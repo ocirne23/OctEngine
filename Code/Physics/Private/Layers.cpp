@@ -3,7 +3,7 @@ module Physics;
 import Core;
 import Core.Log;
 
-import :Layers;
+import :PhysicsTypes;
 
 // Layer name -> category bit registry; index in the vector = bit index. Session-local: bits are only
 // compared against each other at runtime, so allocation order between runs doesn't matter.

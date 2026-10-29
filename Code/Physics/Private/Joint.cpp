@@ -4,7 +4,7 @@ module;
 
 module Physics;
 
-import :Joint;
+import :PhysicsTypes;
 
 void PhysicsJoint::destroy()
 {

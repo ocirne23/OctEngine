@@ -4,6 +4,9 @@ import Core;
 import Core.glm;
 import Settings;
 
+import :Types;
+import :OcclusionState;
+
 void SpatialOccluder::reset()
 {
     if (m_handle.isValid())
@@ -86,7 +89,7 @@ SpatialHandle OcclusionBuffer::addOccluder(const oc::shared_ptr<const OccluderDa
     return { idx, occluder.gen };
 }
 
-void OcclusionBuffer::removeOccluder(SpatialHandle handle)
+void OcclusionBufferState::removeOccluder(SpatialHandle handle)
 {
     oc::vector<glm::vec3> freeOutsideLock; // the vertex buffer's deallocation runs after the unlock
     const std::lock_guard lock(m_occluderMutex);
@@ -100,7 +103,7 @@ void OcclusionBuffer::removeOccluder(SpatialHandle handle)
     m_freeOccluders.push_back(handle.idx);
 }
 
-void OcclusionBuffer::render(const glm::mat4& viewProjRelCamera, const glm::dvec3& cameraPos)
+void OcclusionBufferState::render(const glm::mat4& viewProjRelCamera, const glm::dvec3& cameraPos)
 {
     m_rendered = false;
     m_settings.statHiddenCells = m_statHiddenCells.exchange(0, oc::memory_order_relaxed); // last frame's count
@@ -145,7 +148,7 @@ void OcclusionBuffer::render(const glm::mat4& viewProjRelCamera, const glm::dvec
     m_rendered = true;
 }
 
-void OcclusionBuffer::clipAndRasterize(const glm::vec4 (&clip)[3])
+void OcclusionBufferState::clipAndRasterize(const glm::vec4 (&clip)[3])
 {
     // Sutherland-Hodgman against w > NearEpsilon; a triangle crossing the near plane yields up to
     // four vertices, fanned back into triangles.
@@ -172,7 +175,7 @@ void OcclusionBuffer::clipAndRasterize(const glm::vec4 (&clip)[3])
         rasterizeTriangle(out[0], out[2], out[3]);
 }
 
-void OcclusionBuffer::rasterizeTriangle(const glm::vec4& c0, const glm::vec4& c1, const glm::vec4& c2)
+void OcclusionBufferState::rasterizeTriangle(const glm::vec4& c0, const glm::vec4& c1, const glm::vec4& c2)
 {
     const auto toScreen = [](const glm::vec4& c)
     {
@@ -230,7 +233,7 @@ void OcclusionBuffer::rasterizeTriangle(const glm::vec4& c0, const glm::vec4& c1
     }
 }
 
-bool OcclusionBuffer::isVisible(const glm::vec3& centerRelCamera, const glm::vec3& halfExtent)
+bool OcclusionBufferState::isVisible(const glm::vec3& centerRelCamera, const glm::vec3& halfExtent)
 {
     if (!m_rendered)
         return true;

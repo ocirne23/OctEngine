@@ -5,6 +5,9 @@ import Core.glm;
 import Core.Frustum;
 import Settings;
 
+import :Types;
+import :Stress;
+
 void SpatialStressTest::update(const glm::dvec3& cameraPos, const Frustum& frustum)
 {
     SpatialStressSettings& s = m_settings;

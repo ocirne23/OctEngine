@@ -10,16 +10,14 @@ import Core.Log;
 import Settings;
 import Settings.Tweaks;
 
-import :PhysicsWorld;
-
-static_assert(B3_MAX_WORKERS == 32, "the Physics/World Worker count range (Settings.Physics) is 1..32");
+import :PhysicsTypes;
 import :Body;
-import :Joint;
-import :Mesh;
-import :Types;
-import :Layers;
+import :PhysicsWorldState;
+import :PhysicsWorld;
 import :Convert;
 import :TaskScheduler;
+
+static_assert(B3_MAX_WORKERS == 32, "the Physics/World Worker count range (Settings.Physics) is 1..32");
 
 // box3d hands DrawShapeFcn a *user* shape handle, created on demand the first time each shape is
 // drawn and destroyed when that shape is modified or removed. Without these callbacks there is no
@@ -89,7 +87,7 @@ bool PhysicsWorld::initialize()
     return true;
 }
 
-void PhysicsWorld::shutdown()
+void PhysicsWorldState::shutdown()
 {
     if (!m_initialized)
         return;
@@ -155,7 +153,7 @@ void PhysicsWorld::update(double deltaSec)
     }
 }
 
-void PhysicsWorld::stepSimulation(double deltaSec)
+void PhysicsWorldState::stepSimulation(double deltaSec)
 {
     const PhysicsSettings& settings = Globals::settings.physics;
     m_accumulator += float(deltaSec) * settings.timeScale;
@@ -206,8 +204,9 @@ void PhysicsWorld::queueSetGravity(const glm::vec3& gravity)
     m_commands.push_back(BodyCommand{ .type = EBodyCommand::SetWorldGravity, .a = gravity });
 }
 
-void PhysicsWorld::applyQueuedCommands()
+void PhysicsWorldState::applyQueuedCommands()
 {
+    using EBodyCommand = EPhysicsBodyCommand;
     m_commandScratch.clear();
     {
         const std::lock_guard<std::mutex> lock(m_commandMutex);
@@ -307,7 +306,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         prebuiltHulls.push_back(hull);
     }
 
-    std::unique_lock lock(g_bodyLifecycleMutex); // parallel spawn jobs - see Body.ixx
+    std::unique_lock lock(g_bodyLifecycleMutex); // parallel spawn jobs - see Convert.ixx
     const b3BodyId body = b3CreateBody(oc::bitCast<b3WorldId>(m_worldHandle), &bodyDef);
     if (B3_IS_NULL(body))
     {
@@ -802,7 +801,7 @@ void drawBoxFcn(b3Vec3 extents, b3WorldTransform transform, b3HexColor color, vo
 void drawStringFcn(b3Pos, const char*, b3HexColor, void*) {}
 } // namespace
 
-void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
+void PhysicsWorldState::debugDraw(const glm::vec3& viewPos, const PhysicsWorld::DebugLineFn& line)
 {
     const PhysicsSettings& settings = Globals::settings.physics;
     if (!m_initialized || !settings.debugDrawColliders)
@@ -832,14 +831,14 @@ void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
     b3World_Draw(oc::bitCast<b3WorldId>(m_worldHandle), &draw, PhysicsLayers::All);
 }
 
-void PhysicsWorld::applyContactTuning()
+void PhysicsWorldState::applyContactTuning()
 {
     const PhysicsSettings& settings = Globals::settings.physics;
     if (m_initialized)
         b3World_SetContactTuning(oc::bitCast<b3WorldId>(m_worldHandle), settings.contactHertz, settings.contactDamping, settings.contactSpeed);
 }
 
-void PhysicsWorld::setGravity(const glm::vec3& gravity)
+void PhysicsWorldState::setGravity(const glm::vec3& gravity)
 {
     Globals::settings.physics.gravity = gravity; // the setting, so the panel shows it
     if (m_initialized)

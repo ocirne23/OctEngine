@@ -20,6 +20,14 @@ export glm::quat toGlm(const b3Quat& q) { return glm::quat(q.s, q.v.x, q.v.y, q.
 
 export b3BodyId toBodyId(uint64 handle) { return oc::bitCast<b3BodyId>(handle); }
 
+// Parallel entity spawning: box3d's body create/destroy mutate shared world arrays (body pools,
+// broadphase), so concurrent spawn/despawn jobs serialize on this ONE module-wide mutex -
+// PhysicsWorld::createBody and PhysicsBody::destroy both take it. Everything else that writes
+// box3d stays main-thread-only (or rides the body-command queue) per the standing contract, so
+// no other box3d call needs it. Namespace scope per the /Zc:threadSafeInit- rule; a std::mutex
+// is constant-initialized, so static init is safe.
+std::mutex g_bodyLifecycleMutex; // module linkage: visible to Physics units importing :Convert, never exported
+
 // b3ContactId is 3 fields (index1/world0/generation) and doesn't fit a single bit_cast-able integer; world0
 // is always this process's one physics world, so it's dropped here and re-supplied from the world handle when
 // unpacking (see PhysicsWorld::getContactPoint). Packing is lossless for index1/generation, so this is valid

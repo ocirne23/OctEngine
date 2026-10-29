@@ -4,7 +4,7 @@ module;
 
 module Physics;
 
-import :Mesh;
+import :PhysicsTypes;
 
 void PhysicsMesh::destroy()
 {

@@ -13,9 +13,24 @@ leaks** — ids are stored as integer bits (`b3BodyId` in a `uint64`, `b3WorldId
 2. **Every box3d WRITE that can run off the main thread must go through the body-command queue.**
    Any body write can wake the body, which mutates the world's shared solver sets.
 
+## Source layout: the public API split
+
+The same split as RendererVK's ("The public API split" in [RendererVK CONTEXT](../RendererVK/CONTEXT.md)). The primary interface
+`Public/PhysicsModule.ixx` exports `:PhysicsTypes`, `:Body` and `:PhysicsWorld` only.
+
+| API (`Public/`) | State / internals (`Private/`) |
+|---|---|
+| `PhysicsTypes.ixx`: `PhysicsLayers`, `PhysicsMesh`, `PhysicsJoint`, the body / shape enums, `PhysicsShape`, `PhysicsBodyDesc`, `EPhysicsBodyCommand` | |
+| `Body.ixx`: `PhysicsBody` | `Convert.ixx`: the glm <-> box3d conversions, the handle bit-casts, `g_bodyLifecycleMutex` |
+| `PhysicsWorld.ixx`: `class PhysicsWorld final : public PhysicsWorldState`, `Globals::physics` | `PhysicsWorldState.ixx`: the box3d world, the step, the command queue, `shutdown` (from its destructor), the sinks |
+| | `TaskScheduler.ixx`: `PhysicsTaskScheduler` |
+
+`EPhysicsBodyCommand` is at namespace scope because the state's queue stores it; `PhysicsWorld::EBodyCommand` is its alias.
+The state spells the sampler and sink `oc::function` types out; the API names them (`WaterSurfaceFn`, `DebugLineFn`, ...).
+
 ## `Globals::physics` (`PhysicsWorld`)
 
-[PhysicsWorld.ixx:14](../../../Code/Physics/Private/PhysicsWorld.ixx#L14).
+[PhysicsWorld.ixx](../../../Code/Physics/Public/PhysicsWorld.ixx).
 
 ### The frame
 
@@ -203,8 +218,9 @@ The queue swaps `m_commands` with `m_commandScratch` at drain, so neither vector
 
 ### What is main-thread-only
 
-Everything else. `PhysicsBody`'s direct setters remain as main-thread API, and are sanctioned in
-`InputControls::updatePlayerControl` (before `physics.update`).
+Everything else. `PhysicsBody` keeps three direct setters as main-thread API (`setLinearVelocity`, `setAngularVelocity`,
+`applyImpulse`), sanctioned in `InputControls::updatePlayerControl` (before `physics.update`) and the network correction;
+every other body write exists only as a command.
 
 **EVERY script physics-write thunk queues** — scripts tick on workers. The DSL's
 `self.physics.teleport(position, eulerDeg)` rides the same queue and works on any body type.
@@ -213,7 +229,7 @@ Everything else. `PhysicsBody`'s direct setters remain as main-thread API, and a
 
 box3d's body create and destroy mutate shared world arrays (body pools, broadphase), so concurrent
 spawn and despawn jobs serialize on ONE module-wide mutex, `g_bodyLifecycleMutex`
-([Body.ixx:12](../../../Code/Physics/Private/Body.ixx#L12)). It is at namespace scope per the `/Zc:threadSafeInit-` rule;
+([Convert.ixx](../../../Code/Physics/Private/Convert.ixx)). It is at namespace scope per the `/Zc:threadSafeInit-` rule;
 a `std::mutex` is constant-initialized, so static init is safe.
 
 ## `PhysicsBody`
@@ -223,18 +239,19 @@ Move-only RAII, like `RenderNode`. Destroying the handle destroys the body.
 * Reads: `getPosition`, `getRotation`, `getLinearVelocity`, `getAngularVelocity` (**radians/second**),
   `getMass` (0 for static/kinematic), `getCenterOfMass` (world), `getAABB` (world, over every shape),
   `getPointVelocity` (includes spin), `getGravityScale`, damping, `isAwake`, `isEnabled`.
+* Writes: `setEnabled`, `setLinearVelocity`, `setAngularVelocity`, `applyImpulse` (main thread only; the rest are commands).
 * **IMPULSES are instantaneous** (a hit, a jump). **FORCES accumulate over the step and box3d clears
   them every step**, so a continuous push must be re-applied each frame. Both wake the body.
-* The `AtPoint` variants take a WORLD-space point and therefore also impart spin; the plain forms
+* The `AtPoint` commands take a WORLD-space point and therefore also impart spin; the plain forms
   apply at the centre of mass and do not.
 * `setEnabled` removes and re-adds the body entirely — no collision, queries or events.
   **Expensive in box3d; callers should track state and avoid redundant toggles.**
-* `setAwake` is what makes a settled body react to a changed velocity or force.
-* Per-body `gravityScale`: 0 floats, 1 normal, negative falls upward.
+* `SetAwake` is what makes a settled body react to a changed velocity or force.
+* Per-body gravity scale: 0 floats, 1 normal, negative falls upward.
 
 ## Shapes, bodies and layers
 
-`PhysicsShape` ([Types.ixx:26](../../../Code/Physics/Private/Types.ixx#L26)): `Box` / `Sphere` / `Capsule` / `Hull` /
+`PhysicsShape` ([PhysicsTypes.ixx](../../../Code/Physics/Public/PhysicsTypes.ixx)): `Box` / `Sphere` / `Capsule` / `Hull` /
 `Mesh`, with `halfExtents`, `radius`, `halfHeight` (centre to hemisphere centre, along local Y),
 `offset`, `density` (1000 kg/m³), `friction` (0.6), `restitution`, `categoryBits`, `maskBits`,
 `groupIndex`, `isSensor`, `contactEvents`.

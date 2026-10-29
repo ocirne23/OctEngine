@@ -167,7 +167,7 @@ That is why these hold namespace-scope objects:
 * `AnimStateMachine::getCurrentStateName`'s `"<none>"` (Animation) — reached from a script thunk on
   workers
 * `layerNames()` (Physics) — reached from the terrain collider's tile-build jobs
-* `g_bodyLifecycleMutex` (Physics/Body.ixx) — a `std::mutex` is constant-initialized, so static init
+* `g_bodyLifecycleMutex` (Physics/Convert.ixx) — a `std::mutex` is constant-initialized, so static init
   is safe, but it sits at namespace scope for the same reason
 
 `Procedural`'s diffusion `.cpp` TUs override to `/fp:precise /wd5050` — **load-bearing; see
@@ -401,10 +401,10 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Components](../Docs/Context/Entity/Components.md) | The components: the bone-model animators (HumanoidAnimator grammar), Light, the Game components |
 | ↳ [Multiplayer](../Docs/Context/Entity/Multiplayer.md) | **Multiplayer**: ownership, roles, the wire protocol, snapshots, the spawn stream, claims, validation, correction, ownership transfer, events, session |
 | [Script](../Docs/Context/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
-| [Physics](../Docs/Context/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
+| [Physics](../Docs/Context/Physics/CONTEXT.md) | box3d wrapper: the source layout (public API split), the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
 | [Particle](../Docs/Context/Particle/CONTEXT.md) | GPU particles + decals, `.pfx` effects, ParticleComponent |
 | [Force](../Docs/Context/Force/CONTEXT.md) | Forcefield bubbles: the analytic field, live team count, the baked pressure field, shell tiers / union march, emitter merging, ForceComponent |
-| [Spatial](../Docs/Context/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
+| [Spatial](../Docs/Context/Spatial/CONTEXT.md) | The spatial index: the source layout (public API split), the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
 | [Nav](../Docs/Context/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
 | [Threading](../Docs/Context/Threading/CONTEXT.md) | The fiber job system: the source layout (public API split), worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
 | [Procedural](../Docs/Context/Procedural/CONTEXT.md) | The six globals, parking, `ITerrainSampler` (+ climate encoding), the terrain collider, the generated-mesh cache. **Read it first; the topic files below hold the systems** |

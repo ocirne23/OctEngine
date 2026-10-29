@@ -4,6 +4,13 @@ import Core;
 import Core.glm;
 import Settings;
 
+import :Morton;
+import :Types;
+import :CellMap;
+import :RecordPool;
+import :BlockStore;
+import :SpatialIndexState;
+
 void SpatialEntry::reset()
 {
     if (m_handle.isValid())
@@ -33,7 +40,7 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
     m_initialized = true;
 }
 
-uint32 SpatialIndex::entryLevel(float radius)
+uint32 SpatialIndexState::entryLevel(float radius)
 {
     uint32 level = Morton::levelForRadius(radius);
     if (level >= m_numLevels)
@@ -70,7 +77,7 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
     return { idx, gen };
 }
 
-void SpatialIndex::unregisterEntry(SpatialHandle handle)
+void SpatialIndexState::unregisterEntry(SpatialHandle handle)
 {
     // LOCK-FREE: only this handle's own rows and lane are written (one owner per entry; the pool rows never
     // move, the blocks change only at commit).
@@ -124,19 +131,6 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
     m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = handle.gen, .type = PendingOp::Move, .newLevel = uint8(level) });
-}
-
-void SpatialIndex::setLayerMask(SpatialHandle handle, uint32 layerMask)
-{
-    if (!m_pool.isValidAlive(handle))
-        return;
-    const uint32 idx = handle.idx;
-    m_pool.layerMask[idx] = uint8(layerMask);
-    if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
-    {
-        const uint32 slot = m_pool.storeIdx[idx];
-        m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].layer[BlockStore::laneOf(slot)] = layerMask;
-    }
 }
 
 void SpatialIndex::commitFrame()
@@ -232,7 +226,7 @@ void SpatialIndex::commitFrame()
     ++m_frameId;
 }
 
-void SpatialIndex::insertLane(uint32 idx)
+void SpatialIndexState::insertLane(uint32 idx)
 {
     const uint32 level = m_pool.level[idx];
     const uint64 key = m_pool.cellKey[idx];
@@ -244,7 +238,7 @@ void SpatialIndex::insertLane(uint32 idx)
     setOccupancyBits(level, key);
 }
 
-void SpatialIndex::setOccupancyBits(uint32 level, uint64 key)
+void SpatialIndexState::setOccupancyBits(uint32 level, uint64 key)
 {
     // walk up the ancestors, stopping at the first already-set bit (each bit is set once per cell lifetime)
     for (uint32 lev = level + 1; lev < m_numLevels; ++lev)
@@ -258,7 +252,7 @@ void SpatialIndex::setOccupancyBits(uint32 level, uint64 key)
     }
 }
 
-void SpatialIndex::retireLane(uint32 idx)
+void SpatialIndexState::retireLane(uint32 idx)
 {
     const uint32 level = m_pool.level[idx];
     BlockStore& store = m_blocks[level];
@@ -312,7 +306,7 @@ void SpatialIndex::retireLane(uint32 idx)
         compactCell(level, *rec);
 }
 
-void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
+void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
 {
     BlockStore& store = m_blocks[level];
     oc::vector<CompactEntry>& live = m_compactScratch;
@@ -374,7 +368,7 @@ void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
     }
 }
 
-void SpatialIndex::sweepEmptyCells()
+void SpatialIndexState::sweepEmptyCells()
 {
     for (uint32 i = 0; i < m_emptyCandidates.size(); ++i) // grows while iterating as parents cascade
     {
@@ -395,18 +389,4 @@ void SpatialIndex::sweepEmptyCells()
             m_emptyCandidates.push_back({ parentKey, candidate.level + 1 });
     }
     m_emptyCandidates.clear();
-}
-
-glm::dvec3 SpatialIndex::getPosition(SpatialHandle handle) const
-{
-    if (!m_pool.isValidAlive(handle))
-        return glm::dvec3(0.0);
-    const uint32 idx = handle.idx;
-    return Morton::cellMinWorld(m_pool.cellKey[idx], m_pool.level[idx])
-         + glm::dvec3(m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx]);
-}
-
-float SpatialIndex::getRadius(SpatialHandle handle) const
-{
-    return m_pool.isValidAlive(handle) ? m_pool.radius[handle.idx] : 0.0f;
 }

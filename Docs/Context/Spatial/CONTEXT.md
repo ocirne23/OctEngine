@@ -6,6 +6,22 @@
 The spatial index: culling and position lookup, **independent of the entity parent/child
 hierarchy**. Links Threading (and Settings, for its tweaks).
 
+## Source layout: the public API split
+
+The same split as RendererVK's ("The public API split" in [RendererVK CONTEXT](../RendererVK/CONTEXT.md)) and Entity's (which
+adds the MSVC rules it follows: each state's `self()` is a member template in the state partition, no state member defined in
+another partition). The primary interface `Public/SpatialModule.ixx` exports `:SpatialTypes`, `:SpatialIndex` and `:Occlusion` only.
+
+| API (`Public/`) | State / internals (`Private/`) | Friends of the state |
+|---|---|---|
+| `SpatialTypes.ixx`: `SpatialHandle`, `SpatialEntry`, the layers + `SpatialTerrainTag_Ocean`, `ESpatialPass` + `SpatialPassBit_*`, `rebaseFrustum`, `SpatialIndexDesc`; re-exports `Settings.Spatial` | `Types.ixx`: `SpatialStamp`, `IOcclusionTester`, `inflateFrustum` (and it re-exports `:SpatialTypes` to every internal partition) | |
+| `SpatialIndex.ixx` | `SpatialIndexState.ixx`: storage, commit, traversals, the cull job (`update`), `markVisibleSet` / `markVisibleSphere`, `unregisterEntry`, the hand-over buffers | SpatialEntry, SpatialStressTest |
+| `Occlusion.ixx`: `OccluderData`, `SpatialOccluder`, `OcclusionBuffer` | `OcclusionState.ixx`: the raster, `render`, `removeOccluder`, the `IOcclusionTester` answer | SpatialOccluder, SpatialIndexState (the cull job) |
+| | `Morton.ixx`, `CellMap.ixx`, `RecordPool.ixx`, `BlockStore.ixx`, `Stress.ixx` | |
+
+A nested state type the API needs is re-published with a type ALIAS (`using ECollect = SpatialIndexState::ECollect;`), not a
+using-declaration: MSVC keeps the base's protected access on a nested enum named through a using-declaration.
+
 ## The one call the App makes
 
 `SpatialIndex::update(camera, frustum, viewProjRelCamera, sunDirection)`
@@ -21,7 +37,7 @@ Globals::spatialIndex.joinUpdateJob();
 In order, `update` does:
 
 1. **`commitFrame()`** — applies the cell moves queued during last frame's entity updates.
-2. **`setCullMaxDist(camera.far)`** — the main-pass cull distance tracks the render camera's far
+2. **`m_culling.maxDist = camera.far`** — the main-pass cull distance tracks the render camera's far
    plane, so terrain and entities stream to exactly the view distance rather than a fixed cap.
 3. Returns early if the mode is `Off` or `freeze` is set.
 4. **Occlusion raster**, when the CPU occlusion buffer is enabled.
@@ -95,13 +111,12 @@ An implicit 64-ary hierarchy over per-level hashed grids.
 
 ```cpp
 registerEntry(pos, radius, userData, layerMask = 1, spawnVisible = true) -> SpatialHandle
-unregisterEntry(handle)      // neutralized immediately, unlinked at commit
 updateEntry(handle, pos, radius)
-setLayerMask(handle, mask)
 commitFrame()
 ```
 
-`SpatialEntry` ([Types.ixx:19](../../../Code/Spatial/Private/Types.ixx#L19)) is the move-only RAII wrapper.
+`SpatialEntry` ([SpatialTypes.ixx](../../../Code/Spatial/Public/SpatialTypes.ixx)) is the move-only RAII wrapper: its `reset` (and its
+destructor) is the only unregister - neutralized immediately, unlinked at commit.
 
 **Queries**, read-only and valid between commits:
 `querySphere` · `queryAABB` · `queryFrustum` · `queryRay` (a **broadphase** — entries whose bounds
@@ -126,9 +141,9 @@ sectors both pass false.
 | Operation | Rule |
 |---|---|
 | `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's pool slots and its block lane (~8 stores, two lines); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
-| `registerEntry` / `unregisterEntry` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
+| `registerEntry` / `SpatialEntry::reset` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
 | `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
-| `setLayerMask` / `commitFrame` | Single-threaded, main, outside the pass. |
+| `commitFrame` | Single-threaded, main, outside the pass. |
 | `markVisible*` traversals | Lock-free. The kick/join window forbids registration **by contract**. |
 
 The pending ops are deliberately a `PerWorker` (not owner-sliced or a shared queue): the pushes come
@@ -167,7 +182,7 @@ pushes on one shared cursor would contend.
 > hand-over list (collect slot 1), walked ONCE by `TerrainStreamer::render`'s job, which tells the two apart by the tag
 > and pushes every node with its own pass mask; the tag also keeps the sectors out of the terrain's shadow ball. The
 > owners keep a dead node's memory until `visibleCollectGeneration` moves on (see the hand-over below). **Gameplay
-> queries must never include that layer** ([Types.ixx:59](../../../Code/Spatial/Private/Types.ixx#L59)).
+> queries must never include that layer** ([SpatialTypes.ixx](../../../Code/Spatial/Public/SpatialTypes.ixx)).
 
 ## Visibility stamps
 
@@ -284,7 +299,7 @@ the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow
 ### Culling config (`Spatial/Culling` tweaks)
 
 All Spatial tweaks are `SpatialSettings` = `Globals::settings.spatial` (`Settings.Spatial`, registered in
-`Code/Settings`): `culling`, `stats` (the readouts the index writes), `occlusion`, `stress`. `Spatial:Types`
+`Code/Settings`): `culling`, `stats` (the readouts the index writes), `occlusion`, `stress`. `Spatial:SpatialTypes`
 re-exports `Settings.Spatial`, so `ESpatialCullMode` / `SpatialCullingConfig` / `SpatialStats` reach every
 importer of Spatial. The index binds `m_culling` / `m_stats` as references to them.
 
@@ -346,7 +361,7 @@ See [`Docs/Context/Entity/SimLod.md`](../Entity/SimLod.md).
 
 ## CPU software occlusion
 
-`Spatial:Occlusion`, `Globals::occlusionBuffer`, Spatial/Occlusion tweaks, **default off**.
+`Spatial:Occlusion` (+ `:OcclusionState`), `Globals::occlusionBuffer`, Spatial/Occlusion tweaks, **default off**.
 
 The largest triangles by area of static mesh colliders — extracted by
 `OcclusionBuffer::extractOccluders`, registered by PhysicsComponent through the RAII

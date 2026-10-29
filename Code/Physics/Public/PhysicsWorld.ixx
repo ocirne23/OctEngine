@@ -4,21 +4,18 @@ import Core;
 import Core.glm;
 import Settings;
 
+import :PhysicsTypes;
 import :Body;
-import :Joint;
-import :Mesh;
-import :Types;
-import :Layers;
-import :TaskScheduler;
+import :PhysicsWorldState; // the box3d world, the step, the command queue, the task scheduler, the sinks
 
-export class PhysicsWorld final
+// THE PHYSICS WORLD (Globals::physics): box3d behind integer handles. The state and the private helpers are in PhysicsWorldState.ixx.
+export class PhysicsWorld final : public PhysicsWorldState
 {
 public:
 
-    ~PhysicsWorld() { shutdown(); }
-
     bool initialize();
-    void shutdown();
+
+    // ---- The frame ----
 
     // Contact/sensor begin/end events from the frame's step, fired by dispatchContactEvents(),
     // userData is Entity*. Do not store the returned ContactEvent references.
@@ -48,6 +45,19 @@ public:
     // (light/sun thunks): the main loop calls this AFTER joining the spatial/begin-frame jobs.
     void dispatchContactEvents(const oc::function<void(const ContactEvent&)>& contactCallback);
 
+    // Whether update(deltaSec) will take a step this frame (the accumulator reaches a step and the
+    // sim is live): main publishes it to the JobSystem at the frame top (setFrameHasPhysicsStep),
+    // so work that can wait a frame keeps off the step's worker load.
+    bool willStep(double deltaSec) const;
+    // Fixed-step render interpolation: total steps taken, and the fraction [0,1] of the current frame
+    // into the next step (1 when interpolation is disabled via the Tweak).
+    uint32 getStepCount() const { return m_stepCount; }
+    float getInterpolationAlpha() const;
+    int getStepHz() const { return Globals::settings.physics.stepHz; } // for code that must pace itself in whole steps
+    bool isInitialized() const { return m_initialized; }
+
+    // ---- The body-command queue ----
+
     // Thread-safe absolute repositioning: queues the pose, applied at the start of the next update()
     // before any step. The only way to move a body. Requests apply in call order (last one for a body
     // wins) and are discarded if the body died before the drain.
@@ -58,25 +68,12 @@ public:
     // the body, which mutates the world's shared solver sets - never thread-safe off the main
     // thread - so anything that can run on a job (the script thunks during the parallel entity
     // pass) must go through here. Reads meanwhile still see the pre-write values (one frame of
-    // latency, like teleport). `a` is the velocity/impulse/force/torque, `b` the world-space point
-    // for the AtPoint variants.
-    enum class EBodyCommand : uint8
-    {
-        Teleport, SetLinearVelocity, SetAngularVelocity, ApplyImpulse, ApplyImpulseAtPoint,
-        ApplyAngularImpulse, ApplyForce, ApplyForceAtPoint, ApplyTorque,
-        SetGravityScale, SetLinearDamping, SetAngularDamping, SetAwake, // scalar in a.x
-        SetEnabled, // scalar in a.x: 0 = b3Body_Disable (out of the broadphase + solver entirely,
-                    // pose kept), else b3Body_Enable. The pass-safe form of PhysicsBody::setEnabled
-        SetWorldGravity,
-        // Bounded velocity steering toward a target (network correction "push"): a = target linear
-        // velocity, b = target angular velocity, c.x/c.y = max linear/angular velocity change applied
-        // THIS drain. The linear half lands as a center impulse of at most mass*c.x (composes with the
-        // sim like any hit); the angular half is the exact result the ideal angular impulse I*dw would
-        // produce, applied as a capped velocity add (the inertia tensor cancels out of the math).
-        NudgeVelocity,
-    };
+    // latency, like teleport). The commands are in PhysicsTypes.ixx.
+    using EBodyCommand = EPhysicsBodyCommand;
     void queueBodyCommand(const PhysicsBody& body, EBodyCommand type, const glm::vec3& a, const glm::vec3& b = glm::vec3(0.0f), const glm::vec3& c = glm::vec3(0.0f));
     void queueSetGravity(const glm::vec3& gravity); // world gravity via the same queue (no body)
+
+    // ---- Creation ----
 
     PhysicsBody createBody(const PhysicsBodyDesc& desc, oc::span<const PhysicsShape> shapes);
 
@@ -97,6 +94,8 @@ public:
         const glm::vec3& pivot, float coneAngleDeg = 180.0f);
     PhysicsJoint createWeldJoint(const PhysicsBody& a, const PhysicsBody& b, const glm::vec3& anchor);
 
+    // ---- Queries ----
+
     struct RayHit
     {
         bool hit = false;
@@ -111,6 +110,13 @@ public:
     // claimant can legitimately push, never a wall to validate against).
     RayHit castRayClosest(const glm::vec3& origin, const glm::vec3& translation, uint64 maskBits = PhysicsLayers::All,
         const PhysicsBody* ignoreBody = nullptr, bool staticOnly = false) const;
+
+    // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
+    // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
+    // has no manifold point (e.g. purely speculative contact).
+    bool getContactPoint(int64 contactId, glm::vec3& outPoint, glm::vec3& outNormal) const;
+
+    // ---- Buoyancy ----
 
     // Water surface for buoyancy (the App wires the ocean's CPU height field). fn(x, z) returns
     // the water surface world Y at that column, or -FLT_MAX where there is no water. `active` is
@@ -133,12 +139,7 @@ public:
     float getWaterLinearDrag() const { return Globals::settings.physics.waterLinearDrag; }
     const glm::vec3& getGravity() const { return Globals::settings.physics.gravity; }
 
-    // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
-    // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
-    // has no manifold point (e.g. purely speculative contact).
-    bool getContactPoint(int64 contactId, glm::vec3& outPoint, glm::vec3& outNormal) const;
-
-    void setGravity(const glm::vec3& gravity);
+    // ---- Debug draw ----
 
     // Collider wireframe debug view. The App registers a line sink ONCE (keeps Physics free of any
     // renderer dependency) plus a source for the view position to draw around -- a callback rather than
@@ -155,61 +156,6 @@ public:
         m_debugLine = oc::move(line);
         m_debugViewPos = oc::move(viewPos);
     }
-    bool isDebugDrawEnabled() const { return Globals::settings.physics.debugDrawColliders; }
-
-    // Fixed-step render interpolation: total steps taken, and the fraction [0,1] of the current frame
-    // into the next step (1 when interpolation is disabled via the Tweak).
-    uint32 getStepCount() const { return m_stepCount; }
-    float getInterpolationAlpha() const;
-    int getStepHz() const { return Globals::settings.physics.stepHz; } // for code that must pace itself in whole steps
-    // Whether update(deltaSec) will take a step this frame (the accumulator reaches a step and the
-    // sim is live): main publishes it to the JobSystem at the frame top (setFrameHasPhysicsStep),
-    // so work that can wait a frame keeps off the step's worker load.
-    bool willStep(double deltaSec) const
-    {
-        const PhysicsSettings& settings = Globals::settings.physics;
-        return m_initialized && !settings.paused && m_accumulator + float(deltaSec) * settings.timeScale >= 1.0f / float(settings.stepHz);
-    }
-
-    bool isInitialized() const { return m_initialized; }
-
-private:
-
-    void applyQueuedCommands(); // main thread, start of update
-    void stepSimulation(double deltaSec);
-    void debugDraw(const glm::vec3& viewPos, const DebugLineFn& line); // driven by update(), see setDebugDrawCallback
-
-    struct BodyCommand
-    {
-        uint64 bodyHandle = 0; // b3BodyId bits (unused for SetWorldGravity)
-        EBodyCommand type = EBodyCommand::Teleport;
-        glm::vec3 a = glm::vec3(0.0f);   // pos / velocity / impulse / force / torque / gravity
-        glm::vec3 b = glm::vec3(0.0f);   // world point for the AtPoint variants / NudgeVelocity target angular velocity
-        glm::vec3 c = glm::vec3(0.0f);   // NudgeVelocity caps (max dV, max dW)
-        glm::quat rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // Teleport only
-    };
-    std::mutex m_commandMutex;
-    oc::vector<BodyCommand> m_commands;
-    oc::vector<BodyCommand> m_commandScratch; // swapped with m_commands at drain, so neither reallocates
-
-    uint32 m_worldHandle = 0; // b3WorldId bits
-    bool m_initialized = false;
-    float m_accumulator = 0.0f;
-    void applyContactTuning(); // Globals::settings.physics' contact tuning -> box3d
-    // Handed to box3d as b3WorldDef::userTaskContext and returned through both task callbacks, so
-    // the solver's fork/join state is owned by this world rather than by file statics.
-    PhysicsTaskScheduler m_taskScheduler;
-    uint32 m_stepCount = 0;
-    uint32 m_lastDispatchedStep = 0; // dispatchContactEvents' double-fire guard
-    PhysicsBody m_staticBody;
-
-    // Buoyancy (see setWaterSurface)
-    WaterSurfaceFn m_waterSurface;
-    WaterActiveFn m_waterActive; // global gate; empty = always on
-
-    // Debug draw (the Physics/Debug tweaks)
-    DebugLineFn m_debugLine;       // registered by the App, see setDebugDrawCallback
-    DebugViewPosFn m_debugViewPos; // ditto: where the wireframes are centred/range-culled
 };
 
 // OC_SEG_PHYSICS: ~PhysicsWorld (b3DestroyWorld) fans its teardown tasks onto the job system, so it
@@ -219,4 +165,12 @@ OC_INIT_SEG(OC_SEG_PHYSICS)
 export namespace Globals
 {
     PhysicsWorld physics;
+}
+
+// ---- Inline bodies ----
+
+inline bool PhysicsWorld::willStep(double deltaSec) const
+{
+    const PhysicsSettings& settings = Globals::settings.physics;
+    return m_initialized && !settings.paused && m_accumulator + float(deltaSec) * settings.timeScale >= 1.0f / float(settings.stepHz);
 }

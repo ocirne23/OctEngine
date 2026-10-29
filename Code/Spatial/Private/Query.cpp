@@ -9,6 +9,14 @@ import Core.glm;
 import Core.Camera;
 import Core.Frustum;
 
+import :Morton;
+import :Types;
+import :CellMap;
+import :RecordPool;
+import :BlockStore;
+import :SpatialIndexState;
+import :OcclusionState;
+
 // Shared hierarchical traversal: descend the per-level grids top-down through the occupancy
 // masks, classifying each cell's loose bounds (inflated by half a cell - entities extend at most
 // that far beyond their cell) as outside / intersecting / fully inside. Fully-inside subtrees
@@ -379,7 +387,7 @@ namespace
 }
 
 template <typename Tester>
-uint32 SpatialIndex::testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
+uint32 SpatialIndexState::testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
                               uint32 active, TraverseStats& stats) const
 {
     float loose = halfCell;
@@ -399,7 +407,7 @@ uint32 SpatialIndex::testCell(const Tester& tester, const glm::vec3& cellMin, fl
 }
 
 template <typename Tester, typename ChildFunc>
-void SpatialIndex::forEachChild(const Tester& tester, const glm::dvec3& refPos, uint64 key, uint32 level,
+void SpatialIndexState::forEachChild(const Tester& tester, const glm::dvec3& refPos, uint64 key, uint32 level,
                                 const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
                                 TraverseStats& stats, const ChildFunc& onChild) const
 {
@@ -480,7 +488,7 @@ void SpatialIndex::forEachChild(const Tester& tester, const glm::dvec3& refPos, 
 }
 
 template <typename Tester, typename EmitFunc>
-void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
+void SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
                                    const CellRecord& rec, uint32 level, uint32 active,
                                    TraverseStats& stats, const EmitFunc& emit) const
 {
@@ -519,7 +527,7 @@ void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMi
 }
 
 template <typename Tester, typename EmitFunc>
-void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
+void SpatialIndexState::traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                                 uint64 key, uint32 level, const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
                                 TraverseStats& stats, const EmitFunc& emit) const
 {
@@ -534,7 +542,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
 }
 
 template <typename Tester, typename EmitFunc>
-void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const
+void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const
 {
     // Local counters merged once at the end: traversals run concurrently (script queries on worker
     // threads), so per-test increments on the shared stats would race on the hottest path.
@@ -626,7 +634,7 @@ void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint
 // exactly one cell, and the cell maps only mutate in commitFrame - so the only shared writes are
 // the emit itself (thread-safe stamps) and the stats, which accumulate per chunk and merge once.
 template <typename Tester, typename EmitFunc, typename PrepareFunc>
-void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
+void SpatialIndexState::traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                                     TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks)
 {
     const uint32 top = m_numLevels - 1;
@@ -719,7 +727,7 @@ uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 
     return uint32(outUserData.size());
 }
 
-void SpatialIndex::forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, uint32 skipStampedIn, void* ctx, void (*emit)(void*, uint64)) const
+void SpatialIndexState::forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, uint32 skipStampedIn, void* ctx, void (*emit)(void*, uint64)) const
 {
     if (skipStampedIn == 0)
     {
@@ -734,7 +742,7 @@ void SpatialIndex::forEachInSphereImpl(const glm::dvec3& center, float radius, u
     });
 }
 
-void SpatialIndex::forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
+void SpatialIndexState::forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
                                         IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const
 {
     traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
@@ -807,12 +815,12 @@ uint64 SpatialIndex::queryNearest(const glm::dvec3& pos, float maxRadius, uint32
 // thread-safe by structure: an entry lives in exactly one cell, so no two subtree roots ever write
 // the same slot. The visible count rides TraverseStats::emitted - accumulated per chunk and merged
 // once, never a shared per-entry atomic on the emit path.
-void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
+void SpatialIndexState::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
                                   uint32 layerMask, IOcclusionTester* occlusion)
 {
     const auto start = Clock::now();
     const uint32 passIdx = uint32(pass);
-    advanceStamp(pass);
+    self().advanceStamp(pass);
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
     PassStamps* stamps = m_pool.stamps.data();
     TraverseStats stats;
@@ -881,11 +889,11 @@ void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCa
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
-void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask)
+void SpatialIndexState::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask)
 {
     const auto start = Clock::now();
     const uint32 passIdx = uint32(pass);
-    advanceStamp(pass);
+    self().advanceStamp(pass);
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
     PassStamps* stamps = m_pool.stamps.data();
     const auto stamp = [stamps, passIdx, stampId](uint32 idx, const glm::vec3&, uint32) { stamps[idx].pass[passIdx] = stampId; };
@@ -957,14 +965,14 @@ const oc::vector<oc::vector<uint64>>& SpatialIndex::queryUpdateTiers(const glm::
     return m_tierHitChunks;
 }
 
-void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection)
+void SpatialIndexState::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection)
 {
     ProfileScope updateScope("Spatial", EProfileCategory::Spatial);
 
-    commitFrame();          // applies cell moves queued during last frame's entity updates
+    self().commitFrame();   // applies cell moves queued during last frame's entity updates
     // The SIM LOD tier stamps are NOT made here: the World's selection job stamps them
     // (queryUpdateTiers), off the frame-critical path.
-    setCullMaxDist(camera.far); // cull to exactly the view distance, not a fixed cap
+    m_culling.maxDist = camera.far; // cull to exactly the view distance, not a fixed cap
     if (m_culling.mode == int(ESpatialCullMode::Off) || m_culling.freeze)
         return;
 
