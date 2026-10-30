@@ -578,12 +578,13 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     SWIZZLED into R - `accumChannel` reads ONE value; a vec4 fetch with a dynamic channel index cost the variant 64 -> 71
     registers). The hardware decodes and filters across the columns AND, the slices being interleaved, between a slice
     and the next one of the same channel: one fetch (`densityTexelNew`); only the pair that crosses into the next
-    channel (layer L - 1 -> 0) takes two. Bindings 13-19 with the back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped by the golden ratio per
-    frame) is under the UBO's fade (`u_foliage_handoverFade`, `handoverUbo`). The temporal pass / TAA averages the
-    picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix keeps a dense crown
-    opaque until late in the fade). The whole ray follows its pick - the ring, the skip, the ahead-break - so the
-    variant costs what the normal march does. **Without any temporal accumulation (temporal off, no TAA / DLSS) the
-    fade shows as noise.** The variant is used from the frame AFTER the hand-over began (that frame's UBO was built
+    channel (layer L - 1 -> 0) takes two. Bindings 13-19 with the back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's FIXED noise (IGN) is under the UBO's fade
+    (`u_foliage_handoverFade`, `handoverUbo`): a STATIC DISSOLVE, each pixel switches once. Tried: the noise stepped by
+    the golden ratio per frame for TAA to average into a blend - under the 1-of-2 checkerboard a pixel takes a new pick
+    only every second frame and shows a copy in between, and the noise never settled within the fade. A per-ray pick, not
+    a per-sample density mix (that keeps a dense crown opaque until late in the fade). The whole ray follows its pick -
+    the ring, the skip, the ahead-break - so the variant costs what the normal march does. The variant is used from the
+    frame AFTER the hand-over began (that frame's UBO was built
     before the stage changed);
   * the COPY ~1/8: at fraction 1 `tree_volume_copy.cs` writes `accum` into `density` (encoded, above) in slice ranges and the
     bake floor into the shown one - nothing reads either then - and the SWAP follows. **No cross-fade** (`BakeJob::crossFade` false) for the first bake (nothing

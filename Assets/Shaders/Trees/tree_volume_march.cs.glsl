@@ -63,10 +63,12 @@ bool g_new = false; // this ray shows the new bake
 
 bool handoverPicksNew(ivec2 px)
 {
-    // IGN offset from the step jitter's (decorrelated), stepped by the golden ratio per frame: a short history already
-    // averages to the fade.
+    // A STATIC DISSOLVE: each pixel's fixed threshold (IGN, offset from the step jitter's: decorrelated), so it switches to
+    // the new bake ONCE as the fade passes it - nothing for TAA to average. (A per-frame pick, IGN stepped by the golden
+    // ratio, was noise that TAA averaged into the blend; under the checkerboard a pixel takes a new pick only every
+    // second frame and shows a copy in between, and the noise never settled within the fade.)
     const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
-    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliage_handoverFade;
+    return ign < u_foliage_handoverFade;
 }
 
 vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
