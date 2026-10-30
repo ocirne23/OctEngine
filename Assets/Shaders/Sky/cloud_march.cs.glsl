@@ -99,7 +99,8 @@ void main()
         return;
     }
 
-    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), cloudJitter(px), pixelAngle, CLOUD_DEBUG_MODE == 2);
+    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), cloudSkyJitter(cloudJitter(px), limit >= maxDist),
+                                             pixelAngle, CLOUD_DEBUG_MODE == 2);
     // Re-derived after the march instead of held live across it (registers): the pixel and the limit's log.
     const ivec2 outPx = marchPixel();
     const float outLogLimit = log2(max(limit, 1.0));
@@ -110,14 +111,6 @@ void main()
     }
 
     vec4 color = vec4(r.inScatter, r.transmittance);
-    // A SKY pixel holds the sun disc and halo, and the composite passes scene x transmittance: the opacity "Aerial fade"
-    // took off let the disc shine through any cloud at any density. There the cloud stays opaque and fades into the
-    // clear sky instead (the mirror cache: no disc, seen from the ground).
-    if (limit >= maxDist)
-    {
-        color.rgb += r.fadeOpacity * textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR_CACHE), 0.0).rgb;
-        color.a -= r.fadeOpacity;
-    }
 #if CLOUD_DEBUG_MODE == 1
     color = vec4(stepHeat(float(r.steps) / u_clouds_maxSteps), 0.0);
 #endif

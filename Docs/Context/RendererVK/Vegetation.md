@@ -49,7 +49,11 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   (1 - t)), which every LOD interpolates the same. The curve normal spread over the single-triangle LOD made a
   brightness step at its switch. The CURVE normal (`grassBladeCurveNormal`, only while the blend is below 1) is `cross(tangent, side)`, and the tangent at
   the TIP is the horizontal lean + wind offset: an upright blade, or one bending along its width, makes it ~0 (noise or
-  NaN). Where `|across| / |tangent|` is small (0.05-0.25) it blends to the root's normal `cross(up, side)`.
+  NaN). Where `|across| / |tangent|` is small (0.05-0.25) it blends to the root's normal `cross(up, side)`
+  (`grassBladeRootNormal`, rebuilt from `side`, never held).
+* **The VS writes every output but the normal FIRST** (the clip position, the previous frame's point - from locals, so
+  `g_blade` keeps this frame's curve - the blade data), the normal LAST: written after the curve normal's three
+  evaluations, the other outputs' inputs stayed live across them, 48 -> 72 registers.
 * **THE TURN TO THE VIEW** ("Grass/Look/Turn to view", 0.4; "Turn band", 0.15): a blade seen edge-on is a line, so
   its width axis turns toward the view, per blade at the root (the camera's horizontal direction to it). Its share
   across the view `|a|` becomes `mix(|a|, 1, turn x smoothstep(0, band, |a|))`; the depth part keeps its sign and the

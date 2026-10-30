@@ -171,9 +171,11 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     less of it than terrain at the same distance. **"Aerial dimming"** scales the air's optical depth on the
     cloud's own light (per colour: warmer and darker far out; 1 = physical). **"Aerial fade"** takes the air's MEAN
     optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them.
-    **On a SKY pixel** (march limit = "Max distance", `cloud_march.cs.glsl`) the faded opacity (`fadeOpacity`) goes
-    back into alpha and becomes the CLEAR sky's colour instead (the mirror cache layer, no disc): the sky pixel holds the
-    SUN DISC and halo, and the raised transmittance let them through any cloud at any density. **Each step is in the
+    **On a SKY pixel** (march limit = "Max distance", `cloud_march.cs.glsl`) the faded opacity stays in alpha and
+    becomes the CLEAR sky's colour instead (the mirror cache layer, no disc): the sky pixel holds the SUN DISC and halo,
+    and the raised transmittance let them through any cloud at any density. `cloudRaymarch` does it itself, and the sky
+    flag rides in the SIGN of `jitter` (`cloudSkyJitter`; the march takes `abs(jitter)`): a second value returned past
+    the aerial scatter, or a bool held through the march, cost cloud_march 64 -> 72 registers. **Each step is in the
     clouds' shadow** (`cloudAirSunVis`, `cloud_raymarch.inc.glsl`): the shadow map inside it, and PAST it the
     WEATHER MAP - the coverage of the column where the sun ray from the air point crosses the main layer's
     middle, `1 - smoothstep(0.35, 0.75, coverage)`. The steps sit at the ray's per-pixel / per-frame jitter:

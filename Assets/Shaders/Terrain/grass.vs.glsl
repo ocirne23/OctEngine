@@ -45,7 +45,7 @@ layout (location = 3) flat out vec4 out_blade;   // x = the albedo factor (colou
 layout (location = 4) out vec3 out_prevWorldDelta;
 
 // The blade being built (set in main): its curve, its width axis and half width at the root, the blend from the curve
-// normal to the linear one, and the linear normal's ends.
+// normal to the linear one, and the linear normal's tip end (the root end: grassBladeRootNormal).
 struct GrassBlade
 {
     vec3 root;
@@ -54,11 +54,17 @@ struct GrassBlade
     vec3 side;
     float halfWidth;
     float linearBlend;
-    vec3 rootN;
     vec3 tipN;
 };
 
 GrassBlade g_blade;
+
+// The upright stem's normal: across the width axis, cross(up, side) - rebuilt from side, never held (side is horizontal
+// and unit, so it is unit).
+vec3 grassBladeRootNormal()
+{
+    return vec3(g_blade.side.z, 0.0, -g_blade.side.x);
+}
 
 // A point of the blade's edge (sideSign -1 / +1) or its middle (0) at t: the width narrows linearly to the tip.
 vec3 grassBladePoint(float t, float sideSign)
@@ -72,7 +78,7 @@ vec3 grassBladePoint(float t, float sideSign)
 // geomorph's neighbour average is itself: only the curve part morphs.
 vec3 grassBladeLinearNormal(float t, float sideSign)
 {
-    return mix(g_blade.rootN, g_blade.tipN, t) + g_blade.side * (sideSign * u_grass_roundness * (1.0 - t));
+    return mix(grassBladeRootNormal(), g_blade.tipN, t) + g_blade.side * (sideSign * u_grass_roundness * (1.0 - t));
 }
 
 // CURVE: across the curve's tangent, with the full edge tilt (the tip vertex has none).
@@ -86,7 +92,7 @@ vec3 grassBladeCurveNormal(float t, float sideSign)
     // against the tangent, blend to the root's normal, always defined.
     const float acrossLen = length(across);
     const float acrossWeight = smoothstep(0.05, 0.25, acrossLen / max(length(tangent), 1e-6));
-    const vec3 acrossN = mix(g_blade.rootN, across / max(acrossLen, 1e-12), acrossWeight);
+    const vec3 acrossN = mix(grassBladeRootNormal(), across / max(acrossLen, 1e-12), acrossWeight);
     return normalize(acrossN + side * ((t < 1.0 ? sideSign : 0.0) * u_grass_roundness));
 }
 
@@ -214,24 +220,20 @@ void main()
 #ifdef GRASS_NEAR_SHADOW
     gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
-    g_blade.rootN = cross(vec3(0.0, 1.0, 0.0), side); // unit: side is horizontal and unit
-    const vec3 tipAcross = cross(tip - grassBezier(root, ctrl, tip, 0.5), side);
-    g_blade.tipN = tipAcross * inversesqrt(dot(tipAcross, tipAcross)); // |tipAcross| >= the chord's rise > 0
-    vec3 normal = grassBladeLinearNormal(t, sideSign);
-    if (g_blade.linearBlend < 1.0)
-    {
-        vec3 curve = grassBladeCurveNormal(t, sideSign);
-        if (morph > 0.0)
-            curve = mix(curve, 0.5 * (grassBladeCurveNormal(t - h, sideSign) + grassBladeCurveNormal(t + h, sideSign)), morph);
-        normal = mix(curve, normal, g_blade.linearBlend);
-    }
+    // ORDER: every output but the normal is written FIRST, the normal last - written after the three curve evaluations,
+    // the other outputs' inputs (the previous wind, the dryness noise, the canopy) stayed live across them: 52 -> 72
+    // registers.
+    gl_Position = u_mvp * vec4(pos, 1.0);
+    gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+    out_posAlong = vec4(pos, t);
+    out_groundNormal = groundN;
 
+    // The previous frame's point (g_blade keeps THIS frame's curve: the normal below reads it).
     vec3 ctrlPrev;
     const vec3 tipPrev = grassTip(root, lean, grassWind(xz, u_grass_prevTime, phase) * windFade, height, ctrlPrev);
-    g_blade.ctrl = ctrlPrev;
-    g_blade.tip = tipPrev;
-    const vec3 prevPos = grassBladePoint(t, sideSign) + morphH2 * (root - 2.0 * ctrlPrev + tipPrev);
-    out_groundNormal = groundN;
+    const vec3 prevPos = grassBezier(root, ctrlPrev, tipPrev, t) + side * (sideSign * g_blade.halfWidth * (1.0 - t))
+        + morphH2 * (root - 2.0 * ctrlPrev + tipPrev);
+    out_prevWorldDelta = prevPos - pos;
 
     const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
     const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
@@ -240,17 +242,24 @@ void main()
     // temperature"; the patch's mean temperature - climate is km-scale, so no patch steps show).
     const float variation = 1.0 + u_grass_colorVariation * (phaseVariation.y * 2.0 - 1.0);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, cellTemperature.y);
-    out_prevWorldDelta = prevPos - pos;
-
-    // The canopy at this blade: its mean height and extinction (the ground under it takes the same); the depth is
-    // capped at the canopy height (the sunk root is below the ground).
-    const float canopyHeight = grassCanopyHeight(clump, coverSize);
-    out_posAlong = vec4(pos, t);
-    out_normalDepth = vec4(normal, clamp(canopyHeight - (pos.y - groundY), 0.0, canopyHeight));
     out_blade = vec4(variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), dryness, groundBlend,
         grassCanopyExtinction(cover, widthSize, dist));
 
-    gl_Position = u_mvp * vec4(pos, 1.0);
-    gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+    // The canopy at this blade: its mean height (the ground under it takes the same); the depth is capped at the canopy
+    // height (the sunk root is below the ground).
+    const float canopyHeight = grassCanopyHeight(clump, coverSize);
+    const float canopyDepth = clamp(canopyHeight - (pos.y - groundY), 0.0, canopyHeight);
+
+    vec3 normal = vec3(0.0);
+    if (g_blade.linearBlend < 1.0)
+    {
+        normal = grassBladeCurveNormal(t, sideSign);
+        if (morph > 0.0)
+            normal = mix(normal, 0.5 * (grassBladeCurveNormal(t - h, sideSign) + grassBladeCurveNormal(t + h, sideSign)), morph);
+    }
+    const vec3 tipAcross = cross(tip - grassBezier(root, ctrl, tip, 0.5), side);
+    g_blade.tipN = tipAcross * inversesqrt(dot(tipAcross, tipAcross)); // |tipAcross| >= the chord's rise > 0
+    normal = mix(normal, grassBladeLinearNormal(t, sideSign), g_blade.linearBlend);
+    out_normalDepth = vec4(normal, canopyDepth);
 #endif
 }
