@@ -323,6 +323,10 @@ bounds.
    shore stands under the lake behind a thin bank), held non-rising by a running minimum, carried on through junctions
    until done. One ending in a lake has its surface floored at the level, and the segments flowing into it are floored
    at its start, through junctions. Only raises.
+6. **THE PIECE CONSTANTS** (`PreparedRiverUnit::pieces`, `pointSurface`), from the final points: per piece its surface
+   drop, its steepness (`pieceSteep`) and an upper bound of its reach over the whole piece. `apply` skips a piece past that
+   bound (and past its humidity spread) before any `pow`, and calls `wallReach` once per piece and point.
+   `sinkUnderCarves` cannot use them: it moves the water while it carves, so it calls `pieceSteep` itself.
 
 **The carve** (model frame, per piece, d = distance from the centre line; the unit's W, half-width w, depth and Q
 interpolated).

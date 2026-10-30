@@ -208,11 +208,32 @@ namespace Procedural
 					generateClutterMeshes(type.desc, resolution, type.meshes);
 					saveClutterMeshes(path, hash, type.meshes);
 				}
-				// The flower's texture (a frond, a petal, an ear): once per load (the mesh resolution does not change it).
-				uint32 size = 0;
-				oc::vector<uint8> level0;
-				if (!type.texture.isValid() && generateClutterTexture(type.desc, size, level0))
-					buildLeafClusterMips(level0, size, type.image);
+				// The flower's texture (a frond, a petal, an ear): once per load (the mesh resolution does not change it), cached
+				// AS UPLOADED (MeshCache's CachedTexture, keyed by the .clutter file's text): coverage-preserving mips, BC3.
+				if (!type.texture.isValid())
+				{
+					const oc::string texPath = oc::format("{}/{}.tex", CLUTTER_TEXTURE_DIR, type.desc.name);
+					uint32 size = 0;
+					oc::vector<uint8> level0;
+					if (!loadCachedTexture(texPath, type.meshHash, type.image))
+						type.image = {}; // a failed load may have filled part of it
+					if (type.image.albedo.empty() && generateClutterTexture(type.desc, size, level0))
+					{
+						TreeLeafTexture chain;
+						buildLeafClusterMips(level0, size, chain);
+						type.image.width = type.image.height = size;
+						type.image.albedoEncoding = RenderMaterial::ETextureEncoding::BC3;
+						type.image.albedo.resize(chain.mips.size());
+						for (uint32 k = 0; k < (uint32)chain.mips.size(); ++k)
+						{
+							const uint32 s = glm::max(size >> k, 1u);
+							type.image.albedo[k].resize(TextureConvert::compressedSize(s, s, TextureConvert::EBlockFormat::BC3));
+							TextureConvert::compressBlockRows(chain.mips[k].data(), s, s, TextureConvert::EBlockFormat::BC3, 0, (s + 3) / 4,
+								type.image.albedo[k].data());
+						}
+						saveCachedTexture(texPath, type.meshHash, type.image);
+					}
+				}
 				m_genInFlight.fetch_sub(1, oc::memory_order_release);
 			}, { "Clutter generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 		}
@@ -253,12 +274,13 @@ namespace Procedural
 			for (Renderer::ClutterMesh& mesh : type.meshes)
 				meshes.push_back(oc::move(mesh));
 			type.meshes.clear();
-			if (!type.image.mips.empty())
+			if (!type.image.albedo.empty())
 			{
 				oc::vector<oc::span<uint8>> mips;
-				for (oc::vector<uint8>& level : type.image.mips)
+				for (oc::vector<uint8>& level : type.image.albedo)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				type.texture = RenderTexture::create(type.image.size, type.image.size, mips, oc::format("Clutter/{}", type.desc.name).c_str());
+				type.texture = RenderTexture::create(type.image.width, type.image.height, mips, oc::format("Clutter/{}", type.desc.name).c_str(),
+					type.image.albedoEncoding);
 				type.image = {};
 			}
 			for (const ClutterPlacementDesc& placement : type.desc.placements)

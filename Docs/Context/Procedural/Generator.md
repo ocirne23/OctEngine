@@ -26,7 +26,10 @@ but this one generates **256×256-pixel TILES through three ONNX models.**
 * **`isReady()` is a real state.** Until the models are loaded it is false and the generator must not build
   geometry — **it would bake a flat world into the chunk cache.** TerrainStreamer polls it and rebuilds once it flips.
 
-Tiles cache to disk under `Assets/Local/Diffusion/<seed>/` (zstd).
+Tiles cache to disk under `Assets/Local/Diffusion/<seed>/` (zstd). Each plane is quantized, delta-coded and zstd'd
+(the format notes are at `TILE_CACHE_VERSION`). **`decodePlane` is the ONE dequantization** (AVX2: the running sum and
+an explicit FMA, 16 values per step): the loader decodes through it, and the writer's in-place roundtrip decodes its own
+bytes through it, so RAM and disk hold bit-identical tiles (the crack-free chunk borders rest on that).
 
 ### World origin
 

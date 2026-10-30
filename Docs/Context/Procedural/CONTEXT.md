@@ -91,8 +91,9 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
   these one at a time is fine for a noise field but not for a generator with a per-point cost.
 * **`sampleRiverGrid`** fills the river influence ALONE on a grid (no terrain): placement asks for it at a resolution
   finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
-  RiverTerrain's goes PER PIECE: each river piece writes the points within its reach (the max wins), so the cost
-  follows the river length in the rect, not its area (a per-point search of the pieces was half of TreeWorld's
+  RiverTerrain's goes PER PIECE: each river piece writes the points within its floodplain edge, where its influence
+  ends (the max wins; NOT its carve reach, which adds the valley wall's kilometre), so the cost follows the river length
+  in the rect, not its area (a per-point search of the pieces was half of TreeWorld's
   `placeChunk`). Each LAKE run writes too (not pans): 1 out to 1 px from a wet pixel (the drawn sheet reaches a pixel
   past its runs), fading to 0 over "Lake shore (px)", so "Vegetation clear" keeps trees out of the lakes' edges.
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
@@ -197,13 +198,16 @@ The tree, rock and clutter generators' OUTPUT is saved under `Assets/Local` and 
 | A tree species: its piece library, its baked variants, their far-volume density grids | `Local/Trees/Meshes/<species>.treemesh` | the `.tree` file's text, `TREE_DENSITY_RES` |
 | A rock variant: its `RockShape`, LOD meshes, density grid | `Local/Rocks/Meshes/<type>_v<i>.rockmesh` | the `.rock` file's text, the grid resolution, the variant seed |
 | A clutter type's meshes (every LOD) | `Local/Clutter/Meshes/<type>.cluttermesh` | the `.clutter` file's text, `Clutter/Mesh resolution` |
+| A tree material's textures AS UPLOADED (bark, leaves, each billboard; `CachedTexture`) | `Local/Trees/Textures/<name>.tex` | the `.tree` file's text, `Trees/Compress textures`, the size |
+| A dead-wood rock type's tinted bark, as uploaded | `Local/Rocks/Textures/<type>.tex` | the bark `.tree` file's text, the tint, the size |
+| A flower clutter type's texture (BC3), as uploaded | `Local/Clutter/Textures/<type>.tex` | the `.clutter` file's text |
 
 * **One file per unit, the key INSIDE**: a changed input is a miss that regenerates and overwrites the file - no stale
   files pile up. A damaged or truncated file is a miss too. Format: a header (magic, kind, version, hash, raw size),
-  then the zstd payload (level 3); vectors of trivially copyable types are written raw.
+  then the zstd payload (level 3; textures 9: written once, a few MB); vectors of trivially copyable types are written raw.
 * **The key does not cover the generator CODE.** A change that moves a generator's output for the same inputs must
-  bump `TREE_MESH_CACHE_VERSION` / `ROCK_MESH_CACHE_VERSION` / `CLUTTER_MESH_CACHE_VERSION` (MeshCache.ixx), or the
-  `Meshes` folder must be deleted. The clutter's pebbles come from `generateRockVariant` too: a rock generator change
+  bump `TREE_MESH_CACHE_VERSION` / `ROCK_MESH_CACHE_VERSION` / `CLUTTER_MESH_CACHE_VERSION` / `TEXTURE_CACHE_VERSION`
+  (MeshCache.ixx; the textures also cover the mip builders and the BC encoders), or the folder must be deleted. The clutter's pebbles come from `generateRockVariant` too: a rock generator change
   bumps both.
 * Trees load on main (`TreeSystem::reload`, under its `AllowMainThreadIO`); the rocks and the clutter load / save in
   their generation jobs. A cache hit also makes Debug and the optimized builds draw the same floats (the generators'

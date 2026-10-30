@@ -142,6 +142,17 @@ export namespace Procedural
 		oc::vector<uint32> pointSegment; // per point: its segment
 		oc::vector<uint16> pointSection; // per point: the waterfall lips before it in its segment (apply never blends across one)
 		oc::vector<uint32> rowRuns;      // per unit row + 1: offsets into unit->lakeRuns
+		// apply's per-piece constants, hoisted out of the per-point loop (per point k: the piece k -> k + 1; a segment's last
+		// point holds zeros). Built last in prepare, from the final points.
+		struct Piece
+		{
+			float drop = 0.0f;     // the carved surface's drop over the piece, per model m (0 when shorter than 1 mm)
+			float steep = 0.0f;    // pieceSteep: the drop eased from half "Rapids slope" to "Fall slope"
+			float reachMax = 0.0f; // model m: no point of the piece reaches farther (pieceReach at the larger end, + margin)
+			float hwMax = 0.0f;    // model m: the larger end's half-width (at least 0.05), + margin
+		};
+		oc::vector<Piece> pieces;
+		oc::vector<float> pointSurface; // per point: RiverCarveConfig::surface at it
 	};
 
 	class RiverTerrain final : public ITerrainSampler
@@ -203,9 +214,12 @@ export namespace Procedural
 		oc::shared_ptr<const RiverUnit> buildRaw(int32 ui, int32 uj) const;
 		float pieceReach(float halfWidth, float q) const; // model m: the floodplain's edge (capped) + the wall's reach at q
 		float wallReach(float q) const;                   // model m: the valley wall's reach past the floodplain at q
+		// The piece's steepness from its own drop, eased from half "Rapids slope" to "Fall slope" (0..1).
+		float pieceSteep(const RiverPoint& a, const RiverPoint& c) const;
 		// The ground (model m) piece a -> c leaves at distance d (model m) from its point at t, over the ground hg; its
-		// water surface there in outWater.
-		float pieceCarve(const RiverPoint& a, const RiverPoint& c, float t, float d, float hg, float& outWater) const;
+		// water surface there in outWater. `reach` = wallReach(q at t), `steepDrop` = pieceSteep(a, c): the caller has them.
+		float pieceCarve(const RiverPoint& a, const RiverPoint& c, float t, float d, float hg, float reach, float steepDrop,
+		                 float& outWater) const;
 
 		oc::shared_ptr<const TerrainGenV3> m_base;
 		oc::shared_ptr<const CoarseRiverNetwork> m_network;

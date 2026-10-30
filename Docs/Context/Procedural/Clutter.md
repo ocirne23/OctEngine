@@ -130,8 +130,10 @@ SPIKE's floret (128^2: a pea flower), a BELL's floret (128^2: a tube flaring to 
 smaller spikelets, three long, nearly parallel awns each - a silky brush), `Panicle` (oat: no ear - a rachis with thin
 arching pedicels, one spikelet hanging from each end; Awns 0, PetalWidth x 5 = its width per HeadSize). R = shading,
 G = a mask toward Color2 (the awns, a fern's rachis), A = cover. Made on the type's generation job with
-TreeLeafTexture's coverage-preserving mips (`buildLeafClusterMips`), uploaded in `finishGeneration`
-(`RenderTexture::create`), released after the next `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
+TreeLeafTexture's coverage-preserving mips (`buildLeafClusterMips`), BC3 (sRGB, as the RGBA8 was), cached AS UPLOADED in
+`Local/Clutter/Textures/<type>.tex` (MeshCache's `CachedTexture`, keyed by the `.clutter` file's text: a hit is one read
+and one decompress), uploaded in `finishGeneration` (`RenderTexture::create` with its encoding), released after the next
+`setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
 have none; `PetalShape None` turns a Radial / Umbel / Spike / Bell texture off.
 
 **THE RIVER DATA ON THE GROUND** (TerrainGenerator; the terrain vertex's UV, which the terrain does not use as UV):

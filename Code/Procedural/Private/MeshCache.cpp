@@ -20,7 +20,8 @@ namespace
 
 	constexpr uint32 MESH_CACHE_MAGIC = 0x434D434Fu; // "OCMC"
 	constexpr int32 MESH_CACHE_ZSTD_LEVEL = 3;       // fast: a species is tens of MB raw
-	enum EMeshCacheKind : uint32 { MeshCacheTree = 1, MeshCacheRock = 2, MeshCacheClutter = 3 };
+	constexpr int32 TEXTURE_CACHE_ZSTD_LEVEL = 9;    // a few MB, written once: smaller files (decompression speed is the same)
+	enum EMeshCacheKind : uint32 { MeshCacheTree = 1, MeshCacheRock = 2, MeshCacheClutter = 3, MeshCacheTexture = 4 };
 
 	struct Header
 	{
@@ -102,10 +103,11 @@ namespace
 		return !ZSTD_isError(n) && n == outRaw.size();
 	}
 
-	void writeCacheFile(const oc::string& path, uint32 kind, uint32 version, uint64 hash, const oc::vector<uint8>& raw)
+	void writeCacheFile(const oc::string& path, uint32 kind, uint32 version, uint64 hash, const oc::vector<uint8>& raw,
+	                    int32 level = MESH_CACHE_ZSTD_LEVEL)
 	{
 		oc::vector<uint8> file(sizeof(Header) + ZSTD_compressBound(raw.size()));
-		const size_t n = ZSTD_compress(file.data() + sizeof(Header), file.size() - sizeof(Header), raw.data(), raw.size(), MESH_CACHE_ZSTD_LEVEL);
+		const size_t n = ZSTD_compress(file.data() + sizeof(Header), file.size() - sizeof(Header), raw.data(), raw.size(), level);
 		if (ZSTD_isError(n))
 			return;
 		Header h;
@@ -302,5 +304,46 @@ namespace Procedural
 				w.vec(mesh.indices[k]);
 			}
 		writeCacheFile(path, MeshCacheClutter, CLUTTER_MESH_CACHE_VERSION, hash, w.data);
+	}
+
+	bool loadCachedTexture(const oc::string& path, uint64 hash, CachedTexture& out)
+	{
+		oc::vector<uint8> raw;
+		if (!readCacheFile(path, MeshCacheTexture, TEXTURE_CACHE_VERSION, hash, raw))
+			return false;
+		Reader r{ raw };
+		const auto chain = [&](oc::vector<oc::vector<uint8>>& levels)
+		{
+			uint32 n = 0;
+			if (!r.pod(n) || n > 32)
+				return false;
+			levels.clear();
+			levels.resize(n);
+			for (oc::vector<uint8>& level : levels)
+				if (!r.vec(level))
+					return false;
+			return true;
+		};
+		return r.pod(out.width) && r.pod(out.height) && r.pod(out.albedoEncoding) && r.pod(out.normalEncoding) && r.pod(out.mean)
+			&& chain(out.albedo) && chain(out.normal) && !out.albedo.empty() && r.cursor == raw.size();
+	}
+
+	void saveCachedTexture(const oc::string& path, uint64 hash, const CachedTexture& texture)
+	{
+		Writer w;
+		w.pod(texture.width);
+		w.pod(texture.height);
+		w.pod(texture.albedoEncoding);
+		w.pod(texture.normalEncoding);
+		w.pod(texture.mean);
+		const auto chain = [&](const oc::vector<oc::vector<uint8>>& levels)
+		{
+			w.pod((uint32)levels.size());
+			for (const oc::vector<uint8>& level : levels)
+				w.vec(level);
+		};
+		chain(texture.albedo);
+		chain(texture.normal);
+		writeCacheFile(path, MeshCacheTexture, TEXTURE_CACHE_VERSION, hash, w.data, TEXTURE_CACHE_ZSTD_LEVEL);
 	}
 }

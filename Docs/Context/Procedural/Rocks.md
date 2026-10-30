@@ -175,11 +175,11 @@ breaks, `Break 4 4`, no root plate) and `SnappedTop` (its UPPER HALF - the top h
   0.86, the distance from the part's axis / its radius there): the outer skin is bark, the cuts, the hollow and a
   splinter's inner face are not) into texCoords.y as 1 + it. The rock shader's wood path reads both (RendererVK "The
   rock material", DEAD WOOD).
-* **THE BARK** is the type's MATERIAL (`RockSystem`: `Type::woodMaterial`): the `Bark` species' texture pair -
-  `Assets/Local/Trees/Textures/<Bark>_bark.png` + `_bark_normal.png`, the files TreeSystem writes once; when missing,
-  generated from `Trees/<Bark>.tree` (`generateBarkImages`, not saved: TreeSystem owns those files) - x the `Color`
-  tint, mipped (`buildBarkMips`) and BC1 / BC5-compressed in a Low job per wood type (`loadBark`, job "Rock bark",
-  kicked with the variant jobs in the same counter), uploaded in `finishLoad` as the type's `ownMaterial`. Kept over a
+* **THE BARK** is the type's MATERIAL (`RockSystem`: `Type::woodMaterial`): the `Bark` species' bark, generated from
+  `Trees/<Bark>.tree` (`generateBarkImages`) x the `Color` tint, mipped (`buildBarkMips`) and BC1 / BC5-compressed in a
+  Low job per wood type (`loadBark`, job "Rock bark", kicked with the variant jobs in the same counter), uploaded in
+  `finishLoad` as the type's `ownMaterial`. Cached AS UPLOADED in `Local/Rocks/Textures/<type>.tex` (MeshCache's
+  `CachedTexture`, keyed by the species file's text and the tint), so a hit is one read and one decompress. Kept over a
   remesh, freed in `clearAll`. A rock type's instances use the shared grey material (`m_material`;
   `WorldType::material` is the own material of a wood or cactus type). The far volume takes a wood type as a solid in
   its own colour (`WorldType::ownColour` / `ownAlbedo`: the tinted texture's linear mean).

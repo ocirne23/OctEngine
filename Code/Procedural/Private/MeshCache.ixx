@@ -22,10 +22,16 @@ export namespace Procedural
 	constexpr uint32 TREE_MESH_CACHE_VERSION = 20;// generateTreeLibrary, bakeTreeVariant, bakeTreeDensity
 	constexpr uint32 ROCK_MESH_CACHE_VERSION = 3;    // generateRockVariant (and RockShape's layout: the file holds it raw)
 	constexpr uint32 CLUTTER_MESH_CACHE_VERSION = 1; // generateClutterMeshes (its pebbles: generateRockVariant too)
+	// The bark / leaf / billboard generators, their mip chains (buildBarkMips, buildLeafClusterMips, buildNormalMips) and
+	// the BC encoders (TextureConvert)
+	constexpr uint32 TEXTURE_CACHE_VERSION = 1;
 
 	constexpr const char* TREE_MESH_DIR = "Local/Trees/Meshes";
 	constexpr const char* ROCK_MESH_DIR = "Local/Rocks/Meshes";
 	constexpr const char* CLUTTER_MESH_DIR = "Local/Clutter/Meshes";
+	constexpr const char* TREE_TEXTURE_DIR = "Local/Trees/Textures";
+	constexpr const char* ROCK_TEXTURE_DIR = "Local/Rocks/Textures";
+	constexpr const char* CLUTTER_TEXTURE_DIR = "Local/Clutter/Textures";
 
 	// FNV-1a 64 over an asset file's text, then any settings mixed in.
 	uint64 meshCacheHash(oc::string_view text);
@@ -50,4 +56,20 @@ export namespace Procedural
 
 	bool loadClutterMeshes(const oc::string& path, uint64 hash, oc::vector<Renderer::ClutterMesh>& out);
 	void saveClutterMeshes(const oc::string& path, uint64 hash, const oc::vector<Renderer::ClutterMesh>& meshes);
+
+	// A generated material's textures AS UPLOADED (.tex): the albedo and normal mip chains in their GPU encoding (BC blocks,
+	// or RGBA8), level 0 first, plus the albedo's LINEAR mean (the far volume's colour). A load is one read and one zstd
+	// decompress - no image decode, no mip build, no BC encode.
+	struct CachedTexture
+	{
+		uint32 width = 0;
+		uint32 height = 0;
+		RenderMaterial::ETextureEncoding albedoEncoding = RenderMaterial::ETextureEncoding::Rgba8;
+		RenderMaterial::ETextureEncoding normalEncoding = RenderMaterial::ETextureEncoding::Rgba8;
+		oc::vector<oc::vector<uint8>> albedo;
+		oc::vector<oc::vector<uint8>> normal; // empty: none
+		glm::vec3 mean{ 0.0f };
+	};
+	bool loadCachedTexture(const oc::string& path, uint64 hash, CachedTexture& out);
+	void saveCachedTexture(const oc::string& path, uint64 hash, const CachedTexture& texture);
 }

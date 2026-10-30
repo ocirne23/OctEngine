@@ -45,30 +45,41 @@ namespace
 
 	constexpr uint32 BARK_TEXTURE_SIZE = 1024; // TreeSystem's generated textures
 
-	// A WOOD type's bark: its `Bark` species' texture pair - the files TreeSystem writes once to Assets/Local/Trees/Textures,
-	// else generated from Assets/Trees/<bark>.tree (not saved: TreeSystem owns those files) - x the type's tint, with the
-	// mip chains BC1 / BC5-compressed. A job: the IO, and seconds of work in Debug. False without a bark.
+	// A WOOD type's bark: its `Bark` species' bark (generated from Assets/Trees/<bark>.tree) x the type's tint, with the mip
+	// chains BC1 / BC5-compressed - cached as uploaded in Local/Rocks/Textures/<type>.tex (MeshCache's CachedTexture, keyed
+	// by the species file's text and the tint). A job: the IO, and seconds of work in Debug on a miss. False without a bark.
 	bool loadBark(const RockTypeDesc& desc, oc::vector<oc::vector<uint8>>& outAlbedo, oc::vector<oc::vector<uint8>>& outNormal,
 		uint32& outSize, glm::vec3& outMean)
 	{
-		oc::vector<uint8> albedo, normal;
-		uint32 w = 0, h = 0, nw = 0, nh = 0;
-		const bool loaded = ImageIO::readImageRgba8(oc::format("Local/Trees/Textures/{}_bark.png", desc.bark), w, h, albedo)
-			&& ImageIO::readImageRgba8(oc::format("Local/Trees/Textures/{}_bark_normal.png", desc.bark), nw, nh, normal)
-			&& w == h && nw == w && nh == h && w > 0 && (w & (w - 1)) == 0;
-		uint32 size = w;
-		if (!loaded)
+		const oc::string speciesPath = oc::format("Trees/{}.tree", desc.bark);
+		const oc::string cachePath = oc::format("{}/{}.tex", ROCK_TEXTURE_DIR, desc.name);
+		uint64 hash = meshCacheMix(meshCacheHash(FileSystem::readFileStr(speciesPath)), BARK_TEXTURE_SIZE);
+		for (int c = 0; c < 3; ++c)
 		{
-			TreeSpeciesDesc species;
-			oc::string error;
-			if (!loadTreeSpecies(oc::format("Trees/{}.tree", desc.bark), species, error))
-			{
-				Log::warning(oc::format("Rocks: '{}' - no bark '{}': {}", desc.name, desc.bark, error));
-				return false;
-			}
-			size = BARK_TEXTURE_SIZE;
-			generateBarkImages(species, size, albedo, normal);
+			uint32 bits;
+			std::memcpy(&bits, &desc.color[c], sizeof(bits));
+			hash = meshCacheMix(hash, bits);
 		}
+		CachedTexture cached;
+		if (loadCachedTexture(cachePath, hash, cached) && cached.width == cached.height)
+		{
+			outAlbedo = oc::move(cached.albedo);
+			outNormal = oc::move(cached.normal);
+			outSize = cached.width;
+			outMean = cached.mean;
+			return true;
+		}
+
+		oc::vector<uint8> albedo, normal;
+		TreeSpeciesDesc species;
+		oc::string error;
+		if (!loadTreeSpecies(speciesPath, species, error))
+		{
+			Log::warning(oc::format("Rocks: '{}' - no bark '{}': {}", desc.name, desc.bark, error));
+			return false;
+		}
+		const uint32 size = BARK_TEXTURE_SIZE;
+		generateBarkImages(species, size, albedo, normal);
 
 		// The tint (sRGB), and the far volume's colour: the tinted texture's LINEAR mean (it uploads as sRGB).
 		float toLinear[256];
@@ -101,6 +112,15 @@ namespace
 		encode(bark.albedoMips, TextureConvert::EBlockFormat::BC1, outAlbedo);
 		encode(bark.normalMips, TextureConvert::EBlockFormat::BC5, outNormal);
 		outSize = size;
+
+		cached = {};
+		cached.width = cached.height = size;
+		cached.albedoEncoding = RenderMaterial::ETextureEncoding::BC1;
+		cached.normalEncoding = RenderMaterial::ETextureEncoding::BC5;
+		cached.albedo = outAlbedo;
+		cached.normal = outNormal;
+		cached.mean = outMean;
+		saveCachedTexture(cachePath, hash, cached);
 		return true;
 	}
 }

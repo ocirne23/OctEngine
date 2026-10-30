@@ -59,29 +59,14 @@ namespace
 		outMeshes[0] = uploadTreeMesh(renderer, levels[0], raytraced);
 	}
 
-	// Species textures are generated ONCE into Assets/Local/Trees/Textures (<species>_bark.png, _bark_normal.png,
-	// _leaves.png, the billboard bakes) and read back on later loads. Generated output: not in git.
-	constexpr const char* TREE_TEXTURE_DIR = "Local/Trees/Textures";
+	// Species textures are generated ONCE into Assets/Local/Trees/Textures (TREE_TEXTURE_DIR: <species>_bark.tex,
+	// _leaves.tex, the billboard bakes) in their UPLOAD encoding (MeshCache's CachedTexture) and read back on later loads.
+	// Generated output: not in git.
 
 	// Far-representation cache name infix per piece set (modules keep the original, unprefixed names).
 	constexpr const char* PIECE_KINDS[3] = { "", "trunk", "tree" };
 	constexpr uint32 TREE_TEXTURE_SIZE = 1024;
 	constexpr uint32 TREE_DENSITY_RES = 32; // the far-tree volume's per-variant extinction grid (bakeTreeDensity)
-
-	// A square power-of-two RGBA8 image (the mip chain halves down to 1x1). False when missing or unusable.
-	bool loadSquareImage(const oc::string& path, uint32& outSize, oc::vector<uint8>& outRgba)
-	{
-		uint32 w = 0, h = 0;
-		if (!ImageIO::readImageRgba8(path, w, h, outRgba, true)) // explicit user action: enable / reload
-			return false;
-		if (w != h || w == 0 || (w & (w - 1)) != 0)
-		{
-			Log::warning(oc::format("Trees: '{}' is {}x{}, needs a square power of two - regenerating", path, w, h));
-			return false;
-		}
-		outSize = w;
-		return true;
-	}
 
 	// A bush's `Climate` may list several names (space-separated): it grows around the trees of ANY of them (case-
 	// insensitive). A tree's climate is one name.
@@ -130,19 +115,15 @@ namespace
 
 	// "Trees/Compress textures": an RGBA8 mip chain (levels halving from width x height) as BC blocks, one buffer per
 	// level, every level's block rows spread over the job system.
-	struct EncodedChain
+	void encodeChain(const oc::vector<oc::vector<uint8>>& rgba, uint32 width, uint32 height, TextureConvert::EBlockFormat format,
+		oc::vector<oc::vector<uint8>>& out)
 	{
-		oc::vector<oc::vector<uint8>> levels;
-		oc::vector<oc::span<uint8>> spans;
-	};
-	void encodeChain(const oc::vector<oc::span<uint8>>& rgba, uint32 width, uint32 height, TextureConvert::EBlockFormat format, EncodedChain& out)
-	{
-		out.levels.resize(rgba.size());
+		out.resize(rgba.size());
 		oc::vector<glm::uvec2> tasks; // (level, block row)
 		for (uint32 k = 0; k < (uint32)rgba.size(); ++k)
 		{
 			const uint32 w = glm::max(width >> k, 1u), h = glm::max(height >> k, 1u);
-			out.levels[k].resize(TextureConvert::compressedSize(w, h, format));
+			out[k].resize(TextureConvert::compressedSize(w, h, format));
 			for (uint32 row = 0; row < (h + 3) / 4; ++row)
 				tasks.push_back({ k, row });
 		}
@@ -153,56 +134,79 @@ namespace
 			{
 				const uint32 k = tasks[i].x;
 				const uint32 w = glm::max(width >> k, 1u), h = glm::max(height >> k, 1u);
-				TextureConvert::compressBlockRows(rgba[k].data(), w, h, format, tasks[i].y, tasks[i].y + 1, out.levels[k].data());
+				TextureConvert::compressBlockRows(rgba[k].data(), w, h, format, tasks[i].y, tasks[i].y + 1, out[k].data());
 			}
 		});
-		out.spans.clear();
-		for (oc::vector<uint8>& level : out.levels)
-			out.spans.push_back(oc::span<uint8>(level.data(), level.size()));
 	}
 
-	// RenderMaterial::createTextured with the chains BC-compressed when `compress` (the albedo / normal format each), else RGBA8.
-	RenderMaterial createTreeMaterial(bool compress, uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& albedo,
-		TextureConvert::EBlockFormat albedoFormat, const oc::vector<oc::span<uint8>>* normal, TextureConvert::EBlockFormat normalFormat,
-		float alphaCutoff, const char* debugName, uint32 extraFlags)
+	RenderMaterial::ETextureEncoding textureEncoding(TextureConvert::EBlockFormat format)
 	{
+		switch (format)
+		{
+		case TextureConvert::EBlockFormat::BC1: return RenderMaterial::ETextureEncoding::BC1;
+		case TextureConvert::EBlockFormat::BC3: return RenderMaterial::ETextureEncoding::BC3;
+		default:                                return RenderMaterial::ETextureEncoding::BC5;
+		}
+	}
+
+	// A generated pair of RGBA8 mip chains into its UPLOAD encoding (the .tex cache's content): BC in each map's format when
+	// `compress`, else the RGBA8 chains as they are (moved out of `albedo` / `normal`).
+	void encodeTexture(bool compress, uint32 width, uint32 height, oc::vector<oc::vector<uint8>>& albedo, TextureConvert::EBlockFormat albedoFormat,
+		oc::vector<oc::vector<uint8>>& normal, TextureConvert::EBlockFormat normalFormat, CachedTexture& out)
+	{
+		out.width = width;
+		out.height = height;
+		if (!compress)
+		{
+			out.albedo = oc::move(albedo);
+			out.normal = oc::move(normal);
+			out.albedoEncoding = out.normalEncoding = RenderMaterial::ETextureEncoding::Rgba8;
+			return;
+		}
+		encodeChain(albedo, width, height, albedoFormat, out.albedo);
+		encodeChain(normal, width, height, normalFormat, out.normal);
+		out.albedoEncoding = textureEncoding(albedoFormat);
+		out.normalEncoding = textureEncoding(normalFormat);
+	}
+
+	// The .tex file's key: the species file's text, "Compress textures" and the level-0 size.
+	uint64 textureCacheHash(uint64 speciesTextHash, bool compress, uint32 size)
+	{
+		return meshCacheMix(meshCacheMix(speciesTextHash, compress ? 1u : 0u), size);
+	}
+
+	// The .tex IO runs on main (explicit user action: enable / reload), each call in its own tight scope (never around the
+	// generators' job waits).
+	bool loadTexture(const oc::string& path, uint64 hash, CachedTexture& out)
+	{
+		const FileSystem::AllowMainThreadIO allowIo;
+		return loadCachedTexture(path, hash, out);
+	}
+	void saveTexture(const oc::string& path, uint64 hash, const CachedTexture& texture)
+	{
+		const FileSystem::AllowMainThreadIO allowIo;
+		saveCachedTexture(path, hash, texture);
+		Log::info(oc::format("Trees: generated '{}'", path));
+	}
+
+	RenderMaterial createTreeMaterial(CachedTexture& texture, float alphaCutoff, const char* debugName, uint32 extraFlags)
+	{
+		oc::vector<oc::span<uint8>> albedo, normal;
+		for (oc::vector<uint8>& level : texture.albedo)
+			albedo.push_back(oc::span<uint8>(level.data(), level.size()));
+		for (oc::vector<uint8>& level : texture.normal)
+			normal.push_back(oc::span<uint8>(level.data(), level.size()));
 		RenderMaterial::TextureDesc desc;
-		desc.width = width;
-		desc.height = height;
+		desc.width = texture.width;
+		desc.height = texture.height;
 		desc.albedoMips = &albedo;
-		desc.normalMips = normal;
+		desc.normalMips = normal.empty() ? nullptr : &normal;
+		desc.albedoEncoding = texture.albedoEncoding;
+		desc.normalEncoding = texture.normalEncoding;
 		desc.alphaCutoff = alphaCutoff;
 		desc.extraFlags = extraFlags;
 		desc.debugName = debugName;
-		if (!compress)
-			return RenderMaterial::createTextured(desc);
-		auto encoding = [](TextureConvert::EBlockFormat format)
-		{
-			switch (format)
-			{
-			case TextureConvert::EBlockFormat::BC1: return RenderMaterial::ETextureEncoding::BC1;
-			case TextureConvert::EBlockFormat::BC3: return RenderMaterial::ETextureEncoding::BC3;
-			default:                                return RenderMaterial::ETextureEncoding::BC5;
-			}
-		};
-		EncodedChain albedoBc, normalBc;
-		encodeChain(albedo, width, height, albedoFormat, albedoBc);
-		if (normal)
-			encodeChain(*normal, width, height, normalFormat, normalBc);
-		desc.albedoMips = &albedoBc.spans;
-		desc.normalMips = normal ? &normalBc.spans : nullptr;
-		desc.albedoEncoding = encoding(albedoFormat);
-		desc.normalEncoding = encoding(normalFormat);
 		return RenderMaterial::createTextured(desc);
-	}
-
-	void saveImage(const oc::string& path, uint32 size, const oc::vector<uint8>& rgba)
-	{
-		FileSystem::createDirectories(TREE_TEXTURE_DIR, true);
-		if (ImageIO::writePngRgba8(path, size, size, rgba, true))
-			Log::info(oc::format("Trees: generated '{}'", path));
-		else
-			Log::warning(oc::format("Trees: failed to write '{}'", path));
 	}
 
 	// A tree species' UNDERGROWTH: x = its bushes per tree, y = how far out they go (m, at least the trunk's 1.5 m). The
@@ -476,9 +480,11 @@ namespace Procedural
 			// file's text. A miss generates them and writes the file.
 			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
 			oc::vector<TreeDensityGrid> density;
+			uint64 textHash = 0; // the species file's text: the mesh and texture caches' key
 			{
 				const FileSystem::AllowMainThreadIO allowIo; // explicit user action: enable / reload
-				const uint64 meshHash = meshCacheMix(meshCacheHash(FileSystem::readFileStr(entry.path)), TREE_DENSITY_RES);
+				textHash = meshCacheHash(FileSystem::readFileStr(entry.path));
+				const uint64 meshHash = meshCacheMix(textHash, TREE_DENSITY_RES);
 				const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
 				if (!loadTreeMeshes(meshPath, meshHash, species.library, species.variants, density))
 				{
@@ -535,66 +541,62 @@ namespace Procedural
 				meshes.densityMin = density[v].min;
 				meshes.densityMax = density[v].max;
 			}
-			// Level-0 images, kept for the billboard bake.
+			// Level-0 images for the billboard bake: only those generated here (a .tex holds no RGBA8 level 0), so
+			// buildBillboards generates any it lacks when a bake misses.
 			oc::vector<uint8> barkAlbedo, leafImage;
 			uint32 barkSize = 0, leafSize = 0;
+			glm::vec3 barkMean(0.0f), leafMean(0.0f);
+			const uint64 textureHash = textureCacheHash(textHash, m_settings.compressTextures, TREE_TEXTURE_SIZE);
 			{
-				const oc::string albedoPath = oc::format("{}/{}_bark.png", TREE_TEXTURE_DIR, name);
-				const oc::string normalPath = oc::format("{}/{}_bark_normal.png", TREE_TEXTURE_DIR, name);
-				uint32 normalSize = 0;
-				oc::vector<uint8>& albedo = barkAlbedo;
-				uint32& size = barkSize;
-				oc::vector<uint8> normal;
-				const bool loaded = !m_settings.regenerateTextures && loadSquareImage(albedoPath, size, albedo)
-					&& loadSquareImage(normalPath, normalSize, normal) && normalSize == size;
-				if (!loaded)
+				const oc::string path = oc::format("{}/{}_bark.tex", TREE_TEXTURE_DIR, name);
+				CachedTexture texture;
+				if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture))
 				{
-					size = TREE_TEXTURE_SIZE;
-					generateBarkImages(species.desc, size, albedo, normal);
-					saveImage(albedoPath, size, albedo);
-					saveImage(normalPath, size, normal);
+					oc::vector<uint8> normal;
+					barkSize = TREE_TEXTURE_SIZE;
+					generateBarkImages(species.desc, barkSize, barkAlbedo, normal);
+					TreeBarkTexture bark;
+					buildBarkMips(barkAlbedo, normal, barkSize, bark);
+					texture = {};
+					encodeTexture(m_settings.compressTextures, barkSize, barkSize, bark.albedoMips, TextureConvert::EBlockFormat::BC1,
+						bark.normalMips, TextureConvert::EBlockFormat::BC5, texture);
+					texture.mean = meanLeafAlbedo(barkAlbedo, species.desc.barkColor);
+					saveTexture(path, textureHash, texture);
+					// The level-0 PNGs this file replaces.
+					FileSystem::remove(oc::format("{}/{}_bark.png", TREE_TEXTURE_DIR, name), true);
+					FileSystem::remove(oc::format("{}/{}_bark_normal.png", TREE_TEXTURE_DIR, name), true);
 				}
-				TreeBarkTexture bark;
-				buildBarkMips(albedo, normal, size, bark);
-				oc::vector<oc::span<uint8>> albedoMips, normalMips;
-				for (oc::vector<uint8>& level : bark.albedoMips)
-					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				for (oc::vector<uint8>& level : bark.normalMips)
-					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				species.ownBarkMaterial = createTreeMaterial(m_settings.compressTextures, bark.size, bark.size, albedoMips, TextureConvert::EBlockFormat::BC1,
-					&normalMips, TextureConvert::EBlockFormat::BC5, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
+				barkMean = texture.mean;
+				species.ownBarkMaterial = createTreeMaterial(texture, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
 				species.barkMaterial = species.ownBarkMaterial.index();
 			}
 			if (species.desc.leafType == ETreeLeafType::Cluster)
 			{
-				const oc::string leavesPath = oc::format("{}/{}_leaves.png", TREE_TEXTURE_DIR, name);
-				const oc::string leavesNormalPath = oc::format("{}/{}_leaves_normal.png", TREE_TEXTURE_DIR, name);
-				uint32& size = leafSize;
-				oc::vector<uint8>& image = leafImage;
-				oc::vector<uint8> normalImage;
-				uint32 normalSize = 0;
-				// Both or neither: the normal map must match the leaves drawn in the colour image.
-				if (m_settings.regenerateTextures || !loadSquareImage(leavesPath, size, image)
-					|| !loadSquareImage(leavesNormalPath, normalSize, normalImage) || normalSize != size)
+				const oc::string path = oc::format("{}/{}_leaves.tex", TREE_TEXTURE_DIR, name);
+				CachedTexture texture;
+				if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture))
 				{
-					size = TREE_TEXTURE_SIZE;
-					generateLeafClusterImage(species.desc, size, image, &normalImage);
-					saveImage(leavesPath, size, image);
-					saveImage(leavesNormalPath, size, normalImage);
+					// One generation draws both: the normal map must match the leaves drawn in the colour image.
+					oc::vector<uint8> normalImage;
+					leafSize = TREE_TEXTURE_SIZE;
+					generateLeafClusterImage(species.desc, leafSize, leafImage, &normalImage);
+					TreeLeafTexture albedoChain;
+					buildLeafClusterMips(leafImage, leafSize, albedoChain);
+					oc::vector<oc::vector<uint8>> normalChain;
+					buildNormalMips(normalImage, leafSize, normalChain);
+					texture = {};
+					// The normal map: cupped, tilted leaves, BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the
+					// transmission's leaf thickness).
+					encodeTexture(m_settings.compressTextures, leafSize, leafSize, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
+						normalChain, TextureConvert::EBlockFormat::BC3, texture);
+					texture.mean = meanLeafAlbedo(leafImage, species.desc.leafColor);
+					saveTexture(path, textureHash, texture);
+					FileSystem::remove(oc::format("{}/{}_leaves.png", TREE_TEXTURE_DIR, name), true);
+					FileSystem::remove(oc::format("{}/{}_leaves_normal.png", TREE_TEXTURE_DIR, name), true);
 				}
-				TreeLeafTexture texture;
-				buildLeafClusterMips(image, size, texture);
-				oc::vector<oc::vector<uint8>> normalChain;
-				buildNormalMips(normalImage, size, normalChain);
-				oc::vector<oc::span<uint8>> mips, normalMips;
-				for (oc::vector<uint8>& level : texture.mips)
-					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				for (oc::vector<uint8>& level : normalChain)
-					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms). The normal map: cupped, tilted leaves,
-				// BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the transmission's leaf thickness).
-				species.ownLeafMaterial = createTreeMaterial(m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
-					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
+				leafMean = texture.mean;
+				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms).
+				species.ownLeafMaterial = createTreeMaterial(texture, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
 					RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.leafMaterial = species.ownLeafMaterial.index();
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;
@@ -607,13 +609,13 @@ namespace Procedural
 				leafImage = { (uint8)(glm::clamp(species.desc.leafColor.x, 0.0f, 1.0f) * 255.0f + 0.5f),
 					(uint8)(glm::clamp(species.desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
 					(uint8)(glm::clamp(species.desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
+				leafMean = meanLeafAlbedo(leafImage, species.desc.leafColor);
 			}
 			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`. A species WITHOUT
 			// leaves (a succulent: bark blades) shows in the volume as its bark (bakeTreeDensity splats it): the bark's mean.
 			const glm::vec3 far = species.desc.farColor;
 			const bool leafless = species.variants.empty() || species.variants[0].leaves[0].indices.empty();
-			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f))
-				: leafless ? meanLeafAlbedo(barkAlbedo, species.desc.barkColor) : meanLeafAlbedo(leafImage, species.desc.leafColor))
+			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : leafless ? barkMean : leafMean)
 				* species.desc.farAlbedoScale;
 			if (m_settings.farMode == 0 && species.desc.billboardDistance > 0.0f)
 			{
@@ -639,8 +641,25 @@ namespace Procedural
 	}
 
 	void TreeSystem::buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
-		oc::span<const uint8> barkAlbedo, uint32 barkSize, oc::span<const uint8> leafImage, uint32 leafSize)
+		oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
 	{
+		// The bake's inputs, generated on the first miss when their .tex was loaded (the same images: the generators are
+		// deterministic).
+		const auto bakeInputs = [&]()
+		{
+			if (barkAlbedo.empty())
+			{
+				oc::vector<uint8> normal;
+				barkSize = TREE_TEXTURE_SIZE;
+				generateBarkImages(species.desc, barkSize, barkAlbedo, normal);
+			}
+			if (leafImage.empty())
+			{
+				oc::vector<uint8> normal; // drawn as for the .tex, so the colour image is the same
+				leafSize = TREE_TEXTURE_SIZE;
+				generateLeafClusterImage(species.desc, leafSize, leafImage, &normal);
+			}
+		};
 		const uint32 size = (uint32)species.desc.billboardSize;
 		const uint32 numViews = m_settings.billboardViews == 0 ? 2u : 4u;
 
@@ -658,9 +677,10 @@ namespace Procedural
 		// above is a dot).
 		const oc::vector<TreePiece>* pieceSets[3] = { &species.library.modules, &species.library.trunks, &species.variants };
 		oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
-		// The modules' level-0.. mip chains and axis-coded cards, kept for the mid tier's atlas + card meshes (below).
+		// The modules' textures (their encoded mip chains) and axis-coded cards, kept for the mid tier's atlas + card meshes
+		// (below).
 		const size_t numModules = species.library.modules.size();
-		oc::vector<oc::vector<oc::vector<uint8>>> moduleAlbedo(numModules), moduleNormal(numModules);
+		oc::vector<CachedTexture> moduleTextures(numModules);
 		oc::vector<TreeMesh> moduleCards(numModules);
 		for (uint32 set = 0; set < 3; ++set)
 		for (size_t i = 0; i < pieceSets[set]->size(); ++i)
@@ -680,62 +700,61 @@ namespace Procedural
 			const float bend = species.desc.billboardNormalBend;
 			const uint32 settingsHash = treeHash(0xB1B0A2D5u ^ numViews, (uint32)std::round(bend * 1000.0f));
 			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(set, (uint32)i)), 2u, size) ^ settingsHash);
-			const oc::string albedoPath = oc::format("{}/{}.png", TREE_TEXTURE_DIR, stem);
-			const oc::string normalPath = oc::format("{}/{}_normal.png", TREE_TEXTURE_DIR, stem);
+			const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
+			const uint64 textureHash = meshCacheMix(meshCacheHash(stem), m_settings.compressTextures ? 1u : 0u);
 
-			oc::vector<uint8> albedo, normal;
-			uint32 albedoSize = 0, normalSize = 0;
-			const bool loaded = !m_settings.regenerateTextures && loadSquareImage(albedoPath, albedoSize, albedo)
-				&& loadSquareImage(normalPath, normalSize, normal) && albedoSize == size && normalSize == size;
-			if (!loaded)
+			CachedTexture texture;
+			if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture) || texture.width != size || texture.height != size
+				|| texture.albedo.size() != numMips || texture.normal.size() != numMips)
 			{
+				// Stale slot files go (and the level-0 PNGs of before the .tex).
 				for (const FileSystem::DirEntry& entry : existing)
 					if (entry.name.rfind(prefix.c_str(), 0) == 0 || entry.name.rfind(legacyPrefix.c_str(), 0) == 0)
 						FileSystem::remove(entry.path, true);
+				bakeInputs();
+				oc::vector<uint8> albedo, normal;
 				bakeBillboards(piece, TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize }, size, bend, numViews,
 					horizontal, albedo, normal);
-				saveImage(albedoPath, size, albedo);
-				saveImage(normalPath, size, normal);
-			}
 
-			// `Billboard AlbedoScale` (whole trees only): x the colour in LINEAR space (the texture is sRGB), applied here -
-			// after the cache - so a change needs no re-bake.
-			const float albedoScale = species.desc.billboardAlbedoScale;
-			if (horizontal && albedoScale != 1.0f)
-			{
-				uint8 lut[256];
-				for (uint32 v = 0; v < 256; ++v)
+				// `Billboard AlbedoScale` (whole trees only): x the colour in LINEAR space (the texture is sRGB). Baked into the
+				// .tex: the species file's text keys it, so a change re-bakes anyway.
+				const float albedoScale = species.desc.billboardAlbedoScale;
+				if (horizontal && albedoScale != 1.0f)
 				{
-					const float c = (float)v / 255.0f;
-					const float lin = (c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f)) * albedoScale;
-					const float enc = lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(glm::min(lin, 1.0f), 1.0f / 2.4f) - 0.055f;
-					lut[v] = (uint8)(glm::clamp(enc, 0.0f, 1.0f) * 255.0f + 0.5f);
+					uint8 lut[256];
+					for (uint32 v = 0; v < 256; ++v)
+					{
+						const float c = (float)v / 255.0f;
+						const float lin = (c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f)) * albedoScale;
+						const float enc = lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(glm::min(lin, 1.0f), 1.0f / 2.4f) - 0.055f;
+						lut[v] = (uint8)(glm::clamp(enc, 0.0f, 1.0f) * 255.0f + 0.5f);
+					}
+					for (size_t t = 0; t + 3 < albedo.size(); t += 4)
+						for (size_t c = 0; c < 3; ++c)
+							albedo[t + c] = lut[albedo[t + c]];
 				}
-				for (size_t t = 0; t + 3 < albedo.size(); t += 4)
-					for (size_t c = 0; c < 3; ++c)
-						albedo[t + c] = lut[albedo[t + c]];
+
+				// Coverage-preserving albedo mips (alpha scaled up per level to keep the level-0 coverage), down to numMips.
+				TreeLeafTexture albedoChain;
+				buildLeafClusterMips(albedo, size, albedoChain);
+				oc::vector<oc::vector<uint8>> normalChain;
+				buildNormalMips(normal, size, normalChain); // RGB renormalized, A (the interior) averaged
+				albedoChain.mips.resize(numMips);
+				normalChain.resize(numMips);
+				// BC3 normal: RGB the full normal (sign kept), A the baked interior - no two-channel format holds both.
+				texture = {};
+				encodeTexture(m_settings.compressTextures, size, size, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
+					normalChain, TextureConvert::EBlockFormat::BC3, texture);
+				saveTexture(path, textureHash, texture);
 			}
 
-			// Coverage-preserving albedo mips (alpha scaled up per level to keep the level-0 coverage).
-			TreeLeafTexture albedoChain;
-			buildLeafClusterMips(albedo, size, albedoChain);
-			oc::vector<oc::vector<uint8>> normalChain;
-			buildNormalMips(normal, size, normalChain); // RGB renormalized, A (the interior) averaged
-			oc::vector<oc::span<uint8>> albedoMips, normalMips;
-			for (uint32 k = 0; k < numMips; ++k)
-			{
-				albedoMips.push_back(oc::span<uint8>(albedoChain.mips[k].data(), albedoChain.mips[k].size()));
-				normalMips.push_back(oc::span<uint8>(normalChain[k].data(), normalChain[k].size()));
-			}
 			// The module / trunk billboards draw only in the piece library (debug rows): without it they are not uploaded
 			// (the modules' chains still feed the card atlas below).
 			if (set == 2 || m_settings.showLibrary)
 			{
 				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
-				// "TreeBillboard/<piece>": one box per billboard in the VRAM view. BC3 normal: RGB the full normal (sign
-				// kept), A the baked interior - no two-channel format holds both.
-				meshes.billboardMaterial = createTreeMaterial(m_settings.compressTextures, size, size, albedoMips, TextureConvert::EBlockFormat::BC3,
-					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
+				// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
+				meshes.billboardMaterial = createTreeMaterial(texture, TREE_LEAF_ALPHA_CUTOFF,
 					oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
 					| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
 
@@ -750,38 +769,41 @@ namespace Procedural
 			if (set == 0)
 			{
 				// Kept for the atlas (the material above has copied its levels) and the card meshes.
-				moduleAlbedo[i].assign(albedoChain.mips.begin(), albedoChain.mips.begin() + numMips);
-				moduleNormal[i].assign(normalChain.begin(), normalChain.begin() + numMips);
+				moduleTextures[i] = oc::move(texture);
 				billboardMesh(box, size, numViews, false, moduleCards[i], true);
 			}
 		}
 
 		// THE MID TIER's BRANCH CARDS. One ATLAS per species: the module billboards stacked top to bottom (module m in
 		// rows [m, m + 1) x size), each level the stack of the modules' own levels - exact (every module block halves
-		// cleanly) and every module keeps its coverage-preserving alpha. Then per baked variant ONE card mesh: each
-		// module placement's cards in the variant's space, v remapped into the module's block, the card axis code
-		// (texCoords.z, billboardMesh) remapped with it.
+		// cleanly) and every module keeps its coverage-preserving alpha. The levels are stacked IN THEIR ENCODING: a BC
+		// block covers 4x4 texels of one module, since every level a material gets is a multiple of 4 high (billboardLayout
+		// keeps >= 4 px per strip). Then per baked variant ONE card mesh: each module placement's cards in the variant's
+		// space, v remapped into the module's block, the card axis code (texCoords.z, billboardMesh) remapped with it.
 		if (numModules == 0 || species.variants.empty())
 			return;
 		const uint32 numMips = billboardLayout(size, numViews, false).numMips;
-		oc::vector<oc::vector<uint8>> atlasAlbedo(numMips), atlasNormal(numMips);
-		for (uint32 k = 0; k < numMips; ++k)
-			for (size_t m = 0; m < numModules; ++m)
-			{
-				atlasAlbedo[k].insert(atlasAlbedo[k].end(), moduleAlbedo[m][k].begin(), moduleAlbedo[m][k].end());
-				atlasNormal[k].insert(atlasNormal[k].end(), moduleNormal[m][k].begin(), moduleNormal[m][k].end());
-			}
-		oc::vector<oc::span<uint8>> albedoMips, normalMips;
-		for (uint32 k = 0; k < numMips; ++k)
+		CachedTexture atlas;
+		atlas.width = size;
+		atlas.height = size * (uint32)numModules;
+		atlas.albedoEncoding = moduleTextures[0].albedoEncoding;
+		atlas.normalEncoding = moduleTextures[0].normalEncoding;
+		if (atlas.albedoEncoding != RenderMaterial::ETextureEncoding::Rgba8 && ((size >> (numMips - 1)) & 3u) != 0)
 		{
-			albedoMips.push_back(oc::span<uint8>(atlasAlbedo[k].data(), atlasAlbedo[k].size()));
-			normalMips.push_back(oc::span<uint8>(atlasNormal[k].data(), atlasNormal[k].size()));
+			Log::warning(oc::format("Trees: '{}' - billboard size {} leaves a mip under 4 px: no card atlas", name, size));
+			return;
 		}
+		atlas.albedo.resize(numMips);
+		atlas.normal.resize(numMips);
+		for (uint32 k = 0; k < numMips; ++k)
+			for (const CachedTexture& module : moduleTextures)
+			{
+				atlas.albedo[k].insert(atlas.albedo[k].end(), module.albedo[k].begin(), module.albedo[k].end());
+				atlas.normal[k].insert(atlas.normal[k].end(), module.normal[k].begin(), module.normal[k].end());
+			}
 		// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
-		species.cardAtlasMaterial = createTreeMaterial(m_settings.compressTextures, size, size * (uint32)numModules, albedoMips,
-			TextureConvert::EBlockFormat::BC3, &normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
-			oc::format("TreeCardAtlas/{}", name).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD
-			| RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+		species.cardAtlasMaterial = createTreeMaterial(atlas, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeCardAtlas/{}", name).c_str(),
+			RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
 
 		const float invModules = 1.0f / (float)numModules;
 		for (size_t v = 0; v < species.variants.size(); ++v)

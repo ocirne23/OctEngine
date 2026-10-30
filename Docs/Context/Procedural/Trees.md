@@ -372,8 +372,9 @@ The SHARED pieces — modules AND trunks, and the baked whole-tree variants — 
 world up, so its billboard's "top" card stands vertical: two crossed vertical trunk cards), crossfaded in per placed
 piece beyond its distance × `Trees/Far distance scale` (default 3; `Trees/Force far` shows them all). Two modes,
 `Billboards` and `None`; changing the mode reloads. The bakes live in `TreeImpostor.cpp`: a small software rasterizer
-(2×2 supersampled, back faces culled, leaves alpha-tested). Cache files `<species>_<kind>billboard<i>v<views>_<hash>.png`
-(+ `_normal`; kind "" = module, `trunk`, `tree` = baked variant; stale files of the same prefix are removed).
+(2×2 supersampled, back faces culled, leaves alpha-tested). Cache files `<species>_<kind>billboard<i>v<views>_<hash>.tex`
+(both maps, see "Texture files"; kind "" = module, `trunk`, `tree` = baked variant; stale files of the same prefix are
+removed).
 `treeBakeHash` names them by the bake's INPUTS: the species file's text, the piece's set and index, `BAKE_VERSION`
 and the settings - **never by the geometry**: its floats differ in their last bits between Debug and the optimized
 builds (`/fp:fast`), which renamed (and re-baked) the cache at every config switch. **A generator change that moves
@@ -454,21 +455,22 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
 ### Texture files (`Assets/Local/Trees/Textures`)
 
 Generated output under `Assets/Local`, so NOT in git: a fresh checkout generates them on the first load.
-The species textures are generated ONCE and saved as PNG (`File:ImageIO`): `<species>_bark.png`,
-`<species>_bark_normal.png`, `<species>_leaves.png` + `<species>_leaves_normal.png` (cluster species only; the
-leaves' tangent-space normal map - cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage
-as the colour; A = the leaf's RIM, 0 at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness;
-both are regenerated when either is missing; BC3 on the GPU for the A), plus the billboard bakes. Later loads
-read them back and only rebuild the mip chains (bark box-filtered, leaves coverage-preserving). **A file that exists
-wins — changing `Bark` / `Color` / cluster parameters does NOT regenerate it**: press `Trees/Regenerate textures`
-(overwrites all) or delete the file. The files are also where authored replacements go: square power of
-two, RGBA8; the leaf atlas keeps the 2×2 cell layout (stem at the TOP edge of each cell, v = 0); the normal
-map is tangent space with x along u (around) and y along v (along the branch, DOWN the image). The rocks' DEAD WOOD
-reads the bark pair too ([Rocks.md](Rocks.md)).
+**Each material is ONE `.tex` file AS UPLOADED** (MeshCache's `CachedTexture`, see "The generated-mesh cache" in
+[CONTEXT.md](CONTEXT.md)): the albedo and normal mip chains in their GPU encoding plus the albedo's linear mean (the
+far volume's colour), zstd. A load is one read and one decompress - no image decode, no mip build, no BC encode.
+`<species>_bark.tex`, `<species>_leaves.tex` (cluster species only; its normal map: the leaves' tangent-space normals -
+cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage as the colour; A = the leaf's RIM, 0
+at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness; BC3 on the GPU for the A), plus the
+billboard bakes `<stem>.tex`. Keyed inside by the species file's text, `Compress textures` and the size, so a changed
+`.tree` regenerates them; `Trees/Regenerate textures` overwrites all. Writing a `.tex` removes the level-0 PNGs it
+replaces. **A `.tex` holds no RGBA8 level 0**: a billboard bake miss regenerates the bark / leaf images it needs
+(`buildBillboards`' `bakeInputs`; the generators are deterministic). The rocks' DEAD WOOD keeps its own tinted bark
+`.tex` ([Rocks.md](Rocks.md)).
 
-**GPU formats** (`Trees/Compress textures`, default on, reloads): the PNGs stay the RGBA8 cache; at load the
-finished mip chains (coverage-preserving alpha, AlbedoScale applied) are BC-compressed in memory (File
-`TextureConvert::compressBlockRows`, stb_dxt, every level's block rows a `parallelFor` task, "Tree texture BC"):
+**GPU formats** (`Trees/Compress textures`, default on, reloads; a change is a `.tex` miss, so it re-bakes the
+billboards): the finished mip chains (coverage-preserving alpha, AlbedoScale applied) are BC-compressed when generated
+(File `TextureConvert::compressBlockRows`, stb_dxt, every level's block rows a `parallelFor` task, "Tree texture BC").
+The card atlas stacks the module billboards' levels IN THEIR ENCODING (every level is a multiple of 4 px high):
 
 | Texture | Format |
 |---|---|

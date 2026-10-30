@@ -10,7 +10,7 @@ import Settings;
 
 import :TerrainSampler;
 import :ClutterType;
-import :TreeLeafTexture;
+import :MeshCache;
 
 // GROUND CLUTTER ("Clutter" tweaks; Docs/Context/Procedural/Clutter.md): pebbles, fallen branches, mushrooms and flowers. The
 // objects themselves are placed on the GPU every frame (RendererVK ClutterPipeline, clutter_cull.cs.glsl) - nothing per
@@ -47,9 +47,9 @@ export namespace Procedural
 			ClutterTypeDesc desc;
 			uint64 meshHash = 0; // the .clutter file's text (MeshCache's key, with the mesh resolution)
 			oc::vector<Renderer::ClutterMesh> meshes;
-			// A flower's texture (ClutterTexture: a fern's frond, a radial petal, a grain's ear): the chain from the job,
-			// uploaded and freed in finishGeneration.
-			TreeLeafTexture image;
+			// A flower's texture (ClutterTexture: a fern's frond, a radial petal, a grain's ear): the BC3 chain from the job
+			// (the .tex cache, else generated), uploaded and freed in finishGeneration. Empty: the type has none.
+			CachedTexture image;
 			RenderTexture texture; // its index() is the renderer's u_textures index
 		};
 		// What a floor map bake reads: a copy of the records under the map and what their types mean.

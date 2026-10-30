@@ -217,11 +217,11 @@ uint16 RendererState::addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline,
     return (uint16)addMaterialInfos({ material });
 }
 
-uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc)
+namespace
 {
-    using ETextureEncoding = RenderMaterial::ETextureEncoding;
-    auto toFormat = [](ETextureEncoding encoding, bool sRGB)
+    vk::Format toFormat(RenderMaterial::ETextureEncoding encoding, bool sRGB)
     {
+        using ETextureEncoding = RenderMaterial::ETextureEncoding;
         switch (encoding)
         {
         case ETextureEncoding::BC1: return sRGB ? vk::Format::eBc1RgbaSrgbBlock : vk::Format::eBc1RgbaUnormBlock;
@@ -229,7 +229,11 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
         case ETextureEncoding::BC5: return vk::Format::eBc5UnormBlock;
         default:                    return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
         }
-    };
+    }
+}
+
+uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc)
+{
     assert(desc.albedoMips && "RenderMaterial::TextureDesc needs albedoMips");
     // "<debugName>/albedo" and "/normal": the VRAM view (MemoryPanel) splits a name on '/', so each material is a
     // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
@@ -260,10 +264,11 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
     return (uint16)addMaterialInfos({ material });
 }
 
-uint16 RendererState::addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+uint16 RendererState::addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
+                                 RenderMaterial::ETextureEncoding encoding)
 {
     // No re-record: the upload queued its bindless write (as addTextureMaterial's).
-    return Globals::textureManager.uploadMips(width, height, vk::Format::eR8G8B8A8Srgb, mips, debugName);
+    return Globals::textureManager.uploadMips(width, height, toFormat(encoding, true), mips, debugName);
 }
 
 void RendererState::releaseTexture(uint16 texIdx)
@@ -450,10 +455,11 @@ void RenderMaterial::destroy()
 uint32 RenderMaterial::getFlags() const { return Globals::rendererVK.getMaterialFlags(m_index); }
 void RenderMaterial::setFlags(uint32 flags) { Globals::rendererVK.setMaterialFlags(m_index, flags); }
 
-RenderTexture RenderTexture::create(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+RenderTexture RenderTexture::create(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
+                                    RenderMaterial::ETextureEncoding encoding)
 {
     RenderTexture texture;
-    texture.m_index = Globals::rendererVK.addTexture(width, height, mips, debugName);
+    texture.m_index = Globals::rendererVK.addTexture(width, height, mips, debugName, encoding);
     return texture;
 }
 

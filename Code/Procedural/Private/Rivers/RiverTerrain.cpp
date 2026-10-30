@@ -111,7 +111,17 @@ namespace Procedural
 	// The cross-section: the channel (its sides at the wall slope down to a flat bed: channelCut), then ONE curve over the bank and the floodplain
 	// up to "Bank height" x the hydraulic depth at the floodplain's edge, then the valley wall. The floodplain is carved whole; the wall fades
 	// out over the last 30 % of its reach past the edge.
-	float RiverTerrain::pieceCarve(const RiverPoint& a, const RiverPoint& c, float t, float d, float hg, float& outWater) const
+	float RiverTerrain::pieceSteep(const RiverPoint& a, const RiverPoint& c) const
+	{
+		const float nr = TerrainGenV3::nativeResolution();
+		const float lenM = std::sqrt((c.x - a.x) * (c.x - a.x) + (c.z - a.z) * (c.z - a.z)) * nr;
+		const float drop = lenM > 1e-3f ? (m_carve.surface(a.water, a.depth, a.q) - m_carve.surface(c.water, c.depth, c.q)) / lenM : 0.0f;
+		const float lo = 0.5f * m_unitCfg.rapidsSlope, hi = oc::max(m_unitCfg.fallSlope, lo + 1e-3f);
+		return smoothstep01((drop - lo) / (hi - lo));
+	}
+
+	float RiverTerrain::pieceCarve(const RiverPoint& a, const RiverPoint& c, float t, float d, float hg, float reach, float steepDrop,
+	                               float& outWater) const
 	{
 		const float unitD = oc::max(a.depth + (c.depth - a.depth) * t, 0.02f);
 		const float q = a.q + (c.q - a.q) * t;
@@ -121,16 +131,9 @@ namespace Procedural
 		// channel is "Whitewater channel depth" x deeper and "Whitewater channel widen" x wider - the falling sheet and the
 		// rapids' waves dipped into the bed, and the banks' tips poked through the sheet's edges (the ribbon is 1.2 x the
 		// channel). The steepness is the piece's own drop, eased from half "Rapids slope" to "Fall slope" (the whitewater's
-		// measure); a plunge gorge counts in full (the room at the foot).
+		// measure: pieceSteep); a plunge gorge counts in full (the room at the foot).
 		const float gorge = ((a.flags & RiverPoint_Gorge) ? 1.0f - t : 0.0f) + ((c.flags & RiverPoint_Gorge) ? t : 0.0f);
-		float steep = gorge;
-		{
-			const float nr = TerrainGenV3::nativeResolution();
-			const float lenM = std::sqrt((c.x - a.x) * (c.x - a.x) + (c.z - a.z) * (c.z - a.z)) * nr;
-			const float drop = lenM > 1e-3f ? (m_carve.surface(a.water, a.depth, a.q) - m_carve.surface(c.water, c.depth, c.q)) / lenM : 0.0f;
-			const float lo = 0.5f * m_unitCfg.rapidsSlope, hi = oc::max(m_unitCfg.fallSlope, lo + 1e-3f);
-			steep = oc::max(steep, smoothstep01((drop - lo) / (hi - lo)));
-		}
+		const float steep = oc::max(gorge, steepDrop);
 		// The widened part is a SHELF just under the waterline, not channel: cut at the channel's slope it lay BELOW the
 		// water and the ribbon's edge (1.2 x the river's own half-width) hung over it - the surface stood above the banks
 		// on every slope (2026-10-10). The deep cut keeps the river's own half-width; the bank starts past the shelf.
@@ -152,7 +155,10 @@ namespace Procedural
 		else
 		{
 			if (d < edge)
-				target = W + floodH * std::pow((d - hw) / floodW, oc::max(m_carve.floodplainCurve, 0.1f));
+			{
+				const float x = (d - hw) / floodW, curve = oc::max(m_carve.floodplainCurve, 0.1f);
+				target = W + floodH * (curve == 1.0f ? x : std::pow(x, curve)); // pow(x, 1) is x exactly
+			}
 			else
 				target = W + floodH + m_carve.valleySlope * (d - edge);
 			// A WATERFALL'S PLUNGE GORGE (RiverPoint_Gorge, interpolated along the piece): past the channel's edge the
@@ -162,7 +168,6 @@ namespace Procedural
 				target += (W + oc::max(m_carve.gorgeWallSlope, 0.01f) * (d - hw) - target) * gorge;
 		}
 		const float soft = oc::max(0.5f * unitD, 0.1f);
-		const float reach = wallReach(q);
 		const float fade = reach > 1e-3f
 			? 1.0f - smoothstep01((d - edge - 0.7f * reach) / (0.3f * reach))
 			: (d < edge ? 1.0f : 0.0f);
@@ -254,8 +259,34 @@ namespace Procedural
 			p->rowRuns[(size_t)r.row + 1]++;
 		for (size_t r = 1; r < p->rowRuns.size(); r++)
 			p->rowRuns[r] += p->rowRuns[r - 1];
+		// apply's per-piece constants, from the FINAL points (after the sinking and the lake levels move the water).
+		const auto buildPieces = [&](const RiverUnit& fu)
+		{
+			p->pointSurface.resize(fu.points.size());
+			for (size_t k = 0; k < fu.points.size(); k++)
+				p->pointSurface[k] = m_carve.surface(fu.points[k].water, fu.points[k].depth, fu.points[k].q);
+			p->pieces.assign(fu.points.size(), {});
+			for (const RiverSegment& seg : fu.segments)
+				for (uint32 k = 0; k + 1 < seg.count; k++)
+				{
+					const RiverPoint& a = fu.points[seg.first + k];
+					const RiverPoint& c = fu.points[seg.first + k + 1];
+					PreparedRiverUnit::Piece& pc = p->pieces[seg.first + k];
+					const float lenM = std::sqrt((c.x - a.x) * (c.x - a.x) + (c.z - a.z) * (c.z - a.z)) * nr;
+					pc.drop = lenM > 1e-3f ? (p->pointSurface[seg.first + k] - p->pointSurface[seg.first + k + 1]) / lenM : 0.0f;
+					pc.steep = pieceSteep(a, c);
+					// The reach is linear in the half-width and grows with Q, both interpolated along the piece: an end bounds it
+					// (the margin covers the interpolation's rounding).
+					const float hwMax = oc::max(oc::max(a.halfWidth, c.halfWidth), 0.05f);
+					const float hwMin = oc::max(oc::min(a.halfWidth, c.halfWidth), 0.05f);
+					const float qMax = oc::max(a.q, c.q);
+					pc.reachMax = oc::max(pieceReach(hwMax, qMax), pieceReach(hwMin, qMax)) * 1.001f + 1e-3f;
+					pc.hwMax = hwMax * 1.001f + 1e-3f;
+				}
+		};
 		if (!matched)
 		{
+			buildPieces(u);
 			p->unit = oc::move(unit);
 			return p;
 		}
@@ -263,6 +294,7 @@ namespace Procedural
 		// After the sinking: in a lake the other rivers' carves leave the lake BED, and held under it the outlet's head
 		// stood 6 model m under the lake's surface again (2026-10-11).
 		meetLakeLevels(*matched);
+		buildPieces(*matched);
 		p->unit = oc::move(matched);
 		return p;
 	}
@@ -654,11 +686,13 @@ namespace Procedural
 							const float dx = a.x + abx * t - pt.x, dz = a.z + abz * t - pt.z;
 							const float d = std::sqrt(dx * dx + dz * dz) * nr;
 							const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
-							if (d >= pieceReach(hw, a.q + (c.q - a.q) * t))
+							const float wr = wallReach(a.q + (c.q - a.q) * t);
+							if (d >= oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM) + wr) // pieceReach
 								continue;
 							float Wj;
 							const float w = segmentWeight(d);
-							sumC += w * pieceCarve(a, c, t, d, hg, Wj);
+							// The steepness from the CURRENT water (this pass moves it), not the prepared pieces'.
+							sumC += w * pieceCarve(a, c, t, d, hg, wr, pieceSteep(a, c), Wj);
 							sumS += w * Wj;
 							sumW += w;
 						}
@@ -1027,27 +1061,36 @@ namespace Procedural
 					}
 					const RiverPoint& a = u.points[k];
 					const RiverPoint& c = u.points[k + 1];
+					const PreparedRiverUnit::Piece& pc = pu->pieces[k];
 					const float abx = c.x - a.x, abz = c.z - a.z;
 					const float len2 = abx * abx + abz * abz;
 					const float t = len2 > 1e-12f ? oc::clamp(((lx - a.x) * abx + (lz - a.z) * abz) / len2, 0.0f, 1.0f) : 0.0f;
 					const float px = a.x + abx * t - lx, pz = a.z + abz * t - lz;
 					const float d = std::sqrt(px * px + pz * pz) * nr; // model m
+					const bool humid = !u.segments[ks].ephemeral && m_carve.waterHumidity > 0.0f;
+					// Out of the piece's reach at every t, and of its humidity spread: nothing below can change (the cell lists
+					// pieces by their bounding box, so most points of a cell are past most of its pieces' ends).
+					if (d >= pc.reachMax && (!humid || d >= pc.hwMax + humiditySpreadM))
+						continue;
 					const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
 					const float q = a.q + (c.q - a.q) * t;
-					if (!u.segments[ks].ephemeral && m_carve.waterHumidity > 0.0f)
+					if (humid)
 					{
 						const float size = smoothstep01(q / oc::max(m_carve.waterHumidityFullQ, 1e-3f));
 						waterHumidity = oc::max(waterHumidity, size * (1.0f - smoothstep01(oc::max(d - hw, 0.0f) / humiditySpreadM)));
 					}
-					const float reachEnd = pieceReach(hw, q);
+					if (d >= pc.reachMax)
+						continue;
+					const float wr = wallReach(q);
+					const float reachEnd = oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM) + wr; // pieceReach
 					if (d >= reachEnd)
 						continue;
+					float W;
 					{
-						float W;
 						// The weight fades out with the wall (its last 30 %), so a piece leaves the blend smoothly: cut off
 						// at full weight, the blend jumped where it left - beside a plunge gorge (out of the wide blend
 						// below) the far pieces alone remained, and the gorge walls showed a comb of steps (2026-10-10).
-						const float fadeLen = oc::max(0.3f * wallReach(q), 0.5f);
+						const float fadeLen = oc::max(0.3f * wr, 0.5f);
 						// A LIP'S OWN PIECE keeps only a trace: its water falls the whole drop over its 0.6 px run, and its
 						// carve stood that drop up sideways as a near-vertical face out to its full reach (2026-10-10). The
 						// drop ramp (flushSegment) shapes the face between the sections instead.
@@ -1061,11 +1104,11 @@ namespace Procedural
 							if (li == numLips && numLips < c_maxSections)
 								lips[numLips++].d = FLT_MAX;
 							if (li < numLips && d < lips[li].d)
-								lips[li] = { ls, d, std::sqrt(len2) * nr, m_carve.surface(a.water, a.depth, a.q), m_carve.surface(c.water, c.depth, c.q),
+								lips[li] = { ls, d, std::sqrt(len2) * nr, pu->pointSurface[k], pu->pointSurface[k + 1],
 									m_carve.channelDepth(oc::max(a.depth, 0.02f)) };
 						}
 						const float w = segmentWeight(d) * (1.0f - smoothstep01((d - (reachEnd - fadeLen)) / fadeLen)) * (lipOwn ? 0.001f : 1.0f);
-						const float carve = pieceCarve(a, c, t, d, hModel, W);
+						const float carve = pieceCarve(a, c, t, d, hModel, wr, pc.steep, W);
 						const uint16 sec = pu->pointSection[k];
 						int32 s = 0;
 						while (s < numSec && secId[s] != sec)
@@ -1128,20 +1171,15 @@ namespace Procedural
 						// sqrt(slope) / 0.035, the slope the carved surface's drop over the piece. A dry bed has none.
 						speed = 0.0f;
 						if (!u.segments[pu->pointSegment[k]].ephemeral)
-						{
-							const float lenM = std::sqrt(len2) * nr;
-							const float drop = lenM > 1e-3f
-								? (m_carve.surface(a.water, a.depth, a.q) - m_carve.surface(c.water, c.depth, c.q)) / lenM : 0.0f;
 							speed = oc::clamp(std::pow(oc::max(a.depth + (c.depth - a.depth) * t, 0.05f), 0.6667f)
-								* std::sqrt(oc::max(drop, 1e-5f)) / 0.035f, 0.1f, 6.0f);
-						}
+								* std::sqrt(oc::max(pc.drop, 1e-5f)) / 0.035f, 0.1f, 6.0f);
 					}
 					const float ratio = d / hw;
 					if (ratio < bestRatio)
 					{
 						bestRatio = ratio;
 						bestUnitW = a.water + (c.water - a.water) * t;
-						bestW = m_carve.surface(a.water + (c.water - a.water) * t, oc::max(a.depth + (c.depth - a.depth) * t, 0.02f), q);
+						bestW = W; // pieceCarve's surface at t
 						bestDry = u.segments[pu->pointSegment[k]].ephemeral != 0;
 						float ang = std::atan2(abz, abx) * (0.5f / 3.14159265f);
 						bestAngle = ang < 0.0f ? ang + 1.0f : ang;
@@ -1420,9 +1458,10 @@ namespace Procedural
 		// grid over a chunk is ~80k points, almost all of them far from any river. Now each piece writes only the points
 		// within its reach, with apply's falloff (1 in the channel, 0 at the floodplain's edge; the same unit-local
 		// coordinates and arithmetic as the point search), and a point keeps the max: the cost follows the river length in
-		// the rect, not its area. The reach: the piece's cell-list reach (prepare), grown to its falloff's end where that is
-		// larger, within the grid pad. The one difference: past the pad (a floodplain wider than c_maxFloodplainM) the point
-		// search kept a piece up to its 16 px cell's edge; this cuts it at the pad.
+		// the rect, not its area. The reach: the falloff's end, the floodplain edge (past it the influence is 0, so the valley
+		// wall's far larger reach would only visit points it leaves at 0), within the grid pad. The one difference: past the
+		// pad (a floodplain wider than c_maxFloodplainM) the point search kept a piece up to its 16 px cell's edge; this cuts
+		// it at the pad.
 		const TerrainConfigV3& gc = m_base->config();
 		const double inv = 1.0 / (double)gc.metersPerPixel;
 		const float nr = TerrainGenV3::nativeResolution();
@@ -1453,8 +1492,9 @@ namespace Procedural
 					{
 						const RiverPoint& a = u.points[seg.first + k];
 						const RiverPoint& c = u.points[seg.first + k + 1];
-						const float hwMax = oc::max(a.halfWidth, c.halfWidth);
-						const float reachPx = oc::min(oc::max(pieceReach(hwMax, oc::max(a.q, c.q)), m_carve.floodplainEdge(oc::max(hwMax, 0.05f))) / nr, pad);
+						// inf > 0 only where d < hw x (1 + band factor); +1 px covers the rounding.
+						const float hwMax = oc::max(oc::max(a.halfWidth, c.halfWidth), 0.05f);
+						const float reachPx = oc::min(hwMax * (1.0f + oc::max(m_carve.bankFactor + m_carve.floodplainFactor, 0.0f)) / nr + 1.0f, pad);
 						int32 x0, x1, z0, z1;
 						indexRange(unitX + (double)(oc::min(a.x, c.x) - reachPx), unitX + (double)(oc::max(a.x, c.x) + reachPx), gx0, resX, x0, x1);
 						indexRange(unitZ + (double)(oc::min(a.z, c.z) - reachPx), unitZ + (double)(oc::max(a.z, c.z) + reachPx), gz0, resZ, z0, z1);

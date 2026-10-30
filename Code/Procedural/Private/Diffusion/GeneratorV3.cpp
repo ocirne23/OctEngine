@@ -1,6 +1,7 @@
 module;
 
 #include <zstd/zstd.h> // the disk tile cache's compressor; see the tile-cache block below
+#include <immintrin.h> // AVX2: the tile cache's plane decode (decodePlane)
 
 module Procedural;
 
@@ -112,16 +113,6 @@ namespace Procedural
 				out[n + i] = (uint8)(d >> 8);
 			}
 		}
-		void unsplitUndelta16(const uint8* in, size_t n, uint16* q)
-		{
-			uint16 prev = 0;
-			for (size_t i = 0; i < n; i++)
-			{
-				const uint16 d = (uint16)(in[i] | ((uint16)in[n + i] << 8));
-				prev = (uint16)(prev + d);
-				q[i] = prev;
-			}
-		}
 		void delta8(const uint8* q, size_t n, uint8* out)
 		{
 			uint8 prev = 0;
@@ -131,13 +122,62 @@ namespace Procedural
 				prev = q[i];
 			}
 		}
-		void undelta8(const uint8* in, size_t n, uint8* q)
+
+		// 16 wrapping uint16 deltas -> their running sum, continued from `carry` (every element = the total so far), which
+		// it advances. An 8-bit plane runs through here too: its sum mod 256 is the low byte of the 16-bit one.
+		inline __m256i prefixSum16(__m256i x, __m256i& carry)
 		{
-			uint8 prev = 0;
-			for (size_t i = 0; i < n; i++)
+			x = _mm256_add_epi16(x, _mm256_slli_si256(x, 2));
+			x = _mm256_add_epi16(x, _mm256_slli_si256(x, 4));
+			x = _mm256_add_epi16(x, _mm256_slli_si256(x, 8));
+			// The low lane's total (its element 7) into every element of the high lane.
+			__m256i lo = _mm256_permute2x128_si256(x, x, 0x08); // [0, x.lo]
+			lo = _mm256_shufflehi_epi16(lo, 0xFF);
+			x = _mm256_add_epi16(x, _mm256_unpackhi_epi64(lo, lo));
+			x = _mm256_add_epi16(x, carry);
+			__m256i c = _mm256_shufflehi_epi16(x, 0xFF);
+			c = _mm256_unpackhi_epi64(c, c);
+			carry = _mm256_permute2x128_si256(c, c, 0x11); // element 15 everywhere
+			return x;
+		}
+
+		// THE ONE DEQUANTIZATION, delta-coded bytes -> floats: the running sum (a 16-bit plane's split bytes re-joined), then
+		// minV + q * step as an explicit FMA, 16 values per step. The loader AND the writer's in-place roundtrip both decode
+		// through here - bit-identical dequantization is what the crack-free guarantee rests on, so there is no second
+		// expression of it to drift.
+		void decodePlane(const uint8* in, size_t n, bool eightBit, float minV, float step, float* out)
+		{
+			const __m256 vMin = _mm256_set1_ps(minV), vStep = _mm256_set1_ps(step);
+			const __m256i mask8 = _mm256_set1_epi16(0xFF);
+			__m256i carry = _mm256_setzero_si256();
+			const auto block = [&](__m128i lo, __m128i hi, float* dst)
 			{
-				prev = (uint8)(prev + in[i]);
-				q[i] = prev;
+				__m256i x = eightBit ? _mm256_cvtepu8_epi16(lo)
+				                     : _mm256_set_m128i(_mm_unpackhi_epi8(lo, hi), _mm_unpacklo_epi8(lo, hi));
+				x = prefixSum16(x, carry);
+				if (eightBit)
+					x = _mm256_and_si256(x, mask8);
+				const __m256 f0 = _mm256_cvtepi32_ps(_mm256_cvtepu16_epi32(_mm256_castsi256_si128(x)));
+				const __m256 f1 = _mm256_cvtepi32_ps(_mm256_cvtepu16_epi32(_mm256_extracti128_si256(x, 1)));
+				_mm256_storeu_ps(dst, _mm256_fmadd_ps(f0, vStep, vMin));
+				_mm256_storeu_ps(dst + 8, _mm256_fmadd_ps(f1, vStep, vMin));
+			};
+			const uint8* hiBytes = in + n; // the 16-bit planes' high bytes follow their low bytes
+			size_t i = 0;
+			for (; i + 16 <= n; i += 16)
+				block(_mm_loadu_si128((const __m128i*)(in + i)),
+				      eightBit ? _mm_setzero_si128() : _mm_loadu_si128((const __m128i*)(hiBytes + i)), out + i);
+			if (i < n)
+			{
+				// The tail through the same block (zero-padded), so it decodes exactly like the rest.
+				alignas(16) uint8 lo[16] = {}, hi[16] = {};
+				alignas(32) float tmp[16];
+				const size_t rem = n - i;
+				std::memcpy(lo, in + i, rem);
+				if (!eightBit)
+					std::memcpy(hi, hiBytes + i, rem);
+				block(_mm_load_si128((const __m128i*)lo), _mm_load_si128((const __m128i*)hi), tmp);
+				std::memcpy(out + i, tmp, rem * sizeof(float));
 			}
 		}
 
@@ -227,8 +267,14 @@ namespace Procedural
 			const size_t plane = (size_t)h.width * h.width;
 			auto t = oc::make_shared<FieldTile>();
 			t->width = h.width;
-			oc::vector<uint16> q16(plane);
-			oc::vector<uint8> q8(plane), raw(plane * 2), comp;
+			oc::vector<uint8> raw(plane * 2); // the plane's delta bytes, decodePlane's input
+			// One decompression context for the whole file: ZSTD_decompress makes (and frees) one per call.
+			ZSTD_DCtx* dctx = ZSTD_createDCtx();
+			struct DCtxFree
+			{
+				ZSTD_DCtx* c;
+				~DCtxFree() { ZSTD_freeDCtx(c); }
+			} dctxFree{ dctx };
 			for (const PlaneSchema& ps : TILE_PLANES)
 			{
 				const size_t rawBytes = ps.eightBit ? plane : plane * 2;
@@ -241,39 +287,39 @@ namespace Procedural
 				if (!f.ok || payloadSize == 0 || payloadSize > rawBytes)
 					return nullptr;
 
+				if (f.cursor + payloadSize > bytes.size())
+					return nullptr;
+				const uint8* payload = bytes.data() + f.cursor; // decoded in place, no copy
+				f.cursor += payloadSize;
 				if ((EPlaneCodec)codec == EPlaneCodec::Stored)
 				{
+					// Rare (a plane zstd could not shrink): recoded to the delta form so it decodes like the rest.
 					if (payloadSize != rawBytes)
 						return nullptr;
-					f.read(ps.eightBit ? (void*)q8.data() : (void*)q16.data(), payloadSize);
-					if (!f.ok)
-						return nullptr;
+					if (ps.eightBit)
+						delta8(payload, plane, raw.data());
+					else
+					{
+						oc::vector<uint16> q16(plane);
+						std::memcpy(q16.data(), payload, rawBytes);
+						deltaSplit16(q16.data(), plane, raw.data());
+					}
 				}
 				else if ((EPlaneCodec)codec == EPlaneCodec::Zstd)
 				{
-					comp.resize(payloadSize);
-					f.read(comp.data(), payloadSize);
-					if (!f.ok)
-						return nullptr;
-					const size_t n = ZSTD_decompress(raw.data(), rawBytes, comp.data(), comp.size());
+					const size_t n = ZSTD_decompressDCtx(dctx, raw.data(), rawBytes, payload, payloadSize);
 					if (ZSTD_isError(n) || n != rawBytes)
 						return nullptr;
-					if (ps.eightBit)
-						undelta8(raw.data(), plane, q8.data());
-					else
-						unsplitUndelta16(raw.data(), plane, q16.data());
 				}
 				else
 					return nullptr;
 
-				// MUST match the writer's roundtrip expression exactly (same step, same order of
-				// operations) - bit-identical dequantization is what the crack-free guarantee rests on.
+				// The writer's roundtrip decodes through the same decodePlane with the same step expression.
 				const float maxQ = ps.eightBit ? 255.0f : 65535.0f;
 				const float step = (ph.maxV - ph.minV) / maxQ;
 				oc::vector<float>& v = (*t).*ps.plane;
 				v.resize(plane);
-				for (size_t i = 0; i < plane; i++)
-					v[i] = ph.minV + (float)(ps.eightBit ? q8[i] : q16[i]) * step;
+				decodePlane(raw.data(), plane, ps.eightBit, ph.minV, step, v.data());
 			}
 			// Exactly at the end means the file is whole; anything left over is truncation or garbage.
 			if (!f.ok || !f.atEnd())
@@ -324,7 +370,6 @@ namespace Procedural
 						q8[i] = (uint8)qi;
 					else
 						q16[i] = (uint16)qi;
-					v[i] = lo + (float)qi * step;
 				}
 
 				const size_t rawBytes = ps.eightBit ? plane : plane * 2;
@@ -332,6 +377,8 @@ namespace Procedural
 					delta8(q8.data(), plane, raw.data());
 				else
 					deltaSplit16(q16.data(), plane, raw.data());
+				// The roundtrip: the loader's own decode of these bytes, so RAM holds what a later load returns.
+				decodePlane(raw.data(), plane, ps.eightBit, lo, step, v.data());
 				const size_t n = ZSTD_compress(comp.data(), comp.size(), raw.data(), rawBytes,
 				                               TILE_CACHE_ZSTD_LEVEL);
 				// Per plane, smaller form wins: a plane the transform can't help (it can only expand on

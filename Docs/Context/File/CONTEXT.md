@@ -188,8 +188,8 @@ An unreadable file keeps its packed version; an unreadable NEW file fails the bu
 ## `ImageIO` (`File:ImageIO`)
 
 `writePngRgba8` / `readImageRgba8`: PNG out / any stb-decodable image in, RGBA8, for GENERATED content
-(the procedural tree textures in `Assets/Local/Trees/Textures`, which rocks read back for their bark; the
-renderer's screenshot). stb encodes / decodes in memory and the bytes go through
+(the renderer's screenshot). The procedural tree and rock textures do NOT use it: they cache as uploaded (`.tex`,
+Procedural's mesh cache). stb encodes / decodes in memory and the bytes go through
 `FileSystem::writeFileBytes` / `readFileBytes`, so the disk seam and its main-thread rule hold
 (`allowMainThread`). Its stb implementations are STATIC (internal linkage), like SceneCooker.cpp's —
 RendererVK owns the external-linkage `stb_image`.

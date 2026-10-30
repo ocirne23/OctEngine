@@ -507,8 +507,8 @@ how far out. A bush with a `Placement` block ALSO grows on its own, no tree need
 A trunk may grow several stems (`Trunk Stems`: birch clumps).
 **The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, `Aspen.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
-Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
-(not in git) and reused (regenerate with `Trees/Regenerate textures`).
+Entity, above Procedural). Their generated textures are saved to `Assets/Local/Trees/Textures/*.tex` (not in git), each
+material's mip chains as uploaded (BC), keyed by the `.tree` text (regenerate all with `Trees/Regenerate textures`).
 
 ## `.rock` — rock types
 
@@ -570,9 +570,9 @@ Checked-in inputs for repeatable runs:
 
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, the SPIR-V cache (`ShaderCache/`, see
 [`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md)), compiled script DLLs and PDBs
-(`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
-generated tree textures and far bakes), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/` (the generated meshes -
-"The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
+(`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` / `Rocks/Textures/` / `Clutter/Textures/` (the
+generated tree, billboard, dead-wood and flower textures as uploaded, `.tex`), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/`
+(the generated meshes - both "The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
 splats, the `Diffusion/<seed>/` tile cache, `gamesave.txt` and `profile.txt`. **No `imgui.ini` and no Streamline log
 are written** (the dock layout is rebuilt in code; SL logs through its callback), and a folder is made only when
 something is written into it.

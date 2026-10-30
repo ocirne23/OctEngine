@@ -116,8 +116,9 @@ export namespace Procedural
 
 		void reload(Renderer& renderer);
 		// Bakes (or loads) every module's billboard cards. Needs the species' level-0 bark and leaf images.
+		// The bark / leaf level-0 images are the bake's input: empty (their .tex was loaded) = generated here on a bake miss.
 		void buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
-			oc::span<const uint8> barkAlbedo, uint32 barkSize, oc::span<const uint8> leafImage, uint32 leafSize);
+			oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize);
 		void clearAll(); // nodes first, then the species' meshes and owned materials
 		void destroyTreeSet(); // the GPU expansion set (drains the GPU)
 		// Writes every species' crossfade band (billboard distance x Far distance scale, FadeWidth) into its
