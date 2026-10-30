@@ -38,7 +38,8 @@
 
 layout (local_size_x = 64) in;
 
-layout (binding = 2, r32ui) uniform uimage3D u_accum; // two slices per texel (tree_volume.inc.glsl tvAccumTexel)
+layout (binding = 2, r32ui) uniform uimage3D u_accum; // four slices per texel (tree_volume.inc.glsl tvAccumAdd)
+TV_ACCUM_ADD_FUNCTION(u_accum)
 layout (binding = 3, rgba8) uniform writeonly image2D u_colour;
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
 layout (binding = 5, r32ui) uniform uimage2D u_floorCover; // the largest tree coverage per column (floor pass 1)
@@ -280,9 +281,9 @@ void splatPiece(VolumePiece piece)
         if (extinction <= 1e-4)
             continue;
 
-        imageAtomicAdd(u_accum, tvAccumTexel(texel, s), tvAccumAmount(extinction, s));
+        tvAccumAdd(texel, s, tvAccumLayers(pc_vol_slices), extinction, tvDither(uvec3(texel.x, texel.y * 64 + s, gl_WorkGroupID.x ^ (gl_WorkGroupID.y << 16))));
         if (rock)
-            imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu)); // the same units
+            imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ROCK_SCALE + 0.5), 0xFFFFu));
         else if (g_writeColour)
             imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
 #endif

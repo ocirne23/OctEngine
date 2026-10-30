@@ -410,14 +410,19 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_applySets;
 
-    // R32UI 3D, TWO SLICES per texel (m_accumDepth deep): the splat's 16-bit fixed-point sums; after the resolve, each
-    // slice's extinction as a half float.
+    // R32UI 3D, FOUR SLICES per texel (m_accumDepth deep): the splat's 8-bit fixed-point saturating sums; after the resolve,
+    // each slice's extinction as an sRGB code.
     Image m_accum;
-    vk::ImageView m_accumFloatView; // ... read as RG16F (MUTABLE_FORMAT): the new bake's density during the hand-over
-    uint32 m_accumDepth = 0;        // (m_slices + 1) / 2
-    Image m_density; // R16F 3D: extinction (1/m), sampled
+    vk::ImageView m_accumFloatView; // ... read as RGBA8_SRGB (MUTABLE_FORMAT): the new bake's density during the hand-over
+    oc::array<vk::ImageView, 3> m_accumChannelViews{}; // ... the same, channel 1 / 2 / 3 swizzled into R (the march's single-value reads)
+    uint32 m_accumDepth = 0;        // (m_slices + 3) / 4
+    Image m_density; // 3D extinction (1/m): R8 sRGB-encoded (tree_volume.inc.glsl TV_DENSITY_R8; this view = R8_UNORM), else R16F
+    vk::ImageView m_densitySrgbView; // ... the R8 one's R8_SRGB view (MUTABLE_FORMAT): the march samples it; null for R16F
     // FRONT (m_front: the march's) and BACK (the running bake's) copies, swapped at the bake's last step:
     oc::array<Image, 2> m_colour; // RGBA8 2D: the albedo per column; a = 1 - its ROCK fraction (the march's rock lighting)
+    // ... their R32UI views (MUTABLE_FORMAT): the bake's records stage writes colour + FAR TYPE (in a) by one atomic min
+    // (tree_volume.inc.glsl tvColourType); the resolve sets a back.
+    oc::array<vk::ImageView, 2> m_colourTypeView{};
     oc::array<Image, 2> m_floor;  // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
     // RG32F 2D, one texel per FLOOR_MAX_BLOCK^2 columns (the march's skip): x = the highest floor within one block each
     // way, y = AHEAD - over this row and every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way.
@@ -428,7 +433,6 @@ private:
                         // temporary; then the records' mass (below)
     // (The records' mass per column - R32UI 2D, fixed point, TV_AMOUNT_SCALE - lives in m_floorCover's memory: the floor
     // passes and the smoothing are done with it before the records' mass stage zeroes it.)
-    Image m_farType;    // R32UI 2D: the record type whose profile a column takes (the lowest: a tree before a rock)
     // R32UI 2D: the ROCKS' share of a column, in the accumulation's units summed over the slices (the detail splat's
     // solid voxels, the far records' rock mass / the slice height). The resolve: rock fraction = this / the column's
     // sum -> the colour's alpha (1 - fraction) and its rgb toward the climate's bedrock.

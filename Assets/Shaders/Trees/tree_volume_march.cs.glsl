@@ -25,7 +25,7 @@
 layout (local_size_x = 8, local_size_y = 8) in;
 
 layout (binding = 1) uniform sampler2D u_sceneDepth;
-layout (binding = 3) uniform sampler3D u_density;
+layout (binding = 3) uniform sampler3D u_density; // R8 through its sRGB view (x TV_DENSITY_DECODE) or R16F
 layout (binding = 4) uniform sampler2D u_colour;
 layout (binding = 5, rgba16f) uniform writeonly image2D u_out;
 #ifdef TREE_TEMPORAL_OUT
@@ -44,7 +44,10 @@ layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-flo
 // temporal pass averages the picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix
 // would not). The whole ray reads its pick (g_new), so the variant costs what the normal one does.
 #ifdef TREE_HANDOVER
-layout (binding = 13) uniform sampler3D u_densityNew; // RG16F: two slices per texel (densityTexelNew)
+layout (binding = 13) uniform sampler3D u_densityNew;  // RGBA8_SRGB: four slices per texel (densityTexelNew); R = channel 0
+layout (binding = 17) uniform sampler3D u_densityNew1; // ... the same image, R = channel 1 (a swizzled view)
+layout (binding = 18) uniform sampler3D u_densityNew2; // R = channel 2
+layout (binding = 19) uniform sampler3D u_densityNew3; // R = channel 3
 layout (binding = 14, r32ui) uniform readonly uimage2D u_floorNew;
 layout (binding = 15) uniform sampler2D u_colourNew;
 layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
@@ -69,27 +72,47 @@ bool handoverPicksNew(ivec2 px)
 vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
 
-// The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice): the hardware filters across the columns only
-// (each fetch at a texel layer's centre), the slice axis is blended here.
+// One channel of the accumulation, as a single value: the views at 13 and 17-19 are SWIZZLED so their R is channel 0-3 (a
+// vec4 fetch with a dynamic channel index cost the hand-over variant 64 -> 71 registers).
+float accumChannel(vec3 uvw, int k)
+{
+    if (k == 0)
+        return textureLod(u_densityNew, uvw, 0.0).r;
+    if (k == 1)
+        return textureLod(u_densityNew1, uvw, 0.0).r;
+    if (k == 2)
+        return textureLod(u_densityNew2, uvw, 0.0).r;
+    return textureLod(u_densityNew3, uvw, 0.0).r;
+}
+
+// The new bake's view holds FOUR SLICES per texel, INTERLEAVED (RGBA8_SRGB, tree_volume.inc.glsl: slice s in layer s % L,
+// channel s / L): the hardware decodes and filters across the columns AND between the two slices of one channel - one
+// fetch. Only a pair crossing into the next channel (layer L - 1 -> layer 0) takes two point fetches. (Four slices in one
+// layer's channels, blended here from two RGBA fetches, cost the hand-over variant 64 -> 72 registers.)
 float densityTexelNew(vec3 at)
 {
     const int slices = int(pc_vol_slices);
     const float zs = at.z * float(slices) - 0.5;
     const float z0 = floor(zs);
     const int s0 = clamp(int(z0), 0, slices - 1), s1 = clamp(int(z0) + 1, 0, slices - 1);
-    const float invLayers = 1.0 / float((slices + 1) / 2);
-    const vec2 a = textureLod(u_densityNew, vec3(at.xy, (float(s0 >> 1) + 0.5) * invLayers), 0.0).rg;
-    const vec2 b = textureLod(u_densityNew, vec3(at.xy, (float(s1 >> 1) + 0.5) * invLayers), 0.0).rg;
-    return mix((s0 & 1) != 0 ? a.y : a.x, (s1 & 1) != 0 ? b.y : b.x, zs - z0);
+    const float f = s1 != s0 ? zs - z0 : 0.0;
+    const int layers = (slices + 3) / 4;
+    const float invLayers = 1.0 / float(layers);
+    const int k0 = s0 / layers, l0 = s0 - k0 * layers;
+    if (l0 < layers - 1 || s1 == s0)
+        return accumChannel(vec3(at.xy, (float(l0) + 0.5 + f) * invLayers), k0) * TV_ACCUM_MAX;
+    const float a = accumChannel(vec3(at.xy, (float(layers) - 0.5) * invLayers), k0);
+    const float b = accumChannel(vec3(at.xy, 0.5 * invLayers), k0 + 1);
+    return mix(a, b, f) * TV_ACCUM_MAX;
 }
 
-float densityTexel(vec3 at) { return g_new ? densityTexelNew(at) : textureLod(u_density, at, 0.0).r; }
+float densityTexel(vec3 at) { return g_new ? densityTexelNew(at) : textureLod(u_density, at, 0.0).r * TV_DENSITY_DECODE; }
 vec4 colourAt(vec2 uv) { return g_new ? textureLod(u_colourNew, uv, 0.0) : textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return g_new ? imageLoad(u_floorMaxNew, block).xy : imageLoad(u_floorMax, block).xy; }
 #else
 vec2 bakeCentre() { return pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return imageLoad(u_floor, c).r; }
-float densityTexel(vec3 at) { return textureLod(u_density, at, 0.0).r; }
+float densityTexel(vec3 at) { return textureLod(u_density, at, 0.0).r * TV_DENSITY_DECODE; } // linear (R8: the sRGB view decodes)
 vec4 colourAt(vec2 uv) { return textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return imageLoad(u_floorMax, block).xy; }
 #endif

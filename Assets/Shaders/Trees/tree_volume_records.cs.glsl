@@ -6,8 +6,9 @@
 // 1 x its scale^2, both from its seed as Procedural TreeSystem::expandChunk picks them) / the column's area into a 2D image,
 // fixed point, over a TENT as wide as its crown (at least a cell each way: a point splat made thin pillars where a column is
 // smaller than a crown). The weights are normalized per axis, so a tree adds its whole mass. Its nearest column also takes
-// its type (atomic min: a tree's before a rock's, the same every bake), whose height profile tree_volume_far.cs spreads the
-// mass with, and its colour (last writer wins). No bushes (a few metres tall, kilometres out).
+// its TYPE and COLOUR in one atomic min on the colour map's R32UI view (tree_volume.inc.glsl tvColourType: the type in the
+// alpha byte): the lowest type wins - a tree's before a rock's - with its own colour, the same every bake. tree_volume_far.cs
+// spreads the mass with that type's height profile; the resolve sets the alpha back. No bushes (a few metres tall, kilometres out).
 // albedo.w < 0.75 = a SOLID: its mass is its occupied volume x scale^3 x "Far rock extinction". albedo.w < 0.25 = a ROCK: no
 // colour, its share goes into the column's ROCK SUM in the accumulation's units (mass / area / slice height: what
 // tree_volume_far.cs adds, summed over the slices). 0.5 = dead wood: a solid's mass, a tree's colour.
@@ -21,8 +22,7 @@
 layout (local_size_x = 64) in;
 
 layout (binding = 2, r32ui) uniform uimage2D u_amount;
-layout (binding = 3, r32ui) uniform uimage2D u_type;
-layout (binding = 4, rgba8) uniform writeonly image2D u_colour;
+layout (binding = 3, r32ui) uniform uimage2D u_colourType; // the back colour map's R32UI view (the type in the alpha byte)
 layout (binding = 5, r32ui) uniform uimage2D u_rockSum;
 
 // Mirrors TreeRecordChunkGpu / TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
@@ -138,13 +138,12 @@ void main()
                 const ivec2 col = ivec2(tvWrapAngle(x, angularRes), y);
                 imageAtomicAdd(u_amount, col, amount);
                 if (bedrock)
-                    imageAtomicAdd(u_rockSum, col, uint(a * invSliceH * TV_ACCUM_SCALE + 0.5));
+                    imageAtomicAdd(u_rockSum, col, uint(a * invSliceH * TV_ROCK_SCALE + 0.5));
             }
         }
 
         const ivec2 nearest = ivec2(tvWrapAngle(int(round(tc.x)), angularRes), clamp(int(round(tc.y)), 0, radialRes - 1));
-        imageAtomicMin(u_type, nearest, type);
-        if (!bedrock)
-            imageStore(u_colour, nearest, vec4(pc_types.t[type].albedo.rgb, 1.0));
+        // A rock writes no colour of its own: the clear colour's (the resolve mixes the climate's bedrock in).
+        imageAtomicMin(u_colourType, nearest, (type << 24) | (bedrock ? TV_CLEAR_RGB : packUnorm4x8(vec4(pc_types.t[type].albedo.rgb, 0.0))));
     }
 }

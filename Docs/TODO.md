@@ -227,7 +227,9 @@ See [Procedural Rocks](Context/Procedural/Rocks.md).
 
 ## Clouds
 
-* Phase 4: RTX 2000 presets, empty-space skip, a cirrus layer, weather coupling.
+* RTX 2000 presets, a cirrus layer, weather coupling.
+* A column skip map for the march (low-res max coverage / top per weather texel): jump empty columns without the base
+  fetch of the coarse test. Measure the coarse steps' share of the march first.
 * An aerial-perspective LUT.
 * Dark band on the lit side of far clouds with a small step budget (workaround: 600 `Max steps`).
 * The sun aureole is not in the cloud-shadowed sky-SH correction.

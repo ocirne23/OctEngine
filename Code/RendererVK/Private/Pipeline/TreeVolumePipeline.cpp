@@ -13,7 +13,10 @@ import Settings;
 namespace
 {
     constexpr vk::Format ACCUM_FORMAT = vk::Format::eR32Uint;
-    constexpr vk::Format DENSITY_FORMAT = vk::Format::eR16Sfloat;
+    constexpr vk::Format DENSITY_FORMAT = vk::Format::eR16Sfloat; // the 2D distance images, and the volume's fallback
+    // THE VOLUME'S DENSITY (tree_volume.inc.glsl TV_DENSITY_R8): R8, written UNORM, sampled through an sRGB view.
+    constexpr vk::Format VOLUME_DENSITY_R8 = vk::Format::eR8Unorm;
+    constexpr vk::Format VOLUME_DENSITY_R8_SAMPLED = vk::Format::eR8Srgb;
     constexpr vk::Format COLOUR_FORMAT = vk::Format::eR8G8B8A8Unorm;
     constexpr vk::Format OUT_FORMAT = vk::Format::eR16G16B16A16Sfloat;
     constexpr vk::Format FLOOR_BLOCK_FORMAT = vk::Format::eR32Sfloat;  // the block max
@@ -43,6 +46,15 @@ namespace
         uint32 slices;
         float height;
     };
+
+    // The R8 density needs R8_SRGB with linear filtering (optional in Vulkan; the RTX 40s have it) and R8_UNORM storage.
+    bool volumeDensityR8()
+    {
+        const vk::PhysicalDevice gpu = Globals::device.getPhysicalDevice();
+        const vk::FormatFeatureFlags sampled = vk::FormatFeatureFlagBits::eSampledImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+        return (gpu.getFormatProperties(VOLUME_DENSITY_R8_SAMPLED).optimalTilingFeatures & sampled) == sampled
+            && (gpu.getFormatProperties(VOLUME_DENSITY_R8).optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage);
+    }
 
     vk::DescriptorSetLayoutBinding binding(uint32 idx, vk::DescriptorType type, vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eCompute)
     {
@@ -243,6 +255,8 @@ void TreeVolumePipeline::buildCopyLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_copy.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    if (volumeDensityR8())
+        layout.defines.push_back(ShaderDefine{ "TV_DENSITY_R8", "1" });
     layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum (the float bits)
     layout.descriptorSetLayoutBindings.push_back(binding(1, vk::DescriptorType::eStorageImage)); // density
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(ClearPC) });
@@ -291,8 +305,7 @@ void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
     layout.pushDeclaration = m_recordsBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(2, vk::DescriptorType::eStorageImage)); // the mass per column
-    b.push_back(binding(3, vk::DescriptorType::eStorageImage)); // the type per column
-    b.push_back(binding(4, vk::DescriptorType::eStorageImage)); // colour
+    b.push_back(binding(3, vk::DescriptorType::eStorageImage)); // the colour + type per column (the back colour's R32UI view)
     b.push_back(binding(5, vk::DescriptorType::eStorageImage)); // the rocks' share per column
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = m_recordsBlock.size() });
 }
@@ -325,6 +338,8 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
         layout.defines.push_back(ShaderDefine{ "TREE_HANDOVER", "1" });
     layout.defines.push_back(ShaderDefine{ "TREE_MARCH_SCALE", oc::to_string(scale) });
     layout.defines.push_back(ShaderDefine{ "TREE_MARCH_SKIP", oc::to_string(skip) });
+    if (volumeDensityR8())
+        layout.defines.push_back(ShaderDefine{ "TV_DENSITY_R8", "1" });
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
     b.push_back(binding(1, vk::DescriptorType::eCombinedImageSampler)); // scene depth
@@ -340,10 +355,12 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(11, vk::DescriptorType::eCombinedImageSampler)); // the cloud shadow map
     b.push_back(binding(12, vk::DescriptorType::eStorageImage));         // the max-floor grid
     // The hand-over's NEW bake (TREE_HANDOVER reads them; in every variant's layout, so one set serves all of them).
-    b.push_back(binding(13, vk::DescriptorType::eCombinedImageSampler)); // density (the accumulation's R32F view)
+    b.push_back(binding(13, vk::DescriptorType::eCombinedImageSampler)); // density (the accumulation's RGBA8_SRGB view: R = channel 0)
     b.push_back(binding(14, vk::DescriptorType::eStorageImage));         // floor (back)
     b.push_back(binding(15, vk::DescriptorType::eCombinedImageSampler)); // colour (back)
     b.push_back(binding(16, vk::DescriptorType::eStorageImage));         // the max-floor grid (back)
+    for (uint32 c = 1; c < 4; ++c)
+        b.push_back(binding(16 + c, vk::DescriptorType::eCombinedImageSampler)); // density, R = channel c (swizzled views)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = m_marchBlock.size() });
 }
 
@@ -572,56 +589,111 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     if (m_accumFloatView)
         Globals::device.getDevice().destroyImageView(m_accumFloatView);
     m_accumFloatView = nullptr;
+    for (vk::ImageView& view : m_accumChannelViews)
+    {
+        if (view)
+            Globals::device.getDevice().destroyImageView(view);
+        view = nullptr;
+    }
+    if (m_densitySrgbView)
+        Globals::device.getDevice().destroyImageView(m_densitySrgbView);
+    m_densitySrgbView = nullptr;
     destroyImage(m_accum);
     destroyImage(m_density);
     for (uint32 i = 0; i < 2; ++i)
     {
+        if (m_colourTypeView[i])
+            Globals::device.getDevice().destroyImageView(m_colourTypeView[i]);
+        m_colourTypeView[i] = nullptr;
         destroyImage(m_colour[i]);
         destroyImage(m_floor[i]);
         destroyImage(m_floorMax[i]);
     }
     destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
-    destroyImage(m_farType);
     destroyImage(m_rockSum);
     m_job.active = false; // its images are gone
     m_angularRes = angularRes;
     m_radialRes = radialRes;
     m_slices = slices;
-    m_accumDepth = (slices + 1) / 2;
+    m_accumDepth = (slices + 3) / 4;
     const vk::ImageUsageFlags storageClear = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst;
-    // TWO SLICES PER TEXEL (tree_volume.inc.glsl tvAccumTexel): 16-bit fixed-point halves, half the memory of a texel
-    // per slice. MUTABLE: after the resolve each half holds its slice's extinction as a half float, sampled through an
-    // RG16F view (the hand-over; linear filtering of it is required by the spec).
+    // FOUR SLICES PER TEXEL (tree_volume.inc.glsl tvAccumAdd): 8-bit fixed-point bytes, a quarter of a texel per slice.
+    // MUTABLE: after the resolve each byte holds its slice's extinction as an sRGB code, sampled through an RGBA8_SRGB
+    // view (the hand-over; sampled only - an sRGB format has no storage - and its linear filtering is required by the spec).
     createImage(vk::ImageType::e3D, ACCUM_FORMAT, { angularRes, radialRes, m_accumDepth }, storageClear | vk::ImageUsageFlagBits::eSampled,
         m_accum.image, m_accum.memory, m_accum.view, "TreeVolume.accum", vk::ImageCreateFlagBits::eMutableFormat);
     {
+        const vk::ImageViewUsageCreateInfo sampledOnly{ .usage = vk::ImageUsageFlagBits::eSampled };
         const vk::ImageViewCreateInfo floatViewInfo{
+            .pNext = &sampledOnly,
             .image = m_accum.image,
             .viewType = vk::ImageViewType::e3D,
-            .format = vk::Format::eR16G16Sfloat,
+            .format = vk::Format::eR8G8B8A8Srgb,
             .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
         };
         auto viewResult = Globals::device.getDevice().createImageView(floatViewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         m_accumFloatView = viewResult.value;
-        Globals::device.setDebugName(m_accumFloatView, "TreeVolume.accumFloat");
+        Globals::device.setDebugName(m_accumFloatView, "TreeVolume.accumSrgb");
+        // Channels 1-3 SWIZZLED into R (the march reads one channel as a single value: tree_volume_march.cs accumChannel).
+        const vk::ComponentSwizzle channels[3] = { vk::ComponentSwizzle::eG, vk::ComponentSwizzle::eB, vk::ComponentSwizzle::eA };
+        for (uint32 c = 0; c < 3; ++c)
+        {
+            vk::ImageViewCreateInfo channelInfo = floatViewInfo;
+            channelInfo.components = vk::ComponentMapping{ .r = channels[c], .g = vk::ComponentSwizzle::eZero,
+                .b = vk::ComponentSwizzle::eZero, .a = vk::ComponentSwizzle::eOne };
+            auto channelResult = Globals::device.getDevice().createImageView(channelInfo);
+            assert(channelResult.result == vk::Result::eSuccess);
+            m_accumChannelViews[c] = channelResult.value;
+            Globals::device.setDebugName(m_accumChannelViews[c], "TreeVolume.accumChannel");
+        }
     }
-    createImage(vk::ImageType::e3D, DENSITY_FORMAT, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
-        m_density.image, m_density.memory, m_density.view, "TreeVolume.density");
+    if (volumeDensityR8())
+    {
+        // R8: the UNORM view is the copy's storage target, the sRGB view (sampled only) the march's - tree_volume.inc.glsl.
+        createImage(vk::ImageType::e3D, VOLUME_DENSITY_R8, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
+            m_density.image, m_density.memory, m_density.view, "TreeVolume.density", vk::ImageCreateFlagBits::eMutableFormat);
+        const vk::ImageViewUsageCreateInfo sampledOnly{ .usage = vk::ImageUsageFlagBits::eSampled };
+        const vk::ImageViewCreateInfo srgbViewInfo{
+            .pNext = &sampledOnly,
+            .image = m_density.image,
+            .viewType = vk::ImageViewType::e3D,
+            .format = VOLUME_DENSITY_R8_SAMPLED,
+            .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        auto viewResult = Globals::device.getDevice().createImageView(srgbViewInfo);
+        assert(viewResult.result == vk::Result::eSuccess);
+        m_densitySrgbView = viewResult.value;
+        Globals::device.setDebugName(m_densitySrgbView, "TreeVolume.densitySrgb");
+    }
+    else
+        createImage(vk::ImageType::e3D, DENSITY_FORMAT, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
+            m_density.image, m_density.memory, m_density.view, "TreeVolume.density");
     for (uint32 i = 0; i < 2; ++i)
     {
+        // MUTABLE: the records' stage writes colour + far type through an R32UI view (one atomic min; tree_volume.inc.glsl
+        // tvColourType).
         createImage(vk::ImageType::e2D, COLOUR_FORMAT, { angularRes, radialRes, 1 }, storageClear | vk::ImageUsageFlagBits::eSampled,
-            m_colour[i].image, m_colour[i].memory, m_colour[i].view, "TreeVolume.colour");
+            m_colour[i].image, m_colour[i].memory, m_colour[i].view, "TreeVolume.colour", vk::ImageCreateFlagBits::eMutableFormat);
+        const vk::ImageViewCreateInfo typeViewInfo{
+            .image = m_colour[i].image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = ACCUM_FORMAT,
+            .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        auto typeViewResult = Globals::device.getDevice().createImageView(typeViewInfo);
+        assert(typeViewResult.result == vk::Result::eSuccess);
+        m_colourTypeView[i] = typeViewResult.value;
+        Globals::device.setDebugName(m_colourTypeView[i], "TreeVolume.colourType");
         createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floor[i].image, m_floor[i].memory, m_floor[i].view, "TreeVolume.floor");
         createImage(vk::ImageType::e2D, FLOOR_MAX_FORMAT, floorMaxExtent(), storageClear, m_floorMax[i].image, m_floorMax[i].memory, m_floorMax[i].view, "TreeVolume.floorMax");
     }
     createImage(vk::ImageType::e2D, FLOOR_BLOCK_FORMAT, floorMaxExtent(), storageClear, m_floorBlock.image, m_floorBlock.memory, m_floorBlock.view, "TreeVolume.floorBlock");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floorCover.image, m_floorCover.memory, m_floorCover.view, "TreeVolume.floorCover");
-    createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farType.image, m_farType.memory, m_farType.view, "TreeVolume.farType");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_rockSum.image, m_rockSum.memory, m_rockSum.view, "TreeVolume.rockSum");
     const vk::Image images[] = { m_accum.image, m_density.image, m_colour[0].image, m_colour[1].image, m_floor[0].image, m_floor[1].image,
-        m_floorCover.image, m_farType.image, m_rockSum.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
+        m_floorCover.image, m_rockSum.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
     initGeneral(images, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }); // zero bits: also 0u for R32UI (an empty volume:
                                                                                                  // a max floor of 0 skips nothing that exists)
     m_baked = false;
@@ -662,17 +734,23 @@ TreeVolumePipeline::~TreeVolumePipeline()
 {
     if (m_accumFloatView)
         Globals::device.getDevice().destroyImageView(m_accumFloatView);
+    for (vk::ImageView view : m_accumChannelViews)
+        if (view)
+            Globals::device.getDevice().destroyImageView(view);
+    if (m_densitySrgbView)
+        Globals::device.getDevice().destroyImageView(m_densitySrgbView);
     destroyImage(m_accum);
     destroyImage(m_density);
     for (uint32 i = 0; i < 2; ++i)
     {
+        if (m_colourTypeView[i])
+            Globals::device.getDevice().destroyImageView(m_colourTypeView[i]);
         destroyImage(m_colour[i]);
         destroyImage(m_floor[i]);
         destroyImage(m_floorMax[i]);
     }
     destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
-    destroyImage(m_farType);
     destroyImage(m_rockSum);
     for (Image& out : m_out)
         destroyImage(out);
@@ -860,6 +938,10 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     *job.settings = s;
     job.sources.assign(params.sources.begin(), params.sources.end());
     job.records = params.records;
+    // The far type rides in the colour map's alpha byte, 255 = none (tree_volume.inc.glsl TV_TYPE_NONE): types past 254
+    // are skipped (the records pass ignores a type >= its count).
+    assert(job.records.numTypes < 255);
+    job.records.numTypes = oc::min(job.records.numTypes, 254u);
     job.records.chunksCpu = {};
     job.records.mapCpu = {};
     job.detailRecords = 0;
@@ -932,7 +1014,7 @@ void TreeVolumePipeline::setBakeBudgets()
     BakeJob& job = m_job;
     const uint32 frames = (uint32)oc::max(job.settings->bakeFrames, 1);
     auto share = [&](uint32 total, uint32 stageFrames) { return oc::max(1u, (total + stageFrames - 1u) / stageFrames); };
-    // The clear, the resolve and the copy walk the accumulation's texel layers (two slices each).
+    // The clear, the resolve and the copy walk the accumulation's texel layers (four slices each).
     job.clearPerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
     job.perFrame = oc::max(256u, share(3u * (job.staticPieces + job.detailRecords), oc::max(1u, frames / 2u)));
     job.massPerFrame = share(job.records.numTypes > 0 ? job.records.numChunks : 1u, oc::max(1u, frames / 8u));
@@ -1021,8 +1103,8 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.clearColorImage(m_floor[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range }); // 0u = no floor
             cmd.clearColorImage(m_floorCover.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
             cmd.clearColorImage(m_rockSum.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
-            if (records) // (the records' mass reuses floorCover, zeroed again at its own stage)
-                cmd.clearColorImage(m_farType.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<uint32, 4>{ UINT32_MAX, 0u, 0u, 0u } }, { range }); // no type
+            // (The records' mass reuses floorCover, zeroed again at its own stage; their type rides in the colour's alpha,
+            // the clear's 1 = none - tree_volume.inc.glsl TV_CLEAR_RGB mirrors this clear colour.)
         }
         const uint32 slices = oc::min(job.clearPerFrame, m_accumDepth - job.progress); // texel layers
         if (slices > 0)
@@ -1214,10 +1296,9 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         recordsPc.set(h.vol.centre, job.centre);
         recordsPc.set(h.chunkOffset, job.progress);
         const vk::DescriptorSet set = m_recordsSets[frameIdx].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 4> updates{
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorCover.view) } }, // the mass
-            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farType.view) } },
-            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colour[back].view) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colourTypeView[back]) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
         };
         writeSet(set, updates);
@@ -1243,7 +1324,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorCover.view) } }, // the mass
-            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farType.view) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colourTypeView[back]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
         };
@@ -1276,8 +1357,8 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     }
     if (job.stage == EBakeStage::Resolve)
     {
-        // The sums -> the extinction IN PLACE (half floats in the accumulation: the hand-over's new volume), a range of
-        // texel layers (two slices each) per frame. At its first frame first the per-column pass: the colour with the ROCKS' share (the climate's
+        // The sums -> the extinction IN PLACE (sRGB codes in the accumulation: the hand-over's new volume), a range of
+        // texel layers (four slices each) per frame. At its first frame first the per-column pass: the colour with the ROCKS' share (the climate's
         // bedrock - the terrain's rock materials' mean colours, weighted by their climate boxes - and the rock fraction
         // in alpha), which sums each column's slices, so it runs before any slice converts.
         const vk::DescriptorSet set = m_resolveSets[frameIdx].getDescriptorSet();
@@ -1381,7 +1462,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     if (job.stage != EBakeStage::Copy)
         return;
 
-    // THE COPY: the new extinction into the density, a range of texel layers (two slices each) per frame. Meanwhile the
+    // THE COPY: the new extinction into the density, a range of texel layers (four slices each) per frame. Meanwhile the
     // march reads only the new bake (the fraction is 1), through the accumulation: nothing reads the density.
     {
         const uint32 slices = oc::min(job.copyPerFrame, m_accumDepth - job.progress);
@@ -1595,7 +1676,7 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
     pc.set(m_marchPush.startDistance, params.startDistance); // scaled with the camera's height (Renderer::farTreesStart)
     pc.set(m_marchPush.fullSize, glm::uvec2(m_width, m_height));
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 17> updates{
+    oc::array<DescriptorSetUpdateInfo, 20> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -1603,7 +1684,7 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorMax[m_front].view) } },
-        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_density.view) } },
+        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_densitySrgbView ? m_densitySrgbView : m_density.view) } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_colour[m_front].view) } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(marchColour.view) } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(marchDepth.view) } },
@@ -1619,6 +1700,9 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
         DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
         DescriptorSetUpdateInfo{ .binding = 15, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_colour[back].view) } },
         DescriptorSetUpdateInfo{ .binding = 16, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorMax[back].view) } },
+        DescriptorSetUpdateInfo{ .binding = 17, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[0]) } },
+        DescriptorSetUpdateInfo{ .binding = 18, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[1]) } },
+        DescriptorSetUpdateInfo{ .binding = 19, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[2]) } },
     };
     writeSet(set, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, march.getPipeline());

@@ -455,7 +455,16 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     column's height: spikes over every steep floor step). The lighting taps read the hardware filter at a height above
     the sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly (each tap's NEAREST column's
     floor made the shading jump at every column edge).
-* **Storage:** R16F extinction (1/m; packed in `accum`, below) + an RGBA8 colour map + the floors.
+* **Storage:** the march's 3D extinction (1/m) `density` + an RGBA8 colour map (2D: one colour per column) + the floors;
+  the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB, colour 2 x 18 MB, the 2D R32UI maps ~72 MB
+  (floor x 2, floorCover, rockSum: image atomics are 32-bit only; the far type rides in the colour map, below).
+* **`density` is R8, sRGB-ENCODED** (`tree_volume.inc.glsl` `TV_DENSITY_R8`): the resolve's sRGB code of extinction /
+  `TV_ACCUM_MAX` (4 / m), copied as it is through the image's R8_UNORM view; the march samples its R8_SRGB view
+  (MUTABLE_FORMAT; `VkImageViewUsageCreateInfo` sampled only, `m_densitySrgbView`) x `TV_DENSITY_DECODE`. The hardware
+  decodes sRGB BEFORE the trilinear filter, so the filtering stays exact and the decode is free; the 8 bits sit where
+  the relative steps are small (~2 % at the "Far blob shrink" cut, 0.463 / m); above the max it clamps (~1.4 / m after
+  the shrink and the 0.4 scale: opaque within a few metres). Needs R8_SRGB with linear filtering (`volumeDensityR8`, optional in Vulkan);
+  without it the density is R16F, decoded by the copy (`tvAccumDecode`). The march stays at 64 registers.
 * **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
   (`RenderTreeSet::create` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types' float
   extinction mip chains — `RenderTreeSet::Type::density`, box-filtered to 1³ on upload). Every texel the tree's box
@@ -491,9 +500,13 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
       weight / the column's area into a 2D R32UI image (`m_floorCover`'s memory - the floor passes and the smoothing
       are done with it; the stage zeroes it at its first frame - fixed point `TV_AMOUNT_SCALE`) over a TENT as wide as
       its crown (at least a cell each way, at most 8 texels; per-axis weights normalized, so the tree adds its whole
-      mass - a point splat made pillars where a column is smaller than a crown); its nearest column takes its type
-      (`m_farType`, `imageAtomicMin`: the LOWEST record type, so a tree's before a rock's and the same every bake) and
-      colour. No bushes.
+      mass - a point splat made pillars where a column is smaller than a crown); its nearest column takes its TYPE and
+      COLOUR by ONE `imageAtomicMin(type << 24 | rgb)` on the back colour map's R32UI view (MUTABLE_FORMAT,
+      `m_colourTypeView`; `tree_volume.inc.glsl` `tvColourType`, 255 = none: the clear's alpha 1): the LOWEST record
+      type wins - a tree's before a rock's - WITH its own colour, the same every bake (as "last writer wins" the colour
+      took turns between two species at a stand's edge). A rock writes the clear colour's rgb (`TV_CLEAR_RGB`). The
+      resolve's column pass sets the alpha back (1, or 1 - the rock fraction). No own type map (18 MB); at most 254
+      record types. No bushes.
     * `tree_volume_far.cs`, one thread per column: a column with mass, or next to one (the march's floor ring), that no
       tree floored gets the GROUND under its centre (its chunk's grid, `terrainHeightAt` where none); then mass x the
       type's profile (its mean over each slice) into the accumulation. A column without a type takes a neighbour's,
@@ -533,28 +546,40 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   * the smoothing (2D, a frame); the RECORDS' MASS ~1/8 in chunk ranges (`RecordsPC::chunkOffset`); the FAR COLUMNS
     ~1/4 in radial-row ranges of whole 8-row groups (`FarPC::rowOffset`);
   * the RESOLVE ~1/8, IN PLACE: the column pass (the rock colour; it sums each column's fixed-point slices, so it runs
-    first, `ResolvePC::columnPass`), then texel-layer ranges turn the sums into the extinctions as HALF FLOATS in
-    `accum` itself (`packHalf2x16`, two slices per texel - below); then the max-floor grid (2D, a frame);
-  * **`accum` PACKS TWO SLICES PER TEXEL** (`tree_volume.inc.glsl` `tvAccumTexel` / `tvAccumAmount`): R32UI,
-    `(slices + 1) / 2` layers (`m_accumDepth`), slice s in layer s / 2, its low (even) or high (odd) 16 bits (144 MB
-    instead of 270 MB at 3000 x 1500 x 15). Image atomics are 32-bit only, so the two 16-bit fixed-point halves
-    (x `TV_ACCUM_SCALE` = 1024) share one `imageAtomicAdd`. **The limit: a sum below 64 / m per slice and texel** - it
-    is the texel's MEAN extinction (each add weighted by the tree's cover of the texel: trees side by side in one cell
-    share it by area; only crowns / rocks occupying the same space add fully), and a single add is clamped to its half.
-    Past it the half wraps and carries into the other slice (not guarded: no saturating image atomic). The clear, the
-    resolve and the copy walk the layers; the rock sum (2D) stays 32-bit;
+    first, `ResolvePC::columnPass`; the rock sum has its own scale, `TV_ROCK_SCALE` = 1024), then texel-layer ranges turn
+    the sums into the extinctions' sRGB CODES in `accum` itself (`tvAccumEncode`, four per texel - below); then the
+    max-floor grid (2D, a frame);
+  * **`accum` PACKS FOUR SLICES PER TEXEL, INTERLEAVED** (`tree_volume.inc.glsl` `tvAccumAdd`, `TV_ACCUM_ADD_FUNCTION`):
+    R32UI, L = `(slices + 3) / 4` layers (`m_accumDepth`), slice s in layer s % L, byte s / L (72 MB at 3000 x 1500 x 16).
+    Image atomics are 32-bit only, so the four 8-bit fixed-point bytes (x `TV_ACCUM_SCALE` = 255 / `TV_ACCUM_MAX`: a step
+    is 1/64 per metre) share one `imageAtomicAdd`. **The step sets how much a REBAKE changes:** the polar grid moves
+    with the bake centre, so every rebake samples every tree into other texels, and each texel's rounding moves by up to
+    a step. At `TV_ACCUM_MAX` 16 (1/16 per metre: 0.5-1 optical depth per far cell after the scale) every hand-over
+    visibly changed all trees at once. A sum is the texel's MEAN extinction (each add weighted by the tree's
+    cover of the texel: trees side by side in one cell share it by area; only crowns / rocks occupying the same space add
+    fully). Two rules make 8 bits work:
+    * **STOCHASTIC ROUNDING** (`tvDither`, a hash of the texel, the slice and the tree / row): a rounded small add (a
+      tent's edge, a thin overlap) was lost; dithered, the sum stays right on average.
+    * **SATURATING, by a COMPARE-SWAP loop:** each add raises its byte by min(amount, 255 - byte), so nothing ever
+      carries into the next byte (the slice L layers up) and the sum clamps at `TV_ACCUM_MAX` exactly; a full byte returns
+      without an atomic. Tried: a plain `imageAtomicAdd`, then on an overflow taking the carry back out and ORing the
+      byte to 255 - not exact under concurrency (the OR is no add; a racing undo borrowed from the slice above), and
+      dense crowns grew stacks of dots above them.
+    The clear, the resolve and the copy walk the layers;
   * the HAND-OVER CROSS-FADE ("Far swap time (s)", REAL time - Time's unpaused clock, `handoverFade`; no GPU work of
     its own, so a time and not frames): the march's `TREE_HANDOVER` variant binds BOTH bakes - the new one through
-    `accum`'s RG16F view (MUTABLE_FORMAT, `m_accumFloatView`; the hardware filters across the columns,
-    `densityTexelNew` blends the slice axis from two layer fetches; bindings 13-16 with the back floor / colour / max
-    floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped by the golden ratio per
+    `accum`'s RGBA8_SRGB views (MUTABLE_FORMAT, sampled only: `m_accumFloatView` + `m_accumChannelViews`, channels 1-3
+    SWIZZLED into R - `accumChannel` reads ONE value; a vec4 fetch with a dynamic channel index cost the variant 64 -> 71
+    registers). The hardware decodes and filters across the columns AND, the slices being interleaved, between a slice
+    and the next one of the same channel: one fetch (`densityTexelNew`); only the pair that crosses into the next
+    channel (layer L - 1 -> 0) takes two. Bindings 13-19 with the back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped by the golden ratio per
     frame) is under the UBO's fade (`u_foliage_handoverFade`, `handoverUbo`). The temporal pass / TAA averages the
     picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix keeps a dense crown
     opaque until late in the fade). The whole ray follows its pick - the ring, the skip, the ahead-break - so the
     variant costs what the normal march does. **Without any temporal accumulation (temporal off, no TAA / DLSS) the
     fade shows as noise.** The variant is used from the frame AFTER the hand-over began (that frame's UBO was built
     before the stage changed);
-  * the COPY ~1/8: at fraction 1 `tree_volume_copy.cs` writes `accum` into `density` in slice ranges - nothing reads
+  * the COPY ~1/8: at fraction 1 `tree_volume_copy.cs` writes `accum` into `density` (encoded, above) in slice ranges - nothing reads
     `density` then - and the SWAP follows. **No cross-fade** (`BakeJob::crossFade` false) for the first bake (nothing
     shown yet) and after a volume GEOMETRY change (`sameGeometry`: start, rebake distance, end, height, resolutions -
     the march reads both bakes through the SHOWN bake's ring and layer, so the new one would sample at the wrong

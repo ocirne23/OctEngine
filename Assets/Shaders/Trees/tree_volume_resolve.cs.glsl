@@ -1,12 +1,12 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, the resolve (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as two
-// half floats per texel (tree_volume.inc.glsl). The march's hand-over reads them through the RG16F view, then
-// tree_volume_copy.cs moves them into the R16F density. A range of texel layers per dispatch.
+// FAR-TREE VOLUME BAKE, the resolve (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as four
+// sRGB codes per texel (tree_volume.inc.glsl tvAccumEncode). The march's hand-over reads them through the RGBA8_SRGB view,
+// then tree_volume_copy.cs moves them into the density. A range of texel layers per dispatch.
 // THE COLUMN PASS (pc_columnPass, before any layer converts): the ROCK fraction = the column's rock sum / its sum over the
-// slices. A column with rocks mixes the CLIMATE'S BEDROCK into its colour by it - the terrain's rock materials' mean colours,
+// slices (each in its own scale). A column with rocks mixes the CLIMATE'S BEDROCK into its colour by it - the terrain's rock materials' mean colours,
 // weighted by their climate boxes (terrain_splat.inc.glsl's box weight, over every rock entry) - and stores 1 - the fraction
-// in alpha (the march's rock lighting). Columns without rocks keep the splat's colour.
+// in alpha (the march's rock lighting). Columns without rocks keep the splat's colour, their alpha back at 1.
 
 #extension GL_EXT_scalar_block_layout : require
 
@@ -17,7 +17,7 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout (binding = 2, r32ui) uniform uimage3D u_accum; // the sums in, the extinction's half floats out (in place)
+layout (binding = 2, r32ui) uniform uimage3D u_accum; // the sums in, the extinction's sRGB codes out (in place)
 layout (binding = 4, r32ui) uniform readonly uimage2D u_rockSum;
 layout (binding = 5, rgba8) uniform image2D u_colour;
 layout (binding = 6, r32ui) uniform readonly uimage2D u_floor;
@@ -64,22 +64,29 @@ void main()
     if (pc_columnPass == 0u)
     {
         const uint sums = imageLoad(u_accum, p).r;
-        imageStore(u_accum, p, uvec4(packHalf2x16(vec2(float(sums & 0xFFFFu), float(sums >> 16)) * (1.0 / TV_ACCUM_SCALE))));
+        imageStore(u_accum, p, uvec4(tvAccumEncode(sums & 0xFFu) | tvAccumEncode((sums >> 8) & 0xFFu) << 8
+            | tvAccumEncode((sums >> 16) & 0xFFu) << 16 | tvAccumEncode(sums >> 24) << 24));
         return;
     }
 
-    // THE COLUMN PASS (one layer dispatched).
+    // THE COLUMN PASS (one layer dispatched). A column without rocks takes its alpha back to 1: the records' stage left
+    // its far type there (tree_volume.inc.glsl tvColourType).
     const uint rock = imageLoad(u_rockSum, p.xy).r;
     if (rock == 0u)
+    {
+        const vec4 colour = imageLoad(u_colour, p.xy);
+        if (colour.a < 1.0)
+            imageStore(u_colour, p.xy, vec4(colour.rgb, 1.0));
         return;
+    }
 
     uint total = 0u;
     for (int z = 0; z < imageSize(u_accum).z; ++z)
     {
         const uint sums = imageLoad(u_accum, ivec3(p.xy, z)).r;
-        total += (sums & 0xFFFFu) + (sums >> 16);
+        total += (sums & 0xFFu) + ((sums >> 8) & 0xFFu) + ((sums >> 16) & 0xFFu) + (sums >> 24);
     }
-    const float fraction = clamp(float(rock) / max(float(total), 1.0), 0.0, 1.0);
+    const float fraction = clamp((float(rock) * (1.0 / TV_ROCK_SCALE)) / max(float(total) * (1.0 / TV_ACCUM_SCALE), 1e-3), 0.0, 1.0);
 
     const vec2 xz = tvTexelWorldXZ(p.xy, TV_PUSH_VOL);
     const uint floorBits = imageLoad(u_floor, p.xy).r;

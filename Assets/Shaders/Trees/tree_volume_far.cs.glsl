@@ -21,9 +21,10 @@
 layout (local_size_x = 8, local_size_y = 8) in;
 
 layout (binding = 2, r32ui) uniform readonly uimage2D u_amount;
-layout (binding = 3, r32ui) uniform readonly uimage2D u_type;
+layout (binding = 3, r32ui) uniform readonly uimage2D u_colourType; // the back colour map's R32UI view (tvColourType)
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
-layout (binding = 5, r32ui) uniform uimage3D u_accum; // two slices per texel (tree_volume.inc.glsl tvAccumTexel)
+layout (binding = 5, r32ui) uniform uimage3D u_accum; // four slices per texel (tree_volume.inc.glsl tvAccumAdd)
+TV_ACCUM_ADD_FUNCTION(u_accum)
 
 // Mirrors TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
 struct RecordType
@@ -84,12 +85,12 @@ void main()
         return;
 
     // The type: the column's own, a neighbour's, else the first with mass.
-    uint type = imageLoad(u_type, col).r;
+    uint type = tvColourType(imageLoad(u_colourType, col).r);
     for (int k = 0; k < 9 && !validType(type); ++k)
     {
         const ivec2 n = ivec2(tvWrapAngle(col.x + k % 3 - 1, angularRes), col.y + k / 3 - 1);
         if (n.y >= 0 && n.y < radialRes)
-            type = imageLoad(u_type, n).r;
+            type = tvColourType(imageLoad(u_colourType, n).r);
     }
     for (uint t = 0u; t < pc_numTypes && !validType(type); ++t)
         type = t;
@@ -116,6 +117,6 @@ void main()
         }
         const float extinction = amountPerH * sum;
         if (extinction > 1e-4)
-            imageAtomicAdd(u_accum, tvAccumTexel(col, s), tvAccumAmount(extinction, s));
+            tvAccumAdd(col, s, tvAccumLayers(pc_vol_slices), extinction, tvDither(uvec3(col.x, col.y * 64 + int(s), 0x5EEDu)));
     }
 }
