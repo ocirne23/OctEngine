@@ -35,7 +35,7 @@ layout (binding = 6, rgba16f) uniform writeonly image2D u_outDepth;
 #else
 layout (binding = 6, r16f) uniform writeonly image2D u_outDepth; // the weighted mean distance (m): the fog apply's layer depth
 #endif
-layout (binding = 7, r32ui) uniform readonly uimage2D u_floor;   // the columns' tree floors (tree_volume.inc.glsl)
+layout (binding = 7, r16ui) uniform readonly uimage2D u_floor;   // the columns' tree floors, the shown copy (tvFloorFrontDecode)
 layout (binding = 10) uniform sampler2DArray u_skyMap;           // GI's sky bake (atmosphere.inc.glsl): the canopy's sky light
 layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-floor grid: x dilated, y ahead (tree_volume_floor_max.cs.glsl)
 
@@ -70,7 +70,19 @@ bool handoverPicksNew(ivec2 px)
 }
 
 vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
-uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
+// A column's floor (false: none). The new bake's is the bake's own R32UI one (tree_volume.inc.glsl's encoding).
+bool floorAt(ivec2 c, out float y)
+{
+    if (g_new)
+    {
+        const uint bits = imageLoad(u_floorNew, c).r;
+        y = tvFloorDecode(bits);
+        return bits != 0u;
+    }
+    const uint code = imageLoad(u_floor, c).r;
+    y = tvFloorFrontDecode(code);
+    return code != 0u;
+}
 
 // One channel of the accumulation, as a single value: the views at 13 and 17-19 are SWIZZLED so their R is channel 0-3 (a
 // vec4 fetch with a dynamic channel index cost the hand-over variant 64 -> 71 registers).
@@ -111,7 +123,12 @@ vec4 colourAt(vec2 uv) { return g_new ? textureLod(u_colourNew, uv, 0.0) : textu
 vec2 floorMaxAt(ivec2 block) { return g_new ? imageLoad(u_floorMaxNew, block).xy : imageLoad(u_floorMax, block).xy; }
 #else
 vec2 bakeCentre() { return pc_vol_centre; }
-uint floorBitsAt(ivec2 c) { return imageLoad(u_floor, c).r; }
+bool floorAt(ivec2 c, out float y)
+{
+    const uint code = imageLoad(u_floor, c).r;
+    y = tvFloorFrontDecode(code);
+    return code != 0u;
+}
 float densityTexel(vec3 at) { return textureLod(u_density, at, 0.0).r * TV_DENSITY_DECODE; } // linear (R8: the sRGB view decodes)
 vec4 colourAt(vec2 uv) { return textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return imageLoad(u_floorMax, block).xy; }
@@ -151,9 +168,7 @@ bool floorAtUv(vec2 uv, out float floorY)
     const int angularRes = int(pc_vol_angularRes);
     const ivec2 texel = ivec2(tvWrapAngle(int(floor(uv.x * float(angularRes))), angularRes),
         int(uv.y * float(pc_vol_radialRes)));
-    const uint bits = floorBitsAt(texel);
-    floorY = tvFloorDecode(bits);
-    return bits != 0u;
+    return floorAt(texel, floorY);
 }
 
 // The PRIMARY sample: the 4 columns around p bilinearly, EACH at its own height above its own floor, as the splat stored
@@ -179,12 +194,11 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
     {
         const ivec2 o = ivec2(k & 1, k >> 1);
         const ivec2 col = ivec2(tvWrapAngle(base.x + o.x, angularRes), clamp(base.y + o.y, 0, radialRes - 1));
-        const uint bits = floorBitsAt(col);
-        if (bits == 0u)
+        float colFloor;
+        if (!floorAt(col, colFloor))
             continue; // no tree reaches the column: no density there
         const vec2 w2 = mix(1.0 - f, f, vec2(o));
         const float w = w2.x * w2.y;
-        const float colFloor = tvFloorDecode(bits);
         floorSum += w * colFloor;
         floorWeight += w;
         const float h = p.y - colFloor;

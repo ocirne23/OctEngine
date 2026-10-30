@@ -423,7 +423,11 @@ private:
     // ... their R32UI views (MUTABLE_FORMAT): the bake's records stage writes colour + FAR TYPE (in a) by one atomic min
     // (tree_volume.inc.glsl tvColourType); the resolve sets a back.
     oc::array<vk::ImageView, 2> m_colourTypeView{};
-    oc::array<Image, 2> m_floor;  // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
+    // NOT a front / back pair: the BAKE's floor (R32UI 2D: the dominant tree's base per column, an atomic max -
+    // tree_volume.inc.glsl's encoding; 0 = none; the hand-over reads it as the new bake's) and the SHOWN one (R16UI 2D,
+    // tvFloorFrontEncode: the march's), which the copy stage converts while nothing reads it (as the density).
+    Image m_floorBake;
+    Image m_floorShown;
     // RG32F 2D, one texel per FLOOR_MAX_BLOCK^2 columns (the march's skip): x = the highest floor within one block each
     // way, y = AHEAD - over this row and every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way.
     oc::array<Image, 2> m_floorMax;

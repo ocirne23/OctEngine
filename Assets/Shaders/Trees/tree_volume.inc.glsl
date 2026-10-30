@@ -153,6 +153,17 @@ float tvFloorDecode(uint e)
     return uintBitsToFloat((o & 0x80000000u) != 0u ? o & 0x7FFFFFFFu : ~o);
 }
 
+// THE SHOWN FLOOR (the march's, R16UI; tree_volume_copy.cs converts the bake's R32UI floor into it): the height in
+// TV_FLOOR_FRONT_STEP steps from TV_FLOOR_FRONT_BASE (-1000 .. ~12100 m: peaks reach ~10 km at the model's true scale;
+// clamped), 0 = no floor. A slice is ~1.9 m, so 0.2 m is well inside it. The bake keeps 32 bits: its floor is an atomic max.
+const float TV_FLOOR_FRONT_BASE = -1000.0;
+const float TV_FLOOR_FRONT_STEP = 0.2;
+uint tvFloorFrontEncode(uint bits)
+{
+    return bits == 0u ? 0u : uint(clamp(round((tvFloorDecode(bits) - TV_FLOOR_FRONT_BASE) * (1.0 / TV_FLOOR_FRONT_STEP)), 1.0, 65535.0));
+}
+float tvFloorFrontDecode(uint code) { return float(code) * TV_FLOOR_FRONT_STEP + TV_FLOOR_FRONT_BASE; }
+
 // Texel (angle, radius) centre -> world XZ.
 vec2 tvTexelWorldXZ(ivec2 texel, TreeVolumeParams v)
 {

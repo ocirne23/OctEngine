@@ -526,7 +526,7 @@ export struct FarTreeParams
     uint32 slices = 16;            // height slices
     float height = 30.0f;         // m above the column's tree floor the volume covers
     float densityScale = 0.4f;    // x the baked extinction
-    float blobShrink = 0.463f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float blobShrink = 0.75f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
     float stepScale = 0.8f;       // march step, x the cell size, at startDistance
     float layerSamples = 8.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
     float stepExponent = 0.4f;  // ... x (r / startDistance) ^ this beyond: > 0 = finer near the start, coarser far out

@@ -456,13 +456,19 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     the sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly (each tap's NEAREST column's
     floor made the shading jump at every column edge).
 * **Storage:** the march's 3D extinction (1/m) `density` + an RGBA8 colour map (2D: one colour per column) + the floors;
-  the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB, colour 2 x 18 MB, the 2D R32UI maps ~72 MB
-  (floor x 2, floorCover, rockSum: image atomics are 32-bit only; the far type rides in the colour map, below).
+  the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB, colour 2 x 18 MB, the bake's 2D R32UI maps
+  54 MB (floorBake, floorCover, rockSum: image atomics are 32-bit only; the far type rides in the colour map, below), the
+  shown floor 9 MB.
+* **THE FLOORS ARE NO FRONT / BACK PAIR:** the bake writes `m_floorBake` (R32UI, an atomic max: `tvFloorEncode`), which
+  the hand-over also reads as the new bake's (binding 14); the plain march reads `m_floorShown` (R16UI, binding 7:
+  `tvFloorFrontEncode` - 0.2 m steps from -1000 m to ~12100 m, the model's true-scale peaks reach ~10 km; 0 = none, half
+  the bytes for its 4 floor loads per sample). The copy stage converts the one into the other (with its first layer),
+  while every ray reads the new bake - as it does the density.
 * **`density` is R8, sRGB-ENCODED** (`tree_volume.inc.glsl` `TV_DENSITY_R8`): the resolve's sRGB code of extinction /
   `TV_ACCUM_MAX` (4 / m), copied as it is through the image's R8_UNORM view; the march samples its R8_SRGB view
   (MUTABLE_FORMAT; `VkImageViewUsageCreateInfo` sampled only, `m_densitySrgbView`) x `TV_DENSITY_DECODE`. The hardware
   decodes sRGB BEFORE the trilinear filter, so the filtering stays exact and the decode is free; the 8 bits sit where
-  the relative steps are small (~2 % at the "Far blob shrink" cut, 0.463 / m); above the max it clamps (~1.4 / m after
+  the relative steps are small (~2 % at the "Far blob shrink" cut, 0.75 / m); above the max it clamps (~1.3 / m after
   the shrink and the 0.4 scale: opaque within a few metres). Needs R8_SRGB with linear filtering (`volumeDensityR8`, optional in Vulkan);
   without it the density is R16F, decoded by the copy (`tvAccumDecode`). The march stays at 64 registers.
 * **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
@@ -579,13 +585,14 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     variant costs what the normal march does. **Without any temporal accumulation (temporal off, no TAA / DLSS) the
     fade shows as noise.** The variant is used from the frame AFTER the hand-over began (that frame's UBO was built
     before the stage changed);
-  * the COPY ~1/8: at fraction 1 `tree_volume_copy.cs` writes `accum` into `density` (encoded, above) in slice ranges - nothing reads
-    `density` then - and the SWAP follows. **No cross-fade** (`BakeJob::crossFade` false) for the first bake (nothing
+  * the COPY ~1/8: at fraction 1 `tree_volume_copy.cs` writes `accum` into `density` (encoded, above) in slice ranges and the
+    bake floor into the shown one - nothing reads either then - and the SWAP follows. **No cross-fade** (`BakeJob::crossFade` false) for the first bake (nothing
     shown yet) and after a volume GEOMETRY change (`sameGeometry`: start, rebake distance, end, height, resolutions -
     the march reads both bakes through the SHOWN bake's ring and layer, so the new one would sample at the wrong
     radius / height): the copy then runs whole in ONE frame and the swap follows in it.
-  * The bake writes the BACK `floor` / `colour` (two of each) and the shared `accum`; the march reads the FRONT ones and
-    `density` until the hand-over. No second density: `accum` holds the new one. **A new bake starts only
+  * The bake writes the BACK `colour` / max floor (two of each), `accum` and the bake floor; the march reads the FRONT
+    ones, `density` and the shown floor until the hand-over. No second density or floor: `accum` and the bake floor hold
+    the new ones. **A new bake starts only
     NUM_FRAMES_IN_FLIGHT frames after the last swap OR DROP** (`m_bakeStartFrame`: the snapshots are rewritten - a
     dropped bake's dispatches may still be in flight, and a grown snapshot buffer is re-created - and after a swap the
     old front, the new back, may still be read). `markDirty` re-bakes after a running bake; `invalidate` (a set
