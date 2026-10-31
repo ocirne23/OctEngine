@@ -478,6 +478,10 @@ namespace Procedural
 
 			// THE MESH CACHE (MeshCache): the library, the baked variants and their far-volume grids, keyed by the species
 			// file's text. A miss generates them and writes the file.
+			// The CPU meshes are LOCALS: once uploaded (and baked into the billboards / card meshes below) nothing reads them,
+			// so they go at the end of this species - a few hundred MB over all species.
+			TreeLibrary library;
+			oc::vector<TreePiece> variants;
 			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
 			oc::vector<TreeDensityGrid> density;
 			uint64 textHash = 0; // the species file's text: the mesh and texture caches' key
@@ -486,26 +490,27 @@ namespace Procedural
 				textHash = meshCacheHash(FileSystem::readFileStr(entry.path));
 				const uint64 meshHash = meshCacheMix(textHash, TREE_DENSITY_RES);
 				const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
-				if (!loadTreeMeshes(meshPath, meshHash, species.library, species.variants, density))
+				if (!loadTreeMeshes(meshPath, meshHash, library, variants, density))
 				{
-					species.library = {};
-					generateTreeLibrary(species.desc, species.library);
-					species.variants.clear();
-					species.variants.resize((size_t)species.desc.variantCount);
+					library = {};
+					generateTreeLibrary(species.desc, library);
+					variants.clear();
+					variants.resize((size_t)species.desc.variantCount);
 					for (int v = 0; v < species.desc.variantCount; ++v)
-						bakeTreeVariant(species.desc, species.library, treeHash(species.desc.seed, 5000u + (uint32)v), species.variants[(size_t)v]);
+						bakeTreeVariant(species.desc, library, treeHash(species.desc.seed, 5000u + (uint32)v), variants[(size_t)v]);
 					// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline).
-					density.resize(species.variants.size());
-					for (size_t v = 0; v < species.variants.size(); ++v)
+					density.resize(variants.size());
+					for (size_t v = 0; v < variants.size(); ++v)
 					{
 						TreeBillboardBox box;
-						bakeTreeDensity(species.variants[v], TREE_DENSITY_RES, leafCoverage, density[v].values, box);
+						bakeTreeDensity(variants[v], TREE_DENSITY_RES, leafCoverage, density[v].values, box);
 						density[v].min = box.min;
 						density[v].max = box.max;
 					}
-					saveTreeMeshes(meshPath, meshHash, species.library, species.variants, density);
+					saveTreeMeshes(meshPath, meshHash, library, variants, density);
 				}
 			}
+			species.moduleLength = library.modules.empty() ? 1.0f : library.modules[0].length;
 
 			size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
 			// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
@@ -530,11 +535,11 @@ namespace Procedural
 					}
 				}
 			};
-			uploadPieces(species.library.trunks, species.trunkMeshes);
-			uploadPieces(species.library.modules, species.moduleMeshes);
+			uploadPieces(library.trunks, species.trunkMeshes);
+			uploadPieces(library.modules, species.moduleMeshes);
 			// The baked whole trees the grove places (counted into the same triangle totals).
-			uploadPieces(species.variants, species.variantMeshes);
-			for (size_t v = 0; v < species.variants.size(); ++v)
+			uploadPieces(variants, species.variantMeshes);
+			for (size_t v = 0; v < variants.size(); ++v)
 			{
 				PieceMeshes& meshes = species.variantMeshes[v];
 				meshes.density = oc::move(density[v].values);
@@ -614,12 +619,12 @@ namespace Procedural
 			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`. A species WITHOUT
 			// leaves (a succulent: bark blades) shows in the volume as its bark (bakeTreeDensity splats it): the bark's mean.
 			const glm::vec3 far = species.desc.farColor;
-			const bool leafless = species.variants.empty() || species.variants[0].leaves[0].indices.empty();
+			const bool leafless = variants.empty() || variants[0].leaves[0].indices.empty();
 			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : leafless ? barkMean : leafMean)
 				* species.desc.farAlbedoScale;
 			if (m_settings.farMode == 0 && species.desc.billboardDistance > 0.0f)
 			{
-				buildBillboards(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
+				buildBillboards(renderer, species, library, variants, name, barkAlbedo, barkSize, leafImage, leafSize);
 				// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
 				species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
 				species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
@@ -634,14 +639,14 @@ namespace Procedural
 				}
 			}
 			Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
-				species.desc.name, species.library.trunks.size(), species.library.modules.size(),
+				species.desc.name, library.trunks.size(), library.modules.size(),
 				barkTris[0], leafTris[0], barkTris[1], leafTris[1], barkTris[2], leafTris[2], barkTris[3], leafTris[3]));
 		}
 		applyFadeBands(renderer);
 	}
 
-	void TreeSystem::buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
-		oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
+	void TreeSystem::buildBillboards(Renderer& renderer, Species& species, const TreeLibrary& library, const oc::vector<TreePiece>& variants,
+		const oc::string& name, oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
 	{
 		// The bake's inputs, generated on the first miss when their .tex was loaded (the same images: the generators are
 		// deterministic).
@@ -675,11 +680,11 @@ namespace Procedural
 		// (normal +Z) stands vertical too: two crossed vertical cards through the trunk axis. A whole tree also gets
 		// a HORIZONTAL card for the top-down view (a module's "top" card already lies flat; a bare trunk from
 		// above is a dot).
-		const oc::vector<TreePiece>* pieceSets[3] = { &species.library.modules, &species.library.trunks, &species.variants };
+		const oc::vector<TreePiece>* pieceSets[3] = { &library.modules, &library.trunks, &variants };
 		oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
 		// The modules' textures (their encoded mip chains) and axis-coded cards, kept for the mid tier's atlas + card meshes
 		// (below).
-		const size_t numModules = species.library.modules.size();
+		const size_t numModules = library.modules.size();
 		oc::vector<CachedTexture> moduleTextures(numModules);
 		oc::vector<TreeMesh> moduleCards(numModules);
 		for (uint32 set = 0; set < 3; ++set)
@@ -780,7 +785,7 @@ namespace Procedural
 		// block covers 4x4 texels of one module, since every level a material gets is a multiple of 4 high (billboardLayout
 		// keeps >= 4 px per strip). Then per baked variant ONE card mesh: each module placement's cards in the variant's
 		// space, v remapped into the module's block, the card axis code (texCoords.z, billboardMesh) remapped with it.
-		if (numModules == 0 || species.variants.empty())
+		if (numModules == 0 || variants.empty())
 			return;
 		const uint32 numMips = billboardLayout(size, numViews, false).numMips;
 		CachedTexture atlas;
@@ -806,10 +811,10 @@ namespace Procedural
 			RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
 
 		const float invModules = 1.0f / (float)numModules;
-		for (size_t v = 0; v < species.variants.size(); ++v)
+		for (size_t v = 0; v < variants.size(); ++v)
 		{
 			TreeMesh merged;
-			for (const TreePiecePlacement& placement : species.variants[v].placements)
+			for (const TreePiecePlacement& placement : variants[v].placements)
 			{
 				if (placement.trunk || placement.pieceIdx >= numModules)
 					continue;
@@ -1073,7 +1078,7 @@ namespace Procedural
 				};
 				for (const PieceMeshes& meshes : species.trunkMeshes)
 					placeInRow(meshes, 3.0f);
-				const float moduleWidth = glm::max(species.library.modules.empty() ? 1.0f : species.library.modules[0].length * 0.8f, 1.0f);
+				const float moduleWidth = glm::max(species.moduleLength * 0.8f, 1.0f);
 				for (const PieceMeshes& meshes : species.moduleMeshes)
 					placeInRow(meshes, moduleWidth);
 			}

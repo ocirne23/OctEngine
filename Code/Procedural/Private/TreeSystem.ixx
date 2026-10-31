@@ -86,12 +86,12 @@ export namespace Procedural
 		struct Species
 		{
 			TreeSpeciesDesc desc;
-			TreeLibrary library;
+			// The GPU meshes of the piece library and of the baked whole-tree variants (bakeTreeVariant: what the grove places,
+			// one "piece" each). The CPU meshes are not kept: reload frees them once uploaded and baked.
 			oc::vector<PieceMeshes> trunkMeshes;
 			oc::vector<PieceMeshes> moduleMeshes;
-			// Baked whole-tree variants (bakeTreeVariant): what the grove places. One "piece" each.
-			oc::vector<TreePiece> variants;
 			oc::vector<PieceMeshes> variantMeshes;
+			float moduleLength = 1.0f; // the first module's length (m): the library row's spacing
 			// The materials the pieces draw with: ownBarkMaterial's / ownLeafMaterial's, or a shared one (the solid leaf colour).
 			uint16 barkMaterial = 0;
 			uint16 leafMaterial = 0;
@@ -117,7 +117,8 @@ export namespace Procedural
 		void reload(Renderer& renderer);
 		// Bakes (or loads) every module's billboard cards. Needs the species' level-0 bark and leaf images.
 		// The bark / leaf level-0 images are the bake's input: empty (their .tex was loaded) = generated here on a bake miss.
-		void buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
+		void buildBillboards(Renderer& renderer, Species& species, const TreeLibrary& library, const oc::vector<TreePiece>& variants,
+			const oc::string& name,
 			oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize);
 		void clearAll(); // nodes first, then the species' meshes and owned materials
 		void destroyTreeSet(); // the GPU expansion set (drains the GPU)

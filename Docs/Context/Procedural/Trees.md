@@ -366,6 +366,10 @@ underneath popped visibly (fewer, larger leaf cards per level, no crossfade). Th
 (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table stays for a return of mesh LODs); `lodError` / `Lod ErrorScale`
 are unused, and RendererVK allocates no hysteresis slots for tree records.
 
+**The CPU meshes are not kept**: the library and the baked variants are locals of `reload`'s per-species load (from the
+`.treemesh` cache or generated), freed once uploaded and baked into the billboards and card meshes (`buildBillboards`
+takes them as arguments). `Species` keeps only the GPU `PieceMeshes` and `moduleLength` (the library row's spacing).
+
 ### Far representations (`Trees/Far mode`)
 
 The SHARED pieces — modules AND trunks, and the baked whole-tree variants — get a billboard each (a trunk's +Y is
