@@ -17,8 +17,9 @@ import :RockType;
 // RECORD per terrain chunk - x, z and the species, nothing else. The height is the terrain's; variant, scale and yaw
 // come from the record's hash (treeRecordSeed), so the same tree comes back wherever and whenever it is asked for.
 // The records are a pure function of (seed, chunk, the species' Placement blocks, the sampler): a chunk that leaves
-// the ring is dropped and generated again when it comes back. Generated on Low pump jobs, nearest chunk first, over
-// the terrain's own ring (radius, chunk size, generated bounds). Trees only - the bushes come from the placement
+// the ring is dropped and generated again when it comes back. Generated FOLLOWING THE TERRAIN NODES (a chunk waits for the node over it, whose pump hands it over while the node's
+// tiles are hot - a LOD0 node places it at once from its own samples; see m_waiting), on Low pump jobs, over
+// the terrain's own ring (chunk size, generated bounds; the radius no farther than the far-tree volume draws). Trees only - the bushes come from the placement
 // function at expansion, not from records.
 // NEAR: TreeSystem expands the near chunks' CPU records into its dynamic tree set (TreeSystem "world mode").
 // GPU: every chunk's records go to the GPU (Renderer::addTreeRecordChunk: one fixed-size device-local pool + a chunk
@@ -184,6 +185,7 @@ export namespace Procedural
 		{
 			glm::ivec2 coord{ 0 };
 			uint32 generation = 0;
+			bool regenerate = false; // generated before (its CPU records came back inside the keep radius): no node hook comes
 		};
 		struct Result
 		{
@@ -204,8 +206,16 @@ export namespace Procedural
 			bool uploaded = false;          // went through the upload queue
 		};
 
-		// The chunk's records, and its GROUND for the far volume (its height grid, TreeRecordPool's encoding).
-		static void placeChunk(const GenConfig& config, glm::ivec2 coord, oc::vector<TreeRecord>& out, oc::vector<uint32>& outGround);
+		// The chunk's records, and its GROUND for the far volume (its height grid, TreeRecordPool's encoding). `node`
+		// (optional): a LOD0 terrain node's sample grid over the chunk - its points on the placement grid are read from it,
+		// not sampled again.
+		static void placeChunk(const GenConfig& config, glm::ivec2 coord, oc::vector<TreeRecord>& out, oc::vector<uint32>& outGround,
+			const TerrainNodeSamples* node = nullptr);
+		// THE NODE HOOK (TerrainStreamer::setNodeHook, on its pump job): the waiting chunks under the node become ready,
+		// in the node's order; a LOD0 node's chunk is placed here and now from its samples.
+		void onTerrainNode(const TerrainNodeSamples& node);
+		// The waiting chunks become ready when the terrain pumps are idle (no node is coming for them). The job.
+		void promoteWaiting();
 		void loadSpecies();
 		void restart(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps); // a new generation: drops every chunk
 		void clear(Renderer& renderer, uint64 poolBytes);
@@ -268,14 +278,27 @@ export namespace Procedural
 		oc::vector<uint32> m_pendingRemoves;  // record pool handles of the chunks that left the ring
 		oc::vector<uint64> m_pendingUploads;  // chunk keys to add to the pool
 
-		// Shared with the pumps (m_mutex).
+		// Shared with the pumps and the node hook (m_mutex).
 		mutable std::mutex m_mutex;
-		oc::deque<Request> m_requests;          // nearest first (re-sorted when the ring moves)
+		// THE TREE CHUNKS FOLLOW THE TERRAIN NODES: a requested chunk WAITS for the terrain node over it (the hook moves it
+		// to m_ready, together with the node's other chunks, while the node's tiles are hot; a LOD0 node places it itself)
+		// - unless that node was generated already (TerrainStreamer::nodeGenerated) or the chunk is a regeneration. The
+		// waiting ones left when the terrain pumps go idle become ready too (promoteWaiting).
+		oc::unordered_map<uint64, Request> m_waiting;
+		oc::deque<Request> m_ready;             // the pumps take the front
 		oc::vector<Result> m_results;
 		oc::shared_ptr<const GenConfig> m_pumpConfig;
 		glm::ivec2 m_pumpRingCam{ 0 };
 		int m_pumpRingR = 0;
 		oc::atomic<int32> m_numPumps{ 0 };
 		JobCounter m_pumpCounter;
+		// The node hook's guard: the terrain holds the hook (and this token) and may outlive this object (the procedural
+		// globals' order is undefined). The destructor clears `world`, then waits out the calls under way.
+		struct HookToken
+		{
+			oc::atomic<TreeWorld*> world{ nullptr };
+			oc::atomic<int32> calls{ 0 };
+		};
+		oc::shared_ptr<HookToken> m_hookToken;
 	};
 }

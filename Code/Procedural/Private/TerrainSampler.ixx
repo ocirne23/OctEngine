@@ -188,4 +188,18 @@ export namespace Procedural
 		// consumer lapsing it again would double-count.
 		virtual float lapseRatePerMetre() const = 0;
 	};
+
+	// A terrain node TerrainStreamer just generated, handed to its NODE HOOK (TreeWorld places the tree chunks under it while
+	// its tiles are hot): the sampler it came from, its base chunks, and - for a LOD0 node - its own sample grid (gridRes^2
+	// points from (originX, originZ) every `step` m; empty otherwise). The samplers are pure functions of position, so a
+	// consumer that needs the same world points may read them here instead of sampling again.
+	struct TerrainNodeSamples
+	{
+		const ITerrainSampler* maps = nullptr;
+		int32 firstBaseX = 0, firstBaseZ = 0; // its first base chunk
+		uint32 span = 1;                      // base chunks per side (2^lod)
+		oc::span<const TerrainPoint> field;
+		uint32 gridRes = 0;
+		double originX = 0.0, originZ = 0.0, step = 0.0;
+	};
 }

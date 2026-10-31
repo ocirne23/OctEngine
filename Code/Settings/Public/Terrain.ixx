@@ -205,7 +205,8 @@ export struct TerrainSettings
 	float v3HumidityOffset = 0.0f;        // slides the planet along arid <-> lush
 	float v3HumidFog = 0.25f;
 	float v3ValleyFog = 0.25f;
-	int   v3MaxTiles = 256;               // resident tile budget (~800 KB each)
+	int   v3MaxTiles = 64;                // resident tile budget (~1.1 MB each); the tree chunks follow the terrain nodes, so the working set is small
+	bool  v3LogTileStats = false;         // button (TerrainStreamer clears it): the RAM tile cache's hits / disk loads / generations
 	// Half-precision inference: buys VRAM and load time, NOT generation speed. Reloads the models and changes the
 	// terrain for a given seed.
 	bool  v3Fp16 = false;

@@ -23,5 +23,8 @@ export namespace Procedural
 	// boundaries) and includes the seabed below sea level - the OceanGenerator draws the water over it and
 	// bakes its shore-depth map from the same field. No skirt: the terrain VS stitches every edge to the
 	// coarser side from TerrainChunkMesh::stitch (see "Edge stitching" in the Procedural CONTEXT).
-	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out);
+	// `outField` (optional): the node's sample grid - (lod0Res + 3)^2 points, a one-point halo, from the node's origin less one
+	// step (nodeSize / lod0Res) - for TerrainStreamer's node hook.
+	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out,
+	                   oc::vector<TerrainPoint>* outField = nullptr);
 }

@@ -98,22 +98,97 @@ namespace
 	// altitude) at the terrain's DEFAULT tweaks ("Terrain/Textures": slope rock start / full, crag start / full) - a
 	// mirror for the rocks' crag fit. Approximate on purpose: it places rocks, it does not shade.
 	constexpr float CRAG_SLOPE_START = 0.25f, CRAG_SLOPE_FULL = 0.60f, CRAG_RELIEF_START = 34.0f, CRAG_RELIEF_FULL = 400.0f;
+
+	// The placement grid at Full detail: gpr^2 points from (x0, z0) every `step` m. The points a LOD0 terrain node's own grid
+	// holds (`node`) are COPIED from it, the rest sampled in at most four strips around them. Only on exact lattices (whole
+	// metres, the node's lattice dividing this one): every world point is then the very double the full grid would sample,
+	// and the samplers are pure functions of position - so the records are the same however the chunk was placed (a
+	// chunk regenerated for the keep radius must give back the records the GPU already holds).
+	void sampleField(const ITerrainSampler& maps, double x0, double z0, double step, uint32 gpr, const TerrainNodeSamples* node,
+		oc::vector<TerrainPoint>& field)
+	{
+		field.resize((size_t)gpr * gpr);
+		const auto whole = [](double v) { return v == std::floor(v) && std::abs(v) < 1e12; };
+		// The covered index range on one axis: point i's node index is off + ratio * i, inside [0, gridRes - 1].
+		const auto covered = [&](double origin, double nodeOrigin, int32& lo, int32& hi)
+		{
+			lo = 0;
+			hi = -1;
+			if (!node || node->field.empty() || node->step <= 0.0 || !whole(origin) || !whole(nodeOrigin) || !whole(step) || !whole(node->step))
+				return;
+			const double ratio = step / node->step, off = (origin - nodeOrigin) / node->step;
+			if (ratio < 1.0 || !whole(ratio) || !whole(off))
+				return;
+			const int32 r = (int32)ratio, o = (int32)off, last = (int32)node->gridRes - 1;
+			lo = o >= 0 ? 0 : (-o + r - 1) / r;
+			hi = last - o < 0 ? -1 : glm::min((int32)gpr - 1, (last - o) / r);
+		};
+		int32 i0, i1, j0, j1;
+		covered(x0, node ? node->originX : 0.0, i0, i1);
+		covered(z0, node ? node->originZ : 0.0, j0, j1);
+		if (i0 > i1 || j0 > j1)
+		{
+			maps.sampleGrid(x0, z0, step, gpr, gpr, field, ESampleDetail::Full);
+			return;
+		}
+		const int32 r = (int32)(step / node->step);
+		const int32 ox = (int32)((x0 - node->originX) / node->step), oz = (int32)((z0 - node->originZ) / node->step);
+		for (int32 j = j0; j <= j1; ++j)
+			for (int32 i = i0; i <= i1; ++i)
+				field[(size_t)j * gpr + (size_t)i] = node->field[(size_t)(oz + r * j) * node->gridRes + (size_t)(ox + r * i)];
+		oc::vector<TerrainPoint> rect;
+		const auto sampleRect = [&](int32 a0, int32 a1, int32 b0, int32 b1) // inclusive: a along x, b along z
+		{
+			if (a0 > a1 || b0 > b1)
+				return;
+			const uint32 w = (uint32)(a1 - a0 + 1), h = (uint32)(b1 - b0 + 1);
+			rect.resize((size_t)w * h);
+			maps.sampleGrid(x0 + step * (double)a0, z0 + step * (double)b0, step, w, h, rect, ESampleDetail::Full);
+			for (uint32 b = 0; b < h; ++b)
+				for (uint32 a = 0; a < w; ++a)
+					field[(size_t)(b0 + (int32)b) * gpr + (size_t)(a0 + (int32)a)] = rect[(size_t)b * w + a];
+		};
+		const int32 last = (int32)gpr - 1;
+		sampleRect(0, last, 0, j0 - 1);    // the rows above the node's block
+		sampleRect(0, last, j1 + 1, last); // below it
+		sampleRect(0, i0 - 1, j0, j1);     // left of it
+		sampleRect(i1 + 1, last, j0, j1);  // right of it
+	}
 }
 
 namespace Procedural
 {
 	TreeWorld::~TreeWorld()
 	{
+		// The node hook first: Globals::terrain may be gone already (never called here), or its pumps may be inside the hook.
+		if (m_hookToken)
+		{
+			m_hookToken->world.store(nullptr);
+			while (m_hookToken->calls.load() > 0)
+				std::this_thread::yield();
+		}
 		joinUpdate();
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
-			m_requests.clear(); // starve the pumps: they exit once the queue is empty
+			m_waiting.clear();
+			m_ready.clear(); // starve the pumps: they exit once the queue is empty
 		}
 		Globals::jobSystem.wait(m_pumpCounter);
 	}
 
 	void TreeWorld::initialize()
 	{
+		m_hookToken = oc::make_shared<HookToken>();
+		m_hookToken->world.store(this);
+		Globals::terrain.setNodeHook([token = m_hookToken](const TerrainNodeSamples& node)
+		{
+			// Counted BEFORE the pointer is read: the destructor clears it, then waits for the count.
+			token->calls.fetch_add(1);
+			if (TreeWorld* world = token->world.load())
+				world->onTerrainNode(node);
+			token->calls.fetch_sub(1);
+		});
+
 		auto dirty = [this]() { m_configDirty = true; };
 		const TreeWorldSettings& s = m_settings;
 		Tweak::onChange(s.enabled, this, dirty);
@@ -258,7 +333,8 @@ namespace Procedural
 	{
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
-			m_requests.clear();
+			m_waiting.clear();
+			m_ready.clear();
 			m_results.clear();
 			m_pumpConfig = nullptr;
 		}
@@ -337,7 +413,10 @@ namespace Procedural
 			m_configDirty = true;
 		}
 		const float chunkSize = (float)Globals::terrain.chunkSize();
-		const int ringR = Globals::terrain.ringRadius();
+		// THE RING: the terrain's, but no farther than the far-tree volume draws ("Trees/Far end", + a chunk: the ring is
+		// counted from the camera's chunk) - a record past it serves nothing - and at least one past the keep radius.
+		const int drawnR = (int)std::ceil(glm::max(Globals::settings.farTree.endDistance, 0.0f) / chunkSize) + 1;
+		const int ringR = glm::min(Globals::terrain.ringRadius(), glm::max(drawnR, glm::max(m_settings.keepRadius, m_minKeepRadius) + 1));
 		glm::vec2 boundsMin, boundsMax;
 		const bool bounded = Globals::terrain.generatedBounds(boundsMin, boundsMax);
 		if (m_configDirty || !m_config || maps.get() != m_lastMaps || chunkSize != m_chunkSize || ringR != m_configRingR
@@ -385,6 +464,7 @@ namespace Procedural
 				m_ringR = m_jobRingR;
 				rescanRing();
 			}
+			promoteWaiting();
 			pickUploads();
 		}, { "TreeWorld update", EProfileCategory::Procedural }, EJobPriority::Normal, &m_updateCounter);
 	}
@@ -544,7 +624,7 @@ namespace Procedural
 				else if (!chunk.hasCpu && keep && chunk.count > 0 && m_inFlight.find(it->first) == m_inFlight.end())
 				{
 					m_inFlight.insert(it->first);
-					missing.push_back({ coord, m_config->generation });
+					missing.push_back({ coord, m_config->generation, true });
 				}
 			}
 			++it;
@@ -573,15 +653,120 @@ namespace Procedural
 			const glm::ivec2 da = a.coord - cam, db = b.coord - cam;
 			return da.x * da.x + da.y * da.y < db.x * db.x + db.y * db.y;
 		};
+		oc::sort(missing.begin(), missing.end(), nearer);
+		size_t ready = 0;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_pumpRingCam = m_ringCam;
 			m_pumpRingR = m_ringR;
+			// A waiting chunk that left the ring goes back as a dropped result (its key released by mergeResults); the ready
+			// ones are dropped lazily by the pumps.
+			for (auto it = m_waiting.begin(); it != m_waiting.end(); )
+			{
+				if (chebyshev(it->second.coord, m_ringCam) <= R)
+				{
+					++it;
+					continue;
+				}
+				Result drop;
+				drop.coord = it->second.coord;
+				drop.generation = it->second.generation;
+				drop.dropped = true;
+				m_results.push_back(oc::move(drop));
+				it = m_waiting.erase(it);
+			}
+			// Under m_mutex: the node hook records the node BEFORE it takes this lock, so a chunk either sees its node
+			// generated here or is found waiting by the hook.
+			const ITerrainSampler* maps = m_config->maps.get();
 			for (const Request& request : missing)
-				m_requests.push_back(request);
-			oc::sort(m_requests.begin(), m_requests.end(), nearer);
+			{
+				if (request.regenerate || Globals::terrain.nodeGenerated(request.coord.x, request.coord.y, maps))
+				{
+					m_ready.push_back(request);
+					++ready;
+				}
+				else
+					m_waiting.emplace(chunkKey(request.coord), request);
+			}
 		}
-		kickPump(missing.size());
+		kickPump(ready);
+	}
+
+	void TreeWorld::onTerrainNode(const TerrainNodeSamples& node)
+	{
+		oc::shared_ptr<const GenConfig> config;
+		Request here;
+		bool placeHere = false;
+		size_t promoted = 0;
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			if (!m_pumpConfig || m_pumpConfig->maps.get() != node.maps || m_waiting.empty())
+				return;
+			config = m_pumpConfig;
+			// Row by row over the node: the pumps take them in this order, over the tiles the node just read.
+			for (uint32 z = 0; z < node.span; ++z)
+				for (uint32 x = 0; x < node.span; ++x)
+				{
+					const auto it = m_waiting.find(chunkKey(glm::ivec2(node.firstBaseX + (int32)x, node.firstBaseZ + (int32)z)));
+					if (it == m_waiting.end())
+						continue;
+					const Request request = it->second;
+					m_waiting.erase(it);
+					if (!node.field.empty() && !placeHere && request.generation == config->generation
+						&& chebyshev(request.coord, m_pumpRingCam) <= m_pumpRingR)
+					{
+						here = request;
+						placeHere = true;
+					}
+					else
+					{
+						m_ready.push_back(request);
+						++promoted;
+					}
+				}
+		}
+		if (promoted > 0)
+			kickPump(promoted);
+		if (!placeHere)
+			return;
+		// A LOD0 node: its chunk now, on this (terrain pump) job, from the node's own samples.
+		Result result;
+		result.coord = here.coord;
+		result.generation = here.generation;
+		{
+			ProfileScope scope("TreeWorld::placeChunk", EProfileCategory::Procedural);
+			placeChunk(*config, here.coord, result.records, result.ground, &node);
+		}
+		std::lock_guard<std::mutex> lk(m_mutex);
+		m_results.push_back(oc::move(result));
+	}
+
+	void TreeWorld::promoteWaiting()
+	{
+		if (!Globals::terrain.pumpIdle())
+			return;
+		oc::vector<Request> promoted;
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			if (m_waiting.empty())
+				return;
+			promoted.reserve(m_waiting.size());
+			for (const auto& entry : m_waiting)
+				promoted.push_back(entry.second);
+			m_waiting.clear();
+		}
+		const glm::ivec2 cam = m_ringCam;
+		oc::sort(promoted.begin(), promoted.end(), [cam](const Request& a, const Request& b)
+		{
+			const glm::ivec2 da = a.coord - cam, db = b.coord - cam;
+			return da.x * da.x + da.y * da.y < db.x * db.x + db.y * db.y;
+		});
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			for (const Request& request : promoted)
+				m_ready.push_back(request);
+		}
+		kickPump(promoted.size());
 	}
 
 	// The pump cap ("Gen jobs"; 0 = one per job worker). The pumps are Low and yield at every preemption point, so a pump
@@ -619,10 +804,10 @@ namespace Procedural
 				std::lock_guard<std::mutex> lk(m_mutex);
 				// Lazy staleness, as the terrain pumps: a chunk that left the ring while queued goes back as a
 				// dropped result (the main thread releases its key).
-				while (!m_requests.empty())
+				while (!m_ready.empty())
 				{
-					request = m_requests.front();
-					m_requests.pop_front();
+					request = m_ready.front();
+					m_ready.pop_front();
 					if (m_pumpConfig && request.generation == m_pumpConfig->generation && chebyshev(request.coord, m_pumpRingCam) <= m_pumpRingR)
 					{
 						config = m_pumpConfig;
@@ -642,7 +827,7 @@ namespace Procedural
 				m_numPumps.fetch_sub(1, oc::memory_order_release);
 				{
 					std::lock_guard<std::mutex> lk(m_mutex);
-					if (m_requests.empty())
+					if (m_ready.empty())
 						return;
 				}
 				const int32 cap = pumpCap();
@@ -675,7 +860,8 @@ namespace Procedural
 	// peak, 0 outside its slope and altitude band - gives it a density there: its own density x its fit x its cluster
 	// noise x (fit / best fit) ^ "Climate sharpness". A tree exists with probability (the summed densities) x the
 	// cell's area, its species picked by share. Pure: every random choice hashes (seed, chunk, cell).
-	void TreeWorld::placeChunk(const GenConfig& config, glm::ivec2 coord, oc::vector<TreeRecord>& out, oc::vector<uint32>& outGround)
+	void TreeWorld::placeChunk(const GenConfig& config, glm::ivec2 coord, oc::vector<TreeRecord>& out, oc::vector<uint32>& outGround,
+		const TerrainNodeSamples* node)
 	{
 		out.clear();
 		outGround.clear();
@@ -700,8 +886,8 @@ namespace Procedural
 		const float spacingReach = (float)spacingCells * treeCell;
 		const uint32 halo = glm::max(config.rocks.empty() ? 1u : GRID_HALO, (uint32)std::ceil(spacingReach / step) + 1u);
 		const uint32 gpr = res + 1 + 2 * halo;
-		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
-		config.maps->sampleGrid(ox - step * (float)halo, oz - step * (float)halo, step, gpr, gpr, field, ESampleDetail::Full);
+		oc::vector<TerrainPoint> field;
+		sampleField(*config.maps, ox - step * (float)halo, oz - step * (float)halo, step, gpr, node, field);
 		Globals::jobSystem.preemptionPoint();
 
 		// The river influence on its OWN fine grid over the same extent: most channels are narrower than GRID_STEP, so
@@ -813,11 +999,44 @@ namespace Procedural
 		oc::small_vector<NoiseField, 8> forestTypeNoise;
 		for (const Species& species : config.species)
 			forestTypeNoise.push_back(NoiseField(treeHash(config.seed, 1500u + species.type)));
+		// The squared climate distance past which a fit is EXACTLY 0 (its Gaussian under `floor`, which zeroes it - the
+		// fade's smoothstep, a rock rule's cut-off), so its exp need not run: most species are far outside their box at any
+		// point. The 0.1 % margin is far past exp's rounding. FLT_MAX = always evaluated.
+		const auto fitCut = [](float width, float floor)
+		{
+			return width > 0.0f && floor > 0.0f && floor < 0.999f ? -2.0f * width * width * std::log(floor) * 1.001f : FLT_MAX;
+		};
+		oc::small_vector<float, 8> speciesCut;
+		for (const Species& species : config.species)
+			speciesCut.push_back(fitCut(species.placement.climateWidth, config.fadeStart));
 		const auto speciesWeights = [&](const FieldSample& at, glm::vec2 world) -> float
 		{
 			const float slope2 = at.dx * at.dx + at.dz * at.dz;
 			if (at.river > config.riverClear)
 				return 0.0f; // a river's bed (Terrain/Rivers/Vegetation clear)
+			// The climate fits FIRST: they are cheap, and where no species fits the grassland noises below need no evaluation
+			// (the result is 0 either way, every weight 0).
+			const float altitude = at.height - at.water;
+			const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
+			float best = 0.0f;
+			for (size_t s = 0; s < config.species.size(); ++s)
+			{
+				const TreePlacementDesc& p = config.species[s].placement;
+				fits[s] = 0.0f;
+				weights[s] = 0.0f;
+				if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
+					continue;
+				const glm::vec2 d = glm::max(config.species[s].climateMin - climate, glm::vec2(0.0f))
+					+ glm::max(climate - config.species[s].climateMax, glm::vec2(0.0f));
+				if (glm::dot(d, d) >= speciesCut[s])
+					continue;
+				float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
+				fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
+				fits[s] = fit;
+				best = glm::max(best, fit);
+			}
+			if (best <= 0.0f)
+				return 0.0f;
 			float forest = 1.0f;
 			if (config.grasslandShare > 0.0f)
 			{
@@ -833,31 +1052,8 @@ namespace Procedural
 					forest += (1.0f - forest) * glm::max(glm::max(copse, fringe), 0.05f * t);
 				}
 				if (forest <= 0.0f)
-				{
-					for (size_t s = 0; s < config.species.size(); ++s)
-						weights[s] = 0.0f;
-					return 0.0f;
-				}
+					return 0.0f; // every weight is 0 from the fits loop
 			}
-			const float altitude = at.height - at.water;
-			const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
-			float best = 0.0f;
-			for (size_t s = 0; s < config.species.size(); ++s)
-			{
-				const TreePlacementDesc& p = config.species[s].placement;
-				fits[s] = 0.0f;
-				weights[s] = 0.0f;
-				if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
-					continue;
-				const glm::vec2 d = glm::max(config.species[s].climateMin - climate, glm::vec2(0.0f))
-					+ glm::max(climate - config.species[s].climateMax, glm::vec2(0.0f));
-				float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
-				fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
-				fits[s] = fit;
-				best = glm::max(best, fit);
-			}
-			if (best <= 0.0f)
-				return 0.0f;
 			float total = 0.0f;
 			for (size_t s = 0; s < config.species.size(); ++s)
 			{
@@ -1165,7 +1361,6 @@ namespace Procedural
 			}
 			return false;
 		};
-		const size_t firstTree = out.size(); // the rocks' records come first
 
 		const uint32 n = treeCells;
 		const float cell = treeCell;
@@ -1230,6 +1425,9 @@ namespace Procedural
 				grid[(size_t)gj * span + gi] = candidateAt(c, ci, cj);
 			}
 
+		// The placed tree per candidate cell (its record's index; -1 = none): the bushes' clearance test looks up the cells
+		// around a bush instead of every tree.
+		oc::vector<int32> treeAtCell((size_t)n * n, -1);
 		for (uint32 cj = 0; cj < n; ++cj)
 		{
 			for (uint32 ci = 0; ci < n; ++ci)
@@ -1261,6 +1459,7 @@ namespace Procedural
 				}
 				if (insideRock(local))
 					continue;
+				treeAtCell[(size_t)cj * n + ci] = (int32)out.size();
 				out.push_back(makeTreeRecord(qx, qz, config.species[chosen].type));
 			}
 		}
@@ -1286,7 +1485,10 @@ namespace Procedural
 		for (const Species& bush : config.bushes)
 			bushNoise.push_back(NoiseField(treeHash(config.seed, 1000u + bush.type)));
 		oc::small_vector<float, 8> bushWeights(config.bushes.size(), 0.0f);
-		const size_t endTrees = out.size();
+		oc::small_vector<float, 8> bushCut;
+		for (const Species& bush : config.bushes)
+			bushCut.push_back(fitCut(bush.placement.climateWidth, config.fadeStart));
+		const int32 treeReach = (int32)std::ceil((BUSH_TREE_CLEAR + 0.1f) / cell); // + the record quantization's few cm
 		const uint32 bushSeed = treeHash(treeHash(treeHash(config.seed, 0xB054u), (uint32)coord.x), (uint32)coord.y);
 		for (uint32 cj = 0; cj < bushCells; ++cj)
 			for (uint32 ci = 0; ci < bushCells; ++ci)
@@ -1316,6 +1518,8 @@ namespace Procedural
 						continue;
 					const glm::vec2 d = glm::max(config.bushes[b].climateMin - climate, glm::vec2(0.0f))
 						+ glm::max(climate - config.bushes[b].climateMax, glm::vec2(0.0f));
+					if (glm::dot(d, d) >= bushCut[b])
+						continue;
 					float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
 					fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
 					float density = p.density * fit;
@@ -1330,12 +1534,19 @@ namespace Procedural
 				}
 				if (roll >= total * bushArea || insideRock(local))
 					continue;
+				// A tree lies in its candidate cell (its record quantized a few cm off), so one within the clearance is in
+				// the cells within `treeReach` of the bush's.
 				bool nearTree = false;
-				for (size_t k = firstTree; k < endTrees && !nearTree; ++k)
-				{
-					const glm::vec2 d = treeRecordLocal(out[k], cs) - local;
-					nearTree = glm::dot(d, d) < BUSH_TREE_CLEAR * BUSH_TREE_CLEAR;
-				}
+				const int32 bci = glm::clamp((int32)(local.x / cell), 0, (int32)n - 1), bcj = glm::clamp((int32)(local.y / cell), 0, (int32)n - 1);
+				for (int32 tj = glm::max(bcj - treeReach, 0); tj <= glm::min(bcj + treeReach, (int32)n - 1) && !nearTree; ++tj)
+					for (int32 ti = glm::max(bci - treeReach, 0); ti <= glm::min(bci + treeReach, (int32)n - 1) && !nearTree; ++ti)
+					{
+						const int32 k = treeAtCell[(size_t)tj * n + ti];
+						if (k < 0)
+							continue;
+						const glm::vec2 d = treeRecordLocal(out[(size_t)k], cs) - local;
+						nearTree = glm::dot(d, d) < BUSH_TREE_CLEAR * BUSH_TREE_CLEAR;
+					}
 				if (nearTree)
 					continue;
 				float pick = treeHash01(treeHash(h, 4u)) * total;
@@ -1364,14 +1575,15 @@ namespace Procedural
 				if (treeRecordType(record) < perType.size())
 					++perType[treeRecordType(record)];
 		}
-		size_t queued = 0;
+		size_t waiting = 0, ready = 0;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
-			queued = m_requests.size();
+			waiting = m_waiting.size();
+			ready = m_ready.size();
 		}
 		constexpr double MB = 1.0 / (1024.0 * 1024.0);
-		Log::info(oc::format("Trees/World: {} chunks ({} in flight, {} queued, {} to upload), {} trees, {:.0f} per chunk on average, {} at most",
-			m_chunks.size(), m_inFlight.size(), queued, m_uploadQueue.size(), m_numRecords,
+		Log::info(oc::format("Trees/World: {} chunks ({} in flight: {} waiting for their terrain node, {} ready; {} to upload), {} trees, {:.0f} per chunk on average, {} at most",
+			m_chunks.size(), m_inFlight.size(), waiting, ready, m_uploadQueue.size(), m_numRecords,
 			m_chunks.empty() ? 0.0 : (double)m_numRecords / (double)m_chunks.size(), maxPerChunk));
 		const auto gpu = renderer.treeRecordStats();
 		Log::info(oc::format("Trees/World: CPU {:.1f} MB of records ({} trees); GPU pool {:.1f} / {:.1f} MB used ({} chunks, {} trees; {:.1f} MB awaiting reuse, {} refused)",

@@ -358,7 +358,11 @@ interpolated).
   line, a continuous ramp where two parts of one river meet), and the segments compose by min. **A min over every piece
   lets a reach steeper than "Valley slope" cut under its OWN upstream water; the nearest piece alone leaves cliffs where
   it switches.** Every piece's blend weight fades to 0 over the last 30 % of its wall reach (cut off at full weight,
-  plunge-gorge walls show a comb of steps).
+  plunge-gorge walls show a comb of steps). **THE FAR-PIECE CUT** (a speed rule, not a look): per segment the nearest
+  piece's distance is found first; a piece past 2.5x .. 3.5x it (weight under ~0.1 % of the nearest's, a carve about
+  equal to its neighbours') fades out of the blend and its `pieceCarve` is skipped - but never inside twice the nearest
+  piece's floodplain edge, where the sections and the drop ramp stay exact. Continuous (a fade, not a switch), so the
+  carve stays a pure function of position; it moves heights by centimetres at most.
 * **A waterfall's lip splits a segment into SECTIONS** (`pointSection`, from the `RiverPoint_Lip` flag `shapeFalls`
   sets): a point blends only the pieces of its NEAREST piece's section, so the ground breaks at the lip instead of a
   rounded ramp. **Only near the channel**: fully within the nearest piece's floodplain edge, fading (smoothstep) to the

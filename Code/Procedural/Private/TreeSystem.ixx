@@ -13,6 +13,7 @@ import :TerrainSampler;
 import :TreeSpecies;
 import :TreeGenerator;
 import :TreeWorld;
+import :MeshCache;
 
 // Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library, and draws
 // either the WORLD (TreeWorld's records expanded around the camera into a dynamic GPU set - "World mode" in
@@ -114,12 +115,59 @@ export namespace Procedural
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
-		void reload(Renderer& renderer);
-		// Bakes (or loads) every module's billboard cards. Needs the species' level-0 bark and leaf images.
-		// The bark / leaf level-0 images are the bake's input: empty (their .tex was loaded) = generated here on a bake miss.
-		void buildBillboards(Renderer& renderer, Species& species, const TreeLibrary& library, const oc::vector<TreePiece>& variants,
-			const oc::string& name,
+		// THE SPECIES LOAD runs on JOBS (one Low job per .tree, loadSpecies): the meshes (MeshCache or generated), the
+		// textures (.tex or generated), the billboard bakes and the card meshes - everything but the GPU objects. Main
+		// uploads each species as its job finishes (uploadSpecies: meshes, materials) and frees its CPU data; the trees
+		// spawn once every species is in. The job reads only its slot and a snapshot of the settings.
+		struct LoadSettings
+		{
+			bool compressTextures = true;
+			bool regenerateTextures = false;
+			bool billboards = true;   // Far mode Billboards
+			bool showLibrary = false;
+			uint32 billboardViews = 2;
+		};
+		struct PieceBillboard
+		{
+			CachedTexture texture; // uploaded when `upload` (and kept for a module: the atlas)
+			TreeMesh cards;
+			glm::vec3 farCentre{ 0.0f };
+			float farRadius = 0.0f;
+			bool upload = false;   // a whole tree's, or any with "Show piece library"
+		};
+		struct SpeciesLoad
+		{
+			oc::string path, fileName;
+			bool valid = false;
+			TreeSpeciesDesc desc;
+			oc::string name;
+			TreeLibrary library;
+			oc::vector<TreePiece> variants;
+			oc::vector<TreeDensityGrid> density;
+			CachedTexture bark;
+			CachedTexture leaves; // cluster species only
+			glm::vec3 volumeAlbedo{ 0.0f };
+			bool billboards = false;
+			oc::vector<PieceBillboard> pieceBillboards[3]; // modules, trunks, baked variants
+			CachedTexture atlas;                           // the mid tier's card atlas (empty: none)
+			oc::vector<TreeMesh> variantCards;             // per baked variant: its branch-card mesh
+		};
+		struct LoadSlot
+		{
+			SpeciesLoad load;
+			oc::atomic<bool> done{ false };
+			bool uploaded = false;
+		};
+		void kickLoad();
+		// Uploads the species whose jobs finished; true once every one is in (the species list is then final).
+		bool pumpLoad(Renderer& renderer);
+		void stopLoad(); // joins the load jobs, drops their slots
+		static void loadSpecies(const LoadSettings& settings, SpeciesLoad& out);
+		// The billboard bakes (or their .tex), the card atlas and the variants' card meshes, into `out`. The bark / leaf
+		// level-0 images are the bake's input: empty (their .tex was loaded) = generated here on a bake miss.
+		static void buildBillboards(const LoadSettings& settings, SpeciesLoad& out,
 			oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize);
+		void uploadSpecies(Renderer& renderer, SpeciesLoad& load, Species& species);
 		void clearAll(); // nodes first, then the species' meshes and owned materials
 		void destroyTreeSet(); // the GPU expansion set (drains the GPU)
 		// Writes every species' crossfade band (billboard distance x Far distance scale, FadeWidth) into its
@@ -216,6 +264,11 @@ export namespace Procedural
 
 		bool m_loaded = false;
 		bool m_spawned = false;
+		// The species load in flight (kickLoad): one slot per .tree, name-sorted - m_species[i] is slot i's until pumpLoad
+		// drops the failed ones.
+		bool m_loading = false;
+		oc::vector<oc::unique_ptr<LoadSlot>> m_loadSlots;
+		JobCounter m_loadCounter;
 
 		TreeWorld m_world; // every tree of the terrain ring as records (Docs/Context/Procedural/Trees.md)
 		// World mode.

@@ -546,6 +546,20 @@ namespace Procedural
 				Log::info(oc::format("[Diffusion] reseeded to {}", seed));
 			}
 
+			TerrainGenV3::TileStats tileStats()
+			{
+				TerrainGenV3::TileStats s;
+				{
+					std::lock_guard<std::mutex> ck(m_cacheMutex);
+					s.resident = (uint32)m_cache.order.size();
+					s.maxResident = (uint32)oc::max(4, m_maxTiles);
+				}
+				s.hits = m_statHits.load(oc::memory_order_relaxed);
+				s.diskLoads = m_statDiskLoads.load(oc::memory_order_relaxed);
+				s.generated = m_statGenerated.load(oc::memory_order_relaxed);
+				return s;
+			}
+
 			void setMaxResidentTiles(int32 n)
 			{
 				std::lock_guard<std::mutex> ck(m_cacheMutex);
@@ -760,6 +774,7 @@ namespace Procedural
 			Lru m_cache;
 			Lru m_coarseCache;
 			int32 m_maxTiles = 64;
+			oc::atomic<uint64> m_statHits{ 0 }, m_statDiskLoads{ 0 }, m_statGenerated{ 0 }; // full tiles: tileStats
 			// Dedups concurrent requests for the same tile so N callers cause 1 generation, not N;
 			// joiners park on the tile's JobEvent instead of blocking a worker on a shared_future.
 			struct PendingTile
@@ -786,7 +801,10 @@ namespace Procedural
 			{
 				std::lock_guard<std::mutex> ck(m_cacheMutex);
 				if (FieldTilePtr hit = m_cache.get(key))
+				{
+					m_statHits.fetch_add(1, oc::memory_order_relaxed);
 					return hit;
+				}
 			}
 
 			// Not resident. Claim the generation, or join whoever already claimed it, so N concurrent
@@ -815,7 +833,10 @@ namespace Procedural
 							FieldTilePtr t = loadTileFromDisk(tileCachePath(seed, fp16, false, ti, tj),
 							                                  seed, ti, tj, TILE_W);
 							if (t && m_activeSeed.load(oc::memory_order_relaxed) == seed)
+							{
+								m_statDiskLoads.fetch_add(1, oc::memory_order_relaxed);
 								return t;
+							}
 						}
 
 						const int32 i1 = ti * TILE - HALO, i2 = (ti + 1) * TILE + HALO;
@@ -858,6 +879,7 @@ namespace Procedural
 							t->tempSea[i] = temp[i] - beta[i] * oc::max(0.0f, t->elev[i]);
 
 						saveTileToDisk(tileCachePath(seed, fp16, false, ti, tj), *t, seed, ti, tj);
+						m_statGenerated.fetch_add(1, oc::memory_order_relaxed);
 						return t;
 					});
 					pending = oc::make_shared<PendingTile>();
@@ -1350,10 +1372,10 @@ namespace Procedural
 		out.altitude = s.macro * vs;
 		out.height = m_cfg.seaLevel + s.elev * vs + d;
 		out.waterLevel = m_cfg.seaLevel;
-		out.temperature = temperatureFrom(worldX, worldZ, s, d);
 		// What the map bakes. The rate that pairs with it is published once (lapseRatePerMetre), not
-		// per point.
+		// per point. Evaluated ONCE (its climate wander is an fbm) and lapsed to the full height as temperatureFrom does.
 		out.temperatureSeaLevel = temperatureSeaLevelFrom(worldX, worldZ, s);
+		out.temperature = out.temperatureSeaLevel + lapseOf() * oc::max(0.0f, s.elev + d / oc::max(0.01f, vs));
 		out.humidity = humidityOf(s);
 		out.fogThickness = fogThicknessOf(s);
 		out.fogFalloffMul = fogFalloffOf(out.temperature);
@@ -1509,6 +1531,7 @@ namespace Procedural
 	void TerrainGenV3::setModelLoadingEnabled(bool enabled) { DiffusionRuntime::get().setLoadEnabled(enabled); }
 	bool TerrainGenV3::modelLoadingEnabled() { return DiffusionRuntime::get().isLoadEnabled(); }
 	bool TerrainGenV3::canGenerate() { return modelsLoaded() || (!modelLoadingEnabled() && isReady()); }
+	TerrainGenV3::TileStats TerrainGenV3::tileStats() { return DiffusionRuntime::get().tileStats(); }
 	bool TerrainGenV3::hasFailed() { return DiffusionRuntime::get().hasFailed(); }
 	oc::string TerrainGenV3::statusText() { return DiffusionRuntime::get().statusText(); }
 

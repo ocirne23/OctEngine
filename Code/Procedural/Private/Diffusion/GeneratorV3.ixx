@@ -187,6 +187,17 @@ export namespace Procedural
 		// What the preview and the seeder wait for: the models are up, OR loading is switched off and
 		// the caches serve (a preview then shows only what was generated before).
 		static bool canGenerate();
+		// The RAM tile cache's use since startup (full-detail tiles; "Terrain/V3/Log tile stats"): a disk load or a
+		// generation is a cache MISS - many more misses than distinct tiles means "Resident tiles" is under the working set.
+		struct TileStats
+		{
+			uint32 resident = 0;    // in the RAM cache now
+			uint32 maxResident = 0; // its budget ("Resident tiles")
+			uint64 hits = 0;
+			uint64 diskLoads = 0;
+			uint64 generated = 0;
+		};
+		static TileStats tileStats();
 		// metersPerPixel / the model's native resolution: the uniform factor every world-space length the
 		// generator produces is scaled by (elevation, crag relief, detail). Anything OUTSIDE the generator
 		// that compares against those lengths in metres - the terrain shader's crag thresholds - has to

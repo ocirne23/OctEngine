@@ -21,6 +21,11 @@
   exit-recheck protocol, nearest-first). **The upload layout is built IN the pump** (`RenderMeshData::build`, pure) and
   `Renderer::createMesh` runs on the upload job (below), **so warm-tile mesh builds overlap cold V3 waits, which park
   fibers.**
+* **THE NODE HOOK** (`setNodeHook`; TreeWorld's, see "World records" in [Trees.md](Trees.md)): right after
+  `generateChunk` the pump records the node's base chunks (`nodeGenerated`, for the current sampler; cleared with
+  `m_maps`, pruned past the ring + one maxLod node when the camera chunk moves) and then calls the hook with a
+  `TerrainNodeSamples` (the sampler, the base chunks, and for a LOD0 node its own sample grid - `generateChunk`'s
+  `outField`), outside every streamer lock. `pumpIdle()` = no pump running.
 * **Pre-emption points** (see Threading): the pump yields to higher-priority jobs between chunks,
   `generateChunk` after its `sampleGrid` and per vertex row, and `TerrainGenV3::sampleGrid` per row.
   **All of them sit OUTSIDE the V3 pipeline `JobMutex`** — the Normal collider job samples terrain

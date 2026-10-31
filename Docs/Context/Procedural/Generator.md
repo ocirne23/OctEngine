@@ -26,7 +26,11 @@ but this one generates **256×256-pixel TILES through three ONNX models.**
 * **`isReady()` is a real state.** Until the models are loaded it is false and the generator must not build
   geometry — **it would bake a flat world into the chunk cache.** TerrainStreamer polls it and rebuilds once it flips.
 
-Tiles cache to disk under `Assets/Local/Diffusion/<seed>/` (zstd). Each plane is quantized, delta-coded and zstd'd
+Tiles cache to disk under `Assets/Local/Diffusion/<seed>/` (zstd), and in an LRU in RAM: "Terrain/V3/Resident tiles"
+(64 by default; a full tile is ~1.1 MB there - four float planes of 258²). The working set is small because the tree
+chunks follow the terrain nodes (see "World records" in [Trees.md](Trees.md)). "Terrain/V3/Log tile stats" logs the
+RAM cache's hits, disk loads and generations (`TerrainGenV3::tileStats`): far more misses than distinct tiles = the
+budget is under the working set. Each plane is quantized, delta-coded and zstd'd
 (the format notes are at `TILE_CACHE_VERSION`). **`decodePlane` is the ONE dequantization** (AVX2: the running sum and
 an explicit FMA, 16 values per step): the loader decodes through it, and the writer's in-place roundtrip decodes its own
 bytes through it, so RAM and disk hold bit-identical tiles (the crack-free chunk borders rest on that).
@@ -114,9 +118,11 @@ proportions).
 The model resolves 30 m/px, so the diffusion field is smooth below that and a close-up hillside would
 be bilinear mush.
 
-A **slope-masked** noise layer rides on top (`:Noise` `fbmEroded`), in two bands — coarse crags
+A **slope-masked** noise layer rides on top (`:Noise` `fbm`), in two bands — coarse crags
 (wavelength 220 m, amplitude 38, 4 octaves) and fine break-up (45 m / 11 / 3 octaves) — with
-"Detail slope gain" 0.75 as `sf = min(1, slope * gain)`.
+"Detail slope gain" 0.75 as `sf = min(1, slope * gain)`. `:Noise` picks each lattice corner's gradient from a table of
+its 65536 directions built once in static init (`g_gradients`; a cos and a sin per corner were about a third of every
+fbm), and `fill` evaluates the climate wander (an fbm) once per point for both temperatures.
 
 > **Plains and seabed stay smooth; only mountain faces get crags.** Wavelengths are in MODEL metres and
 > ride `metersPerPixel`, so **the OCTAVE counts are what set how far below the model's 30 m/px the

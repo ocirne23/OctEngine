@@ -366,9 +366,19 @@ underneath popped visibly (fewer, larger leaf cards per level, no crossfade). Th
 (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table stays for a return of mesh LODs); `lodError` / `Lod ErrorScale`
 are unused, and RendererVK allocates no hysteresis slots for tree records.
 
-**The CPU meshes are not kept**: the library and the baked variants are locals of `reload`'s per-species load (from the
-`.treemesh` cache or generated), freed once uploaded and baked into the billboards and card meshes (`buildBillboards`
-takes them as arguments). `Species` keeps only the GPU `PieceMeshes` and `moduleLength` (the library row's spacing).
+### The species load
+
+**On JOBS, one Low job per `.tree`** ("Tree species load", `kickLoad` -> `loadSpecies`): the `.tree` parse, the meshes
+(the `.treemesh` cache or generated), the textures (`.tex` or generated), the billboard bakes, the card atlas and the
+variants' card meshes - everything but the GPU objects - into the job's own slot (`SpeciesLoad`), from a snapshot of
+the settings (`LoadSettings`). Each `TreeSystem::update` UPLOADS the species whose jobs finished (`pumpLoad` ->
+`uploadSpecies`: the piece meshes, the materials, the billboards, the derived fade materials) and frees that slot's
+CPU data at once; once every species is in, the failed ones drop out of `m_species` (name order kept), the fade bands
+are written and the trees spawn. Nothing draws while a load runs. `clearAll` (a reload, a disable, the destructor)
+joins the jobs first (`stopLoad`).
+
+**The CPU meshes are not kept**: `Species` holds only the GPU `PieceMeshes`, `moduleLength` (the library row's
+spacing) and `volumeAlbedo`.
 
 ### Far representations (`Trees/Far mode`)
 
@@ -594,10 +604,27 @@ chunk and the QUANTIZED position, never the record's index, so a change elsewher
 was. **Mirrored in `Assets/Shaders/Trees/tree_record.inc.glsl` - keep in step.** A member of TreeSystem, updated
 before its `Enabled` check: it runs with the preview off.
 
-* **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.
-  On a camera chunk change the missing chunks are requested and the queue re-sorted nearest first; Low pump jobs
-  (`Gen jobs`; 0, the default = one per job worker - `pumpCap`; they yield at every preemption point, so they only
-  fill idle workers) take the front, with lazy staleness as the terrain pumps.
+* **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), but **no farther than the far-tree volume
+  draws** ("Trees/Far end", 12 km, + one chunk: a record past it serves nothing - the terrain's ring reaches ~33 km, ~7x
+  the chunks) and at least one past the keep radius; one chunk of hysteresis on eviction. A "Far end" change is a ring
+  change: a restart.
+  On a camera chunk change the missing chunks are requested; Low pump jobs (`Gen jobs`; 0, the default = one per job
+  worker - `pumpCap`; they yield at every preemption point, so they only fill idle workers) take the front of the READY
+  queue, with lazy staleness as the terrain pumps.
+* **THE CHUNKS FOLLOW THE TERRAIN NODES** (`TerrainStreamer::setNodeHook`, set in `initialize`): a requested chunk WAITS
+  (`m_waiting`) for the terrain node over it. Right after the terrain pump generates a node it calls the hook
+  (`onTerrainNode`, on that pump): the node's waiting chunks move to the ready queue together, row by row - the pumps
+  then place them while the node's tiles are still in the RAM cache, so the tile working set is a node's area, not the
+  whole perimeter of the ring (the nearest-first order sweeps it). A LOD0 node places its chunk AT ONCE
+  on its own pump, reading the node's 2 m sample grid for the 8 m placement grid's points it holds (`sampleField`: every
+  4th sample; the halo in up to four strips) instead of sampling them again. That reuse is exact - whole-metre
+  lattices, the very doubles the full grid would sample, the samplers pure functions of position - so a chunk gives the
+  same records however it was placed (a keep-radius regeneration must match the records the GPU holds). A chunk goes
+  straight to the ready queue when its node was generated already (`TerrainStreamer::nodeGenerated`: the streamer
+  records a node's base chunks BEFORE calling the hook, and TreeWorld checks under its lock, so no chunk falls between)
+  or when it is a keep-radius regeneration (`Request::regenerate`). **The waiting ones left when the terrain pumps go
+  idle become ready too** (`promoteWaiting`, nearest first, in the bookkeeping job): a node that stays resident is not
+  generated again. The hook is guarded by a token (`HookToken`): the procedural globals' teardown order is undefined.
 * **THE BOOKKEEPING JOB** (`"TreeWorld update"`, Normal, `m_updateCounter`): merging the pumps' results, the ring
   rescan (a walk of every chunk + the (2R+1)² ring) and the next upload pick run OFF main. main.cpp kicks it
   (`TreeSystem::kickWorldUpdate`) right after `clutter.update` - the LAST reader of the records this frame
@@ -659,7 +686,9 @@ before its `Enabled` check: it runs with the preview off.
   summed `Density` x the cell's hectares, or a rock cell whose roll is above its type's bound (every rule's `Density`
   x its largest ground / forest / river / flow multipliers - every fit term is at most 1), skips its field sample and
   fits. The river grid (1 m) covers only what is read: the chunk plus the neighbours' rock reach + 2 m, not the
-  terrain halo.
+  terrain halo. A species (or bush) whose climate distance puts its Gaussian under "Climate fade start" skips its `exp`
+  (`fitCut`: its fit is exactly 0 there), the grassland noises run only where some species fits, and the bushes' tree
+  clearance looks up the tree per candidate cell around the bush (`treeAtCell`), not every tree of the chunk - all exact.
 * **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density / climate /
   grassland / forest type tweaks, `Reload species`, a new sampler, a chunk size or bounds change, a rock change (`setRocks`). The generation
   counter is monotonic, so a late pump result of an old config never merges.

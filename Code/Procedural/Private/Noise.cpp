@@ -20,13 +20,28 @@ namespace Procedural
 			h ^= h >> 13;
 			return h;
 		}
+
+		// THE GRADIENT TABLE: the 65536 directions gradient() picks from (the hash's low 16 bits as an angle), computed
+		// ONCE - a cos and a sin per lattice corner were about a third of every fbm (the terrain detail, the climate
+		// wander, the tree placement's patches). Namespace scope, built in static init, before any job samples (512 KB).
+		struct GradientTable
+		{
+			glm::vec2 dirs[65536];
+			GradientTable()
+			{
+				for (uint32 i = 0; i < 65536; ++i)
+				{
+					const float angle = (float)i / 65535.0f * 6.28318530718f;
+					dirs[i] = glm::vec2(std::cos(angle), std::sin(angle));
+				}
+			}
+		};
+		const GradientTable g_gradients;
 	}
 
 	glm::vec2 NoiseField::gradient(int32 ix, int32 iy) const
 	{
-		const uint32 h = hashCoord(ix, iy, m_seed);
-		const float angle = (float)(h & 0xffffu) / 65535.0f * 6.28318530718f;
-		return glm::vec2(std::cos(angle), std::sin(angle));
+		return g_gradients.dirs[hashCoord(ix, iy, m_seed) & 0xffffu];
 	}
 
 	float NoiseField::noise2D(float x, float y) const

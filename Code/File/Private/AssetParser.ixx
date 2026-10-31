@@ -19,11 +19,7 @@ export struct AssetNode
     bool hasValue(size_t idx = 0) const { return idx < values.size(); }
     size_t numValues() const { return values.size(); }
 
-    const oc::string& asString(size_t idx = 0) const
-    {
-        static const oc::string empty;
-        return idx < values.size() ? values[idx] : empty;
-    }
+    const oc::string& asString(size_t idx = 0) const; // "" past the values (a namespace-scope empty string: parsed on jobs)
     bool asBool(size_t idx = 0, bool fallback = false) const;
     int asInt(size_t idx = 0, int fallback = 0) const;
     float asFloat(size_t idx = 0, float fallback = 0.0f) const;

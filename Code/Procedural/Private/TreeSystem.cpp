@@ -175,16 +175,9 @@ namespace
 		return meshCacheMix(meshCacheMix(speciesTextHash, compress ? 1u : 0u), size);
 	}
 
-	// The .tex IO runs on main (explicit user action: enable / reload), each call in its own tight scope (never around the
-	// generators' job waits).
-	bool loadTexture(const oc::string& path, uint64 hash, CachedTexture& out)
-	{
-		const FileSystem::AllowMainThreadIO allowIo;
-		return loadCachedTexture(path, hash, out);
-	}
+	// On the species' load job (TreeSystem::loadSpecies).
 	void saveTexture(const oc::string& path, uint64 hash, const CachedTexture& texture)
 	{
-		const FileSystem::AllowMainThreadIO allowIo;
 		saveCachedTexture(path, hash, texture);
 		Log::info(oc::format("Trees: generated '{}'", path));
 	}
@@ -233,6 +226,7 @@ namespace Procedural
 
 	void TreeSystem::clearAll()
 	{
+		stopLoad(); // its jobs write only their slots: joined before the species they upload into go
 		destroyTreeSet();
 		m_pieces.clear();
 		m_species.clear(); // the meshes and the materials (Species: the derived ones before their sources)
@@ -331,7 +325,7 @@ namespace Procedural
 		if (!m_settings.enabled)
 		{
 			// Disabled frees everything, so enabling again re-reads the .tree files.
-			if (m_loaded)
+			if (m_loaded || m_loading)
 			{
 				clearAll();
 				m_loaded = false;
@@ -341,11 +335,19 @@ namespace Procedural
 		}
 
 		ProfileScope profileScope("Trees", EProfileCategory::Procedural);
-		if (!m_loaded || m_settings.reload)
+		if ((!m_loaded && !m_loading) || m_settings.reload)
 		{
 			m_settings.reload = false;
-			clearAll();
-			reload(renderer);
+			clearAll(); // joins a load in flight
+			kickLoad();
+			m_loaded = false;
+			m_spawned = false;
+		}
+		// The species load on its jobs: each finished species uploads here; nothing spawns until all are in.
+		if (m_loading)
+		{
+			if (!pumpLoad(renderer))
+				return;
 			m_settings.regenerateTextures = false;
 			m_loaded = true;
 			m_spawned = false;
@@ -444,8 +446,9 @@ namespace Procedural
 		}
 	}
 
-	void TreeSystem::reload(Renderer& renderer)
+	void TreeSystem::kickLoad()
 	{
+		m_loading = true; // also with no species: pumpLoad then finishes at once
 		oc::vector<FileSystem::DirEntry> entries;
 		{
 			const FileSystem::AllowMainThreadIO allowIo; // explicit user action: enable / reload
@@ -456,198 +459,301 @@ namespace Procedural
 			}
 		}
 		oc::sort(entries.begin(), entries.end(), [](const FileSystem::DirEntry& a, const FileSystem::DirEntry& b) { return a.name < b.name; });
-
+		LoadSettings settings;
+		settings.compressTextures = m_settings.compressTextures;
+		settings.regenerateTextures = m_settings.regenerateTextures;
+		settings.billboards = m_settings.farMode == 0;
+		settings.showLibrary = m_settings.showLibrary;
+		settings.billboardViews = m_settings.billboardViews == 0 ? 2u : 4u;
 		for (const FileSystem::DirEntry& entry : entries)
 		{
 			if (entry.isDirectory || entry.extension != ".tree")
 				continue;
-			TreeSpeciesDesc desc;
-			oc::string error;
-			{
-				const FileSystem::AllowMainThreadIO allowIo;
-				if (!loadTreeSpecies(entry.path, desc, error))
-				{
-					Log::warning(oc::format("Trees: failed to load '{}': {}", entry.path, error));
-					continue;
-				}
-			}
-
-			Species& species = m_species.emplace_back();
-			species.desc = oc::move(desc);
-			const oc::string& name = species.desc.name.empty() ? entry.name : species.desc.name;
-
-			// THE MESH CACHE (MeshCache): the library, the baked variants and their far-volume grids, keyed by the species
-			// file's text. A miss generates them and writes the file.
-			// The CPU meshes are LOCALS: once uploaded (and baked into the billboards / card meshes below) nothing reads them,
-			// so they go at the end of this species - a few hundred MB over all species.
-			TreeLibrary library;
-			oc::vector<TreePiece> variants;
-			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
-			oc::vector<TreeDensityGrid> density;
-			uint64 textHash = 0; // the species file's text: the mesh and texture caches' key
-			{
-				const FileSystem::AllowMainThreadIO allowIo; // explicit user action: enable / reload
-				textHash = meshCacheHash(FileSystem::readFileStr(entry.path));
-				const uint64 meshHash = meshCacheMix(textHash, TREE_DENSITY_RES);
-				const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
-				if (!loadTreeMeshes(meshPath, meshHash, library, variants, density))
-				{
-					library = {};
-					generateTreeLibrary(species.desc, library);
-					variants.clear();
-					variants.resize((size_t)species.desc.variantCount);
-					for (int v = 0; v < species.desc.variantCount; ++v)
-						bakeTreeVariant(species.desc, library, treeHash(species.desc.seed, 5000u + (uint32)v), variants[(size_t)v]);
-					// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline).
-					density.resize(variants.size());
-					for (size_t v = 0; v < variants.size(); ++v)
-					{
-						TreeBillboardBox box;
-						bakeTreeDensity(variants[v], TREE_DENSITY_RES, leafCoverage, density[v].values, box);
-						density[v].min = box.min;
-						density[v].max = box.max;
-					}
-					saveTreeMeshes(meshPath, meshHash, library, variants, density);
-				}
-			}
-			species.moduleLength = library.modules.empty() ? 1.0f : library.modules[0].length;
-
-			size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
-			// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
-			// shadow + GI); with billboards the whole billboard is the tree's only RT representation (buildBillboards).
-			// Bushes never: too small to matter to GI / RT shadows, and too many for the TLAS.
-			const bool meshesRaytraced = m_settings.farMode != 0 && !species.desc.bush;
-			auto uploadPieces = [&](const oc::vector<TreePiece>& pieces, oc::vector<PieceMeshes>& out)
-			{
-				out.resize(pieces.size());
-				for (size_t i = 0; i < pieces.size(); ++i)
-				{
-					uploadLevelZero(renderer, pieces[i].bark, out[i].bark, meshesRaytraced);
-					uploadLevelZero(renderer, pieces[i].leaves, out[i].leaves, meshesRaytraced);
-					// Baked variants: the bark split as well (the mid tier's trunk / branches, main pass only); empty
-					// elsewhere - no meshes.
-					uploadLevelZero(renderer, pieces[i].trunkBark, out[i].trunkBark, false);
-					uploadLevelZero(renderer, pieces[i].branchBark, out[i].branchBark, false);
-					for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
-					{
-						barkTris[k] += numTriangles(pieces[i].bark[k]);
-						leafTris[k] += numTriangles(pieces[i].leaves[k]);
-					}
-				}
-			};
-			uploadPieces(library.trunks, species.trunkMeshes);
-			uploadPieces(library.modules, species.moduleMeshes);
-			// The baked whole trees the grove places (counted into the same triangle totals).
-			uploadPieces(variants, species.variantMeshes);
-			for (size_t v = 0; v < variants.size(); ++v)
-			{
-				PieceMeshes& meshes = species.variantMeshes[v];
-				meshes.density = oc::move(density[v].values);
-				meshes.densityMin = density[v].min;
-				meshes.densityMax = density[v].max;
-			}
-			// Level-0 images for the billboard bake: only those generated here (a .tex holds no RGBA8 level 0), so
-			// buildBillboards generates any it lacks when a bake misses.
-			oc::vector<uint8> barkAlbedo, leafImage;
-			uint32 barkSize = 0, leafSize = 0;
-			glm::vec3 barkMean(0.0f), leafMean(0.0f);
-			const uint64 textureHash = textureCacheHash(textHash, m_settings.compressTextures, TREE_TEXTURE_SIZE);
-			{
-				const oc::string path = oc::format("{}/{}_bark.tex", TREE_TEXTURE_DIR, name);
-				CachedTexture texture;
-				if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture))
-				{
-					oc::vector<uint8> normal;
-					barkSize = TREE_TEXTURE_SIZE;
-					generateBarkImages(species.desc, barkSize, barkAlbedo, normal);
-					TreeBarkTexture bark;
-					buildBarkMips(barkAlbedo, normal, barkSize, bark);
-					texture = {};
-					encodeTexture(m_settings.compressTextures, barkSize, barkSize, bark.albedoMips, TextureConvert::EBlockFormat::BC1,
-						bark.normalMips, TextureConvert::EBlockFormat::BC5, texture);
-					texture.mean = meanLeafAlbedo(barkAlbedo, species.desc.barkColor);
-					saveTexture(path, textureHash, texture);
-					// The level-0 PNGs this file replaces.
-					FileSystem::remove(oc::format("{}/{}_bark.png", TREE_TEXTURE_DIR, name), true);
-					FileSystem::remove(oc::format("{}/{}_bark_normal.png", TREE_TEXTURE_DIR, name), true);
-				}
-				barkMean = texture.mean;
-				species.ownBarkMaterial = createTreeMaterial(texture, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
-				species.barkMaterial = species.ownBarkMaterial.index();
-			}
-			if (species.desc.leafType == ETreeLeafType::Cluster)
-			{
-				const oc::string path = oc::format("{}/{}_leaves.tex", TREE_TEXTURE_DIR, name);
-				CachedTexture texture;
-				if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture))
-				{
-					// One generation draws both: the normal map must match the leaves drawn in the colour image.
-					oc::vector<uint8> normalImage;
-					leafSize = TREE_TEXTURE_SIZE;
-					generateLeafClusterImage(species.desc, leafSize, leafImage, &normalImage);
-					TreeLeafTexture albedoChain;
-					buildLeafClusterMips(leafImage, leafSize, albedoChain);
-					oc::vector<oc::vector<uint8>> normalChain;
-					buildNormalMips(normalImage, leafSize, normalChain);
-					texture = {};
-					// The normal map: cupped, tilted leaves, BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the
-					// transmission's leaf thickness).
-					encodeTexture(m_settings.compressTextures, leafSize, leafSize, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
-						normalChain, TextureConvert::EBlockFormat::BC3, texture);
-					texture.mean = meanLeafAlbedo(leafImage, species.desc.leafColor);
-					saveTexture(path, textureHash, texture);
-					FileSystem::remove(oc::format("{}/{}_leaves.png", TREE_TEXTURE_DIR, name), true);
-					FileSystem::remove(oc::format("{}/{}_leaves_normal.png", TREE_TEXTURE_DIR, name), true);
-				}
-				leafMean = texture.mean;
-				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms).
-				species.ownLeafMaterial = createTreeMaterial(texture, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
-					RendererVKLayout::MATERIAL_FLAG_LEAF);
-				species.leafMaterial = species.ownLeafMaterial.index();
-				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;
-			}
-			else
-			{
-				species.leafMaterial = RenderMaterial::getOrCreateSolidColor(species.desc.leafColor);
-				// Single leaves are solid-coloured: the bake samples a 1x1 opaque image of that colour.
-				leafSize = 1;
-				leafImage = { (uint8)(glm::clamp(species.desc.leafColor.x, 0.0f, 1.0f) * 255.0f + 0.5f),
-					(uint8)(glm::clamp(species.desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
-					(uint8)(glm::clamp(species.desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
-				leafMean = meanLeafAlbedo(leafImage, species.desc.leafColor);
-			}
-			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`. A species WITHOUT
-			// leaves (a succulent: bark blades) shows in the volume as its bark (bakeTreeDensity splats it): the bark's mean.
-			const glm::vec3 far = species.desc.farColor;
-			const bool leafless = variants.empty() || variants[0].leaves[0].indices.empty();
-			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : leafless ? barkMean : leafMean)
-				* species.desc.farAlbedoScale;
-			if (m_settings.farMode == 0 && species.desc.billboardDistance > 0.0f)
-			{
-				buildBillboards(renderer, species, library, variants, name, barkAlbedo, barkSize, leafImage, leafSize);
-				// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
-				species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
-				species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
-				// The MID tier's (bands set by applyFadeBands): the leaves and the branch bark fading out over the mid band,
-				// the card mesh fading in over it (from the atlas buildBillboards made) and out over the far band.
-				species.leafMidFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
-				species.branchMidFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
-				if (species.cardAtlasMaterial.isValid())
-				{
-					species.cardInMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
-					species.cardOutMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
-				}
-			}
-			Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
-				species.desc.name, library.trunks.size(), library.modules.size(),
-				barkTris[0], leafTris[0], barkTris[1], leafTris[1], barkTris[2], leafTris[2], barkTris[3], leafTris[3]));
+			auto slot = oc::make_unique<LoadSlot>();
+			slot->load.path = entry.path;
+			slot->load.fileName = entry.name;
+			m_loadSlots.push_back(oc::move(slot));
 		}
-		applyFadeBands(renderer);
+		m_species.clear();
+		m_species.resize(m_loadSlots.size());
+		for (oc::unique_ptr<LoadSlot>& slot : m_loadSlots)
+			Globals::jobSystem.submit([s = slot.get(), settings]
+			{
+				loadSpecies(settings, s->load);
+				s->done.store(true, oc::memory_order_release);
+			}, { "Tree species load", EProfileCategory::Procedural }, EJobPriority::Low, &m_loadCounter);
 	}
 
-	void TreeSystem::buildBillboards(Renderer& renderer, Species& species, const TreeLibrary& library, const oc::vector<TreePiece>& variants,
-		const oc::string& name, oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
+	bool TreeSystem::pumpLoad(Renderer& renderer)
 	{
+		bool all = true;
+		for (size_t i = 0; i < m_loadSlots.size(); ++i)
+		{
+			LoadSlot& slot = *m_loadSlots[i];
+			if (slot.uploaded)
+				continue;
+			if (!slot.done.load(oc::memory_order_acquire))
+			{
+				all = false;
+				continue;
+			}
+			const bool valid = slot.load.valid;
+			if (valid)
+				uploadSpecies(renderer, slot.load, m_species[i]);
+			slot.load = SpeciesLoad{}; // the CPU meshes and textures go now
+			slot.load.valid = valid;
+			slot.uploaded = true;
+		}
+		if (!all)
+			return false;
+		Globals::jobSystem.wait(m_loadCounter); // every job has stored `done`: this only retires the counter
+		oc::vector<Species> loaded;
+		for (size_t i = 0; i < m_loadSlots.size(); ++i)
+			if (m_loadSlots[i]->load.valid)
+				loaded.push_back(oc::move(m_species[i]));
+		m_species = oc::move(loaded);
+		m_loadSlots.clear();
+		m_loading = false;
+		applyFadeBands(renderer);
+		return true;
+	}
+
+	void TreeSystem::stopLoad()
+	{
+		if (!m_loading)
+			return;
+		Globals::jobSystem.wait(m_loadCounter); // main helps
+		m_loadSlots.clear();
+		m_loading = false;
+	}
+
+	// On a JOB: everything of the species but its GPU objects (uploadSpecies). Reads only `out` and `settings`.
+	void TreeSystem::loadSpecies(const LoadSettings& settings, SpeciesLoad& out)
+	{
+		oc::string error;
+		if (!loadTreeSpecies(out.path, out.desc, error))
+		{
+			Log::warning(oc::format("Trees: failed to load '{}': {}", out.path, error));
+			return;
+		}
+		out.name = out.desc.name.empty() ? out.fileName : out.desc.name;
+		const oc::string& name = out.name;
+		const TreeSpeciesDesc& desc = out.desc;
+
+		// THE MESH CACHE (MeshCache): the library, the baked variants and their far-volume grids, keyed by the species
+		// file's text. A miss generates them and writes the file. Main frees them once uploaded (and baked into the
+		// billboards / card meshes below): nothing reads them after - a few hundred MB over all species.
+		const float leafCoverage = desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
+		const uint64 textHash = meshCacheHash(FileSystem::readFileStr(out.path)); // the mesh and texture caches' key
+		{
+			const uint64 meshHash = meshCacheMix(textHash, TREE_DENSITY_RES);
+			const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
+			if (!loadTreeMeshes(meshPath, meshHash, out.library, out.variants, out.density))
+			{
+				out.library = {};
+				generateTreeLibrary(desc, out.library);
+				out.variants.clear();
+				out.variants.resize((size_t)desc.variantCount);
+				for (int v = 0; v < desc.variantCount; ++v)
+					bakeTreeVariant(desc, out.library, treeHash(desc.seed, 5000u + (uint32)v), out.variants[(size_t)v]);
+				// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline).
+				out.density.resize(out.variants.size());
+				for (size_t v = 0; v < out.variants.size(); ++v)
+				{
+					TreeBillboardBox box;
+					bakeTreeDensity(out.variants[v], TREE_DENSITY_RES, leafCoverage, out.density[v].values, box);
+					out.density[v].min = box.min;
+					out.density[v].max = box.max;
+				}
+				saveTreeMeshes(meshPath, meshHash, out.library, out.variants, out.density);
+			}
+		}
+
+		// Level-0 images for the billboard bake: only those generated here (a .tex holds no RGBA8 level 0), so
+		// buildBillboards generates any it lacks when a bake misses.
+		oc::vector<uint8> barkAlbedo, leafImage;
+		uint32 barkSize = 0, leafSize = 0;
+		glm::vec3 barkMean(0.0f), leafMean(0.0f);
+		const uint64 textureHash = textureCacheHash(textHash, settings.compressTextures, TREE_TEXTURE_SIZE);
+		{
+			const oc::string path = oc::format("{}/{}_bark.tex", TREE_TEXTURE_DIR, name);
+			CachedTexture& texture = out.bark;
+			if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture))
+			{
+				oc::vector<uint8> normal;
+				barkSize = TREE_TEXTURE_SIZE;
+				generateBarkImages(desc, barkSize, barkAlbedo, normal);
+				TreeBarkTexture bark;
+				buildBarkMips(barkAlbedo, normal, barkSize, bark);
+				texture = {};
+				encodeTexture(settings.compressTextures, barkSize, barkSize, bark.albedoMips, TextureConvert::EBlockFormat::BC1,
+					bark.normalMips, TextureConvert::EBlockFormat::BC5, texture);
+				texture.mean = meanLeafAlbedo(barkAlbedo, desc.barkColor);
+				saveTexture(path, textureHash, texture);
+				// The level-0 PNGs this file replaces.
+				FileSystem::remove(oc::format("{}/{}_bark.png", TREE_TEXTURE_DIR, name));
+				FileSystem::remove(oc::format("{}/{}_bark_normal.png", TREE_TEXTURE_DIR, name));
+			}
+			barkMean = texture.mean;
+		}
+		if (desc.leafType == ETreeLeafType::Cluster)
+		{
+			const oc::string path = oc::format("{}/{}_leaves.tex", TREE_TEXTURE_DIR, name);
+			CachedTexture& texture = out.leaves;
+			if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture))
+			{
+				// One generation draws both: the normal map must match the leaves drawn in the colour image.
+				oc::vector<uint8> normalImage;
+				leafSize = TREE_TEXTURE_SIZE;
+				generateLeafClusterImage(desc, leafSize, leafImage, &normalImage);
+				TreeLeafTexture albedoChain;
+				buildLeafClusterMips(leafImage, leafSize, albedoChain);
+				oc::vector<oc::vector<uint8>> normalChain;
+				buildNormalMips(normalImage, leafSize, normalChain);
+				texture = {};
+				// The normal map: cupped, tilted leaves, BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the
+				// transmission's leaf thickness).
+				encodeTexture(settings.compressTextures, leafSize, leafSize, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
+					normalChain, TextureConvert::EBlockFormat::BC3, texture);
+				texture.mean = meanLeafAlbedo(leafImage, desc.leafColor);
+				saveTexture(path, textureHash, texture);
+				FileSystem::remove(oc::format("{}/{}_leaves.png", TREE_TEXTURE_DIR, name));
+				FileSystem::remove(oc::format("{}/{}_leaves_normal.png", TREE_TEXTURE_DIR, name));
+			}
+			leafMean = texture.mean;
+		}
+		else
+		{
+			// Single leaves are solid-coloured: the bake samples a 1x1 opaque image of that colour.
+			leafSize = 1;
+			leafImage = { (uint8)(glm::clamp(desc.leafColor.x, 0.0f, 1.0f) * 255.0f + 0.5f),
+				(uint8)(glm::clamp(desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
+				(uint8)(glm::clamp(desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
+			leafMean = meanLeafAlbedo(leafImage, desc.leafColor);
+		}
+		// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`. A species WITHOUT
+		// leaves (a succulent: bark blades) shows in the volume as its bark (bakeTreeDensity splats it): the bark's mean.
+		const glm::vec3 far = desc.farColor;
+		const bool leafless = out.variants.empty() || out.variants[0].leaves[0].indices.empty();
+		out.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : leafless ? barkMean : leafMean) * desc.farAlbedoScale;
+		out.billboards = settings.billboards && desc.billboardDistance > 0.0f;
+		if (out.billboards)
+			buildBillboards(settings, out, barkAlbedo, barkSize, leafImage, leafSize);
+		out.valid = true;
+	}
+
+	// On main: the species' GPU objects from its load (loadSpecies).
+	void TreeSystem::uploadSpecies(Renderer& renderer, SpeciesLoad& load, Species& species)
+	{
+		species.desc = oc::move(load.desc);
+		species.moduleLength = load.library.modules.empty() ? 1.0f : load.library.modules[0].length;
+		species.volumeAlbedo = load.volumeAlbedo;
+		const oc::string& name = load.name;
+
+		size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
+		// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
+		// shadow + GI); with billboards the whole billboard is the tree's only RT representation (buildBillboards).
+		// Bushes never: too small to matter to GI / RT shadows, and too many for the TLAS.
+		const bool meshesRaytraced = m_settings.farMode != 0 && !species.desc.bush;
+		auto uploadPieces = [&](const oc::vector<TreePiece>& pieces, oc::vector<PieceMeshes>& out)
+		{
+			out.resize(pieces.size());
+			for (size_t i = 0; i < pieces.size(); ++i)
+			{
+				uploadLevelZero(renderer, pieces[i].bark, out[i].bark, meshesRaytraced);
+				uploadLevelZero(renderer, pieces[i].leaves, out[i].leaves, meshesRaytraced);
+				// Baked variants: the bark split as well (the mid tier's trunk / branches, main pass only); empty
+				// elsewhere - no meshes.
+				uploadLevelZero(renderer, pieces[i].trunkBark, out[i].trunkBark, false);
+				uploadLevelZero(renderer, pieces[i].branchBark, out[i].branchBark, false);
+				for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
+				{
+					barkTris[k] += numTriangles(pieces[i].bark[k]);
+					leafTris[k] += numTriangles(pieces[i].leaves[k]);
+				}
+			}
+		};
+		uploadPieces(load.library.trunks, species.trunkMeshes);
+		uploadPieces(load.library.modules, species.moduleMeshes);
+		// The baked whole trees the grove places (counted into the same triangle totals).
+		uploadPieces(load.variants, species.variantMeshes);
+		for (size_t v = 0; v < load.variants.size() && v < load.density.size(); ++v)
+		{
+			PieceMeshes& meshes = species.variantMeshes[v];
+			meshes.density = oc::move(load.density[v].values);
+			meshes.densityMin = load.density[v].min;
+			meshes.densityMax = load.density[v].max;
+		}
+
+		species.ownBarkMaterial = createTreeMaterial(load.bark, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
+		species.barkMaterial = species.ownBarkMaterial.index();
+		if (species.desc.leafType == ETreeLeafType::Cluster)
+		{
+			// LEAF: the sun shines through the cluster cards (LitTree's leaf terms).
+			species.ownLeafMaterial = createTreeMaterial(load.leaves, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
+				RendererVKLayout::MATERIAL_FLAG_LEAF);
+			species.leafMaterial = species.ownLeafMaterial.index();
+			species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;
+		}
+		else
+			species.leafMaterial = RenderMaterial::getOrCreateSolidColor(species.desc.leafColor);
+
+		if (load.billboards)
+		{
+			oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
+			for (uint32 set = 0; set < 3; ++set)
+				for (size_t i = 0; i < load.pieceBillboards[set].size() && i < meshSets[set]->size(); ++i)
+				{
+					PieceBillboard& billboard = load.pieceBillboards[set][i];
+					PieceMeshes& meshes = (*meshSets[set])[i];
+					meshes.farCentre = billboard.farCentre;
+					meshes.farRadius = billboard.farRadius;
+					if (!billboard.upload)
+						continue;
+					const bool horizontal = set == 2;
+					// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
+					// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
+					meshes.billboardMaterial = createTreeMaterial(billboard.texture, TREE_LEAF_ALPHA_CUTOFF,
+						oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
+						| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
+					// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
+					// views), and never a bush's.
+					meshes.billboard = uploadTreeMesh(renderer, billboard.cards, horizontal && !species.desc.bush);
+				}
+			if (!load.atlas.albedo.empty())
+			{
+				// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
+				species.cardAtlasMaterial = createTreeMaterial(load.atlas, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeCardAtlas/{}", name).c_str(),
+					RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+				for (size_t v = 0; v < load.variantCards.size() && v < species.variantMeshes.size(); ++v)
+					species.variantMeshes[v].cards = uploadTreeMesh(renderer, load.variantCards[v], false); // main pass only
+			}
+			// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
+			species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
+			species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
+			// The MID tier's (bands set by applyFadeBands): the leaves and the branch bark fading out over the mid band,
+			// the card mesh fading in over it (from the atlas buildBillboards made) and out over the far band.
+			species.leafMidFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
+			species.branchMidFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
+			if (species.cardAtlasMaterial.isValid())
+			{
+				species.cardInMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
+				species.cardOutMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
+			}
+		}
+		Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
+			species.desc.name, load.library.trunks.size(), load.library.modules.size(),
+			barkTris[0], leafTris[0], barkTris[1], leafTris[1], barkTris[2], leafTris[2], barkTris[3], leafTris[3]));
+	}
+
+	// On the species' load job (loadSpecies).
+	void TreeSystem::buildBillboards(const LoadSettings& settings, SpeciesLoad& out,
+		oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
+	{
+		const TreeSpeciesDesc& desc = out.desc;
+		const TreeLibrary& library = out.library;
+		const oc::vector<TreePiece>& variants = out.variants;
+		const oc::string& name = out.name;
 		// The bake's inputs, generated on the first miss when their .tex was loaded (the same images: the generators are
 		// deterministic).
 		const auto bakeInputs = [&]()
@@ -656,24 +762,24 @@ namespace Procedural
 			{
 				oc::vector<uint8> normal;
 				barkSize = TREE_TEXTURE_SIZE;
-				generateBarkImages(species.desc, barkSize, barkAlbedo, normal);
+				generateBarkImages(desc, barkSize, barkAlbedo, normal);
 			}
 			if (leafImage.empty())
 			{
 				oc::vector<uint8> normal; // drawn as for the .tex, so the colour image is the same
 				leafSize = TREE_TEXTURE_SIZE;
-				generateLeafClusterImage(species.desc, leafSize, leafImage, &normal);
+				generateLeafClusterImage(desc, leafSize, leafImage, &normal);
 			}
 		};
-		const uint32 size = (uint32)species.desc.billboardSize;
-		const uint32 numViews = m_settings.billboardViews == 0 ? 2u : 4u;
+		const uint32 size = (uint32)desc.billboardSize;
+		const uint32 numViews = settings.billboardViews;
 
 		oc::vector<FileSystem::DirEntry> existing;
-		FileSystem::listDirectory(TREE_TEXTURE_DIR, existing, true);
+		FileSystem::listDirectory(TREE_TEXTURE_DIR, existing);
 		// The cache key's source: the species file's text (every piece's geometry comes from it and the generator code,
 		// which BAKE_VERSION covers).
 		uint32 speciesHash = 2166136261u;
-		for (const char c : FileSystem::readFileStr(species.desc.path, true))
+		for (const char c : FileSystem::readFileStr(desc.path))
 			speciesHash = (speciesHash ^ (uint8)c) * 16777619u;
 
 		// Modules, trunks and the baked whole trees alike. A trunk's / tree's +Y is world up, so its "top" card
@@ -681,17 +787,18 @@ namespace Procedural
 		// a HORIZONTAL card for the top-down view (a module's "top" card already lies flat; a bare trunk from
 		// above is a dot).
 		const oc::vector<TreePiece>* pieceSets[3] = { &library.modules, &library.trunks, &variants };
-		oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
 		// The modules' textures (their encoded mip chains) and axis-coded cards, kept for the mid tier's atlas + card meshes
 		// (below).
 		const size_t numModules = library.modules.size();
 		oc::vector<CachedTexture> moduleTextures(numModules);
 		oc::vector<TreeMesh> moduleCards(numModules);
 		for (uint32 set = 0; set < 3; ++set)
+			out.pieceBillboards[set].resize(pieceSets[set]->size());
+		for (uint32 set = 0; set < 3; ++set)
 		for (size_t i = 0; i < pieceSets[set]->size(); ++i)
 		{
 			const TreePiece& piece = (*pieceSets[set])[i];
-			PieceMeshes& meshes = (*meshSets[set])[i];
+			PieceBillboard& billboard = out.pieceBillboards[set][i];
 			const TreeBillboardBox box = billboardBox(piece);
 			const bool horizontal = set == 2;
 			// Mips down to ~4 px per strip, while the strip boundaries stay on texel boundaries (billboardLayout).
@@ -702,20 +809,20 @@ namespace Procedural
 			const oc::string prefix = oc::format("{}_{}billboard{}v{}_", name, PIECE_KINDS[set], i, numViews);
 			// Before the view count was named.
 			const oc::string legacyPrefix = oc::format("{}_{}billboard{}_", name, PIECE_KINDS[set], i);
-			const float bend = species.desc.billboardNormalBend;
+			const float bend = desc.billboardNormalBend;
 			const uint32 settingsHash = treeHash(0xB1B0A2D5u ^ numViews, (uint32)std::round(bend * 1000.0f));
 			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(set, (uint32)i)), 2u, size) ^ settingsHash);
 			const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
-			const uint64 textureHash = meshCacheMix(meshCacheHash(stem), m_settings.compressTextures ? 1u : 0u);
+			const uint64 textureHash = meshCacheMix(meshCacheHash(stem), settings.compressTextures ? 1u : 0u);
 
 			CachedTexture texture;
-			if (m_settings.regenerateTextures || !loadTexture(path, textureHash, texture) || texture.width != size || texture.height != size
+			if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture) || texture.width != size || texture.height != size
 				|| texture.albedo.size() != numMips || texture.normal.size() != numMips)
 			{
 				// Stale slot files go (and the level-0 PNGs of before the .tex).
 				for (const FileSystem::DirEntry& entry : existing)
 					if (entry.name.rfind(prefix.c_str(), 0) == 0 || entry.name.rfind(legacyPrefix.c_str(), 0) == 0)
-						FileSystem::remove(entry.path, true);
+						FileSystem::remove(entry.path);
 				bakeInputs();
 				oc::vector<uint8> albedo, normal;
 				bakeBillboards(piece, TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize }, size, bend, numViews,
@@ -723,7 +830,7 @@ namespace Procedural
 
 				// `Billboard AlbedoScale` (whole trees only): x the colour in LINEAR space (the texture is sRGB). Baked into the
 				// .tex: the species file's text keys it, so a change re-bakes anyway.
-				const float albedoScale = species.desc.billboardAlbedoScale;
+				const float albedoScale = desc.billboardAlbedoScale;
 				if (horizontal && albedoScale != 1.0f)
 				{
 					uint8 lut[256];
@@ -748,35 +855,29 @@ namespace Procedural
 				normalChain.resize(numMips);
 				// BC3 normal: RGB the full normal (sign kept), A the baked interior - no two-channel format holds both.
 				texture = {};
-				encodeTexture(m_settings.compressTextures, size, size, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
+				encodeTexture(settings.compressTextures, size, size, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
 					normalChain, TextureConvert::EBlockFormat::BC3, texture);
 				saveTexture(path, textureHash, texture);
 			}
 
 			// The module / trunk billboards draw only in the piece library (debug rows): without it they are not uploaded
 			// (the modules' chains still feed the card atlas below).
-			if (set == 2 || m_settings.showLibrary)
-			{
-				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
-				// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
-				meshes.billboardMaterial = createTreeMaterial(texture, TREE_LEAF_ALPHA_CUTOFF,
-					oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
-					| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
-
-				TreeMesh cards;
-				billboardMesh(box, size, numViews, horizontal, cards, false, species.desc.billboardTopCardHeight);
-				// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
-				// views), and never a bush's.
-				meshes.billboard = uploadTreeMesh(renderer, cards, horizontal && !species.desc.bush);
-			}
-			meshes.farCentre = (box.min + box.max) * 0.5f;
-			meshes.farRadius = glm::length(box.max - box.min) * 0.5f;
+			billboard.upload = set == 2 || settings.showLibrary;
+			if (billboard.upload)
+				billboardMesh(box, size, numViews, horizontal, billboard.cards, false, desc.billboardTopCardHeight);
+			billboard.farCentre = (box.min + box.max) * 0.5f;
+			billboard.farRadius = glm::length(box.max - box.min) * 0.5f;
 			if (set == 0)
 			{
-				// Kept for the atlas (the material above has copied its levels) and the card meshes.
-				moduleTextures[i] = oc::move(texture);
+				// The atlas's (and the card meshes') - a copy only when the module's own billboard uploads too.
+				if (billboard.upload)
+					moduleTextures[i] = texture;
+				else
+					moduleTextures[i] = oc::move(texture);
 				billboardMesh(box, size, numViews, false, moduleCards[i], true);
 			}
+			if (billboard.upload)
+				billboard.texture = oc::move(texture);
 		}
 
 		// THE MID TIER's BRANCH CARDS. One ATLAS per species: the module billboards stacked top to bottom (module m in
@@ -806,14 +907,13 @@ namespace Procedural
 				atlas.albedo[k].insert(atlas.albedo[k].end(), module.albedo[k].begin(), module.albedo[k].end());
 				atlas.normal[k].insert(atlas.normal[k].end(), module.normal[k].begin(), module.normal[k].end());
 			}
-		// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
-		species.cardAtlasMaterial = createTreeMaterial(atlas, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeCardAtlas/{}", name).c_str(),
-			RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+		out.atlas = oc::move(atlas); // uploadSpecies makes its material
 
 		const float invModules = 1.0f / (float)numModules;
+		out.variantCards.resize(variants.size());
 		for (size_t v = 0; v < variants.size(); ++v)
 		{
-			TreeMesh merged;
+			TreeMesh& merged = out.variantCards[v];
 			for (const TreePiecePlacement& placement : variants[v].placements)
 			{
 				if (placement.trunk || placement.pieceIdx >= numModules)
@@ -843,7 +943,6 @@ namespace Procedural
 				for (uint32 index : src.indices)
 					merged.indices.push_back(base + index);
 			}
-			species.variantMeshes[v].cards = uploadTreeMesh(renderer, merged, false); // main pass only
 		}
 	}
 

@@ -209,8 +209,9 @@ The tree, rock and clutter generators' OUTPUT is saved under `Assets/Local` and 
   bump `TREE_MESH_CACHE_VERSION` / `ROCK_MESH_CACHE_VERSION` / `CLUTTER_MESH_CACHE_VERSION` / `TEXTURE_CACHE_VERSION`
   (MeshCache.ixx; the textures also cover the mip builders and the BC encoders), or the folder must be deleted. The clutter's pebbles come from `generateRockVariant` too: a rock generator change
   bumps both.
-* Trees load on main (`TreeSystem::reload`, under its `AllowMainThreadIO`); the rocks and the clutter load / save in
-  their generation jobs. A cache hit also makes Debug and the optimized builds draw the same floats (the generators'
+* Every cache loads / saves on jobs: the trees in their species load jobs (`TreeSystem::loadSpecies`, one Low job per
+  `.tree`; main only uploads - see "The species load" in [Trees.md](Trees.md)), the rocks and the clutter in their
+  generation jobs. A cache hit also makes Debug and the optimized builds draw the same floats (the generators'
   `/fp:fast` last bits).
 
 # Build note

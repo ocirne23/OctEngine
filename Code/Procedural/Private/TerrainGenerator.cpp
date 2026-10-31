@@ -9,7 +9,7 @@ import :TerrainChunk;
 
 namespace Procedural
 {
-	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out)
+	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out, oc::vector<TerrainPoint>* outField)
 	{
 		out.clear();
 
@@ -129,5 +129,7 @@ namespace Procedural
 				out.indices.push_back(b); out.indices.push_back(c); out.indices.push_back(d);
 			}
 		}
+		if (outField)
+			*outField = oc::move(field);
 	}
 }

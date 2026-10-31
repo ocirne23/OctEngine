@@ -69,6 +69,9 @@ namespace
 	}
 
 	// Pack a node coordinate (at its lod) + the LOD into a stable 64-bit key. 28 bits each for X/Z covers +-134M nodes.
+	// A BASE chunk's key (m_nodeGenerated).
+	uint64 baseKey(int32 x, int32 z) { return (uint64)(uint32)x | ((uint64)(uint32)z << 32); }
+
 	uint64 chunkKey(glm::ivec2 coord, uint32 lod)
 	{
 		const uint64 x = (uint64)(uint32)coord.x & 0xFFFFFFFull;
@@ -621,6 +624,7 @@ namespace Procedural
 			m_maps = nullptr;
 			++m_generation;
 			m_requests.clear();
+			m_nodeGenerated.clear();
 			return;
 		}
 
@@ -695,12 +699,26 @@ namespace Procedural
 		m_maps = oc::move(maps);
 		++m_generation;
 		m_requests.clear(); // drop queued work built against the old config
+		m_nodeGenerated.clear();
 	}
 
 	oc::shared_ptr<const ITerrainSampler> TerrainStreamer::currentMaps()
 	{
 		std::lock_guard<std::mutex> lk(m_mutex);
 		return m_maps;
+	}
+
+	void TerrainStreamer::setNodeHook(oc::function<void(const TerrainNodeSamples&)> hook)
+	{
+		auto shared = hook ? oc::make_shared<const oc::function<void(const TerrainNodeSamples&)>>(oc::move(hook)) : nullptr;
+		std::lock_guard<std::mutex> lk(m_mutex);
+		m_nodeHook = oc::move(shared);
+	}
+
+	bool TerrainStreamer::nodeGenerated(int32 x, int32 z, const ITerrainSampler* maps) const
+	{
+		std::lock_guard<std::mutex> lk(m_mutex);
+		return maps != nullptr && maps == m_maps.get() && m_nodeGenerated.find(baseKey(x, z)) != m_nodeGenerated.end();
 	}
 
 	TerrainStreamer::StreamStatus TerrainStreamer::streamStatus() const
@@ -890,8 +908,10 @@ namespace Procedural
 
 			Request req;
 			bool haveWork = false;
+			oc::shared_ptr<const oc::function<void(const TerrainNodeSamples&)>> hook;
 			{
 				std::lock_guard<std::mutex> lk(m_mutex);
+				hook = m_nodeHook;
 				// Take the request NEAREST THE CAMERA, re-measured against the ring state as it is RIGHT NOW.
 				// Deliberately not a queue: FIFO order is enqueue TIME, which stops matching distance the
 				// moment the camera moves. Chunks arrive over many frames, and a chunk whose LOD band
@@ -982,7 +1002,38 @@ namespace Procedural
 				// timeline shows the on-thread segments, parked time is not counted.
 				ProfileScope genScope("TerrainStreamer::generateChunk", EProfileCategory::Procedural);
 				TerrainChunkMesh mesh;
-				generateChunk(*req.maps, req.params, mesh);
+				oc::vector<TerrainPoint> field; // a LOD0 node's sample grid, for the node hook
+				generateChunk(*req.maps, req.params, mesh, hook && req.params.lod == 0 ? &field : nullptr);
+				genScope.stop();
+				// THE NODE HOOK (TreeWorld places the tree chunks under this node while its tiles are hot): the node's base chunks
+				// are recorded FIRST (nodeGenerated), so a consumer that misses this call sees them recorded.
+				const int32 span = 1 << req.params.lod;
+				const glm::ivec2 firstBase = req.params.coord * span;
+				{
+					std::lock_guard<std::mutex> lk(m_mutex);
+					if (req.maps == m_maps)
+						for (int32 z = 0; z < span; ++z)
+							for (int32 x = 0; x < span; ++x)
+								m_nodeGenerated.insert(baseKey(firstBase.x + x, firstBase.y + z));
+				}
+				if (hook && *hook)
+				{
+					TerrainNodeSamples node;
+					node.maps = req.maps.get();
+					node.firstBaseX = firstBase.x;
+					node.firstBaseZ = firstBase.y;
+					node.span = (uint32)span;
+					if (!field.empty())
+					{
+						const double step = (double)(req.params.nodeSize() / (float)glm::max(1u, req.params.lod0Res)); // generateChunk's
+						node.field = oc::span<const TerrainPoint>(field.data(), field.size());
+						node.gridRes = glm::max(1u, req.params.lod0Res) + 3;
+						node.originX = (double)req.params.coord.x * (double)req.params.nodeSize() - step;
+						node.originZ = (double)req.params.coord.y * (double)req.params.nodeSize() - step;
+						node.step = step;
+					}
+					(*hook)(node);
+				}
 				if (!mesh.indices.empty())
 				{
 					ProfileScope meshScope("TerrainStreamer::buildMesh", EProfileCategory::Procedural); // pure, never parks
@@ -1338,6 +1389,15 @@ namespace Procedural
 		m_disabledIdle = false;
 
 		ProfileScope profileScope("Terrain", EProfileCategory::Procedural);
+		if (m_settings.v3LogTileStats)
+		{
+			m_settings.v3LogTileStats = false;
+			const TerrainGenV3::TileStats t = TerrainGenV3::tileStats();
+			const uint64 misses = t.diskLoads + t.generated;
+			Log::info(oc::format("[Terrain] V3 tiles: {} / {} resident (~{:.0f} MB); {} hits, {} disk loads, {} generated ({:.2f}% misses)",
+				t.resident, t.maxResident, (double)t.resident * 1.07, t.hits, t.diskLoads, t.generated,
+				t.hits + misses > 0 ? 100.0 * (double)misses / (double)(t.hits + misses) : 0.0));
+		}
 		//m_settings.terrainMapFarRange = camera.far;
 		if (m_configDirty)
 		{
@@ -1419,6 +1479,22 @@ namespace Procedural
 		// so on main, no job.
 		const Ring ring{ camChunks, glm::ivec2(camCX, camCZ), R, fullRes, lodStep, maxLod, true };
 		const bool ringMoved = !(ring == m_ring);
+		if (ring.camChunk != m_nodeGeneratedCam)
+		{
+			// nodeGenerated's record: past the ring and a whole maxLod node (a big node sticks out of the ring by its size) no
+			// consumer asks.
+			m_nodeGeneratedCam = ring.camChunk;
+			const int32 keep = R + (1 << maxLod);
+			std::lock_guard<std::mutex> lk(m_mutex);
+			for (auto it = m_nodeGenerated.begin(); it != m_nodeGenerated.end(); )
+			{
+				const int32 x = (int32)(uint32)*it, z = (int32)(uint32)(*it >> 32);
+				if (glm::max(glm::abs(x - ring.camChunk.x), glm::abs(z - ring.camChunk.y)) > keep)
+					it = m_nodeGenerated.erase(it);
+				else
+					++it;
+			}
+		}
 		if (ringMoved)
 		{
 			m_ring = ring;

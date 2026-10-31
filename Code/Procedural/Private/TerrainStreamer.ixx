@@ -58,6 +58,17 @@ export namespace Procedural
 		void restampVegetation(glm::ivec2 coord);
 		// This frame's render() routes the vegetation (the terrain draws its chunks): its owner submits nothing else.
 		bool vegetationRouted() const { return m_vegRouted; }
+
+		// THE NODE HOOK (TreeWorld: the tree chunks follow the terrain nodes). Called ON THE PUMP JOB right after a node is
+		// generated (TerrainNodeSamples: a LOD0 node with its sample grid), outside every streamer lock. Main thread to set;
+		// empty = none. The owner must outlive its hook or guard it (TreeWorld's HookToken).
+		void setNodeHook(oc::function<void(const TerrainNodeSamples&)> hook);
+		// A node over base chunk `coord` was generated from `maps` (its current sampler) since that sampler was published,
+		// or the hook's call for it is under way: a consumer waiting for the hook there would wait for a regeneration that
+		// may never come. Recorded BEFORE the hook is called. Any thread.
+		bool nodeGenerated(int32 x, int32 z, const ITerrainSampler* maps) const;
+		// No generation pump is running: no node hook call is coming until the ring moves or a node is re-requested.
+		bool pumpIdle() const { return m_numPumps.load(oc::memory_order_acquire) == 0; }
 		// Joins the render-push job render() kicked (the renderNode pushes run on a worker). main.cpp
 		// calls it right before Renderer::present; update() and clearResidents() join it too before
 		// they touch m_residents, so a caller never sees the map change under the job.
@@ -266,7 +277,12 @@ export namespace Procedural
 		// remain, and every append is followed by kickPump - so requests never strand. ---
 		oc::atomic<int32>      m_numPumps{ 0 };
 		JobCounter              m_pumpCounter;
-		std::mutex              m_mutex;
+		mutable std::mutex      m_mutex;
+		// The node hook (setNodeHook; a pump copies the pointer at dequeue) and the base chunks a node was generated over from
+		// m_maps (nodeGenerated; cleared when m_maps changes, pruned past the ring + a maxLod node when the camera chunk moves).
+		oc::shared_ptr<const oc::function<void(const TerrainNodeSamples&)>> m_nodeHook;
+		oc::unordered_set<uint64> m_nodeGenerated;
+		glm::ivec2 m_nodeGeneratedCam{ INT32_MAX };
 		// An unordered POOL of outstanding work, despite the deque: the worker rescans it on every dequeue
 		// and takes whichever chunk is nearest the camera THEN, so insertion order carries no meaning and
 		// neither side sorts it. Ordering it would just re-decide, one camera position stale, what the

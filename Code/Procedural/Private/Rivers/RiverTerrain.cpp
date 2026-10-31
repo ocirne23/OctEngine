@@ -1050,6 +1050,18 @@ namespace Procedural
 					allW = allC = 0.0f;
 					nearD = FLT_MAX;
 				};
+				// The point's distance (model m) to piece k -> k + 1 and its parameter there.
+				const auto pieceDistance = [&](uint32 k, float& t)
+				{
+					const RiverPoint& a = u.points[k];
+					const RiverPoint& c = u.points[k + 1];
+					const float abx = c.x - a.x, abz = c.z - a.z;
+					const float len2 = abx * abx + abz * abz;
+					t = len2 > 1e-12f ? oc::clamp(((lx - a.x) * abx + (lz - a.z) * abz) / len2, 0.0f, 1.0f) : 0.0f;
+					const float px = a.x + abx * t - lx, pz = a.z + abz * t - lz;
+					return std::sqrt(px * px + pz * pz) * nr;
+				};
+				float cutStart = FLT_MAX, cutEnd = FLT_MAX;
 				for (uint32 n = pu->cellStart[cell]; n < pu->cellStart[cell + 1]; n++)
 				{
 					const uint32 k = pu->cellPieces[n];
@@ -1058,15 +1070,34 @@ namespace Procedural
 					{
 						flushSegment();
 						curSeg = ks;
+						// THE FAR-PIECE CUT: a piece's blend weight falls as 1 / d^6, so past ~3x the distance of the segment's
+						// NEAREST piece it adds well under 0.1 % of the blend - of a carve about equal to its neighbours' (the
+						// same river) - and its pieceCarve is skipped (most pieces of a cell's list: it covers the whole wall
+						// reach). Its weight fades out over 2.5x .. 3.5x that distance, so no piece leaves in a step (the carve
+						// stays continuous, and a pure function of position); never inside twice the nearest piece's floodplain
+						// edge, where the sections and the drop ramp stay exact. A cell lists its pieces segment by segment.
+						float minD = FLT_MAX, minHw = 0.05f;
+						for (uint32 m = n; m < pu->cellStart[cell + 1] && pu->pointSegment[pu->cellPieces[m]] == ks; m++)
+						{
+							const uint32 km = pu->cellPieces[m];
+							float tm;
+							const float dm = pieceDistance(km, tm);
+							if (dm < minD)
+							{
+								minD = dm;
+								minHw = oc::max(u.points[km].halfWidth + (u.points[km + 1].halfWidth - u.points[km].halfWidth) * tm, 0.05f);
+							}
+						}
+						cutStart = oc::max(2.5f * minD, 2.0f * oc::min(m_carve.floodplainEdge(minHw), c_maxFloodplainM));
+						cutEnd = cutStart + oc::max(minD, 1.0f);
 					}
 					const RiverPoint& a = u.points[k];
 					const RiverPoint& c = u.points[k + 1];
 					const PreparedRiverUnit::Piece& pc = pu->pieces[k];
 					const float abx = c.x - a.x, abz = c.z - a.z;
 					const float len2 = abx * abx + abz * abz;
-					const float t = len2 > 1e-12f ? oc::clamp(((lx - a.x) * abx + (lz - a.z) * abz) / len2, 0.0f, 1.0f) : 0.0f;
-					const float px = a.x + abx * t - lx, pz = a.z + abz * t - lz;
-					const float d = std::sqrt(px * px + pz * pz) * nr; // model m
+					float t;
+					const float d = pieceDistance(k, t); // model m
 					const bool humid = !u.segments[ks].ephemeral && m_carve.waterHumidity > 0.0f;
 					// Out of the piece's reach at every t, and of its humidity spread: nothing below can change (the cell lists
 					// pieces by their bounding box, so most points of a cell are past most of its pieces' ends).
@@ -1085,7 +1116,9 @@ namespace Procedural
 					const float reachEnd = oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM) + wr; // pieceReach
 					if (d >= reachEnd)
 						continue;
-					float W;
+					const float cut = 1.0f - smoothstep01((d - cutStart) / (cutEnd - cutStart)); // the far-piece cut
+					float W = 0.0f;
+					if (cut > 0.0f)
 					{
 						// The weight fades out with the wall (its last 30 %), so a piece leaves the blend smoothly: cut off
 						// at full weight, the blend jumped where it left - beside a plunge gorge (out of the wide blend
@@ -1107,7 +1140,7 @@ namespace Procedural
 								lips[li] = { ls, d, std::sqrt(len2) * nr, pu->pointSurface[k], pu->pointSurface[k + 1],
 									m_carve.channelDepth(oc::max(a.depth, 0.02f)) };
 						}
-						const float w = segmentWeight(d) * (1.0f - smoothstep01((d - (reachEnd - fadeLen)) / fadeLen)) * (lipOwn ? 0.001f : 1.0f);
+						const float w = segmentWeight(d) * (1.0f - smoothstep01((d - (reachEnd - fadeLen)) / fadeLen)) * (lipOwn ? 0.001f : 1.0f) * cut;
 						const float carve = pieceCarve(a, c, t, d, hModel, wr, pc.steep, W);
 						const uint16 sec = pu->pointSection[k];
 						int32 s = 0;
@@ -1179,7 +1212,9 @@ namespace Procedural
 					{
 						bestRatio = ratio;
 						bestUnitW = a.water + (c.water - a.water) * t;
-						bestW = W; // pieceCarve's surface at t
+						// pieceCarve's surface at t (that of a cut piece: the same expression)
+						bestW = cut > 0.0f ? W
+							: m_carve.surface(a.water + (c.water - a.water) * t, oc::max(a.depth + (c.depth - a.depth) * t, 0.02f), q);
 						bestDry = u.segments[pu->pointSegment[k]].ephemeral != 0;
 						float ang = std::atan2(abz, abx) * (0.5f / 3.14159265f);
 						bestAngle = ang < 0.0f ? ang + 1.0f : ang;
@@ -1298,6 +1333,10 @@ namespace Procedural
 			const int32 reach = oc::max(oc::max((int32)std::ceil(shorePx + 0.5f), c_rimPx), (int32)std::ceil(humiditySpreadPx));
 			float best2 = FLT_MAX, nearLevel = 0.0f;
 			for (int32 r = oc::max(row - reach, 0); r <= oc::min(row + reach, m_unitPx - 1); r++)
+			{
+				// A row whose distance alone is past the nearest so far cannot win (the test below is strict).
+				if (((float)r - fz) * ((float)r - fz) > best2)
+					continue;
 				for (uint32 n = pu->rowRuns[r]; n < pu->rowRuns[r + 1]; n++)
 				{
 					const RiverLakeRun& run = u.lakeRuns[n];
@@ -1311,6 +1350,7 @@ namespace Procedural
 						nearLevel = u.lakes[run.lake].level;
 					}
 				}
+			}
 			if (best2 < FLT_MAX)
 			{
 				p.river = oc::max(p.river, oc::clamp(1.0f - (std::sqrt(best2) - 0.5f) / shorePx, 0.0f, 1.0f));
