@@ -31,7 +31,7 @@ layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
 #define LIT_NO_RTAO
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_splat.inc.glsl"
-#include "grass.inc.glsl"   // grassNearShadow, grassValueNoise (in_vertices: the lit core's binding 14)
+#include "grass.inc.glsl"   // grassNearShadow, grassValueNoise (in_terrainVertices: the lit core's binding 14)
 #include "clutter.inc.glsl"
 #include "cactus.inc.glsl"
 

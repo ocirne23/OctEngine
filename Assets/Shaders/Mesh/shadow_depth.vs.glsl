@@ -7,6 +7,7 @@
 #extension GL_EXT_multiview : require
 
 #include "shared.inc.glsl"
+#include "mesh_vertex.inc.glsl"
 #include "tree_wind.inc.glsl"
 
 // Depth-only vertex shader for the sun shadow cascades, rendered in a single multiview pass: gl_ViewIndex selects the
@@ -17,15 +18,17 @@ struct InMeshInstancesData
     vec4 posScale;
     vec4 quat;
     uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), bit 15 = a tree (wind), bits 8..14 its
-                                 // trunk-bend scale x 32, bit 7 = a tree billboard, low 7 = cascade mask
+                                 // trunk-bend scale x 32 - no bit 15: bit 8 = a terrain node - bit 7 = a tree billboard,
+                                 // low 7 = cascade mask
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {
     InMeshInstancesData in_instances[];
 };
+// The one pipeline draws both vertex formats, so the vertices are not attributes: two blocks on the mega-buffer.
+layout (binding = 2, std430) readonly buffer InVertices { MeshVertex in_vertices[]; };
+layout (binding = 2, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 
-layout (location = 0) in vec4 in_posU; // MeshVertex: xyz = position, w = uv.x
-layout (location = 3) in float in_v;   // MeshVertex normalV.w = uv.y (bound alone, not the normal)
 layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec2 out_uv;
@@ -35,7 +38,7 @@ void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];
     const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000007Fu;
-    out_uv = vec2(in_posU.w, in_v);
+    out_uv = vec2(0.0);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
     if ((cascadeMask & (1u << gl_ViewIndex)) == 0u)
     {
@@ -43,14 +46,28 @@ void main()
         return;
     }
 
-    vec3 worldPos = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
+    const uint vertexIdx = uint(gl_VertexIndex);
+    vec3 localPos;
+    if ((inst.alphaTexIdxCascadeMask & 0x00008100u) == 0x00000100u)
+    {
+        localPos = vec3(in_terrainVertices[vertexIdx].x, in_terrainVertices[vertexIdx].y, in_terrainVertices[vertexIdx].z);
+    }
+    else
+    {
+        const vec4 posU = in_vertices[vertexIdx].positionU;
+        localPos = posU.xyz;
+        if (out_alphaTexIdx != 0xFFFFu)
+            out_uv = vec2(posU.w, in_vertices[vertexIdx].normalV.w);
+    }
+
+    vec3 worldPos = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
     // A tree (the shadow cull's bit 15): the wind's TRUNK bend only (its casters are mostly the billboards; no payload
     // attribute in this pass) - the same bend the main pass gives every representation.
     if ((inst.alphaTexIdxCascadeMask & 0x00008000u) != 0u)
     {
         vec3 unusedPrevDelta;
         const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
-        worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, vec2(windTrunk, 1.0), unusedPrevDelta);
+        worldPos += treeWind(localPos, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, vec2(windTrunk, 1.0), unusedPrevDelta);
         // A tree BILLBOARD (bit 7) shifted toward the sun by "Trees/Billboard shadow shift (m)" (< 0: away from it): its
         // flat cards stand at the crown's middle, so its shadow starts there, not at the crown's sun side.
         if ((inst.alphaTexIdxCascadeMask & 0x00000080u) != 0u)

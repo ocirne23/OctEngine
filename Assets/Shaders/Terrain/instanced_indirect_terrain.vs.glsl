@@ -11,6 +11,7 @@
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
+#include "mesh_vertex.inc.glsl"
 
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -31,12 +32,8 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-// positionU.w (MeshVertex's texCoord u) carries the RIVER influence on the terrain, not a UV.
-layout (location = 0) in vec4 in_posRiver;
-layout (location = 1) in vec3 in_normal;
-// NOT a tangent on the terrain: the EDGE STITCH (TerrainChunkMesh) - xyz = this vertex's height on the straight edge
-// of a neighbour 1 / 2 / 3 LODs coarser, w = the chunk's LOD.
-layout (location = 2) in vec4 in_stitch;
+// The vertex is read by gl_VertexIndex: the pipeline's vertex input is the 48-byte MeshVertex of the shared execution set.
+layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 layout (location = 4) in uint inst_idx;
 
 // INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) compute the same
@@ -118,13 +115,13 @@ uint terrainLeafLod(ivec2 base)
 // EDGE STITCHING (no skirts): an edge vertex takes its height on the edge's COARSER side, so both nodes of every edge
 // draw the same line. The edge's LOD = the coarser of the leaves over the two base chunks either side of this vertex
 // (the same pair from both nodes); this node is never coarser than its own leaf (the streamer's invariant). A corner
-// sits on every lattice; an interior vertex never moves.
-float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin)
+// sits on every lattice; an interior vertex never moves. Its height there: the straight line between this edge's two
+// vertices on the coarser lattice, read from the mesh (the coarser node has a vertex at the same world point).
+float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin, uint ownLod)
 {
     const float chunkSize = u_terrain_stitch.x;
     if (chunkSize <= 0.0)
         return localPos.y; // stitching off
-    const uint ownLod = uint(in_stitch.w + 0.5);
     const int span = 1 << ownLod;
     const bvec2 lo = equal(localPos.xz, vec2(0.0));
     const bvec2 hi = equal(localPos.xz, vec2(chunkSize * float(span)));
@@ -137,7 +134,20 @@ float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin)
     const ivec2 inside = nodeBase + (onX ? ivec2(hi.x ? span - 1 : 0, along) : ivec2(along, hi.y ? span - 1 : 0));
     const ivec2 outside = inside + (onX ? ivec2(hi.x ? 1 : -1, 0) : ivec2(0, hi.y ? 1 : -1));
     const int delta = min(int(max(terrainLeafLod(inside), terrainLeafLod(outside))) - int(ownLod), 3);
-    return delta > 0 ? in_stitch[delta - 1] : localPos.y;
+    if (delta <= 0)
+        return localPos.y;
+
+    const uint res = uint(u_terrain_stitch.w);
+    const float quad = chunkSize * float(span) / float(res);
+    const uint i = uint(round((onX ? localPos.z : localPos.x) / quad));
+    const uint s = min(1u << uint(delta), res);
+    const uint i0 = i / s * s;
+    if (i0 == i)
+        return localPos.y;
+    const uint i1 = min(i0 + s, res);
+    const uint rowStep = onX ? res + 1u : 1u; // a west / east edge runs along the rows
+    const uint vertex = uint(gl_VertexIndex);
+    return mix(in_terrainVertices[vertex - (i - i0) * rowStep].y, in_terrainVertices[vertex + (i1 - i) * rowStep].y, float(i - i0) / float(i1 - i0));
 }
 
 void main()
@@ -147,10 +157,11 @@ void main()
 #endif
     const InMeshInstancesData inst = in_instances[inst_idx];
 
-    const vec3 in_pos = in_posRiver.xyz;
-    out_river = in_posRiver.w;
-    out_normal = quat_transform(in_normal, inst.quat);
-    const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz), in_pos.z);
+    const TerrainVertex vertex = in_terrainVertices[gl_VertexIndex];
+    const vec3 in_pos = vec3(vertex.x, vertex.y, vertex.z);
+    out_river = float(vertex.data & 255u) * (1.0 / 255.0);
+    out_normal = quat_transform(terrainVertexNormal(vertex.normalOct), inst.quat);
+    const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz, vertex.data >> 24), in_pos.z);
     out_pos    = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
 
     // Baked terrain fields, evaluated PER VERTEX and interpolated. Interpolation loses nothing: every field is

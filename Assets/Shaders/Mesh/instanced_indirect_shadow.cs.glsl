@@ -11,7 +11,8 @@
 
 struct MaterialInfo         { uint flags; float opacity; uint diffuseNormalTexIdx; uint metalRoughnessTexIdxAlphaMode; };
 // Matches RendererVKLayout::OutShadowMeshInstance. alphaTexIdxCascadeMask: alpha-mask texture << 16 (0xFFFF = none),
-// bit 15 = sways in the wind, bits 8..14 = its trunk-bend scale x 32, bit 7 = a tree billboard, bits 0..6 = the cascade mask.
+// bit 15 = sways in the wind, bits 8..14 = its trunk-bend scale x 32 (no bit 15: bit 8 = a terrain node), bit 7 = a tree
+// billboard, bits 0..6 = the cascade mask.
 struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; };
 
 layout (binding = 6, std430) writeonly buffer OutMeshInstancesBuffer       { OutMeshInstance      out_meshInstances[]; };
@@ -76,9 +77,10 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
     // Bits 0..6 the cascade mask (NUM_SHADOW_CASCADES = 4), 7 = a tree BILLBOARD (shifted toward the sun in the VS),
-    // 8..14 the trunk-bend scale x 32 (0..~4), 15 = sways.
+    // 8..14 the trunk-bend scale x 32 (0..~4), 15 = sways. Not swaying: bit 8 = a terrain node (TerrainVertex).
     const bool billboard = sways && (material.flags & MATERIAL_FLAG_BILLBOARD) != 0u;
-    const uint windBits = sways ? uint(clamp(round(windTrunk * 32.0), 0.0, 127.0)) << 8 : 0u;
+    const uint windBits = sways ? uint(clamp(round(windTrunk * 32.0), 0.0, 127.0)) << 8
+                                : ((material.flags & MATERIAL_FLAG_TERRAIN) != 0u ? 0x00000100u : 0u);
     const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x0000007Fu) | (billboard ? 0x00000080u : 0u) | windBits
                       | (sways ? 0x00008000u : 0u);
 

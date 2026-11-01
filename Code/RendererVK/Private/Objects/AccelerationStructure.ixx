@@ -53,7 +53,7 @@ public:
     // allowCompaction: builds carry eAllowCompaction and record a compacted-size query for
     // recordCompaction to consume.
     void recordBuildBlas(uint32 frameIdx, vk::CommandBuffer cmd, Buffer& vertexBuffer, Buffer& indexBuffer,
-        const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, oc::span<const uint32> meshIndices,
+        const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, const uint8* vertexStrides, oc::span<const uint32> meshIndices,
         bool allowCompaction);
 
     // BLAS compaction: build-size quotes are conservative worst cases, so freshly built BLASes waste

@@ -412,10 +412,11 @@ interpolated).
 
 **Consumers.**
 
-* **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river` into the vertex's u
-  and 1 (inland water / dry bed) into its v - not a texture coordinate. The splat paints the bed with the beach layer
-  and the grass / clutter culls read the same value (RendererVK "Terrain and ocean integration"). Its resolution is the
-  drawn node's vertex spacing (2 m at LOD0).
+* **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river`, `riverSpeed` and
+  "under river or lake water" as three bytes of the vertex (`TerrainVertex`, RendererVK "Terrain and ocean integration").
+  The splat paints the bed with the beach layer and the grass / clutter culls read the same value. They are on the
+  ground's vertices because the ground reads them: the influence reaches the floodplain's edge and dry beds, where no
+  ribbon lies, and a cull finds a vertex from xz. Their resolution is the drawn node's vertex spacing (2 m at LOD0).
 * TreeWorld's water term (trees AND rocks) takes `max(sea, inlandWater)` where there is inland water, so nothing places
   in a lake. **A river's bed is kept clear by its INFLUENCE instead** ("Vegetation clear": no tree or rock where
   `river` is above it), read from its OWN 1 m grid (`ITerrainSampler::sampleRiverGrid`: the influence alone, from the

@@ -414,6 +414,28 @@ export namespace RendererVKLayout
     static_assert(sizeof(MeshVertex) == 48);
     using MeshIndex = uint32;
 
+    // A terrain node's vertex (Renderer::createTerrainMesh; the GLSL mirror is in mesh_vertex.inc.glsl), in the SAME mega-buffer as MeshVertex: its MeshInfo
+    // vertexOffset counts TerrainVertex units. The terrain VS and the shadow VS read it by gl_VertexIndex, the BLAS build with this stride, and a ray hit on a
+    // MATERIAL_FLAG_TERRAIN material fetches it in place of a MeshVertex. No tangent and no uv: the terrain FS builds its own bases and shades in world space.
+    constexpr float TERRAIN_VERTEX_SPEED_MAX = 12.75f; // m/s at riverSpeed 255
+    struct TerrainVertex
+    {
+        glm::vec3 position;    // node-local X/Z, world Y
+        uint32 normalOct;      // two snorm16: the normal's x and z over its L1 length (a height field's normal has y > 0, so no fold)
+        uint8 riverInfluence;  // 255 in a channel, 0 past its floodplain
+        uint8 riverSpeed;      // TERRAIN_VERTEX_SPEED_MAX at 255
+        uint8 underWater;      // 255 under river or lake water
+        uint8 lod;             // the node's LOD (the VS's edge stitch)
+
+        void setNormal(const glm::vec3& n)
+        {
+            const float invL1 = 1.0f / (glm::abs(n.x) + glm::abs(n.y) + glm::abs(n.z));
+            const auto snorm16 = [](float v) { return (uint32)(uint16)(int16)glm::round(glm::clamp(v, -1.0f, 1.0f) * 32767.0f); };
+            normalOct = snorm16(n.x * invL1) | (snorm16(n.z * invL1) << 16);
+        }
+    };
+    static_assert(sizeof(TerrainVertex) == 20);
+
     // Per-vertex skinning influences for skeletal meshes. Stored as a parallel stream (not folded into
     // MeshVertex) so the rendered/BLAS vertex format stays 48 bytes. boneIndices reference the scene
     // Skeleton's bone array; weights are normalized to sum 1. The GPU skinning compute reads this plus a
@@ -466,8 +488,8 @@ export namespace RendererVKLayout
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
     // load does not grow them:
-    constexpr size_t INITIAL_VERTEX_DATA = 32 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
-    constexpr size_t INITIAL_INDEX_DATA = 80 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+    constexpr size_t INITIAL_VERTEX_DATA = 16 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_INDEX_DATA = 45 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)

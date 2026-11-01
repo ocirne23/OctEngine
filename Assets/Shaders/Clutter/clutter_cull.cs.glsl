@@ -37,7 +37,7 @@ layout (binding = 2, std430) readonly buffer InGrassFrame // RendererVKLayout::G
     float gf_chunkSize;
     uvec2 gf_chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM];
 };
-layout (binding = 3, std430) readonly buffer InVertices { MeshVertex in_vertices[]; };
+layout (binding = 3, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 
 #include "grass.inc.glsl" // hashes, value noise, the ground mesh, grassTerrainCover
 #define CLUTTER_FRAME_BINDING 4

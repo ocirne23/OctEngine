@@ -31,7 +31,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 // occlusion stands in.
 #define LIT_NO_RTAO
 #include "instanced_indirect_lit.inc.glsl"
-#include "grass.inc.glsl" // grassCanopySun (in_vertices: the lit core's binding 14)
+#include "grass.inc.glsl" // grassCanopySun (in_terrainVertices: the lit core's binding 14)
 
 void main()
 {

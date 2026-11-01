@@ -85,6 +85,7 @@ struct InMeshInstance
 	uint pipelineIdxAlphaMode;
 };
 layout (binding = 14, std430) readonly buffer InRTVertices  { MeshVertex in_vertices[]; };
+layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 layout (binding = 15, std430) readonly buffer InRTIndices   { uint in_indices[]; };
 layout (binding = 16, std430) readonly buffer InRTMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_instances[]; };

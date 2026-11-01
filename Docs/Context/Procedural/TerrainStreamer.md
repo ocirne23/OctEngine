@@ -18,9 +18,9 @@
   A per-chunk LOD scheme (one fixed-size chunk per coordinate, regenerated whenever its band moved) could not keep up
   with fast flight; the quadtree regenerates a node only when its own grid moves.
 * Generated on up to "Gen jobs" **self-continuing Low-priority pump jobs** (`"terrainChunkPump"`; `kickPump` CAS-claim +
-  exit-recheck protocol, nearest-first). **The upload layout is built IN the pump** (`RenderMeshData::build`, pure) and
-  `Renderer::createMesh` runs on the upload job (below), **so warm-tile mesh builds overlap cold V3 waits, which park
-  fibers.**
+  exit-recheck protocol, nearest-first). **`generateChunk` writes the upload layout (`TerrainVertex`) IN the pump** and
+  `Renderer::createTerrainMesh` runs on the upload job (below), **so warm-tile mesh builds overlap cold V3 waits, which
+  park fibers.**
 * **THE NODE HOOK** (`setNodeHook`; TreeWorld's, see "World records" in [Trees.md](Trees.md)): right after
   `generateChunk` the pump records the node's base chunks (`nodeGenerated`, for the current sampler; cleared with
   `m_maps`, pruned past the ring + one maxLod node when the camera chunk moves) and then calls the hook with a
@@ -108,11 +108,11 @@
      replacements overlap no longer than the one-frame stamp latency. Adoption itself never registers.
 
 * **The mesh upload is a job too** (`"terrainUpload"`, Normal, `m_uploadCounter`).
-  `Renderer::createMesh` copies the node into the staging ring. Every node is ~1.2 MB (see "Node memory" below), and a
-  wrap of the 100 MB ring waits a staging fence, so uploads on main cost tens of ms. `update` only PICKS the batch into
+  `Renderer::createTerrainMesh` copies the node into the staging ring. Every node is ~330 KB (see "Node memory" below), and
+  a wrap of the 100 MB ring waits a staging fence, so uploads on main cost tens of ms. `update` only PICKS the batch into
   `m_uploads` (cap "Uploads/frame" AND "Upload MB/frame", 48 MB default; the first node always goes; the picks stay in
   `m_pending`). **main.cpp kicks it right AFTER `present`** (`kickUploads`), so it runs through the frame-pacing
-  wait, and **joins it before the next frame's "Frame kicks"** (`joinUploads`): `createMesh` grows the
+  wait, and **joins it before the next frame's "Frame kicks"** (`joinUploads`): `createTerrainMesh` grows the
   MeshInfo / per-mesh tables that the begin-frame job and the entity pass's `renderNode` read.
   Everything it calls is thread-safe (the MeshDataManager alloc mutex, the staging mutex, the renderer
   `m_spawnMutex`), like parallel entity spawning. **The batch fans out across workers**: a grain-1
@@ -128,11 +128,12 @@
 
 ### Node memory
 
-Every node is the same `lod0Res` grid: `(lod0Res+1)²` vertices and `6·lod0Res²` indices, no skirt (edge stitching,
-below) - ~1.2 MB (48-byte `MeshVertex`, 4-byte index). The wanted set is roughly 25 LOD0 nodes, then ~15 per coarser
-level (each band is about one node wide in its own node size). A retired node's ranges free at once
-(`retireResident` -> `RenderMesh::destroy`), so residency follows the camera; the mega-buffers never shrink - the
-freed ranges are holes for later uploads.
+Every node is the same `lod0Res` grid: `(lod0Res+1)²` vertices, no skirt (edge stitching, below) - ~330 KB (20-byte
+`TerrainVertex`, RendererVK "Terrain and ocean integration"). **All nodes draw ONE index range of `6·lod0Res²` indices**
+(`m_nodeIndices`, made before the first upload of a `lod0Res`; `terrainNodeIndices`). The wanted set is roughly 25 LOD0
+nodes, then ~15 per coarser level (each band is about one node wide in its own node size). A retired node's vertex range
+frees at once (`retireResident` -> `RenderMesh::destroy`), so residency follows the camera; the mega-buffers never
+shrink - the freed ranges are holes for later uploads.
 
 ### Edge stitching (no skirts)
 
@@ -141,18 +142,19 @@ one does not (T-junctions: cracks). Instead of a skirt, **the terrain VS snaps t
 side's straight edge**. Every node has the same grid, so a node one level coarser has a vertex on every 2nd vertex of
 the finer one's edge (aligned: a node's edge starts on its coarser neighbour's lattice).
 
-* **The data** (`generateChunk`, `TerrainChunkMesh::stitch`, uploaded in `MeshVertex::tangent` - the terrain shades
-  without tangents): per vertex, xyz = its height on the straight edge of a neighbour 1 / 2 / 3 LODs coarser
-  (`TERRAIN_STITCH_LEVELS` = 3; the own height off the edges and on the coarse lattice), w = the node's LOD. Shared edge
-  points are sampled at the same world points by both nodes, so they match exactly.
+* **The data**: no stitch data on the vertex but the node's LOD (`TerrainVertex::lod`). A neighbour 1 / 2 / 3 LODs coarser
+  has its vertices on every 2nd / 4th / 8th of ours, at the same world points (sampled there by both nodes, so they match
+  exactly), and draws the edge as the line between those heights.
 * **The shader** (`instanced_indirect_terrain.vs.glsl`, `terrainStitchedHeight`): a vertex on one edge (found by its
   local x / z = 0 or the node size; a corner is on every lattice) takes the two BASE chunks on either side of it (the
-  same pair from both nodes), computes the quadtree leaf LOD over each (`terrainLeafLod`, at the draw camera), and takes
-  `stitch[edgeLod - ownLod - 1]` when the coarser of the two is above its own. `terrainLeafLod` / `terrainRingLod` /
+  same pair from both nodes), computes the quadtree leaf LOD over each (`terrainLeafLod`, at the draw camera), and when the
+  coarser of the two is above its own (at most 3 LODs) takes the straight line between the two vertices of the coarser
+  lattice on its edge, read from the mesh relative to `gl_VertexIndex` (one vertex apart along a north / south edge, a row
+  apart along a west / east edge). An interior vertex reads no neighbour. `terrainLeafLod` / `terrainRingLod` /
   `terrainNodeEdgeDist` mirror `Ring::leafLodAt` / `ringLodAt` / `nodeEdgeDist` **bit for bit** (the same float
   operations in the same order - `ringLodAt` is a threshold loop, no log2): both nodes of an edge must agree. UBO
-  `terrain_stitch` (base chunk size, 0 = off; the draw camera) and `terrain_stitchBands` (`Renderer::setTerrainStitch`,
-  every enabled update). Tweak `Terrain/Edge stitching` (off = the cracks, a debug view).
+  `terrain_stitch` (base chunk size, 0 = off; the draw camera; `lod0Res`) and `terrain_stitchBands`
+  (`Renderer::setTerrainStitch`, every enabled update). Tweak `Terrain/Edge stitching` (off = the cracks, a debug view).
 * **The DRAW CAMERA - why the shader cannot use the ring camera.** A node's drawn LOD differs from the wanted tree until
   its replacement lands (seconds on a cold tile). Both sides compute the same edge LOD only if no drawn node is
   COARSER than the leaf the shader computes over it (a finer one has every vertex it needs). So the streamer keeps

@@ -26,12 +26,27 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   AND rock. The contract is on `TerrainSplatMaterial` / `TerrainSplatCounts` (TerrainResources.ixx).
 * **The beach also paints a river's BED**: `TerrainFields::river` (the river influence, 1 in a channel, 0 past its
   floodplain) over `TERRAIN_RIVER_BED_START..FULL` (0..1: the whole floodplain band), max'd with the shore band. It
-  comes from the TERRAIN VERTEX's u (`positionU.w`; Procedural writes the river there - the terrain shades in world
-  space and has no use for a UV): the terrain VS reads location 0 as a vec4 and passes `out_river` (location 4) through
-  the tessellation stages to both FSs; the grass and clutter culls read it from the mesh with `grassGroundRiver`, over
-  the same triangle as the height, so the bed's grass and clutter follow the ground's layers. The ocean's seabed
-  splat sets it 0. The RT / GI hit shaders still read that u as a UV for the terrain material's diffuse texture,
-  which the terrain does not have.
+  comes from the TERRAIN VERTEX (`TerrainVertex`, "The terrain vertex" below): the terrain VS passes `out_river`
+  (location 4) through the tessellation stages to both FSs; the grass and clutter culls read it from the mesh with
+  `grassGroundRiver`, over the same triangle as the height, so the bed's grass and clutter follow the ground's layers.
+  The ocean's seabed splat sets it 0.
+* **The terrain vertex** (`RendererVKLayout::TerrainVertex`, 20 B; GLSL `mesh_vertex.inc.glsl`): position, an octahedral
+  normal (two snorm16; a height field's normal has y > 0, so no fold), and 4 bytes - river influence, flow speed
+  (/ `TERRAIN_VERTEX_SPEED_MAX`), under water, the node's LOD. **It sits in the MeshVertex mega-buffer**, at a vertex
+  offset in its own units (`VERTEX_BUCKET_BYTES` is a multiple of both strides), so nothing rebinds a buffer inside the
+  DGC executes:
+  * The terrain VS and the shadow VS read it from a storage block by `gl_VertexIndex`, with no vertex attributes. The
+    terrain variants share the execution set's MeshVertex vertex input and do not consume it. **The shadow pipeline has
+    no vertex attributes at all**: its ONE multiview pipeline draws both formats (bit 8 of the instance's packed word,
+    without bit 15 = a terrain node). A second block on the buffer's binding (`in_terrainVertices`) names the format.
+  * The BLAS build takes the stride per mesh (`RayTracingScene::getVertexStrides`).
+  * A ray hit whose material has `MATERIAL_FLAG_TERRAIN` fetches `TerrainVertex` (the GI trace, `water_scene.inc`, the
+    film's mirror) - bounds included, the indices being in its units. Terrain is opaque in the TLAS, so
+    `rtsCandidateBlocks` never meets it.
+  * **Every node of one `lod0Res` draws ONE index range** (`RenderMeshIndices`, held by TerrainStreamer;
+    `RenderMesh::m_numIndices` 0 = not the mesh's to free): the indices are relative to the vertex offset.
+  * **A mesh on TerrainLit must be a `createTerrainMesh` mesh.** An `ObjectContainer` material override to TerrainLit would
+    draw a 48-byte mesh with this VS; `.oc` files cannot select it (`parsePipeline`).
 * **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than an ARM texture):
   diffuse = sRGB albedo + linear ROUGHNESS in the alpha (BC3); normal (BC5 sets `MATERIAL_FLAG_BC5_NORMAL`);
   height = HEIGHT (R, 0.5 = flat) + AO (G) (BC5). **Metalness is always 0** (`metalRoughnessTexIdx` stays none).

@@ -1050,7 +1050,7 @@ void RendererState::recordGlobalIllumPrep(uint32 frameIdx)
         // had its build queued at addMeshInfos time; takeBuildList handles both and moves the watermark.
         const oc::vector<uint32> buildList = m_rt.takeBuildList(m_meshInfos.count());
         m_rt.accel().recordBuildBlas(frameIdx, vkPrepCommandBuffer, Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(),
-            m_meshInfos.getBuffer().getBackingStoreAs<RendererVKLayout::MeshInfo>().data(), m_rt.getVertexCounts(), buildList,
+            m_meshInfos.getBuffer().getBackingStoreAs<RendererVKLayout::MeshInfo>().data(), m_rt.getVertexCounts(), m_rt.getVertexStrides(), buildList,
             m_rtParams.blasCompaction);
         // No GI clear here: new meshes (terrain streaming!) leave the persistent probe volume intact.
         // Stale irradiance around new geometry self-corrects - embedded probes relocate out the next

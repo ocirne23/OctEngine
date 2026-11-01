@@ -99,7 +99,7 @@ ClutterType <name>
 		River none full [curve] (the river influence: 1 in a channel or over a lake, 0 past the floodplain - linear
 		        across it, so ^ curve (0.1..16) first: 4 keeps a type close to the water) · Flow slow fast
 		        (the river's speed, 0.5 .. 2.5 m/s; a lake is slow) · Water dry under (under a river's / lake's water:
-		        a bank vs the middle) - all three from the terrain vertex's UV (below)
+		        a bank vs the middle) - all three from the terrain vertex (below)
 		Ring radius width cell chance (fairy rings: the density x 1 on a ring of radius +-30 %, falling off over width;
 		        one ring per `cell` metres with `chance`. 0 radius = none)
 ```
@@ -136,10 +136,10 @@ and one decompress), uploaded in `finishGeneration` (`RenderTexture::create` wit
 `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
 have none; `PetalShape None` turns a Radial / Umbel / Spike / Bell texture off.
 
-**THE RIVER DATA ON THE GROUND** (TerrainGenerator; the terrain vertex's UV, which the terrain does not use as UV):
-u = `TerrainPoint::river`, v = `riverSpeed` (m/s: the Manning speed of the most influential piece, as the water
-ribbons'; 0 off rivers, on lakes and dry beds), NEGATIVE under river or lake water: -(speed + 0.01).
-`grassGroundRiverData` (grass.inc.glsl) reads it over the drawn triangle: (influence, speed, under the water 0..1).
+**THE RIVER DATA ON THE GROUND** (TerrainGenerator; three bytes of the terrain vertex, `TerrainVertex`):
+`TerrainPoint::river`, `riverSpeed` (m/s: the Manning speed of the most influential piece, as the water ribbons'; 0 off
+rivers, on lakes and dry beds) and "under river or lake water".
+`grassGroundRiverData` (grass.inc.glsl) reads them over the drawn triangle: (influence, speed, under the water 0..1).
 
 ### The meshes (`generateClutterMeshes`)
 

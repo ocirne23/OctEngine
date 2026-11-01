@@ -195,7 +195,7 @@ export namespace Procedural
 			// Built IN the pump job (the final vertex layout, pure): the main thread only uploads it
 			// (Renderer::createMesh). Empty = dropped/failed; the key is released and update re-requests it
 			// if still wanted (m_wantedDirty).
-			RenderMeshData mesh;
+			TerrainChunkMesh mesh;
 		};
 
 		// Heap-held (m_residents maps to a unique_ptr): the SpatialIndex hands the Resident* over as userData,
@@ -303,6 +303,9 @@ export namespace Procedural
 			Result result;
 			RenderMesh mesh;
 		};
+		// The index range every node of m_nodeIndicesRes draws; declared before the meshes.
+		RenderMeshIndices      m_nodeIndices;
+		uint32                 m_nodeIndicesRes = 0;
 		oc::vector<Upload>     m_uploads;
 		JobCounter             m_uploadCounter;
 		oc::shared_ptr<const ITerrainSampler> m_maps;

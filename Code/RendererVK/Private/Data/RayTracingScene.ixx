@@ -36,16 +36,18 @@ public:
     // Called with the slots addMeshInfos just claimed. `reused` distinguishes a recycled range (below
     // the watermark, so its builds are queued) from a fresh append (the watermark scan catches it).
     // `noStaticBlas`: skinned output regions, and meshes created not raytraced.
-    void onMeshInfosAdded(uint32 base, uint32 count, oc::span<const uint32> vertexCounts, bool noStaticBlas, bool reused)
+    void onMeshInfosAdded(uint32 base, uint32 count, oc::span<const uint32> vertexCounts, uint32 vertexStride, bool noStaticBlas, bool reused)
     {
         if (!reused)
         {
             m_vertexCounts.resize(base + count);
+            m_vertexStrides.resize(base + count);
             m_noStaticBlas.resize(base + count);
         }
         for (uint32 i = 0; i < count; ++i)
         {
             m_vertexCounts[base + i] = vertexCounts[i];
+            m_vertexStrides[base + i] = (uint8)vertexStride;
             m_noStaticBlas[base + i] = noStaticBlas ? 1 : 0;
             if (reused && !noStaticBlas && base + i < m_blasBuiltCount)
                 m_pendingRebuilds.push_back(base + i);
@@ -85,6 +87,7 @@ public:
         return buildList;
     }
     const uint32* getVertexCounts() const { return m_vertexCounts.data(); } // BLAS maxVertex, one per MeshInfo
+    const uint8* getVertexStrides() const { return m_vertexStrides.data(); } // BLAS vertexStride, one per MeshInfo
     // A static BLAS is (or will be) built for the mesh - false for one created not raytraced (and skinned outputs).
     bool hasStaticBlas(uint32 meshIdx) const { return meshIdx < m_noStaticBlas.size() && !m_noStaticBlas[meshIdx]; }
 
@@ -109,6 +112,7 @@ private:
     oc::function<void(uint32)> m_onTlasGrown;
 
     oc::vector<uint32> m_vertexCounts;    // exact per-MeshInfo vertex count (BLAS maxVertex)
+    oc::vector<uint8> m_vertexStrides;    // per MeshInfo: sizeof(MeshVertex), or sizeof(TerrainVertex) for a terrain node
     oc::vector<uint8> m_noStaticBlas;     // per MeshInfo: skinned output region or not raytraced (no static BLAS build)
     oc::vector<uint32> m_pendingRebuilds; // re-streamed / recycled meshes awaiting a build
     uint32 m_blasBuiltCount = 0;          // the one-time build watermark

@@ -101,9 +101,10 @@ private:
 
 private:
 
-    // Bucket sizes must be a multiple of the element size (48-byte MeshVertex / 4-byte MeshIndex /
+    // Bucket sizes must be a multiple of the element size (48-byte MeshVertex and 20-byte TerrainVertex / 4-byte MeshIndex /
     // 32-byte SkinningVertex).
-    static constexpr size_t VERTEX_BUCKET_BYTES = 64 * sizeof(RendererVKLayout::MeshVertex); // 3 KB
+    static constexpr size_t VERTEX_BUCKET_BYTES = 65 * sizeof(RendererVKLayout::MeshVertex); // 3 KB
+    static_assert(VERTEX_BUCKET_BYTES % sizeof(RendererVKLayout::TerrainVertex) == 0);
     static constexpr size_t INDEX_BUCKET_BYTES = 256 * sizeof(RendererVKLayout::MeshIndex);  // 1 KB
     static constexpr size_t SKINNING_BUCKET_BYTES = 64 * sizeof(RendererVKLayout::SkinningVertex); // 2 KB
 

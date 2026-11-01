@@ -88,6 +88,11 @@ public:
     // GPU LOD chain over them - spawnMeshNode places level 0 and the cull picks each instance's level. `errors` = each level's geometric deviation in
     // mesh-local units (0 for level 0; the screen-space-error selector).
     RenderMesh createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, bool raytraced = true);
+
+    // A terrain node: compact TerrainVertex data over a SHARED index range (one MeshInfo + its BLAS, no LOD chain). Draw it on TerrainLit only: the other
+    // pipelines read MeshVertex. `indices` outlives the mesh.
+    RenderMeshIndices createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices);
+    RenderMesh createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices);
     const MeshLodParams& getLodParams() const { return m_lodParams; } // the "LOD" settings the chains are generated and picked with
 
     // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity instance offset: the mesh is its own root).
@@ -121,8 +126,8 @@ public:
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // see TerrainStreamer::registerTerrainTextures
     float giTlasRange() const { return m_giProbePipeline.getTlasRange(); } // metres from sceneFocusOrCamera
 
-    // The terrain VS's EDGE STITCHING (its draw camera and ring bands; chunkSize 0 = off). Main thread, read by the next frame's UBO.
-    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod);
+    // The terrain VS's EDGE STITCHING (its draw camera, ring bands and the nodes' quads per side; chunkSize 0 = off). Main thread, read by the next frame's UBO.
+    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res);
 
     // V3's world scale (the loaded model's native resolution - not a tweak): the crag thresholds and the crag wander ("Terrain/Textures") are metres at the
     // model's true scale. A change re-bakes the UBO values that read it.
@@ -263,9 +268,9 @@ inline void Renderer::setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types
     m_treeRecordSet = volumeSet.m_setId;
 }
 
-inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod)
+inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res)
 {
-    m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, 0.0f);
+    m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, (float)lod0Res);
     m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, 0.0f);
 }
 

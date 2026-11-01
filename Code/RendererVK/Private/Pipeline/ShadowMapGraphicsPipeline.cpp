@@ -28,13 +28,10 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
     layout.cullMode = vk::CullModeFlagBits::eFront;
 
     auto& bindings = layout.vertexLayoutInfo.bindingDescriptions;
-    bindings.push_back(vk::VertexInputBindingDescription{ .binding = 0, .stride = sizeof(RendererVKLayout::MeshVertex), .inputRate = vk::VertexInputRate::eVertex });
+    // No vertex attributes: this ONE pipeline draws MeshVertex and TerrainVertex casters, so the VS reads them from the storage buffer (binding 2) by gl_VertexIndex.
     bindings.push_back(vk::VertexInputBindingDescription{ .binding = 2, .stride = sizeof(uint32), .inputRate = vk::VertexInputRate::eInstance });
 
     auto& attributes = layout.vertexLayoutInfo.attributeDescriptions;
-    // Position + u, and v alone (normalV.w): 20 B, not the whole normal.
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, positionU) });
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 3, .binding = 0, .format = vk::Format::eR32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, normalV) + 3 * sizeof(float) });
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 2, .format = vk::Format::eR32Uint, .offset = 0 });
 
     auto& descriptorSetBindings = layout.descriptorSetLayoutBindings;
@@ -42,6 +39,8 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
         .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // shared transformed instances
         .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // the vertex mega-buffer
+        .binding = 2, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // diffuse texture array (alpha-mask discard)
         .binding = 7, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     // The texture array (the set's highest binding) is variable-count: the layout declares the fixed
@@ -125,16 +124,18 @@ void ShadowMapGraphicsPipeline::reloadShaders(uint32 maxTextures)
 
 void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParams& params)
 {
-    oc::array<DescriptorSetUpdateInfo, 3> updates{
+    oc::array<DescriptorSetUpdateInfo, 4> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.meshInstanceBuffer.getBuffer(), .range = params.meshInstanceBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.vertexBuffer.getBuffer(), .range = params.vertexBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler },
     };
     for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
     {
-        updates[2].imageInfos.push_back(vk::DescriptorImageInfo{
+        updates[3].imageInfos.push_back(vk::DescriptorImageInfo{
             .sampler = m_sampler.getSampler(),
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -146,7 +147,6 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParam
     commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet, updates);
     vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-    vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer() }, { 0 });
     vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
     vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
 

@@ -6,7 +6,7 @@
 // by density AND by distance, so a blade fades out by shrinking, never by popping.
 // Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices (two triangles per
 // cell, as TerrainGenerator.cpp splits them) - the baked height map (8 m texels) is far too coarse.
-// Needs shared.inc.glsl and the includer's `in_vertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
+// Needs shared.inc.glsl and the includer's `in_terrainVertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
 // GRASS_NOISE_SAMPLER: the terrain noise texture (its A channel is the value noise's lattice); default its slot of the
 // includer's u_textures[] - the grass cull and the near-shadow casters (no bindless array) bind it alone.
 
@@ -17,7 +17,7 @@
 #define GRASS_NOISE_SAMPLER u_textures[u_terrain_noiseTex]
 #endif
 
-#include "mesh_vertex.inc.glsl" // meshVertexUV (the ground's river data)
+#include "mesh_vertex.inc.glsl" // TerrainVertex (the ground)
 
 uint grassLodSegments(uint lod)
 {
@@ -519,9 +519,9 @@ float grassGroundHeight(GrassGround g, vec2 xz, out vec3 normal)
     const vec2 f = local - vec2(cell);
     const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
-    const float ha = in_vertices[a].positionU.y;
-    const float hb = in_vertices[a + 1u].positionU.y;
-    const float hc = in_vertices[a + vpr].positionU.y;
+    const float ha = in_terrainVertices[a].y;
+    const float hb = in_terrainVertices[a + 1u].y;
+    const float hc = in_terrainVertices[a + vpr].y;
     float h, dx, dz;
     if (f.x + f.y <= 1.0)
     {
@@ -531,7 +531,7 @@ float grassGroundHeight(GrassGround g, vec2 xz, out vec3 normal)
     }
     else
     {
-        const float hd = in_vertices[a + vpr + 1u].positionU.y;
+        const float hd = in_terrainVertices[a + vpr + 1u].y;
         dx = hd - hc;
         dz = hd - hb;
         h = hd - dx * (1.0 - f.x) - dz * (1.0 - f.y);
@@ -550,28 +550,27 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     const vec2 f = local - vec2(cell);
     const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
-    const vec3 nb = in_vertices[a + 1u].normalV.xyz;
-    const vec3 nc = in_vertices[a + vpr].normalV.xyz;
+    const vec3 nb = terrainVertexNormal(in_terrainVertices[a + 1u].normalOct);
+    const vec3 nc = terrainVertexNormal(in_terrainVertices[a + vpr].normalOct);
     vec3 n;
     if (f.x + f.y <= 1.0)
     {
-        const vec3 na = in_vertices[a].normalV.xyz;
+        const vec3 na = terrainVertexNormal(in_terrainVertices[a].normalOct);
         n = na + (nb - na) * f.x + (nc - na) * f.y;
     }
     else
     {
-        const vec3 nd = in_vertices[a + vpr + 1u].normalV.xyz;
+        const vec3 nd = terrainVertexNormal(in_terrainVertices[a + vpr + 1u].normalOct);
         n = nd - (nd - nc) * (1.0 - f.x) - (nd - nb) * (1.0 - f.y);
     }
     return normalize(n);
 }
 
-// One ground vertex's river data (TerrainGenerator, the vertex's UV): the influence, the speed (m/s), 1 under river or
-// lake water (v < 0: -(speed + 0.01)).
+// One ground vertex's river data (TerrainGenerator): the influence, the speed (m/s), 1 under river or lake water.
 vec3 grassGroundRiverVertex(uint i)
 {
-    const vec2 uv = meshVertexUV(in_vertices[i]);
-    return uv.y < 0.0 ? vec3(uv.x, -uv.y - 0.01, 1.0) : vec3(uv.x, uv.y, 0.0);
+    const vec4 data = unpackUnorm4x8(in_terrainVertices[i].data);
+    return vec3(data.x, data.y * TERRAIN_VERTEX_SPEED_MAX, data.z);
 }
 
 // The mesh's RIVER data at xz, over the same triangle as the height: x = the river influence (what the ground's beach

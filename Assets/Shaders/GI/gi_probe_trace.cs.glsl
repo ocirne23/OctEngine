@@ -55,6 +55,7 @@ layout (binding = 3, std430) readonly buffer InGridTable
 };
 layout (binding = 4) uniform accelerationStructureEXT u_tlas;
 layout (binding = 5, std430) readonly buffer InVertices    { MeshVertex in_vertices[]; };
+layout (binding = 5, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
@@ -200,19 +201,30 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
     const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
     const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-    if (max(max(v0, v1), v2) >= in_vertices.length())
+    const bool terrainHit = (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u; // TerrainVertex units
+    if (max(max(v0, v1), v2) >= (terrainHit ? in_terrainVertices.length() : in_vertices.length()))
         return traceMiss(dir, sunLuma, skyLuma, skyOpen);
 
     const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float t    = rayQueryGetIntersectionTEXT(rq, true);
     const mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
     const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-    // Two wide loads per vertex: the normal and the uv's v share normalV, the u rides positionU.w.
-    const vec4 nv0 = in_vertices[v0].normalV, nv1 = in_vertices[v1].normalV, nv2 = in_vertices[v2].normalV;
-    const vec3 objN = b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz; // the next normalize cancels its length
+    vec3 objN; // the next normalize cancels its length
+    vec2 uv = vec2(0.0); // the terrain material's texture is the fallback: any uv reads the same
+    if (terrainHit)
+    {
+        objN = b.x * terrainVertexNormal(in_terrainVertices[v0].normalOct) + b.y * terrainVertexNormal(in_terrainVertices[v1].normalOct)
+             + b.z * terrainVertexNormal(in_terrainVertices[v2].normalOct);
+    }
+    else
+    {
+        // Two wide loads per vertex: the normal and the uv's v share normalV, the u rides positionU.w.
+        const vec4 nv0 = in_vertices[v0].normalV, nv1 = in_vertices[v1].normalV, nv2 = in_vertices[v2].normalV;
+        objN = b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz;
+        uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
+           + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
+    }
     vec3 worldN = normalize(mat3(o2w) * objN);
-    const vec2 uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
-                  + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
     const vec3 worldPos = origin + dir * t;
     hitDist = t; // committed surface hit -> actual distance to geometry along this ray
     if (dot(worldN, dir) > 0.0)

@@ -15,4 +15,20 @@ struct MeshVertex
 
 #define meshVertexUV(v) vec2((v).positionU.w, (v).normalV.w)
 
+// RendererVKLayout::TerrainVertex: 20 B, a terrain node's vertex in the same mega-buffer, read through a second block on
+// the buffer's binding (in_terrainVertices). A mesh's vertexOffset counts these for a MATERIAL_FLAG_TERRAIN material.
+struct TerrainVertex
+{
+    float x, y, z;  // node-local X/Z, world Y
+    uint normalOct; // terrainVertexNormal
+    uint data;      // unpackUnorm4x8: x = the river influence, y = the flow speed / TERRAIN_VERTEX_SPEED_MAX,
+                    // z = 1 under river or lake water; the top byte = the node's LOD
+};
+
+vec3 terrainVertexNormal(uint normalOct)
+{
+    const vec2 e = unpackSnorm2x16(normalOct);
+    return normalize(vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y));
+}
+
 #endif

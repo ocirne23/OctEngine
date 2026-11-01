@@ -816,10 +816,10 @@ namespace Procedural
 		{
 			auto uploadOne = [&](Upload& upload)
 			{
-				if (upload.mesh.isValid() || upload.result.mesh.indices.empty())
+				if (upload.mesh.isValid() || upload.result.mesh.vertices.empty())
 					return; // uploaded (or failed) by an earlier kick
-				upload.mesh = renderer.createMesh(upload.result.mesh);
-				upload.result.mesh = RenderMeshData{}; // the copy is in the staging ring now
+				upload.mesh = renderer.createTerrainMesh(upload.result.mesh, m_nodeIndices);
+				upload.result.mesh = TerrainChunkMesh{}; // the copy is in the staging ring now
 			};
 			// One chunk per task: the staging memcpy runs outside its mutex, so they copy in parallel.
 			Globals::jobSystem.parallelFor(0, (uint32)m_uploads.size(), 1, { "terrainUploadMesh", EProfileCategory::Procedural },
@@ -1034,20 +1034,7 @@ namespace Procedural
 					}
 					(*hook)(node);
 				}
-				if (!mesh.indices.empty())
-				{
-					ProfileScope meshScope("TerrainStreamer::buildMesh", EProfileCategory::Procedural); // pure, never parks
-					MeshGeometryDesc geom;
-					geom.positions = mesh.positions.data();
-					geom.normals = mesh.normals.data();
-					geom.texCoords = mesh.texCoords.data();
-					geom.numVertices = (uint32)mesh.positions.size();
-					geom.indices = mesh.indices.data();
-					geom.numIndices = (uint32)mesh.indices.size();
-					res.mesh.build(geom); // the upload layout; the source arrays die here, halving what ships
-					for (size_t v = 0; v < res.mesh.vertices.size(); ++v)
-						res.mesh.vertices[v].tangent = mesh.stitch[v]; // the edge stitch rides the tangent slot (TerrainChunkMesh)
-				}
+				res.mesh = oc::move(mesh);
 			}
 
 			{
@@ -1145,7 +1132,7 @@ namespace Procedural
 		updateFogHeightMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
 		renderer.setTerrainParams(0.0f, m_settings.seaLevel);   // no mesh up: disables the ocean land cull
 		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
-		renderer.setTerrainStitch(0.0f, glm::vec2(0.0f), 0.0f, 1.0f, 0); // no chunks: no edge stitching
+		renderer.setTerrainStitch(0.0f, glm::vec2(0.0f), 0.0f, 1.0f, 0, 1); // no chunks: no edge stitching
 
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
 	}
@@ -1566,7 +1553,7 @@ namespace Procedural
             for (Upload& upload : m_uploads)
             {
                 Result& res = upload.result;
-                if (!upload.mesh.isValid() && !res.mesh.indices.empty())
+                if (!upload.mesh.isValid() && !res.mesh.vertices.empty())
                 {
                     if (&m_uploads[kept] != &upload)
                         m_uploads[kept] = oc::move(upload); // not kicked yet: stays in the batch
@@ -1608,9 +1595,17 @@ namespace Procedural
             ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
             const size_t maxBytes = (size_t)(glm::max(m_settings.maxUploadMBPerFrame, 1.0f) * 1024.0f * 1024.0f);
             size_t batchBytes = 0;
+            // Nothing draws an older range here: a lod0Res change cleared the residents and the upload batch (config-dirty).
+            const uint32 nodeRes = (uint32)glm::max(1, m_settings.lod0Res);
+            if (!ready.empty() && m_nodeIndicesRes != nodeRes)
+            {
+                const oc::vector<uint32> indices = terrainNodeIndices(nodeRes);
+                m_nodeIndices = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(indices.data(), indices.size()));
+                m_nodeIndicesRes = nodeRes;
+            }
             for (Result& res : ready)
             {
-                if (res.mesh.indices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
+                if (res.mesh.vertices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
                 {
                     m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
                     m_wantedDirty = true;
@@ -1623,8 +1618,7 @@ namespace Procedural
                     m_wantedDirty = true;
                     continue;
                 }
-                const size_t bytes = res.mesh.vertices.size() * sizeof(res.mesh.vertices[0])
-                    + res.mesh.indices.size() * sizeof(res.mesh.indices[0]);
+                const size_t bytes = res.mesh.vertices.size() * sizeof(res.mesh.vertices[0]);
                 if ((int)m_uploads.size() >= m_settings.maxUploadsPerFrame || (!m_uploads.empty() && batchBytes + bytes > maxBytes))
                 {
                     m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
@@ -1640,7 +1634,7 @@ namespace Procedural
 
 		updateResidency(gate);
 		renderer.setTerrainStitch(m_settings.edgeStitch ? chunkSize : 0.0f, m_drawCam.cam,
-			m_drawCam.fullRes, glm::max(m_drawCam.lodStep, 0.01f), m_drawCam.maxLod);
+			m_drawCam.fullRes, glm::max(m_drawCam.lodStep, 0.01f), m_drawCam.maxLod, (uint32)glm::max(1, m_settings.lod0Res));
 
 		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
 

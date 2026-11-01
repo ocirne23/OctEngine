@@ -8,7 +8,7 @@ import :RenderParticleEmitterState; // the state
 // RAII owner of a GPU particle emitter slot (move-only, like RenderMesh). Destroying it retires the slot: its live particles die over the next frames, and
 // the slot is reused once the GPU has drained them. create and destroy run from ANY THREAD (parallel entity spawning; the slot table is lock-free), but the
 // renderer must be alive: the owner destructs before it (InitSeg.h). update and emit: between beginFrame and present, one writer per emitter. The state is in
-// RenderParticleEmitterState.ixx; the multi-line bodies are below the class.
+// RenderParticleEmitterState.ixx; the multi-line bodies are below  the class.
 export class RenderParticleEmitter final : public RenderParticleEmitterState
 {
 public:

@@ -11,7 +11,7 @@ namespace Procedural
 {
 	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out, oc::vector<TerrainPoint>* outField)
 	{
-		out.clear();
+		out.vertices.clear();
 
 		const uint32 res = glm::max(1u, params.lod0Res); // every node: the same grid, over 2^lod base chunks
 		const uint32 vpr = res + 1; // vertices per row
@@ -43,10 +43,8 @@ namespace Procedural
 			return field[(size_t)(row + 1) * gpr + (size_t)(col + 1)];
 		};
 
-		out.positions.reserve((size_t)vpr * vpr);
-		out.normals.reserve((size_t)vpr * vpr);
-		out.texCoords.reserve((size_t)vpr * vpr);
-		out.stitch.reserve((size_t)vpr * vpr);
+		out.vertices.reserve((size_t)vpr * vpr);
+		glm::vec3 boundsMin(FLT_MAX), boundsMax(-FLT_MAX);
 
 		// One cell, not the old half cell: the difference is now taken between the actual mesh neighbours,
 		// so the normals describe the triangles being drawn rather than a sub-cell slope the geometry never
@@ -70,53 +68,36 @@ namespace Procedural
 				const glm::vec3 dpdv(0.0f, at(col, row + 1).height - at(col, row - 1).height, 2.0f * eps);
 				const glm::vec3 normal = -glm::normalize(glm::cross(dpdu, dpdv));
 
-				out.positions.push_back({ lx, y, lz });
-				out.normals.push_back(normal);
-				// The UV carries the RIVER, not a texture coordinate (the terrain shades in world space): u = the
-				// river influence (TerrainPoint::river), v = its flow speed (m/s, TerrainPoint::riverSpeed; 0 off rivers
-				// and on lakes), NEGATIVE under river or lake water: -(speed + 0.01). The terrain VS and the grass /
-				// clutter culls read u (terrain_splat.inc.glsl: the bed takes the beach layer), the clutter cull v (its
-				// `Flow` and `Water` terms: reeds by slow water at its edge, stones in fast; grassGroundRiverData).
+				// The river data: the terrain VS and the grass / clutter culls read the influence (terrain_splat.inc.glsl: the bed
+				// takes the beach layer), the clutter cull the flow speed and the water (its `Flow` and `Water` terms: reeds by slow
+				// water at its edge, stones in fast; grassGroundRiverData).
 				const TerrainPoint& p = at(col, row);
 				const bool underWater = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake;
-				out.texCoords.push_back({ p.river, underWater ? -(p.riverSpeed + 0.01f) : p.riverSpeed, 0.0f });
+				RendererVKLayout::TerrainVertex& vertex = out.vertices.emplace_back();
+				vertex.position = glm::vec3(lx, y, lz);
+				vertex.setNormal(normal);
+				vertex.riverInfluence = (uint8)glm::round(glm::clamp(p.river, 0.0f, 1.0f) * 255.0f);
+				vertex.riverSpeed = (uint8)glm::round(glm::clamp(p.riverSpeed / RendererVKLayout::TERRAIN_VERTEX_SPEED_MAX, 0.0f, 1.0f) * 255.0f);
+				vertex.underWater = underWater ? 255 : 0;
+				vertex.lod = (uint8)params.lod;
+				boundsMin = glm::min(boundsMin, vertex.position);
+				boundsMax = glm::max(boundsMax, vertex.position);
 			}
 			Globals::jobSystem.preemptionPoint(); // nothing half-done between rows
 		}
+		out.bounds.pos = (boundsMin + boundsMax) * 0.5f;
+		out.bounds.radius = glm::length(boundsMax - boundsMin) * 0.5f;
 
-		// The EDGE STITCH (TerrainChunkMesh::stitch): per vertex, its height on the straight edge of a neighbour
-		// 1 / 2 / 3 LODs coarser - that neighbour's vertices sit on every (1 << d)-th of ours, at the same world
-		// points, so it draws the edge as the line between those heights. Off the edges, and on the coarse lattice,
-		// it is the vertex's own height. A neighbour coarser than this chunk's single quad clamps to the corners.
-		const auto heightAt = [&](uint32 col, uint32 row) { return out.positions[(size_t)row * vpr + col].y; };
-		const auto edgeHeight = [&](uint32 i, uint32 d, auto&& along) -> float
-		{
-			const uint32 s = glm::min(1u << d, res);
-			const uint32 i0 = i / s * s;
-			if (i0 == i)
-				return along(i);
-			const uint32 i1 = glm::min(i0 + s, res);
-			return glm::mix(along(i0), along(i1), (float)(i - i0) / (float)(i1 - i0));
-		};
-		for (uint32 row = 0; row <= res; ++row)
-		{
-			for (uint32 col = 0; col <= res; ++col)
-			{
-				glm::vec4 s(heightAt(col, row));
-				s.w = (float)params.lod;
-				const bool rowEdge = row == 0 || row == res, colEdge = col == 0 || col == res;
-				if (rowEdge != colEdge) // on one edge (a corner is on every lattice)
-				{
-					for (uint32 d = 1; d <= TERRAIN_STITCH_LEVELS; ++d)
-						s[d - 1] = rowEdge
-							? edgeHeight(col, d, [&](uint32 c) { return heightAt(c, row); })
-							: edgeHeight(row, d, [&](uint32 r) { return heightAt(col, r); });
-				}
-				out.stitch.push_back(s);
-			}
-		}
+		if (outField)
+			*outField = oc::move(field);
+	}
 
-		out.indices.reserve((size_t)res * res * 6);
+	oc::vector<uint32> terrainNodeIndices(uint32 lod0Res)
+	{
+		const uint32 res = glm::max(1u, lod0Res);
+		const uint32 vpr = res + 1;
+		oc::vector<uint32> indices;
+		indices.reserve((size_t)res * res * 6);
 		for (uint32 row = 0; row < res; ++row)
 		{
 			for (uint32 col = 0; col < res; ++col)
@@ -125,11 +106,10 @@ namespace Procedural
 				const uint32 b = a + 1;
 				const uint32 c = (row + 1) * vpr + col;
 				const uint32 d = c + 1;
-				out.indices.push_back(a); out.indices.push_back(c); out.indices.push_back(b);
-				out.indices.push_back(b); out.indices.push_back(c); out.indices.push_back(d);
+				indices.push_back(a); indices.push_back(c); indices.push_back(b);
+				indices.push_back(b); indices.push_back(c); indices.push_back(d);
 			}
 		}
-		if (outField)
-			*outField = oc::move(field);
+		return indices;
 	}
 }

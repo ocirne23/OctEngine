@@ -64,6 +64,7 @@ struct InMeshInstance
     uint pipelineIdxAlphaMode;
 };
 layout (binding = 14, std430) readonly buffer InRTVertices  { MeshVertex in_vertices[]; };
+layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 layout (binding = 15, std430) readonly buffer InRTIndices   { uint in_indices[]; };
 layout (binding = 16, std430) readonly buffer InRTMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_instances[]; };
@@ -189,21 +190,32 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
             const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
             const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
             const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-            if (max(max(v0, v1), v2) < in_vertices.length())
+            const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
+            const bool terrainHit = materialIdx < in_materialInfos.length() && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u;
+            if (max(max(v0, v1), v2) < (terrainHit ? in_terrainVertices.length() : in_vertices.length()))
             {
                 const vec2 bc = rayQueryGetIntersectionBarycentricsEXT(rq, true);
                 const vec3 w = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-                const vec3 objN = in_vertices[v0].normalV.xyz * w.x + in_vertices[v1].normalV.xyz * w.y + in_vertices[v2].normalV.xyz * w.z;
-                const vec2 uv = w.x * rtsVertexUV(v0) + w.y * rtsVertexUV(v1) + w.z * rtsVertexUV(v2);
+                vec3 objN;
+                vec2 uv = vec2(0.0);
+                if (terrainHit)
+                {
+                    objN = terrainVertexNormal(in_terrainVertices[v0].normalOct) * w.x + terrainVertexNormal(in_terrainVertices[v1].normalOct) * w.y
+                         + terrainVertexNormal(in_terrainVertices[v2].normalOct) * w.z;
+                }
+                else
+                {
+                    objN = in_vertices[v0].normalV.xyz * w.x + in_vertices[v1].normalV.xyz * w.y + in_vertices[v2].normalV.xyz * w.z;
+                    uv = w.x * rtsVertexUV(v0) + w.y * rtsVertexUV(v1) + w.z * rtsVertexUV(v2);
+                }
                 hit.N = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true)) * objN);
                 if (dot(hit.N, dir) > 0.0)
                     hit.N = -hit.N;
 
 
-                const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
                 if (materialIdx < in_materialInfos.length())
                 {
-                    if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u)
+                    if (terrainHit)
                         hit.albedo = waterBedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
                     else
                     {

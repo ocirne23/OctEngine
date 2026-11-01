@@ -198,8 +198,8 @@ which is a baked define).
   reads `MeshVertex in_vertices[]` from `mesh_vertex.inc.glsl` (plain std430; the skinning pass uses it too).
   **`MeshVertex` is 3 × vec4 — `positionU`, `normalV`, `tangent` — with the texCoord in the two `.w`**, so every member
   is 16 B-aligned (one wide load each) and position stays at offset 0 for the BLAS build. The vertex input binds
-  locations 0 / 1 as vec4s (a shader without uv declares vec3 there); the shadow pass binds `normalV.w` alone at
-  location 3.
+  locations 0 / 1 as vec4s (a shader without uv declares vec3 there). A hit on a `MATERIAL_FLAG_TERRAIN` material reads
+  `TerrainVertex in_terrainVertices[]` instead ("The terrain vertex" in [Terrain.md](Terrain.md)).
 * **Miss rays AND the virtual sky probe sample THE SKY MAP** instead of marching the atmosphere, so the out-of-field
   fallback matches the misses by construction. **Gather hits use `giEvalBounce`** (gi_probe.inc.glsl, write side;
   probe path only): the cheap multi-bounce lookup — no Chebyshev, no cross-cascade blend — because the result is

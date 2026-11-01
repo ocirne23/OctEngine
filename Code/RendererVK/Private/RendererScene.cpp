@@ -390,6 +390,41 @@ RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc
     return mesh;
 }
 
+RenderMeshIndices Renderer::createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices)
+{
+    RenderMeshIndices shared;
+    if (indices.empty())
+        return shared;
+    shared.m_numIndices = (uint32)indices.size();
+    shared.m_firstIndex = (uint32)(Globals::meshDataManager.uploadIndexData(indices.data(), indices.size_bytes()) / sizeof(RendererVKLayout::MeshIndex));
+    return shared;
+}
+
+RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices)
+{
+    RenderMesh mesh;
+    if (data.vertices.empty() || !indices.isValid())
+        return mesh;
+    const uint32 stride = sizeof(RendererVKLayout::TerrainVertex);
+    const uint32 numVertices = (uint32)data.vertices.size();
+    mesh.m_vertexStride = (uint8)stride;
+    mesh.m_numVertices = numVertices;
+    mesh.m_firstVertex = (uint32)(Globals::meshDataManager.uploadVertexData(data.vertices.data(), size_t(numVertices) * stride) / stride);
+    mesh.m_firstIndex = indices.m_firstIndex;
+    mesh.m_bounds = data.bounds;
+
+    oc::vector<RendererVKLayout::MeshInfo> infos(1);
+    RendererVKLayout::MeshInfo& info = infos[0];
+    info.center = data.bounds.pos;
+    info.radius = data.bounds.radius;
+    info.indexCount = indices.m_numIndices;
+    info.firstIndex = indices.m_firstIndex;
+    info.vertexOffset = (int32)mesh.m_firstVertex;
+    info.prevVertexDelta = 0;
+    mesh.m_meshIdx = (uint16)addMeshInfos(infos, oc::span<const uint32>(&numVertices, 1), false, true, stride);
+    return mesh;
+}
+
 RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform)
 {
     RenderNode node;
@@ -415,6 +450,12 @@ void RenderMesh::destroy()
 {
     if (m_meshIdx != UINT16_MAX)
         Globals::rendererVK.destroyMesh(*this);
+}
+
+void RenderMeshIndices::destroy()
+{
+    if (m_numIndices > 0)
+        Globals::rendererVK.destroyMeshIndices(*this);
 }
 
 RenderMaterial RenderMaterial::createForMesh(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced)
@@ -480,12 +521,19 @@ void RendererState::destroyMesh(RenderMesh& mesh)
         freeMeshLodGroup(mesh.m_lodGroup);
         mesh.m_lodGroup = UINT32_MAX;
     }
-    Globals::meshDataManager.freeVertexData(size_t(mesh.m_firstVertex) * sizeof(RendererVKLayout::MeshVertex),
-        size_t(mesh.m_numVertices) * sizeof(RendererVKLayout::MeshVertex));
-    Globals::meshDataManager.freeIndexData(size_t(mesh.m_firstIndex) * sizeof(RendererVKLayout::MeshIndex),
-        size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex));
+    Globals::meshDataManager.freeVertexData(size_t(mesh.m_firstVertex) * mesh.m_vertexStride, size_t(mesh.m_numVertices) * mesh.m_vertexStride);
+    if (mesh.m_numIndices > 0)
+        Globals::meshDataManager.freeIndexData(size_t(mesh.m_firstIndex) * sizeof(RendererVKLayout::MeshIndex),
+            size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex));
     freeMeshInfoRange(mesh.m_meshIdx, mesh.m_numLevels);
     mesh.m_meshIdx = UINT16_MAX;
+}
+
+void RendererState::destroyMeshIndices(RenderMeshIndices& indices)
+{
+    Globals::meshDataManager.freeIndexData(size_t(indices.m_firstIndex) * sizeof(RendererVKLayout::MeshIndex),
+        size_t(indices.m_numIndices) * sizeof(RendererVKLayout::MeshIndex));
+    indices.m_numIndices = 0;
 }
 
 uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)
@@ -750,7 +798,7 @@ void RendererState::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, ui
 // never compacted, so a range a destroyed container freed is reused first). The callback is the
 // Renderer's own per-slot bookkeeping: the parallel CPU side tables and the BLAS build queue.
 uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs,
-    bool raytraced)
+    bool raytraced, uint32 vertexStride)
 {
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
     if (meshInfos.empty())
@@ -768,7 +816,7 @@ uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>&
         }
         // The BLAS side tables and the build queue: a recycled slot below the one-time build
         // watermark needs its build queued explicitly, since the watermark scan will not reach it.
-        m_rt.onMeshInfosAdded(base, count, vertexCounts, skinnedOutputs || !raytraced, reused);
+        m_rt.onMeshInfosAdded(base, count, vertexCounts, vertexStride, skinnedOutputs || !raytraced, reused);
         // Fresh mesh slots must read as "no LOD chain" on the GPU (device memory starts undefined;
         // addMeshLodGroup overwrites the chained ones right after). A growth re-uploads the whole
         // mapping itself, so this only has to cover the within-capacity append.

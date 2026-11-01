@@ -27,6 +27,40 @@ export struct RenderMeshData
     void build(const MeshGeometryDesc& geometry);
 };
 
+// A terrain node's CPU side (Renderer::createTerrainMesh): compact vertices, with the indices in a shared RenderMeshIndices.
+export struct RenderTerrainMeshData
+{
+    oc::vector<RendererVKLayout::TerrainVertex> vertices;
+    Sphere bounds; // mesh-local, the AABB's centre + half diagonal
+};
+
+// RAII owner of one index range that many meshes draw (Renderer::createMeshIndices; move-only): every terrain node has the same grid, so one range serves them
+// all, each mesh at its own vertex offset. Destroy every mesh that draws it first.
+export class RenderMeshIndices final : public RenderMeshIndicesState
+{
+public:
+
+    RenderMeshIndices() = default;
+    RenderMeshIndices(RenderMeshIndices&& other) noexcept { moveFrom(other); }
+    RenderMeshIndices& operator=(RenderMeshIndices&& other) noexcept;
+    ~RenderMeshIndices() { destroy(); }
+
+    bool isValid() const { return m_numIndices > 0; }
+    void destroy(); // main thread
+
+    RenderMeshIndices(const RenderMeshIndices&) = delete;
+    RenderMeshIndices& operator=(const RenderMeshIndices&) = delete;
+
+private:
+
+    void moveFrom(RenderMeshIndices& other)
+    {
+        m_firstIndex = other.m_firstIndex;
+        m_numIndices = other.m_numIndices;
+        other.m_numIndices = 0;
+    }
+};
+
 // RAII owner of the uploaded mesh and its LOD levels (move-only, like RenderNode). Destroy every RenderNode spawned from it first; the free drops the LOD
 // chain and neutralizes the MeshInfo slots, so a node pushed earlier this frame draws nothing instead of stale data. The state is in RenderMeshState.ixx.
 export class RenderMesh final : public RenderMeshState
@@ -42,7 +76,7 @@ public:
     void destroy(); // main thread (Renderer::destroyMesh)
 
     const Sphere& getBounds() const { return m_bounds; } // level 0's
-    uint32 getFirstVertex() const { return m_firstVertex; } // in the vertex mega-buffer, MeshVertex units (the grass reads the terrain's)
+    uint32 getFirstVertex() const { return m_firstVertex; } // in the vertex mega-buffer, in this mesh's vertex units (the grass reads the terrain's: TerrainVertex)
 
     RenderMesh(const RenderMesh&) = delete;
     RenderMesh& operator=(const RenderMesh&) = delete;
@@ -71,6 +105,16 @@ inline void RenderMeshData::build(const MeshGeometryDesc& geometry)
     indices.assign(geometry.indices, geometry.indices + geometry.numIndices);
     bounds.pos = (mn + mx) * 0.5f;
     bounds.radius = glm::length(mx - mn) * 0.5f;
+}
+
+inline RenderMeshIndices& RenderMeshIndices::operator=(RenderMeshIndices&& other) noexcept
+{
+    if (this != &other)
+    {
+        destroy();
+        moveFrom(other);
+    }
+    return *this;
 }
 
 inline RenderMesh& RenderMesh::operator=(RenderMesh&& other) noexcept

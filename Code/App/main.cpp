@@ -47,7 +47,8 @@ int main(int argc, char* argv[])
 
     runCommandLineTool(argc, argv);
 
-    const LaunchOptions options = parseCommandLine(argc, argv);
+    LaunchOptions options = parseCommandLine(argc, argv);
+    options.sandbox = true;
     const bool headlessServer = options.headlessServer();
     const bool unattendedRun = options.unattendedRun();
     if (unattendedRun)

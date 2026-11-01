@@ -365,7 +365,9 @@ protected:
     void freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count);
 
     friend class RenderMesh;
+    friend class RenderMeshIndices;
     void destroyMesh(RenderMesh& mesh);
+    void destroyMeshIndices(RenderMeshIndices& indices);
 
     // The material and texture handles' creates, frees and flags (RenderMaterial / RenderTexture: their API).
     friend class RenderMaterial;
@@ -395,7 +397,7 @@ protected:
     void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
 
     uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false,
-        bool raytraced = true);
+        bool raytraced = true, uint32 vertexStride = sizeof(RendererVKLayout::MeshVertex));
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_rt.accel().getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);

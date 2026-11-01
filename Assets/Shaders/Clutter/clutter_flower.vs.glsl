@@ -18,7 +18,7 @@
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
-layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertices[]; }; // grass.inc.glsl's ground (unused here)
+layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; }; // grass.inc.glsl's ground (unused here)
 // grass.inc.glsl's value noise (the stem's wind ripple): the terrain noise texture - in the main set's bindless array, alone
 // in the near casters' set.
 #ifdef CLUTTER_NEAR_SHADOW
