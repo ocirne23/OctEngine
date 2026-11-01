@@ -299,7 +299,8 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 //   2  the cross-fade band: the cascade tint, going WHITE across the SHADOW_CASCADE_BLEND band into the next
 //   3  the raw sun visibility term alone (what sampleSunShadow returns), greyscale
 //   4  shadow-map texel size heat: green = 5 cm per texel, red = 1 m per texel (log scale)
-#if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
+//   5  the terrain march's steps: terrainMarchDebugColor, instanced_indirect_lit.inc.glsl
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0 && SHADOW_DEBUG != 5
 vec3 shadowDebugOverlay(vec3 color, vec3 worldPos, vec3 N)
 {
 	int cascade = getSunCascade(worldPos);

@@ -152,8 +152,9 @@ calls `reloadShaders()`.
 * **"Shadows/Debug mode"** (`ShadowParams::debugMode`) is BAKED as the `SHADOW_DEBUG` define into the lit and terrain
   fragment variants (`StaticMeshGraphicsPipeline::setShadowDebugMode`; the listener in `Renderer` does the GPU-idle +
   reload). `shadowDebugOverlay` in `shadows.inc.glsl`: 1 cascade index tint, 2 the cross-fade band (white), 3 the raw
-  sun visibility, 4 shadow-map texel size heat (green 5 cm → red 1 m). PCSS path only. `~GameMatch`'s shadow-preset
-  restore leaves this field alone for the same reason.
+  sun visibility, 4 shadow-map texel size heat (green 5 cm → red 1 m), PCSS path only. 5 the terrain march's steps, on both
+  paths (`terrainMarchDebugColor`, see [Terrain](Terrain.md)). `~GameMatch`'s shadow-preset restore leaves this field alone
+  for the same reason.
 * **"LOD/Light grid/Debug Mode"** (`LightGridParams::debugMode`) is BAKED as the `LIGHT_GRID_DEBUG` define on the same
   lit fragments (its own listener; at 0 every debug branch folds away) and overlays the forward pass's
   `computeLitColor` (`instanced_indirect_lit.inc.glsl`): 1 light grid cells (random colour per grid), 2 per-cell light

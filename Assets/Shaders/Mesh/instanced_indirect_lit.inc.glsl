@@ -180,6 +180,28 @@ void resolveLiveDepth(vec3 worldPos)
 	g_liveWaterLevel = localWaterLevel;
 }
 
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG == 5
+// One march toward the sun, on the RT path or not. Red = cell steps, green = skips (a chunk or a brick), each sqrt(steps / 256):
+// half at 64, full at 256. Blue = the ray hit the terrain. A black and white checker = it stopped at TERRAIN_RAY_MAX_STEPS (a false
+// miss): a pattern, because no colour survives the fog. Near black = faces away from the sun.
+vec3 terrainMarchDebugColor(vec3 worldPos, vec3 N)
+{
+	const vec3 L = u_sunDirection.xyz;
+	if (dot(N, L) <= 0.0)
+		return vec3(0.02);
+	g_terrainRaySkips = 0u;
+	g_terrainRayCells = 0u;
+	const float tMax = 10000.0;
+	const float t = terrainRayMarch(worldPos + N * 0.02, L, 0.01, tMax);
+	if (g_terrainRaySkips + g_terrainRayCells >= TERRAIN_RAY_MAX_STEPS)
+	{
+		const ivec2 block = ivec2(gl_FragCoord.xy) / 8;
+		return vec3(float((block.x + block.y) & 1));
+	}
+	return vec3(sqrt(float(g_terrainRayCells) / 256.0), sqrt(float(g_terrainRaySkips) / 256.0), t < tMax ? 0.25 : 0.0);
+}
+#endif
+
 // The sun's visibility at worldPos: the shadow (PCSS or the RT ray), the long-range terrain march, the eclipse and
 // the clouds. N = the normal the shadow's offset follows.
 float sunShadowVisibility(vec3 worldPos, vec3 N)
@@ -470,7 +492,9 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #elif LIGHT_GRID_DEBUG == 3 // every light whose range covers the point adds a step of blue
 	color += debugRangeTint + vec3(0.0, 0.0, 0.02);
 #endif
-#if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG == 5
+	color = terrainMarchDebugColor(worldPos, vec3(N));
+#elif defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
 	color = shadowDebugOverlay(color, worldPos, vec3(N)); // "Shadows/Debug mode": baked, see shadows.inc.glsl
 #endif
 	return color;

@@ -19,6 +19,15 @@
 #define TERRAIN_RAY_MAX_STEPS 256u
 #define TERRAIN_RAY_ALBEDO 1.0 // a terrain hit's albedo where the splat is out of reach: the terrain material's white fallback texture
 
+// "Shadows/Debug mode" = Terrain march steps (terrainMarchDebugColor, instanced_indirect_lit.inc.glsl): compiled out otherwise.
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG == 5
+uint g_terrainRaySkips = 0u;
+uint g_terrainRayCells = 0u;
+#define TERRAIN_RAY_COUNT(counter) ++counter
+#else
+#define TERRAIN_RAY_COUNT(counter)
+#endif
+
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TerrainRayFloats { float f[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TerrainRayWords { uint w[]; };
 
@@ -105,6 +114,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         if (entry.firstVertex == TERRAIN_RAY_NO_NODE)
         {
             side = 0.0;
+            TERRAIN_RAY_COUNT(g_terrainRaySkips);
         }
         else
         {
@@ -130,6 +140,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
                     stepSide = -1.0;
                 else
                 {
+                    TERRAIN_RAY_COUNT(g_terrainRayCells);
                     const vec2 cellLo = nodeLo + vec2(cell) * quad;
                     exitT = min(exitT, terrainRayExit(o.xz, invD.xz, cellLo, quad));
                     const uint a = (entry.firstVertex + cell.y * vpr + cell.x) * 3u;
@@ -156,6 +167,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         }
         if (stepSide != 0.0)
         {
+            TERRAIN_RAY_COUNT(g_terrainRaySkips);
             if (side != 0.0 && (side < 0.0) != (stepSide < 0.0))
                 return t;
             side = stepSide;

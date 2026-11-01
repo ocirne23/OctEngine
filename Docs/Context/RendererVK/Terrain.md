@@ -67,6 +67,9 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   * **A hit's normal** = `terrainRayNormal(hitPos)`, the interpolated vertex normals (a second lookup after the march, so
     the march keeps nothing but t). **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
     mirror, `waterBedAlbedo` (the splat) in `traceScene`.
+  * **The step view**: "Shadows/Debug mode" = Terrain march steps (`terrainMarchDebugColor`, baked as `SHADOW_DEBUG` 5) marches once toward
+    the sun from every lit pixel, on the RT path or not: red = cell steps, green = skips, each `sqrt(steps / 256)`; blue = a terrain hit; a black and white
+    checker = stopped at 256 steps (a pattern, because no colour survives the fog).
   * **The RTAO's relief skip**: a march hit nearer than the relief depth is the underside of the flat mesh: it marches
     once more from past that hit.
 * **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than an ARM texture):

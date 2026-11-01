@@ -258,7 +258,7 @@ export struct ShadowParams
     // Debug overlay, BAKED as the SHADOW_DEBUG define into the lit fragment variants (a change reloads
     // the static mesh pipeline through the Renderer's listener - no uniform, no per-pixel cost when off):
     // 0 off, 1 cascade index tint, 2 the cascade cross-fade band, 3 the raw sun visibility, 4 shadow-map
-    // texel size heat. Cascade data only exists on the PCSS path (RT sun off).
+    // texel size heat, 5 the terrain march's steps toward the sun. Cascade data only exists on the PCSS path (RT sun off).
     int debugMode = 0;
     float terrainMarchSpread = 0.02f;  // penumbra growth per metre along the ray. Deliberately far wider
                                 // than the true sun disc (~0.005): the softness is what keeps the map's
