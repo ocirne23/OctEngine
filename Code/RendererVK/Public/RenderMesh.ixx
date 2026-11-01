@@ -30,7 +30,7 @@ export struct RenderMeshData
 // A terrain node's CPU side (Renderer::createTerrainMesh): compact vertices, with the indices in a shared RenderMeshIndices.
 export struct RenderTerrainMeshData
 {
-    oc::vector<RendererVKLayout::TerrainVertex> vertices; // the grid, then the node's bricks in the same elements (TerrainRayFrameGpu's comment)
+    oc::vector<RendererVKLayout::TerrainVertex> vertices; // the grid, then the node's bricks and blocks in the same elements (Layout.ixx, the ray march's data)
     Sphere bounds; // mesh-local, the AABB's centre + half diagonal
     float minHeight = 0.0f; // world Y over the grid (the terrain ray march)
     float maxHeight = 0.0f;

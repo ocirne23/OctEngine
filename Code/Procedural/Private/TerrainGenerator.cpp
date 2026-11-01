@@ -44,9 +44,11 @@ namespace Procedural
 			return field[(size_t)(row + 1) * gpr + (size_t)(col + 1)];
 		};
 
-		// The vertices, then the node's bricks (TerrainRayFrameGpu's comment) in the same allocation, in whole vertices.
+		// The vertices, then the node's bricks and blocks (Layout.ixx, the ray march's data) in the same allocation, in whole vertices.
 		const uint32 bricksPerSide = glm::max(res >> RendererVKLayout::TERRAIN_BRICK_SHIFT, 1u);
-		const size_t numBrickVertices = ((size_t)bricksPerSide * bricksPerSide * sizeof(glm::vec2) + sizeof(RendererVKLayout::TerrainVertex) - 1) / sizeof(RendererVKLayout::TerrainVertex);
+		const uint32 blocksPerSide = glm::max(bricksPerSide >> RendererVKLayout::TERRAIN_BLOCK_SHIFT, 1u);
+		const size_t numBounds = (size_t)bricksPerSide * bricksPerSide + (size_t)blocksPerSide * blocksPerSide;
+		const size_t numBrickVertices = (numBounds * sizeof(glm::vec2) + sizeof(RendererVKLayout::TerrainVertex) - 1) / sizeof(RendererVKLayout::TerrainVertex);
 		out.vertices.reserve((size_t)vpr * vpr + numBrickVertices);
 		glm::vec3 boundsMin(FLT_MAX), boundsMax(-FLT_MAX);
 
@@ -97,7 +99,7 @@ namespace Procedural
 
 		// The bricks: each over its cells' corner vertices, so a brick's bounds hold every triangle in it.
 		const uint32 brickCells = glm::min(RendererVKLayout::TERRAIN_BRICK_CELLS, res);
-		oc::vector<glm::vec2> bricks((size_t)bricksPerSide * bricksPerSide);
+		oc::vector<glm::vec2> bricks(numBounds, glm::vec2(FLT_MAX, -FLT_MAX));
 		for (uint32 brickRow = 0; brickRow < bricksPerSide; ++brickRow)
 		{
 			for (uint32 brickCol = 0; brickCol < bricksPerSide; ++brickCol)
@@ -112,6 +114,11 @@ namespace Procedural
 					}
 				}
 				bricks[(size_t)brickRow * bricksPerSide + brickCol] = bound;
+
+				glm::vec2& block = bricks[(size_t)bricksPerSide * bricksPerSide
+					+ (size_t)glm::min(brickRow >> RendererVKLayout::TERRAIN_BLOCK_SHIFT, blocksPerSide - 1u) * blocksPerSide
+					+ glm::min(brickCol >> RendererVKLayout::TERRAIN_BLOCK_SHIFT, blocksPerSide - 1u)];
+				block = glm::vec2(glm::min(block.x, bound.x), glm::max(block.y, bound.y));
 			}
 		}
 		out.vertices.resize((size_t)vpr * vpr + numBrickVertices);

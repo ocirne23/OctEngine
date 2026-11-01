@@ -2,9 +2,10 @@
 // the TLAS trace stops at the march's hit (tMax). The same triangles the terrain draws, without the edge stitch and the
 // tessellation, like a BLAS over them.
 //
-// One flat loop, three levels, each step taken at the coarsest level that can rule the ray out from t to where it leaves:
+// One flat loop, four levels, each step taken at the coarsest level that can rule the ray out from t to where it leaves:
 //   a BASE CHUNK (the per-frame table, RendererState::uploadTerrainRayFrame: the finest drawn node over it, with the node's height range),
-//   a BRICK (TERRAIN_BRICK_SHIFT: its min and max height, stored after the node's vertices),
+//   a BLOCK (TERRAIN_BLOCK_SHIFT bricks: its min and max height, stored after the node's bricks),
+//   a BRICK (TERRAIN_BRICK_SHIFT cells: its min and max height, stored after the node's vertices),
 //   a CELL (its two triangles: the diagonal runs from (col + 1, row) to (col, row + 1), TerrainGenerator.cpp).
 // Each step holds nothing from the last but the ray's side of the surface, so a step across a boundary loses no crossing: a
 // side change between two steps is a hit too. Past the table (around the scene focus, "RT/TLAS Range") and past
@@ -99,6 +100,8 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
     const float lod0Quad = table.lod0Quad;
     const uint bricksPerSide = max(res >> TERRAIN_BRICK_SHIFT, 1u);
     const uint brickCells = min(1u << TERRAIN_BRICK_SHIFT, res);
+    const uint blocksPerSide = max(bricksPerSide >> TERRAIN_BLOCK_SHIFT, 1u);
+    const uint blockCells = brickCells * min(1u << TERRAIN_BLOCK_SHIFT, bricksPerSide);
 
     float side = 0.0; // the ray's side of the surface at the last step: > 0 above, < 0 below, 0 unknown
     for (uint i = 0u; i < TERRAIN_RAY_MAX_STEPS && t < tEnd; ++i)
@@ -129,37 +132,49 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
                 const float quad = lod0Quad * float(span);
                 const uvec2 cell = uvec2(clamp(ivec2(floor((p.xz - nodeLo) / quad)), ivec2(0), ivec2(int(res) - 1)));
                 const uvec2 brick = min(cell / brickCells, uvec2(bricksPerSide - 1u));
-                const uint brickFloat = (entry.firstVertex + vpr * vpr) * 3u + (brick.y * bricksPerSide + brick.x) * 2u;
-                const float brickExit = terrainRayExit(o.xz, invD.xz, nodeLo + vec2(brick * brickCells) * quad, float(brickCells) * quad);
-                exitT = min(exitT, brickExit);
+                const uint bricksFloat = (entry.firstVertex + vpr * vpr) * 3u;
+                const uvec2 block = min(brick >> TERRAIN_BLOCK_SHIFT, uvec2(blocksPerSide - 1u));
+                const uint blockFloat = bricksFloat + (bricksPerSide * bricksPerSide + block.y * blocksPerSide + block.x) * 2u;
+                exitT = min(exitT, terrainRayExit(o.xz, invD.xz, nodeLo + vec2(block * blockCells) * quad, float(blockCells) * quad));
                 yEnd = o.y + d.y * min(exitT, tEnd);
-                if (min(p.y, yEnd) > floats.f[brickFloat + 1u])
+                if (min(p.y, yEnd) > floats.f[blockFloat + 1u])
                     stepSide = 1.0;
-                else if (max(p.y, yEnd) < floats.f[brickFloat])
+                else if (max(p.y, yEnd) < floats.f[blockFloat])
                     stepSide = -1.0;
                 else
                 {
-                    const vec2 cellLo = nodeLo + vec2(cell) * quad;
-                    exitT = min(exitT, terrainRayExit(o.xz, invD.xz, cellLo, quad));
-                    const uint a = (entry.firstVertex + cell.y * vpr + cell.x) * 3u;
-                    const vec4 h = vec4(floats.f[a], floats.f[a + 3u], floats.f[a + vpr * 3u], floats.f[a + (vpr + 1u) * 3u]);
+                    const uint brickFloat = bricksFloat + (brick.y * bricksPerSide + brick.x) * 2u;
+                    const float brickExit = terrainRayExit(o.xz, invD.xz, nodeLo + vec2(brick * brickCells) * quad, float(brickCells) * quad);
+                    exitT = min(exitT, brickExit);
+                    yEnd = o.y + d.y * min(exitT, tEnd);
+                    if (min(p.y, yEnd) > floats.f[brickFloat + 1u])
+                        stepSide = 1.0;
+                    else if (max(p.y, yEnd) < floats.f[brickFloat])
+                        stepSide = -1.0;
+                    else
+                    {
+                        const vec2 cellLo = nodeLo + vec2(cell) * quad;
+                        exitT = min(exitT, terrainRayExit(o.xz, invD.xz, cellLo, quad));
+                        const uint a = (entry.firstVertex + cell.y * vpr + cell.x) * 3u;
+                        const vec4 h = vec4(floats.f[a], floats.f[a + 3u], floats.f[a + vpr * 3u], floats.f[a + (vpr + 1u) * 3u]);
 
-                    // Up to two pieces: the height is linear in t on each side of the diagonal.
-                    const float tCellEnd = min(exitT, tEnd);
-                    const float along = d.x + d.z;
-                    const float tDiag = t + (1.0 - ((p.x - cellLo.x) + (p.z - cellLo.y)) / quad) * quad * (abs(along) > 1e-8 ? 1.0 / along : 1e8);
-                    const float tMid = clamp(tDiag, t, tCellEnd);
+                        // Up to two pieces: the height is linear in t on each side of the diagonal.
+                        const float tCellEnd = min(exitT, tEnd);
+                        const float along = d.x + d.z;
+                        const float tDiag = t + (1.0 - ((p.x - cellLo.x) + (p.z - cellLo.y)) / quad) * quad * (abs(along) > 1e-8 ? 1.0 / along : 1e8);
+                        const float tMid = clamp(tDiag, t, tCellEnd);
 
-                    const float g0 = terrainRayGap(o, d, t, cellLo, quad, h);
-                    if (side != 0.0 && (side < 0.0) != (g0 < 0.0))
-                        return t;
-                    const float g1 = terrainRayGap(o, d, tMid, cellLo, quad, h);
-                    if ((g0 < 0.0) != (g1 < 0.0))
-                        return t + (tMid - t) * g0 / (g0 - g1);
-                    const float g2 = terrainRayGap(o, d, tCellEnd, cellLo, quad, h);
-                    if ((g1 < 0.0) != (g2 < 0.0))
-                        return tMid + (tCellEnd - tMid) * g1 / (g1 - g2);
-                    side = g2;
+                        const float g0 = terrainRayGap(o, d, t, cellLo, quad, h);
+                        if (side != 0.0 && (side < 0.0) != (g0 < 0.0))
+                            return t;
+                        const float g1 = terrainRayGap(o, d, tMid, cellLo, quad, h);
+                        if ((g0 < 0.0) != (g1 < 0.0))
+                            return t + (tMid - t) * g0 / (g0 - g1);
+                        const float g2 = terrainRayGap(o, d, tCellEnd, cellLo, quad, h);
+                        if ((g1 < 0.0) != (g2 < 0.0))
+                            return tMid + (tCellEnd - tMid) * g1 / (g1 - g2);
+                        side = g2;
+                    }
                 }
             }
         }

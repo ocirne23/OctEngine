@@ -49,13 +49,14 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   not raytraced): every ray walks the node vertices as a height field, then traces the TLAS up to the march's hit
   (`terrainRayMarch(o, d, tMin, tMax)` returns tMax for a miss). An any-hit ray that hits the terrain traces nothing. In: `rtShadowVisibility`
   (so the GI's and the lit core's shadow rays), the RTAO, `volRayVisibility`, the rain occlusion, the GI gather, `traceScene`, the film's mirror.
-  * **One flat loop, three levels**: a base chunk (with the height range of the node over it), a brick (8 x 8 cells:
+  * **One flat loop, four levels**: a base chunk (with the height range of the node over it), a block (4 x 4 bricks, 64 m at
+    LOD0: `TERRAIN_BLOCK_SHIFT`; a low-sun ray over a chunk with a hill in it would otherwise step brick by brick), a brick (8 x 8 cells:
     `TERRAIN_BRICK_SHIFT`), a cell (its two triangles, with the mesh's diagonal). Each step takes the coarsest level that
     rules the ray out up to where the ray leaves it. A cell's height is linear in t on each side of the diagonal, so the hit
     is exact. Between steps only the ray's side of the surface survives, and a side change between two steps is a hit: so a ray
     across a T-junction at a LOD edge cannot leak. Stops at 256 steps (a miss). Both sides of a triangle hit, like a ray query,
     so a hit normal with y > 0 facing away is still the GI's backface.
-  * **The bricks**: min and max height per brick, in the node's vertex allocation, after its `(lod0Res + 1)²` vertices
+  * **The bricks and blocks**: min and max height per brick, then per block, in the node's vertex allocation, after its `(lod0Res + 1)²` vertices
     (`generateChunk`; about 2 KB per node, `RenderTerrainMeshData::vertices` holds them in whole vertices).
   * **The table** (`TerrainRayFrameGpu`, one host-visible buffer per frame slot, `uploadTerrainRayFrame` in present): the
     base chunks around the scene focus out to "RT/TLAS Range" + a chunk, at most 65 per axis, each with the finest drawn

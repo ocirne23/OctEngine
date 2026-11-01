@@ -438,9 +438,12 @@ export namespace RendererVKLayout
     static_assert(sizeof(TerrainVertex) == 12);
 
     // THE TERRAIN RAY MARCH's data (terrain_ray.inc.glsl). After a node's (lod0Res + 1)^2 vertices, its BRICKS: per TERRAIN_BRICK_CELLS x TERRAIN_BRICK_CELLS
-    // cells the min and the max height (two floats, row-major), written by generateChunk, allocated and freed with the vertices.
+    // cells the min and the max height (two floats, row-major), then its BLOCKS the same way, per TERRAIN_BLOCK_BRICKS x TERRAIN_BLOCK_BRICKS bricks. Written by
+    // generateChunk, allocated and freed with the vertices.
     constexpr uint32 TERRAIN_BRICK_SHIFT = 3;
     constexpr uint32 TERRAIN_BRICK_CELLS = 1u << TERRAIN_BRICK_SHIFT;
+    constexpr uint32 TERRAIN_BLOCK_SHIFT = 2;
+    constexpr uint32 TERRAIN_BLOCK_BRICKS = 1u << TERRAIN_BLOCK_SHIFT;
     constexpr uint32 TERRAIN_RAY_TABLE_DIM = 65;  // base chunks per axis around the scene focus: 8192 m either way at 256 m chunks, the "RT/TLAS Range" maximum
     constexpr uint32 TERRAIN_RAY_NO_NODE = 0xFFFFFFFFu;
     struct TerrainRayEntry // one base chunk: the finest drawn node over it
