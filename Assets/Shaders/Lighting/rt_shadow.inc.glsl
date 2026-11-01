@@ -8,9 +8,12 @@
 //   - in_materialInfos[] (MaterialInfo: diffuseNormalTexIdx, opacity)
 //   - u_textures[] + GL_EXT_nonuniform_qualifier
 //   - GL_EXT_ray_query
+// The terrain is not in the TLAS: terrain_ray.inc.glsl marches it first, and a hit needs no trace at all.
 
 #ifndef RT_SHADOW_INC_GLSL
 #define RT_SHADOW_INC_GLSL
+
+#include "terrain_ray.inc.glsl"
 
 #define RT_SHADOW_ALPHA_LOD 3.0 // coarse mip: no derivatives on rays, and shadows don't need alpha detail
 
@@ -52,6 +55,8 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 // Hard shadow visibility (1 = unoccluded) that respects alpha-masked geometry.
 float rtShadowVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
 {
+	if (terrainRayMarch(origin, dir, tMin, tMax) < tMax)
+		return 0.0;
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, origin, tMin, dir, tMax);
 	while (rayQueryProceedEXT(rq))

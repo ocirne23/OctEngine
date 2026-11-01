@@ -357,6 +357,8 @@ static oc::string buildLayoutPreamble()
     def("MOTION_BLUR_SUBTILE", MOTION_BLUR_SUBTILE);
     def("MATERIAL_FLAG_TERRAIN", MATERIAL_FLAG_TERRAIN, "u");
     def("TERRAIN_VERTEX_SPEED_MAX", TERRAIN_VERTEX_SPEED_MAX);
+    def("TERRAIN_BRICK_SHIFT", TERRAIN_BRICK_SHIFT);
+    def("TERRAIN_RAY_NO_NODE", TERRAIN_RAY_NO_NODE, "u");
     def("OCEAN_FFT_SIZE", OCEAN_FFT_SIZE);
     def("OCEAN_CASCADES", OCEAN_CASCADES);
     def("OCEAN_FOAM_LEVELS", OCEAN_FOAM_LEVELS);
@@ -452,6 +454,9 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
     oc::string preamble = "#extension GL_ARB_shading_language_include : require\n";
     // The generated push blocks are scalar (PushBlock): a shader that includes one needs no extension line of its own.
     preamble += "#extension GL_EXT_scalar_block_layout : require\n";
+    // terrain_ray.inc.glsl's table sits behind includes in many shaders (the lit core): an address in the UBO is a uvec2.
+    preamble += "#extension GL_EXT_buffer_reference : require\n";
+    preamble += "#extension GL_EXT_buffer_reference_uvec2 : require\n";
     preamble += buildLayoutPreamble();
     for (const ShaderDefine& define : defines)
     {

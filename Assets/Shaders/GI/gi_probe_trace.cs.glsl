@@ -55,7 +55,6 @@ layout (binding = 3, std430) readonly buffer InGridTable
 };
 layout (binding = 4) uniform accelerationStructureEXT u_tlas;
 layout (binding = 5, std430) readonly buffer InVertices    { MeshVertex in_vertices[]; };
-layout (binding = 5, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
@@ -171,60 +170,63 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     sunLuma = 0.0;
     skyLuma = 0.0;
     skyOpen = 0.0;
+    // The terrain first (not in the TLAS): the trace stops at it.
+    const float tTerrain = terrainRayMarch(origin, dir, 0.05, rayMax);
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.05, dir, rayMax);
+    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.05, dir, tTerrain);
     while (rayQueryProceedEXT(rq)) {}
 
+    float t;
+    vec3 worldN; // not unit yet: the next normalize cancels its length
+    vec3 albedo = vec3(TERRAIN_RAY_ALBEDO);
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
-        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
-
-    // Bound every post-hit buffer access: a bad meshIdx / triBase / vertex index would read out of bounds and MMU-fault.
-    // An out-of-range hit counts as a miss.
-    const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
-    const bool tree = (instanceIdx & 0x800000) != 0;
-    if (!tree && uint(instanceIdx) >= in_instances.length())
-        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
-
-    // Geometry comes from the RT meshIdx packed into the instance's sbtOffset (a LOD chain traces one shared BLAS, which
-    // may differ from the raster level the instance references); the material still comes from the instance.
-    const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
-    const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
-    if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
-        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
-    const InMeshInfo mi    = in_meshInfos[meshIdx];
-
-    const int  prim    = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-    const uint triBase = mi.firstIndex + uint(prim) * 3u;
-    if (triBase + 2u >= in_indices.length())
-        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
-    const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
-    const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
-    const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-    const bool terrainHit = (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u; // TerrainVertex units
-    if (max(max(v0, v1), v2) >= (terrainHit ? in_terrainVertices.length() : in_vertices.length()))
-        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
-
-    const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-    const float t    = rayQueryGetIntersectionTEXT(rq, true);
-    const mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
-    const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-    vec3 objN; // the next normalize cancels its length
-    vec2 uv = vec2(0.0); // the terrain material's texture is the fallback: any uv reads the same
-    if (terrainHit)
     {
-        objN = b.x * terrainVertexNormal(in_terrainVertices[v0].normalOct) + b.y * terrainVertexNormal(in_terrainVertices[v1].normalOct)
-             + b.z * terrainVertexNormal(in_terrainVertices[v2].normalOct);
+        if (tTerrain >= rayMax)
+            return traceMiss(dir, sunLuma, skyLuma, skyOpen);
+        t = tTerrain;
+        worldN = terrainRayNormal(origin + dir * t);
     }
     else
     {
+        // Bound every post-hit buffer access: a bad meshIdx / triBase / vertex index would read out of bounds and MMU-fault.
+        // An out-of-range hit counts as a miss.
+        const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
+        const bool tree = (instanceIdx & 0x800000) != 0;
+        if (!tree && uint(instanceIdx) >= in_instances.length())
+            return traceMiss(dir, sunLuma, skyLuma, skyOpen);
+
+        // Geometry comes from the RT meshIdx packed into the instance's sbtOffset (a LOD chain traces one shared BLAS, which
+        // may differ from the raster level the instance references); the material still comes from the instance.
+        const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
+        const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
+        if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
+            return traceMiss(dir, sunLuma, skyLuma, skyOpen);
+        const InMeshInfo mi    = in_meshInfos[meshIdx];
+
+        const int  prim    = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        const uint triBase = mi.firstIndex + uint(prim) * 3u;
+        if (triBase + 2u >= in_indices.length())
+            return traceMiss(dir, sunLuma, skyLuma, skyOpen);
+        const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
+        const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
+        const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
+        if (max(max(v0, v1), v2) >= in_vertices.length())
+            return traceMiss(dir, sunLuma, skyLuma, skyOpen);
+
+        const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        t                = rayQueryGetIntersectionTEXT(rq, true);
+        const mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
+        const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
         // Two wide loads per vertex: the normal and the uv's v share normalV, the u rides positionU.w.
         const vec4 nv0 = in_vertices[v0].normalV, nv1 = in_vertices[v1].normalV, nv2 = in_vertices[v2].normalV;
-        objN = b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz;
-        uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
-           + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
+        worldN = mat3(o2w) * (b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz);
+        const vec2 uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
+                      + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
+        const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
+        albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, GI_ALBEDO_LOD).rgb;
     }
-    vec3 worldN = normalize(mat3(o2w) * objN);
+    worldN = normalize(worldN);
     const vec3 worldPos = origin + dir * t;
     hitDist = t; // committed surface hit -> actual distance to geometry along this ray
     if (dot(worldN, dir) > 0.0)
@@ -232,9 +234,6 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
         worldN = -worldN;
         backface = 1.0;
     }
-
-    const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
-    const vec3 albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, GI_ALBEDO_LOD).rgb;
 
     // NO cloud shadow here: the probe keeps its sun part apart and the LOOKUP dims it by the cloud shadow at the shaded
     // point (giIrradiance). Cloud-shadowed hits make every probe lag a moving cloud shadow by its update interval

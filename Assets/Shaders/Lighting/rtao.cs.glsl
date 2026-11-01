@@ -32,9 +32,10 @@ struct InMeshInstance
     uint pipelineIdxAlphaMode;
 };
 
-// Both variants: a hit's material flags (the tessellated terrain's underside skip, below).
 layout (binding = 8, std430) readonly buffer InInstances { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials { MaterialInfo in_materialInfos[]; };
+
+#include "terrain_ray.inc.glsl"
 
 #ifdef RTAO_ALPHA_TEST
 struct InMeshInfo
@@ -128,8 +129,8 @@ void main()
     const float frameRot = float(u_frameIndex);
     vec2 jitter = vec2(ign(vec2(px) + frameRot * 1.6180339), ign(vec2(px.yx) + frameRot * 3.1415926 + vec2(17.3, 5.1)));
 
-    // The TESSELLATED terrain: the depth holds the displaced relief, centred on the flat mesh in the TLAS, so a relief
-    // low sits UNDER its own mesh and every ray hits the underside at once (dark blotches). A TERRAIN hit nearer than the
+    // The TESSELLATED terrain: the depth holds the displaced relief, centred on the flat mesh the march walks, so a relief
+    // low sits UNDER its own mesh and every ray hits the underside at once (dark blotches). A terrain hit nearer than the
     // relief depth, inside the tessellation's reach, is that underside: the ray continues past it once.
     const float terrainSkip = (u_terrainTess_enabled > 0.5 && viewDist < u_terrainTess_fadeEnd)
         ? max(u_terrainTess_depthGround, u_terrainTess_depthRock) : 0.0;
@@ -144,40 +145,30 @@ void main()
         float phi = 6.2831853 * u.y;
         vec3 dir = T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(1.0 - u.x);
 
-        bool hit = false;
-        float t = 0.0;
-        float tStart = 0.01;
-        for (int pass = 0; pass < 2; ++pass)
-        {
-            rayQueryEXT rq;
-#ifdef RTAO_ALPHA_TEST
-            // Masked geometry is non-opaque in the TLAS: the alpha test runs on its candidates. Cull mask 0x01: not the
-            // FOLIAGE cards (gi_tlas_instances.cs.glsl).
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, tStart, dir, u_rt_aoRadius);
-            while (rayQueryProceedEXT(rq))
-            {
-                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))
-                    rayQueryConfirmIntersectionEXT(rq);
-            }
-#else
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, tStart, dir, u_rt_aoRadius);
-            while (rayQueryProceedEXT(rq)) {}
-#endif
-            hit = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
-            if (!hit)
-                break;
-            t = rayQueryGetIntersectionTEXT(rq, true);
-            if (pass > 0 || t >= terrainSkip)
-                break;
+        float t = terrainRayMarch(rayOrigin, dir, 0.01, u_rt_aoRadius);
+        if (t < terrainSkip)
+            t = terrainRayMarch(rayOrigin, dir, t + 0.01, u_rt_aoRadius); // the terrain's underside: continue past it
+        bool hit = t < u_rt_aoRadius;
 
-            const uint instanceIdx = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true));
-            // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material.
-            const uint materialIdx = (instanceIdx & 0x800000u) != 0u ? instanceIdx & 0xFFFFu
-                : instanceIdx < uint(in_instances.length()) ? in_instances[instanceIdx].meshIdxMaterialIdx >> 16 : 0xFFFFu;
-            if (materialIdx >= uint(in_materialInfos.length()) || (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) == 0u)
-                break;
-            tStart = t + 0.01; // the terrain's underside: continue past it
-            hit = false;
+        // The TLAS, up to the terrain's hit.
+        rayQueryEXT rq;
+#ifdef RTAO_ALPHA_TEST
+        // Masked geometry is non-opaque in the TLAS: the alpha test runs on its candidates. Cull mask 0x01: not the
+        // FOLIAGE cards (gi_tlas_instances.cs.glsl).
+        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, 0.01, dir, t);
+        while (rayQueryProceedEXT(rq))
+        {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+#else
+        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, 0.01, dir, t);
+        while (rayQueryProceedEXT(rq)) {}
+#endif
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT)
+        {
+            hit = true;
+            t = rayQueryGetIntersectionTEXT(rq, true);
         }
 
         if (hit)

@@ -92,6 +92,8 @@ public:
     // A terrain node: compact TerrainVertex data over a SHARED index range (one MeshInfo + its BLAS, no LOD chain). Draw it on TerrainLit only: the other
     // pipelines read MeshVertex. `indices` outlives the mesh.
     RenderMeshIndices createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices);
+    // The terrain nodes' coarser index ranges for the sun shadow pass, over every 2nd and every 4th vertex ("Shadows/Terrain half-res from (m)"). Main thread.
+    void setTerrainShadowIndices(const RenderMeshIndices& half, const RenderMeshIndices& quarter);
     RenderMesh createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices);
     const MeshLodParams& getLodParams() const { return m_lodParams; } // the "LOD" settings the chains are generated and picked with
 
@@ -126,8 +128,9 @@ public:
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // see TerrainStreamer::registerTerrainTextures
     float giTlasRange() const { return m_giProbePipeline.getTlasRange(); } // metres from sceneFocusOrCamera
 
-    // The terrain VS's EDGE STITCHING (its draw camera, ring bands and the nodes' quads per side; chunkSize 0 = off). Main thread, read by the next frame's UBO.
-    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res);
+    // The terrain VS's EDGE STITCHING (its draw camera, ring bands and the nodes' quads per side; chunkSize 0 = off) and LOD0's quad size (m), for the vertices'
+    // X/Z. Main thread, read by the next frame's UBO.
+    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res, float lod0Quad);
 
     // V3's world scale (the loaded model's native resolution - not a tweak): the crag thresholds and the crag wander ("Terrain/Textures") are metres at the
     // model's true scale. A change re-bakes the UBO values that read it.
@@ -175,6 +178,9 @@ public:
     // of the camera. MAIN THREAD, every frame before present (Procedural TerrainStreamer::update). Valid for ONE frame: a frame without a call draws no grass
     // (a disabled terrain, or freed chunks, can never be read).
     void setGrassGround(float chunkSize, uint32 vertexStride, oc::span<const GrassGroundChunk> chunks);
+    // The terrain RAY MARCH walks these (terrain_ray.inc.glsl): every drawn node. MAIN THREAD, every frame before present (TerrainStreamer::update). Valid for ONE
+    // frame, like the grass's: a frame without a call marches nothing.
+    void setTerrainRayNodes(float chunkSize, uint32 lod0Res, oc::span<const TerrainRayNode> nodes);
     // The terrain height right under the camera (world Y; NaN = unknown), per frame: the near grass cascade's placement and the far-tree volume's cell layout.
     void setCameraGround(float groundY) { m_cameraGround = groundY; }
 
@@ -268,10 +274,10 @@ inline void Renderer::setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types
     m_treeRecordSet = volumeSet.m_setId;
 }
 
-inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res)
+inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res, float lod0Quad)
 {
     m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, (float)lod0Res);
-    m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, 0.0f);
+    m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, lod0Quad);
 }
 
 inline void Renderer::setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel)

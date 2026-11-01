@@ -319,6 +319,14 @@ void RendererState::initSharedBuffers()
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
 	m_terrain.createNoiseTexture(); // before the first record: the grass cull binds it directly
+	for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+	{
+		m_terrainRayFrames[i].initialize(sizeof(RendererVKLayout::TerrainRayFrameGpu), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eHostVisible, false, "TerrainRayFrame", BufferHostAccess::eSequentialWrite);
+		m_mappedTerrainRayFrames[i] = (RendererVKLayout::TerrainRayFrameGpu*)m_terrainRayFrames[i].mapMemory().data();
+		m_mappedTerrainRayFrames[i]->tableDim = 0; // every march misses
+		m_terrainRayFrames[i].flushMappedMemory(sizeof(RendererVKLayout::TerrainRayFrameGpu));
+	}
 
     // The inland water map per frame slot (the fog binds it): host-visible, written in present when it changes.
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
@@ -885,6 +893,7 @@ void Renderer::present()
     {
         m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
         m_grassGround.clear(); // one frame only (setGrassGround)
+        m_terrainRayNodes.clear(); // likewise (setTerrainRayNodes)
         Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
         return;
     }
@@ -901,6 +910,7 @@ void Renderer::present()
         }
         m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
         m_grassGround.clear();
+        m_terrainRayNodes.clear();
         Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
         return;
     }
@@ -931,6 +941,7 @@ void Renderer::present()
     m_ubo.evaluatePresent(); // + the tree range: RenderTreeSet::render claims it after beginFrame
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
+    uploadTerrainRayFrame(frameIdx); // this frame's terrain ray table (likewise)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
     uploadRiverWaterMap(frameIdx); // the inland water map, when it changed
     uploadRiverMist(frameIdx);     // the river mist sources, when they changed

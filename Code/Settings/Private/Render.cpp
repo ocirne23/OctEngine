@@ -82,6 +82,8 @@ void Settings::registerShadow(ShadowParams& s)
     Tweak::floatVar("Shadows", "Caster pad (m)", &s.casterPad, 0.0f, 5000.0f, 10.0f);
     Tweak::floatVar("Shadows", "Depth bias", &s.depthBias, 0.0f, 0.005f, 0.0001f);
     Tweak::floatVar("Shadows", "Normal bias", &s.normalBias, 0.0f, 10.0f);
+    Tweak::floatVar("Shadows", "Terrain half-res from (m)", &s.terrainHalfFrom, 0.0f, 20000.0f, 10.0f);
+    Tweak::floatVar("Shadows", "Terrain quarter-res from (m)", &s.terrainQuarterFrom, 0.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Shadows", "Terrain march start (m)", &s.terrainMarchStart, 50.0f, 20000.0f, 50.0f);
     Tweak::floatVar("Shadows", "Terrain march bias (m)", &s.terrainMarchBias, 0.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Shadows", "Terrain march spread", &s.terrainMarchSpread, 0.002f, 0.1f, 0.001f);

@@ -14,6 +14,7 @@ namespace Procedural
 		out.vertices.clear();
 
 		const uint32 res = glm::max(1u, params.lod0Res); // every node: the same grid, over 2^lod base chunks
+		assert(res <= 255 && "TerrainVertex holds its grid position in 8 bits");
 		const uint32 vpr = res + 1; // vertices per row
 		const float  step = params.nodeSize() / (float)res;
 		const double ox = (double)params.coord.x * (double)params.nodeSize();
@@ -43,7 +44,10 @@ namespace Procedural
 			return field[(size_t)(row + 1) * gpr + (size_t)(col + 1)];
 		};
 
-		out.vertices.reserve((size_t)vpr * vpr);
+		// The vertices, then the node's bricks (TerrainRayFrameGpu's comment) in the same allocation, in whole vertices.
+		const uint32 bricksPerSide = glm::max(res >> RendererVKLayout::TERRAIN_BRICK_SHIFT, 1u);
+		const size_t numBrickVertices = ((size_t)bricksPerSide * bricksPerSide * sizeof(glm::vec2) + sizeof(RendererVKLayout::TerrainVertex) - 1) / sizeof(RendererVKLayout::TerrainVertex);
+		out.vertices.reserve((size_t)vpr * vpr + numBrickVertices);
 		glm::vec3 boundsMin(FLT_MAX), boundsMax(-FLT_MAX);
 
 		// One cell, not the old half cell: the difference is now taken between the actual mesh neighbours,
@@ -74,38 +78,63 @@ namespace Procedural
 				const TerrainPoint& p = at(col, row);
 				const bool underWater = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake;
 				RendererVKLayout::TerrainVertex& vertex = out.vertices.emplace_back();
-				vertex.position = glm::vec3(lx, y, lz);
-				vertex.setNormal(normal);
+				vertex.height = y;
+				vertex.setNormalLod(normal, underWater, params.lod);
 				vertex.riverInfluence = (uint8)glm::round(glm::clamp(p.river, 0.0f, 1.0f) * 255.0f);
 				vertex.riverSpeed = (uint8)glm::round(glm::clamp(p.riverSpeed / RendererVKLayout::TERRAIN_VERTEX_SPEED_MAX, 0.0f, 1.0f) * 255.0f);
-				vertex.underWater = underWater ? 255 : 0;
-				vertex.lod = (uint8)params.lod;
-				boundsMin = glm::min(boundsMin, vertex.position);
-				boundsMax = glm::max(boundsMax, vertex.position);
+				vertex.col = (uint8)col;
+				vertex.row = (uint8)row;
+				const glm::vec3 position(lx, y, lz);
+				boundsMin = glm::min(boundsMin, position);
+				boundsMax = glm::max(boundsMax, position);
 			}
 			Globals::jobSystem.preemptionPoint(); // nothing half-done between rows
 		}
 		out.bounds.pos = (boundsMin + boundsMax) * 0.5f;
 		out.bounds.radius = glm::length(boundsMax - boundsMin) * 0.5f;
+		out.minHeight = boundsMin.y;
+		out.maxHeight = boundsMax.y;
+
+		// The bricks: each over its cells' corner vertices, so a brick's bounds hold every triangle in it.
+		const uint32 brickCells = glm::min(RendererVKLayout::TERRAIN_BRICK_CELLS, res);
+		oc::vector<glm::vec2> bricks((size_t)bricksPerSide * bricksPerSide);
+		for (uint32 brickRow = 0; brickRow < bricksPerSide; ++brickRow)
+		{
+			for (uint32 brickCol = 0; brickCol < bricksPerSide; ++brickCol)
+			{
+				glm::vec2 bound(FLT_MAX, -FLT_MAX);
+				for (uint32 row = brickRow * brickCells; row <= glm::min((brickRow + 1) * brickCells, res); ++row)
+				{
+					for (uint32 col = brickCol * brickCells; col <= glm::min((brickCol + 1) * brickCells, res); ++col)
+					{
+						const float height = out.vertices[(size_t)row * vpr + col].height;
+						bound = glm::vec2(glm::min(bound.x, height), glm::max(bound.y, height));
+					}
+				}
+				bricks[(size_t)brickRow * bricksPerSide + brickCol] = bound;
+			}
+		}
+		out.vertices.resize((size_t)vpr * vpr + numBrickVertices);
+		memcpy(out.vertices.data() + (size_t)vpr * vpr, bricks.data(), bricks.size() * sizeof(glm::vec2));
 
 		if (outField)
 			*outField = oc::move(field);
 	}
 
-	oc::vector<uint32> terrainNodeIndices(uint32 lod0Res)
+	oc::vector<uint32> terrainNodeIndices(uint32 lod0Res, uint32 stride)
 	{
 		const uint32 res = glm::max(1u, lod0Res);
 		const uint32 vpr = res + 1;
 		oc::vector<uint32> indices;
-		indices.reserve((size_t)res * res * 6);
-		for (uint32 row = 0; row < res; ++row)
+		indices.reserve((size_t)(res / stride) * (res / stride) * 6);
+		for (uint32 row = 0; row + stride <= res; row += stride)
 		{
-			for (uint32 col = 0; col < res; ++col)
+			for (uint32 col = 0; col + stride <= res; col += stride)
 			{
 				const uint32 a = row * vpr + col;
-				const uint32 b = a + 1;
-				const uint32 c = (row + 1) * vpr + col;
-				const uint32 d = c + 1;
+				const uint32 b = a + stride;
+				const uint32 c = (row + stride) * vpr + col;
+				const uint32 d = c + stride;
 				indices.push_back(a); indices.push_back(c); indices.push_back(b);
 				indices.push_back(b); indices.push_back(c); indices.push_back(d);
 			}

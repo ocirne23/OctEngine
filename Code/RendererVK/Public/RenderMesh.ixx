@@ -30,8 +30,10 @@ export struct RenderMeshData
 // A terrain node's CPU side (Renderer::createTerrainMesh): compact vertices, with the indices in a shared RenderMeshIndices.
 export struct RenderTerrainMeshData
 {
-    oc::vector<RendererVKLayout::TerrainVertex> vertices;
+    oc::vector<RendererVKLayout::TerrainVertex> vertices; // the grid, then the node's bricks in the same elements (TerrainRayFrameGpu's comment)
     Sphere bounds; // mesh-local, the AABB's centre + half diagonal
+    float minHeight = 0.0f; // world Y over the grid (the terrain ray march)
+    float maxHeight = 0.0f;
 };
 
 // RAII owner of one index range that many meshes draw (Renderer::createMeshIndices; move-only): every terrain node has the same grid, so one range serves them
@@ -77,6 +79,8 @@ public:
 
     const Sphere& getBounds() const { return m_bounds; } // level 0's
     uint32 getFirstVertex() const { return m_firstVertex; } // in the vertex mega-buffer, in this mesh's vertex units (the grass reads the terrain's: TerrainVertex)
+    float getMinHeight() const { return m_minHeight; } // a terrain node's world Y range
+    float getMaxHeight() const { return m_maxHeight; }
 
     RenderMesh(const RenderMesh&) = delete;
     RenderMesh& operator=(const RenderMesh&) = delete;

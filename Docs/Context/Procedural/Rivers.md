@@ -413,7 +413,7 @@ interpolated).
 **Consumers.**
 
 * **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river`, `riverSpeed` and
-  "under river or lake water" as three bytes of the vertex (`TerrainVertex`, RendererVK "Terrain and ocean integration").
+  "under river or lake water" as two bytes and a bit of the vertex (`TerrainVertex`, RendererVK "Terrain and ocean integration").
   The splat paints the bed with the beach layer and the grass / clutter culls read the same value. They are on the
   ground's vertices because the ground reads them: the influence reaches the floodplain's edge and dry beds, where no
   ribbon lies, and a cull finds a vertex from xz. Their resolution is the drawn node's vertex spacing (2 m at LOD0).

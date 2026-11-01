@@ -46,28 +46,37 @@ layout (location = 0, index = 1) out vec4 out_factor; // the ground's multiplier
 // LOD this shader's splat cannot give). hitTerrain lets the caller fade terrain hits on sloped film.
 bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3 L, vec3 ambientSky, out vec3 radiance, out bool hitTerrain)
 {
-	hitTerrain = false;
+	// The terrain first (not in the TLAS): the trace stops at it.
+	const float tTerrain = terrainRayMarch(origin, dir, 0.05, tMax);
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsNoneEXT, 0xFFu, origin, 0.05, dir, tMax);
+	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsNoneEXT, 0xFFu, origin, 0.05, dir, tTerrain);
 	while (rayQueryProceedEXT(rq))
 	{
 		if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
 			&& rtsCandidateBlocks(rq))
 			rayQueryConfirmIntersectionEXT(rq);
 	}
-	if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
+	const bool hitScene = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+	hitTerrain = !hitScene;
+	if (!hitScene && tTerrain >= tMax)
 		return false;
 
-	const float t = rayQueryGetIntersectionTEXT(rq, true);
+	const float t = hitScene ? rayQueryGetIntersectionTEXT(rq, true) : tTerrain;
 	const vec3 hitPos = origin + dir * t;
 	vec3 hitN = -dir;
-	vec3 albedo = vec3(0.3);
+	vec3 albedo = vec3(hitScene ? 0.3 : TERRAIN_RAY_ALBEDO);
+	if (!hitScene)
+	{
+		hitN = terrainRayNormal(hitPos);
+		if (dot(hitN, dir) > 0.0)
+			hitN = -hitN;
+	}
 	// Interpolated normal/uv + material albedo, bounds-checked like rt_shadow.inc.glsl.
-	const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+	const int instanceIdx = hitScene ? rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true) : 0;
 	// Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
 	const bool tree = (instanceIdx & 0x800000) != 0;
-	const uint meshIdx = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
-	if ((tree || uint(instanceIdx) < in_instances.length()) && meshIdx < in_meshInfos.length())
+	const uint meshIdx = hitScene ? rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true) : 0u;
+	if (hitScene && (tree || uint(instanceIdx) < in_instances.length()) && meshIdx < in_meshInfos.length())
 	{
 		const InMeshInfo mi = in_meshInfos[meshIdx];
 		const uint triBase = mi.firstIndex + uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true)) * 3u;
@@ -77,23 +86,12 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 			const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
 			const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
 			const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
-			hitTerrain = materialIdx < in_materialInfos.length() && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u;
-			if (max(max(v0, v1), v2) < (hitTerrain ? in_terrainVertices.length() : in_vertices.length()))
+			if (max(max(v0, v1), v2) < in_vertices.length())
 			{
 				const vec2 bc = rayQueryGetIntersectionBarycentricsEXT(rq, true);
 				const vec3 w = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-				vec3 objN;
-				vec2 uv = vec2(0.0);
-				if (hitTerrain)
-				{
-					objN = terrainVertexNormal(in_terrainVertices[v0].normalOct) * w.x + terrainVertexNormal(in_terrainVertices[v1].normalOct) * w.y
-					     + terrainVertexNormal(in_terrainVertices[v2].normalOct) * w.z;
-				}
-				else
-				{
-					objN = in_vertices[v0].normalV.xyz * w.x + in_vertices[v1].normalV.xyz * w.y + in_vertices[v2].normalV.xyz * w.z;
-					uv = w.x * rtsVertexUV(v0) + w.y * rtsVertexUV(v1) + w.z * rtsVertexUV(v2);
-				}
+				const vec3 objN = in_vertices[v0].normalV.xyz * w.x + in_vertices[v1].normalV.xyz * w.y + in_vertices[v2].normalV.xyz * w.z;
+				const vec2 uv = w.x * rtsVertexUV(v0) + w.y * rtsVertexUV(v1) + w.z * rtsVertexUV(v2);
 				hitN = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true)) * objN);
 				if (dot(hitN, dir) > 0.0)
 					hitN = -hitN;

@@ -1132,7 +1132,7 @@ namespace Procedural
 		updateFogHeightMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
 		renderer.setTerrainParams(0.0f, m_settings.seaLevel);   // no mesh up: disables the ocean land cull
 		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
-		renderer.setTerrainStitch(0.0f, glm::vec2(0.0f), 0.0f, 1.0f, 0, 1); // no chunks: no edge stitching
+		renderer.setTerrainStitch(0.0f, glm::vec2(0.0f), 0.0f, 1.0f, 0, 1, 1.0f); // no chunks: no edge stitching
 
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
 	}
@@ -1601,6 +1601,11 @@ namespace Procedural
             {
                 const oc::vector<uint32> indices = terrainNodeIndices(nodeRes);
                 m_nodeIndices = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(indices.data(), indices.size()));
+                const oc::vector<uint32> half = terrainNodeIndices(nodeRes, 2);
+                const oc::vector<uint32> quarter = terrainNodeIndices(nodeRes, 4);
+                m_nodeShadowIndicesHalf = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(half.data(), half.size()));
+                m_nodeShadowIndicesQuarter = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(quarter.data(), quarter.size()));
+                renderer.setTerrainShadowIndices(m_nodeShadowIndicesHalf, m_nodeShadowIndicesQuarter);
                 m_nodeIndicesRes = nodeRes;
             }
             for (Result& res : ready)
@@ -1634,7 +1639,7 @@ namespace Procedural
 
 		updateResidency(gate);
 		renderer.setTerrainStitch(m_settings.edgeStitch ? chunkSize : 0.0f, m_drawCam.cam,
-			m_drawCam.fullRes, glm::max(m_drawCam.lodStep, 0.01f), m_drawCam.maxLod, (uint32)glm::max(1, m_settings.lod0Res));
+			m_drawCam.fullRes, glm::max(m_drawCam.lodStep, 0.01f), m_drawCam.maxLod, (uint32)glm::max(1, m_settings.lod0Res), chunkSize / (float)glm::max(1, m_settings.lod0Res));
 
 		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
 
@@ -1666,6 +1671,16 @@ namespace Procedural
 						}
 			}
 			renderer.setGrassGround(chunkSize, lod0Res + 1, oc::span<const Renderer::GrassGroundChunk>(m_grassGround.data(), m_grassGround.size()));
+
+			// Every ray marches the drawn nodes (terrain_ray.inc.glsl); the renderer keeps the ones its table reaches.
+			m_terrainRayNodes.clear();
+			for (const auto& entry : m_residents)
+			{
+				const Resident& resident = *entry.second;
+				if (resident.mesh.isValid() && resident.spatialEntry.isValid())
+					m_terrainRayNodes.push_back({ resident.firstBase(), resident.lod, resident.mesh.getFirstVertex(), resident.mesh.getMinHeight(), resident.mesh.getMaxHeight() });
+			}
+			renderer.setTerrainRayNodes(chunkSize, lod0Res, oc::span<const Renderer::TerrainRayNode>(m_terrainRayNodes.data(), m_terrainRayNodes.size()));
 		}
 	}
 

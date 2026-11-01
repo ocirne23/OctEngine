@@ -128,9 +128,10 @@
 
 ### Node memory
 
-Every node is the same `lod0Res` grid: `(lod0Res+1)²` vertices, no skirt (edge stitching, below) - ~330 KB (20-byte
-`TerrainVertex`, RendererVK "Terrain and ocean integration"). **All nodes draw ONE index range of `6·lod0Res²` indices**
-(`m_nodeIndices`, made before the first upload of a `lod0Res`; `terrainNodeIndices`). The wanted set is roughly 25 LOD0
+Every node is the same `lod0Res` grid: `(lod0Res+1)²` vertices, no skirt (edge stitching, below) - ~200 KB (12-byte
+`TerrainVertex`, height only) + ~2 KB of bricks for the ray march, no BLAS (RendererVK "Terrain and ocean integration"). **All nodes draw ONE index range of `6·lod0Res²` indices**
+(`m_nodeIndices`, made before the first upload of a `lod0Res`; `terrainNodeIndices`), plus two coarser ranges for the sun
+shadow pass (RendererVK "Sun shadow draw cost"). The wanted set is roughly 25 LOD0
 nodes, then ~15 per coarser level (each band is about one node wide in its own node size). A retired node's vertex range
 frees at once (`retireResident` -> `RenderMesh::destroy`), so residency follows the camera; the mega-buffers never
 shrink - the freed ranges are holes for later uploads.
@@ -142,7 +143,7 @@ one does not (T-junctions: cracks). Instead of a skirt, **the terrain VS snaps t
 side's straight edge**. Every node has the same grid, so a node one level coarser has a vertex on every 2nd vertex of
 the finer one's edge (aligned: a node's edge starts on its coarser neighbour's lattice).
 
-* **The data**: no stitch data on the vertex but the node's LOD (`TerrainVertex::lod`). A neighbour 1 / 2 / 3 LODs coarser
+* **The data**: no stitch data on the vertex but the node's LOD (`TerrainVertex::normalLod`). A neighbour 1 / 2 / 3 LODs coarser
   has its vertices on every 2nd / 4th / 8th of ours, at the same world points (sampled there by both nodes, so they match
   exactly), and draws the edge as the line between those heights.
 * **The shader** (`instanced_indirect_terrain.vs.glsl`, `terrainStitchedHeight`): a vertex on one edge (found by its
@@ -170,7 +171,7 @@ the finer one's edge (aligned: a node's edge starts on its coarser neighbour's l
   * **The UBO lags one frame** (the begin-frame job builds it before `terrain.update`), and a node registered in an
     update draws in the main pass only from the next frame (its first stamp) - so this frame's drawn set always keeps the
     invariant for the camera the UBO carries. Culling `Off`'s walk skips held nodes.
-* **Not stitched:** the shadow pass (`shadow_depth.vs`), the ray-tracing BLAS, the grass and clutter (they read the
+* **Not stitched:** the shadow pass (`shadow_depth.vs`), the terrain ray march, the grass and clutter (they read the
   unsnapped vertices) - all off by the tiny T-junction error at a LOD edge. **Tessellation:** every edge to a coarser
   node is >= `fullResDist + lodStep` chunks (~460 m) away, past the tessellation fade end (75 m), so the displaced
   relief only meets LOD0 against LOD0.

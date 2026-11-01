@@ -20,6 +20,8 @@ protected:
         m_firstIndex = other.m_firstIndex;
         m_numIndices = other.m_numIndices;
         m_bounds = other.m_bounds;
+        m_minHeight = other.m_minHeight;
+        m_maxHeight = other.m_maxHeight;
         m_lodGroup = other.m_lodGroup;
         m_meshIdx = other.m_meshIdx;
         m_numLevels = other.m_numLevels;
@@ -34,6 +36,8 @@ protected:
     uint32 m_firstIndex = 0;
     uint32 m_numIndices = 0;          // 0 = the indices are a RenderMeshIndices', which frees them (a terrain node)
     Sphere m_bounds;                  // level 0's
+    float m_minHeight = 0.0f;         // a terrain node's world Y range (the terrain ray table)
+    float m_maxHeight = 0.0f;
     uint32 m_lodGroup = UINT32_MAX;   // the GPU LOD chain over the levels (UINT32_MAX = one level)
     uint16 m_meshIdx = UINT16_MAX;    // level 0's MeshInfo; level k is m_meshIdx + k
     uint8 m_numLevels = 1;

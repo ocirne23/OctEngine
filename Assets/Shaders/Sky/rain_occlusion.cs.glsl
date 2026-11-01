@@ -17,8 +17,13 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 0) uniform accelerationStructureEXT u_tlas;
 layout (binding = 1, r32ui) uniform restrict writeonly uimage2D u_rainOcclusion;
 
-// The push block: RainOcclusionPipeline's RainPush (pc_layerBlock: lockable).
+// The push block: RainOcclusionPipeline's RainPush (pc_layerBlock: lockable; pc_terrainRay: no frame UBO here).
+layout (buffer_reference) buffer TerrainRayTable;
 #include "push.generated.glsl"
+
+#include "mesh_vertex.inc.glsl"
+#define TERRAIN_RAY_TABLE pc_terrainRay
+#include "terrain_ray.inc.glsl"
 
 void main()
 {
@@ -35,11 +40,13 @@ void main()
     const float range = length(span);
     const vec3 dir = span / range;
 
+    // The terrain first (not in the TLAS): the solid trace stops at it.
+    const float tTerrain = terrainRayMarch(origin, dir, 0.0, range);
     rayQueryEXT solid;
-    rayQueryInitializeEXT(solid, u_tlas, gl_RayFlagsCullNoOpaqueEXT, 0xFFu, origin, 0.0, dir, range);
+    rayQueryInitializeEXT(solid, u_tlas, gl_RayFlagsCullNoOpaqueEXT, 0xFFu, origin, 0.0, dir, tTerrain);
     while (rayQueryProceedEXT(solid)) {}
     const float tSolid = rayQueryGetIntersectionTypeEXT(solid, true) == gl_RayQueryCommittedIntersectionTriangleEXT
-        ? rayQueryGetIntersectionTEXT(solid, true) : range;
+        ? rayQueryGetIntersectionTEXT(solid, true) : tTerrain;
 
     uint layers = 0u;
     float tTop = range;

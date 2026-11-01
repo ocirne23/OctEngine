@@ -30,23 +30,45 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   (location 4) through the tessellation stages to both FSs; the grass and clutter culls read it from the mesh with
   `grassGroundRiver`, over the same triangle as the height, so the bed's grass and clutter follow the ground's layers.
   The ocean's seabed splat sets it 0.
-* **The terrain vertex** (`RendererVKLayout::TerrainVertex`, 20 B; GLSL `mesh_vertex.inc.glsl`): position, an octahedral
-  normal (two snorm16; a height field's normal has y > 0, so no fold), and 4 bytes - river influence, flow speed
-  (/ `TERRAIN_VERTEX_SPEED_MAX`), under water, the node's LOD. **It sits in the MeshVertex mega-buffer**, at a vertex
-  offset in its own units (`VERTEX_BUCKET_BYTES` is a multiple of both strides), so nothing rebinds a buffer inside the
-  DGC executes:
+* **The terrain vertex** (`RendererVKLayout::TerrainVertex`, 12 B; GLSL `mesh_vertex.inc.glsl`): the height, an
+  octahedral normal (two snorm14; a height field's normal has y > 0, so no fold) with the under-water bit and the node's
+  LOD in one word, and 4 bytes - river influence, flow speed (/ `TERRAIN_VERTEX_SPEED_MAX`), grid column, grid row.
+  **X/Z are not stored**: `terrainVertexXZ` = the grid position x LOD0's quad size (`u_terrain_stitchBands.w`) x 2^lod.
+  Eight bits of grid position cap "LOD0 resolution" at 128. **It sits in the MeshVertex mega-buffer**, at a vertex offset
+  in its own units (`VERTEX_BUCKET_BYTES` is a multiple of both strides), so nothing rebinds a buffer inside the DGC
+  executes:
   * The terrain VS and the shadow VS read it from a storage block by `gl_VertexIndex`, with no vertex attributes. The
     terrain variants share the execution set's MeshVertex vertex input and do not consume it. **The shadow pipeline has
     no vertex attributes at all**: its ONE multiview pipeline draws both formats (bit 8 of the instance's packed word,
     without bit 15 = a terrain node). A second block on the buffer's binding (`in_terrainVertices`) names the format.
-  * The BLAS build takes the stride per mesh (`RayTracingScene::getVertexStrides`).
-  * A ray hit whose material has `MATERIAL_FLAG_TERRAIN` fetches `TerrainVertex` (the GI trace, `water_scene.inc`, the
-    film's mirror) - bounds included, the indices being in its units. Terrain is opaque in the TLAS, so
-    `rtsCandidateBlocks` never meets it.
   * **Every node of one `lod0Res` draws ONE index range** (`RenderMeshIndices`, held by TerrainStreamer;
     `RenderMesh::m_numIndices` 0 = not the mesh's to free): the indices are relative to the vertex offset.
   * **A mesh on TerrainLit must be a `createTerrainMesh` mesh.** An `ObjectContainer` material override to TerrainLit would
     draw a 48-byte mesh with this VS; `.oc` files cannot select it (`parsePipeline`).
+* **THE TERRAIN RAY MARCH** (`terrain_ray.inc.glsl`). **The terrain has no BLAS and is not in the TLAS** (`createTerrainMesh`:
+  not raytraced): every ray walks the node vertices as a height field, then traces the TLAS up to the march's hit
+  (`terrainRayMarch(o, d, tMin, tMax)` returns tMax for a miss). An any-hit ray that hits the terrain traces nothing. In: `rtShadowVisibility`
+  (so the GI's and the lit core's shadow rays), the RTAO, `volRayVisibility`, the rain occlusion, the GI gather, `traceScene`, the film's mirror.
+  * **One flat loop, three levels**: a base chunk (with the height range of the node over it), a brick (8 x 8 cells:
+    `TERRAIN_BRICK_SHIFT`), a cell (its two triangles, with the mesh's diagonal). Each step takes the coarsest level that
+    rules the ray out up to where the ray leaves it. A cell's height is linear in t on each side of the diagonal, so the hit
+    is exact. Between steps only the ray's side of the surface survives, and a side change between two steps is a hit: so a ray
+    across a T-junction at a LOD edge cannot leak. Stops at 256 steps (a miss). Both sides of a triangle hit, like a ray query,
+    so a hit normal with y > 0 facing away is still the GI's backface.
+  * **The bricks**: min and max height per brick, in the node's vertex allocation, after its `(lod0Res + 1)²` vertices
+    (`generateChunk`; about 2 KB per node, `RenderTerrainMeshData::vertices` holds them in whole vertices).
+  * **The table** (`TerrainRayFrameGpu`, one host-visible buffer per frame slot, `uploadTerrainRayFrame` in present): the
+    base chunks around the scene focus out to "RT/TLAS Range" + a chunk, at most 65 per axis, each with the finest drawn
+    node over it (`setTerrainRayNodes`, every frame from `TerrainStreamer::update`; a frame without a call marches
+    nothing). A ray past it misses, as past the TLAS range.
+  * **No descriptor**: a device address, `u_present_terrainRay.xy` (the preamble enables `GL_EXT_buffer_reference` and
+    `_uvec2` in every shader); `pc_terrainRay` in the rain occlusion, which binds no frame UBO (`#define TERRAIN_RAY_TABLE`).
+    The table holds the vertex mega-buffer's address, and reads through it are not bounds-checked: the march clamps every index.
+  * **A hit's normal** = `terrainRayNormal(hitPos)`, the interpolated vertex normals (a second lookup after the march, so
+    the march keeps nothing but t). **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
+    mirror, `waterBedAlbedo` (the splat) in `traceScene`.
+  * **The RTAO's relief skip**: a march hit nearer than the relief depth is the underside of the flat mesh: it marches
+    once more from past that hit.
 * **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than an ARM texture):
   diffuse = sRGB albedo + linear ROUGHNESS in the alpha (BC3); normal (BC5 sets `MATERIAL_FLAG_BC5_NORMAL`);
   height = HEIGHT (R, 0.5 = flat) + AO (G) (BC5). **Metalness is always 0** (`metalRoughnessTexIdx` stays none).
@@ -139,7 +161,7 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
     relief on coarse triangles. The height falloff is read by the TES, the ground FS pixel normal, the film VS lift
     and the ocean's film estimate. The domain origin is LOWER_LEFT, so `ccw` follows the GL rules.
   * **Lighting uses the UNDISPLACED position** (`in_meshPos`, location 3; `TERRAIN_LIT_POS` in the terrain FS under
-    `TERRAIN_TESS`). The shadow map and the TLAS hold the flat mesh, and the centred relief puts half the surface below
+    `TERRAIN_TESS`). The shadow map and the ray march hold the flat mesh, and the centred relief puts half the surface below
     it: lit from the displaced point, that half self-shadowed in bands. The splat samples the displaced `in_pos`.
     **Keep it a vec3 interpolant:** one float (the displacement) rebuilt in the FS cost the tessellated ground FS 8
     registers - the compiler kept the rebuilt point live, while a vec3 interpolant is re-read at each use. The FILM
@@ -287,7 +309,7 @@ the GGX glint, the light-grid lights. **Its RT toggles and ranges are the ocean'
   out there the lake is opaque and the terrain mesh cuts its shore (the body trace's height-map fallback is near-only
   too). **Writes alpha 0** - TAA's animated-surface flag, as the ocean (the ripples move without motion vectors).
 * **The body trace starts 1 m BACK along the refracted ray** (`traceRiverBody`; the water path counts from the
-  surface): in a shallow stream the TLAS bed (a coarser terrain LOD) can lie at or just above the drawn surface, and a
+  surface): in a shallow stream the marched bed (a coarser terrain LOD) can lie at or just above the drawn surface, and a
   ray from the surface misses it - a bright band along the banks.
 * UBO section "Rivers" (`river_*`, RendererUbo.cpp), lock section "Rivers" (`c_uboLockSections`: the
   "Terrain/Rivers/Surface" rows; `river_nearCovered` is `UboLive`).

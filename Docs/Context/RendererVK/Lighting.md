@@ -198,8 +198,8 @@ which is a baked define).
   reads `MeshVertex in_vertices[]` from `mesh_vertex.inc.glsl` (plain std430; the skinning pass uses it too).
   **`MeshVertex` is 3 × vec4 — `positionU`, `normalV`, `tangent` — with the texCoord in the two `.w`**, so every member
   is 16 B-aligned (one wide load each) and position stays at offset 0 for the BLAS build. The vertex input binds
-  locations 0 / 1 as vec4s (a shader without uv declares vec3 there). A hit on a `MATERIAL_FLAG_TERRAIN` material reads
-  `TerrainVertex in_terrainVertices[]` instead ("The terrain vertex" in [Terrain.md](Terrain.md)).
+  locations 0 / 1 as vec4s (a shader without uv declares vec3 there). The terrain is not in the TLAS: the trace stops at
+  the terrain ray march's hit ("THE TERRAIN RAY MARCH" in [Terrain.md](Terrain.md)).
 * **Miss rays AND the virtual sky probe sample THE SKY MAP** instead of marching the atmosphere, so the out-of-field
   fallback matches the misses by construction. **Gather hits use `giEvalBounce`** (gi_probe.inc.glsl, write side;
   probe path only): the cheap multi-bounce lookup — no Chebyshev, no cross-cascade blend — because the result is
@@ -375,8 +375,12 @@ raster-bound: with every terrain triangle made degenerate it still cost ~70% of 
 * No effect either: a smaller "Shadows/Caster pad (m)", dropping terrain chunks from the coarser cascades where a
   finer one covers them (the masks change, the vertex work does not), and column-strip chunk indices for better
   post-transform reuse (vertex reuse is not the limit).
-* What is left: fewer terrain vertices into the pass (a coarser shadow LOD - a visual trade), or caching the static
-  casters' cascades.
+* **The terrain's shadow LOD** ("Shadows/Terrain half-res from (m)" 300, "Terrain quarter-res from (m)" 1000; the node's near
+  side from the focus): the shadow cull gives a far node a coarser shared index range over the same vertices, every 2nd or
+  every 4th (`terrainNodeIndices` stride, `setTerrainShadowIndices`, `u_terrain_shadowIndices`), so only those vertices run.
+  By distance and not by the cascade mask: a near cascade's box reaches far up-sun and takes in distant nodes. A coarse
+  caster differs from the surface it shades, so a value too low shows as false self-shadow on slopes.
+* What is left: caching the static casters' cascades.
 
 ## Aerial perspective ("Fog/Aerial perspective" tweaks)
 

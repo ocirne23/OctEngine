@@ -34,8 +34,8 @@ public:
     void setActive(bool active);
     bool isActive() const { return m_active; }
     // Into the primary, after the TLAS build's barrier: the trace, then a barrier to the particle sim's sampled read.
-    // viewProj = the frame UBO's u_weather_rainOcclusionViewProj (its inverse rides the push constants).
-    void record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj);
+    // viewProj = the frame UBO's u_weather_rainOcclusionViewProj (its inverse rides the push constants). terrainRay = this slot's terrain ray table.
+    void record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj, uint64 terrainRay);
 
     // Always in GENERAL (the particle sim samples it there, nearest, bounds-checked itself).
     vk::ImageView getView() const { return m_view; }
@@ -55,6 +55,7 @@ private:
         PushValue<glm::mat4> invViewProj = g("invViewProj");
         PushValue<uint32> resolution = g("resolution");
         PushValue<float> layerBlock = g("layerBlock"); // lockable: the rain one foliage layer stops (0..1)
+        PushValue<uint64> terrainRay = g("terrainRay", "TerrainRayTable");
     };
     PushBlock m_block;
     RainPush m_push{ { m_block } };

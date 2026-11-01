@@ -18,7 +18,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain", "Origin X (m)", &s.originX, -1.0e7f, 1.0e7f, 10.0f);
 	Tweak::floatVar("Terrain", "Origin Z (m)", &s.originZ, -1.0e7f, 1.0e7f, 10.0f);
 	Tweak::intVar("Terrain", "Chunk size (m)", &s.chunkSize, 128, 1024, 1.0f);
-	Tweak::intVar("Terrain", "LOD0 resolution", &s.lod0Res, 128, 1024, 1.0f);
+	Tweak::intVar("Terrain", "LOD0 resolution", &s.lod0Res, 16, 128, 1.0f); // at most 128: TerrainVertex holds its grid position in 8 bits
 	Tweak::intVar("Terrain", "Range (chunks)", &s.ringRadius, 1, 128, 1.0f); // max generation radius from the camera chunk
 	Tweak::floatVar("Terrain", "LOD step (chunks)", &s.lodStep, 0.1f, 16.0f, 0.1f); // LOD0 band width; each next band doubles
 	Tweak::floatVar("Terrain", "Full-res distance (chunks)", &s.fullResDist, 0.0f, 32.0f, 0.05f); // edge distance forced to LOD0 before bands begin

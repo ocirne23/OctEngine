@@ -213,7 +213,7 @@ void AccelerationStructure::ensureScratch(Buffer& scratch, vk::DeviceAddress& ou
 }
 
 void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer cmd, Buffer& vertexBuffer, Buffer& indexBuffer,
-    const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, const uint8* vertexStrides, oc::span<const uint32> meshIndices,
+    const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, oc::span<const uint32> meshIndices,
     bool allowCompaction)
 {
     // Only self-aliased meshes with live geometry build a BLAS: LOD-chain levels share their RT level's,
@@ -259,7 +259,7 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
         // be designated-initialized; default-construct then assign the active union member.
         vk::AccelerationStructureGeometryTrianglesDataKHR tri{
             .vertexFormat = vk::Format::eR32G32B32Sfloat,
-            .vertexStride = vertexStrides[toBuild[i]],
+            .vertexStride = sizeof(RendererVKLayout::MeshVertex),
             .maxVertex = vertexCounts[toBuild[i]] - 1u,
             .indexType = vk::IndexType::eUint32,
         };

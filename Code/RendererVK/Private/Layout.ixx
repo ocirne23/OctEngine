@@ -415,26 +415,56 @@ export namespace RendererVKLayout
     using MeshIndex = uint32;
 
     // A terrain node's vertex (Renderer::createTerrainMesh; the GLSL mirror is in mesh_vertex.inc.glsl), in the SAME mega-buffer as MeshVertex: its MeshInfo
-    // vertexOffset counts TerrainVertex units. The terrain VS and the shadow VS read it by gl_VertexIndex, the BLAS build with this stride, and a ray hit on a
-    // MATERIAL_FLAG_TERRAIN material fetches it in place of a MeshVertex. No tangent and no uv: the terrain FS builds its own bases and shades in world space.
+    // vertexOffset counts TerrainVertex units. The height only: X/Z come from its grid position. The terrain VS and the shadow VS read it by gl_VertexIndex, and
+    // the terrain ray march (terrain_ray.inc.glsl) by node and cell. No tangent and no uv: the terrain FS builds its own bases and shades in world space.
     constexpr float TERRAIN_VERTEX_SPEED_MAX = 12.75f; // m/s at riverSpeed 255
     struct TerrainVertex
     {
-        glm::vec3 position;    // node-local X/Z, world Y
-        uint32 normalOct;      // two snorm16: the normal's x and z over its L1 length (a height field's normal has y > 0, so no fold)
+        float height;          // world Y
+        uint32 normalLod;      // bits 0..13, 14..27: the normal's x and z over its L1 length, snorm14 (a height field's normal has y > 0, so no fold);
+                               // bit 28: under river or lake water; bits 29..31: the node's LOD
         uint8 riverInfluence;  // 255 in a channel, 0 past its floodplain
         uint8 riverSpeed;      // TERRAIN_VERTEX_SPEED_MAX at 255
-        uint8 underWater;      // 255 under river or lake water
-        uint8 lod;             // the node's LOD (the VS's edge stitch)
+        uint8 col;             // the grid position in the node: X = col x the node's quad size, Z = row x it
+        uint8 row;
 
-        void setNormal(const glm::vec3& n)
+        void setNormalLod(const glm::vec3& n, bool underWater, uint32 lod)
         {
             const float invL1 = 1.0f / (glm::abs(n.x) + glm::abs(n.y) + glm::abs(n.z));
-            const auto snorm16 = [](float v) { return (uint32)(uint16)(int16)glm::round(glm::clamp(v, -1.0f, 1.0f) * 32767.0f); };
-            normalOct = snorm16(n.x * invL1) | (snorm16(n.z * invL1) << 16);
+            const auto snorm14 = [](float v) { return (uint32)((int32)glm::round(glm::clamp(v, -1.0f, 1.0f) * 8191.0f) + 8192); };
+            normalLod = snorm14(n.x * invL1) | (snorm14(n.z * invL1) << 14) | ((underWater ? 1u : 0u) << 28) | (lod << 29);
         }
     };
-    static_assert(sizeof(TerrainVertex) == 20);
+    static_assert(sizeof(TerrainVertex) == 12);
+
+    // THE TERRAIN RAY MARCH's data (terrain_ray.inc.glsl). After a node's (lod0Res + 1)^2 vertices, its BRICKS: per TERRAIN_BRICK_CELLS x TERRAIN_BRICK_CELLS
+    // cells the min and the max height (two floats, row-major), written by generateChunk, allocated and freed with the vertices.
+    constexpr uint32 TERRAIN_BRICK_SHIFT = 3;
+    constexpr uint32 TERRAIN_BRICK_CELLS = 1u << TERRAIN_BRICK_SHIFT;
+    constexpr uint32 TERRAIN_RAY_TABLE_DIM = 65;  // base chunks per axis around the scene focus: 8192 m either way at 256 m chunks, the "RT/TLAS Range" maximum
+    constexpr uint32 TERRAIN_RAY_NO_NODE = 0xFFFFFFFFu;
+    struct TerrainRayEntry // one base chunk: the finest drawn node over it
+    {
+        uint32 firstVertex = TERRAIN_RAY_NO_NODE; // the node's first TerrainVertex in the mega-buffer
+        uint32 lod = 0;
+        float minHeight = 0.0f;                   // over the whole node
+        float maxHeight = 0.0f;
+    };
+    static_assert(sizeof(TerrainRayEntry) == 16);
+    struct TerrainRayFrameGpu // per frame slot, host-visible, read by device address (scalar layout: no holes)
+    {
+        uint64 vertices = 0;         // the vertex mega-buffer's device address
+        glm::ivec2 tableMin{ 0 };    // the base chunk of table cell (0, 0)
+        uint32 tableDim = 0;         // cells per axis; 0 = no terrain, every march misses
+        float chunkSize = 1.0f;      // m
+        float lod0Quad = 1.0f;       // m: LOD0's quad size, doubling per LOD
+        uint32 lod0Res = 1;          // quads per side of every node
+        float minHeight = 0.0f;      // over every entry: the march's height band
+        float maxHeight = 0.0f;
+        uint32 _pad[2] = { 0, 0 };
+        TerrainRayEntry entries[TERRAIN_RAY_TABLE_DIM * TERRAIN_RAY_TABLE_DIM];
+    };
+    static_assert(sizeof(TerrainRayFrameGpu) == 48 + sizeof(TerrainRayEntry) * TERRAIN_RAY_TABLE_DIM * TERRAIN_RAY_TABLE_DIM);
 
     // Per-vertex skinning influences for skeletal meshes. Stored as a parallel stream (not folded into
     // MeshVertex) so the rendered/BLAS vertex format stays 48 bytes. boneIndices reference the scene
@@ -488,7 +518,7 @@ export namespace RendererVKLayout
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
     // load does not grow them:
-    constexpr size_t INITIAL_VERTEX_DATA = 16 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_VERTEX_DATA = 512 * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
     constexpr size_t INITIAL_INDEX_DATA = 45 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances

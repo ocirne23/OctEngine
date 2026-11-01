@@ -169,7 +169,7 @@ void RainOcclusionPipeline::reloadShaders()
         printf("RainOcclusionPipeline: shader reload failed, keeping previous pipeline\n");
 }
 
-void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj)
+void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj, uint64 terrainRay)
 {
     assert(m_active && "RainOcclusionPipeline::record while inactive");
     // The whole image is rewritten: its old contents are discarded. The source scope (every earlier compute read on the
@@ -197,6 +197,7 @@ void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::A
     PushData pc(m_block);
     pc.set(m_push.invViewProj, glm::inverse(viewProj));
     pc.set(m_push.resolution, res);
+    pc.set(m_push.terrainRay, terrainRay);
     cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
     cmd.dispatch((res + 7) / 8, (res + 7) / 8, 1);
 

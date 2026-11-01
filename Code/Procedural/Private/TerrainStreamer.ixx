@@ -305,6 +305,8 @@ export namespace Procedural
 		};
 		// The index range every node of m_nodeIndicesRes draws; declared before the meshes.
 		RenderMeshIndices      m_nodeIndices;
+		RenderMeshIndices      m_nodeShadowIndicesHalf;    // over every 2nd vertex: the sun shadow pass (Renderer::setTerrainShadowIndices)
+		RenderMeshIndices      m_nodeShadowIndicesQuarter; // over every 4th vertex
 		uint32                 m_nodeIndicesRes = 0;
 		oc::vector<Upload>     m_uploads;
 		JobCounter             m_uploadCounter;
@@ -360,6 +362,7 @@ export namespace Procedural
 		oc::vector<VegetationDraw>          m_vegDraws;
 		bool                                m_vegRouted = false;
 		oc::vector<Renderer::GrassGroundChunk> m_grassGround; // update's per-frame list for Renderer::setGrassGround (kept memory)
+		oc::vector<Renderer::TerrainRayNode> m_terrainRayNodes; // update's per-frame list for Renderer::setTerrainRayNodes (kept memory)
 		void noteVegetation(const Resident& resident, uint32 passMask); // the walk job
 		// The walk's main-drawn chunks for the rivers' water (RiverSystem::drawChunks at its end; a slot per hand-over entry).
 		oc::vector<RiverSystem::ChunkDraw>  m_riverChunks;

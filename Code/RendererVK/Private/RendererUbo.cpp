@@ -999,6 +999,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.addArray("cascadePlanes", NUM_SHADOW_CASCADES * 6, [this](uint32 i) { return m_cascadePlanes[i]; }, UboLive);
         list.add("shadow_depthBias", sh.depthBias);
         list.add("shadow_normalBias", sh.normalBias);
+        list.add("shadow_terrainHalfFrom", sh.terrainHalfFrom);
+        list.add("shadow_terrainQuarterFrom", sh.terrainQuarterFrom);
         list.add("shadow_invResolution", [] { return 1.0f / (float)RendererVKLayout::SHADOW_MAP_RESOLUTION; });
         list.add("shadow_terrainMarchStart", [&] { return glm::max(sh.terrainMarchStart, 50.0f); }, sh.terrainMarchStart); // the tweak min
         list.add("shadow_terrainMarchBias", [&] { return glm::max(sh.terrainMarchBias, 1.0f); }, sh.terrainMarchBias);
@@ -1262,8 +1264,10 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("terrain_lapseRate", [this] { return m_terrain.getParams().y; }, UboLive);  // C per world metre above sea level (<= 0)
         // The terrain VS's edge stitching (setTerrainStitch): x = chunk size (0 = off), yz = the streamer's DRAW camera in
         // chunks; the bands: x = full-res distance, y = LOD step, z = max LOD. terrainRingLod mirrors ringLodAt with them.
+        // bands.w = LOD0's quad size (m), set with stitching off too: a terrain vertex's X/Z (terrainVertexXZ).
         list.add("terrain_stitch", [this] { return m_terrainStitch; }, UboLive);
         list.add("terrain_stitchBands", [this] { return m_terrainStitchBands; }, UboLive);
+        list.add("terrain_shadowIndices", [this] { return m_terrainShadowIndices; }, UboLive); // the shadow cull's coarser ranges (setTerrainShadowIndices)
         list.add("terrain_splatBase", [this] { return m_terrain.getSplatBaseMaterial() < 0 ? -1.0f : (float)m_terrain.getSplatBaseMaterial(); }, UboLive);
         list.add("terrain_numGround", [this] { return (float)m_terrain.getSplatCounts().numGround; }, UboLive);
         list.add("terrain_numRock", [this] { return (float)m_terrain.getSplatCounts().numRock; }, UboLive);
@@ -1810,6 +1814,12 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("present_treeCount", [this] { return m_treeCullPieces; }, UboPresent);       // the listed pieces
         // The grass / clutter ground table's row stride (setGrassGround, from the terrain update after the build).
         list.add("present_groundStride", [this] { return m_grassGroundStride; }, UboPresent);
+        // This slot's terrain ray table's device address (xy; terrain_ray.inc.glsl).
+        list.add("present_terrainRay", [this]
+        {
+            const uint64 address = m_terrainRayFrames[m_swapChain.getCurrentFrameIndex()].getDeviceAddress();
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboPresent);
         list.add("present_treeFarScale", [this] { return m_treeCullDistanceScale; }, UboPresent);
         list.add("present_treeForceFar", [this] { return m_treeCullForceFar; }, UboPresent);
         list.add("present_treeVolumeStart", [this] { return treeCullVolumeStart(); }, UboPresent); // the far-tree volume's start (m; 0 = no volume)

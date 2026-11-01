@@ -20,6 +20,11 @@ export struct RendererTypes
     // `vertexStride` vertices apart (a base chunk inside a bigger quadtree node is a sub-grid of it).
     struct GrassGroundChunk { glm::ivec2 coord; uint32 firstVertex = 0; uint32 res = 0; };
 
+    // ---- The terrain ray march (setTerrainRayNodes) ----
+
+    // One drawn quadtree node: its first BASE chunk (2^lod chunks per side), its mesh's first vertex and its height range.
+    struct TerrainRayNode { glm::ivec2 firstBase; uint32 lod = 0; uint32 firstVertex = 0; float minHeight = 0.0f; float maxHeight = 0.0f; };
+
     // ---- Ground clutter (setClutterAssets) ----
 
     // One rigid variant mesh: its LOD levels (level 0 first; an empty level = none), y up, the lowest point at 0.

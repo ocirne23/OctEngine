@@ -550,17 +550,17 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     const vec2 f = local - vec2(cell);
     const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
-    const vec3 nb = terrainVertexNormal(in_terrainVertices[a + 1u].normalOct);
-    const vec3 nc = terrainVertexNormal(in_terrainVertices[a + vpr].normalOct);
+    const vec3 nb = terrainVertexNormal(in_terrainVertices[a + 1u].normalLod);
+    const vec3 nc = terrainVertexNormal(in_terrainVertices[a + vpr].normalLod);
     vec3 n;
     if (f.x + f.y <= 1.0)
     {
-        const vec3 na = terrainVertexNormal(in_terrainVertices[a].normalOct);
+        const vec3 na = terrainVertexNormal(in_terrainVertices[a].normalLod);
         n = na + (nb - na) * f.x + (nc - na) * f.y;
     }
     else
     {
-        const vec3 nd = terrainVertexNormal(in_terrainVertices[a + vpr + 1u].normalOct);
+        const vec3 nd = terrainVertexNormal(in_terrainVertices[a + vpr + 1u].normalLod);
         n = nd - (nd - nc) * (1.0 - f.x) - (nd - nb) * (1.0 - f.y);
     }
     return normalize(n);
@@ -570,7 +570,7 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
 vec3 grassGroundRiverVertex(uint i)
 {
     const vec4 data = unpackUnorm4x8(in_terrainVertices[i].data);
-    return vec3(data.x, data.y * TERRAIN_VERTEX_SPEED_MAX, data.z);
+    return vec3(data.x, data.y * TERRAIN_VERTEX_SPEED_MAX, terrainVertexUnderWater(in_terrainVertices[i].normalLod));
 }
 
 // The mesh's RIVER data at xz, over the same triangle as the height: x = the river influence (what the ground's beach

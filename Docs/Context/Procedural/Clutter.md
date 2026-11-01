@@ -136,7 +136,7 @@ and one decompress), uploaded in `finishGeneration` (`RenderTexture::create` wit
 `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
 have none; `PetalShape None` turns a Radial / Umbel / Spike / Bell texture off.
 
-**THE RIVER DATA ON THE GROUND** (TerrainGenerator; three bytes of the terrain vertex, `TerrainVertex`):
+**THE RIVER DATA ON THE GROUND** (TerrainGenerator; two bytes and a bit of the terrain vertex, `TerrainVertex`):
 `TerrainPoint::river`, `riverSpeed` (m/s: the Manning speed of the most influential piece, as the water ribbons'; 0 off
 rivers, on lakes and dry beds) and "under river or lake water".
 `grassGroundRiverData` (grass.inc.glsl) reads them over the drawn triangle: (influence, speed, under the water 0..1).

@@ -239,6 +239,9 @@ export struct ShadowParams
                                 // small clips casters out of the depth map and their shadows pop away.
     float depthBias = 0.001f;    // sun cascade depth bias
     float normalBias = 1.0f;     // sun cascade normal bias (texels)
+    // A terrain node casts over every 2nd / every 4th of its vertices from this far (m, the node's near side from the focus): the pass is bound by its vertices.
+    float terrainHalfFrom = 300.0f;
+    float terrainQuarterFrom = 1000.0f;
 
     // Long-range terrain sun shadows. Past maxDistance (and past the RT path's TLAS range) both shadow
     // sources run out of data, so distant ground goes uniformly lit - a hard terminator across a mesh

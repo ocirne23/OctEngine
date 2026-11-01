@@ -50,7 +50,8 @@ void main()
     vec3 localPos;
     if ((inst.alphaTexIdxCascadeMask & 0x00008100u) == 0x00000100u)
     {
-        localPos = vec3(in_terrainVertices[vertexIdx].x, in_terrainVertices[vertexIdx].y, in_terrainVertices[vertexIdx].z);
+        const vec2 localXZ = terrainVertexXZ(in_terrainVertices[vertexIdx].data, terrainVertexLod(in_terrainVertices[vertexIdx].normalLod), u_terrain_stitchBands.w);
+        localPos = vec3(localXZ.x, in_terrainVertices[vertexIdx].y, localXZ.y);
     }
     else
     {

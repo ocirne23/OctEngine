@@ -29,5 +29,6 @@ export namespace Procedural
 	                   oc::vector<TerrainPoint>* outField = nullptr);
 
 	// The index list every node of this lod0Res shares (Renderer::createMeshIndices): two triangles a c b, b c d per quad.
-	oc::vector<uint32> terrainNodeIndices(uint32 lod0Res);
+	// stride 2 / 4 = over every 2nd / 4th vertex of the same grid (the sun shadow pass's coarser ranges).
+	oc::vector<uint32> terrainNodeIndices(uint32 lod0Res, uint32 stride = 1);
 }

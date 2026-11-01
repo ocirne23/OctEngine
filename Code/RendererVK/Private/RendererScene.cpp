@@ -400,6 +400,11 @@ RenderMeshIndices Renderer::createMeshIndices(oc::span<const RendererVKLayout::M
     return shared;
 }
 
+void Renderer::setTerrainShadowIndices(const RenderMeshIndices& half, const RenderMeshIndices& quarter)
+{
+    m_terrainShadowIndices = glm::uvec4(half.m_firstIndex, half.m_numIndices, quarter.m_firstIndex, quarter.m_numIndices);
+}
+
 RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices)
 {
     RenderMesh mesh;
@@ -412,6 +417,8 @@ RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const 
     mesh.m_firstVertex = (uint32)(Globals::meshDataManager.uploadVertexData(data.vertices.data(), size_t(numVertices) * stride) / stride);
     mesh.m_firstIndex = indices.m_firstIndex;
     mesh.m_bounds = data.bounds;
+    mesh.m_minHeight = data.minHeight;
+    mesh.m_maxHeight = data.maxHeight;
 
     oc::vector<RendererVKLayout::MeshInfo> infos(1);
     RendererVKLayout::MeshInfo& info = infos[0];
@@ -421,7 +428,8 @@ RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const 
     info.firstIndex = indices.m_firstIndex;
     info.vertexOffset = (int32)mesh.m_firstVertex;
     info.prevVertexDelta = 0;
-    mesh.m_meshIdx = (uint16)addMeshInfos(infos, oc::span<const uint32>(&numVertices, 1), false, true, stride);
+    // Not raytraced: no BLAS, the terrain is not in the TLAS. Every ray marches it (terrain_ray.inc.glsl).
+    mesh.m_meshIdx = (uint16)addMeshInfos(infos, oc::span<const uint32>(&numVertices, 1), false, false);
     return mesh;
 }
 
@@ -798,7 +806,7 @@ void RendererState::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, ui
 // never compacted, so a range a destroyed container freed is reused first). The callback is the
 // Renderer's own per-slot bookkeeping: the parallel CPU side tables and the BLAS build queue.
 uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs,
-    bool raytraced, uint32 vertexStride)
+    bool raytraced)
 {
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
     if (meshInfos.empty())
@@ -816,7 +824,7 @@ uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>&
         }
         // The BLAS side tables and the build queue: a recycled slot below the one-time build
         // watermark needs its build queued explicitly, since the watermark scan will not reach it.
-        m_rt.onMeshInfosAdded(base, count, vertexCounts, vertexStride, skinnedOutputs || !raytraced, reused);
+        m_rt.onMeshInfosAdded(base, count, vertexCounts, skinnedOutputs || !raytraced, reused);
         // Fresh mesh slots must read as "no LOD chain" on the GPU (device memory starts undefined;
         // addMeshLodGroup overwrites the chained ones right after). A growth re-uploads the whole
         // mapping itself, so this only has to cover the within-capacity append.
@@ -1085,6 +1093,71 @@ void RendererState::uploadGrassFrame(uint32 frameIdx)
     }
     m_grassPipeline.flushFrame(frameIdx);
     m_grassGround.clear();
+}
+
+// ---- The terrain ray march ----
+
+void Renderer::setTerrainRayNodes(float chunkSize, uint32 lod0Res, oc::span<const TerrainRayNode> nodes)
+{
+    m_terrainRayChunkSize = chunkSize;
+    m_terrainRayLod0Res = glm::max(lod0Res, 1u);
+    m_terrainRayNodes.assign(nodes.begin(), nodes.end());
+}
+
+// This slot's table (its fence was waited; terrain_ray.inc.glsl): the base chunks around the scene focus, as far as the TLAS reaches, each with the finest drawn
+// node over it. Then the frame's node list is spent.
+void RendererState::uploadTerrainRayFrame(uint32 frameIdx)
+{
+    using namespace RendererVKLayout;
+    TerrainRayFrameGpu& frame = *m_mappedTerrainRayFrames[frameIdx];
+    frame.tableDim = 0;
+    if (!m_terrainRayNodes.empty() && m_terrainRayChunkSize > 0.0f)
+    {
+        const float range = self().giTlasRange() + m_terrainRayChunkSize;
+        const glm::vec3 focus = self().sceneFocusOrCamera();
+        const glm::vec2 focusXZ(focus.x, focus.z);
+        const glm::ivec2 tableMin(glm::floor((focusXZ - range) / m_terrainRayChunkSize));
+        const glm::ivec2 tableMax(glm::floor((focusXZ + range) / m_terrainRayChunkSize));
+        const int tableDim = oc::min(oc::max(tableMax.x - tableMin.x, tableMax.y - tableMin.y) + 1, (int)TERRAIN_RAY_TABLE_DIM);
+
+        // Built here, then copied: the mapped table is write-combined memory (never read it back).
+        m_terrainRayEntries.assign((size_t)tableDim * tableDim, TerrainRayEntry{});
+        float minHeight = FLT_MAX, maxHeight = -FLT_MAX;
+        for (const TerrainRayNode& node : m_terrainRayNodes)
+        {
+            const int span = 1 << node.lod;
+            const glm::ivec2 lo = glm::max(node.firstBase - tableMin, glm::ivec2(0));
+            const glm::ivec2 hi = glm::min(node.firstBase + span - tableMin, glm::ivec2(tableDim));
+            for (int z = lo.y; z < hi.y; ++z)
+            {
+                for (int x = lo.x; x < hi.x; ++x)
+                {
+                    TerrainRayEntry& entry = m_terrainRayEntries[(size_t)z * tableDim + x];
+                    if (entry.firstVertex == TERRAIN_RAY_NO_NODE || node.lod < entry.lod) // a LOD hand-over keeps two residents: the finer one
+                        entry = TerrainRayEntry{ node.firstVertex, node.lod, node.minHeight, node.maxHeight };
+                }
+            }
+            if (lo.x < hi.x && lo.y < hi.y)
+            {
+                minHeight = oc::min(minHeight, node.minHeight);
+                maxHeight = oc::max(maxHeight, node.maxHeight);
+            }
+        }
+        if (minHeight <= maxHeight)
+        {
+            frame.vertices = Globals::meshDataManager.getVertexBuffer().getDeviceAddress();
+            frame.tableMin = tableMin;
+            frame.tableDim = (uint32)tableDim;
+            frame.chunkSize = m_terrainRayChunkSize;
+            frame.lod0Quad = m_terrainRayChunkSize / (float)m_terrainRayLod0Res;
+            frame.lod0Res = m_terrainRayLod0Res;
+            frame.minHeight = minHeight;
+            frame.maxHeight = maxHeight;
+            memcpy(frame.entries, m_terrainRayEntries.data(), m_terrainRayEntries.size() * sizeof(TerrainRayEntry));
+        }
+    }
+    m_terrainRayFrames[frameIdx].flushMappedMemory(sizeof(TerrainRayFrameGpu));
+    m_terrainRayNodes.clear();
 }
 
 // ---- Ground clutter (ClutterPipeline; Procedural ClutterSystem) ----

@@ -10,6 +10,8 @@
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
+#include "mesh_vertex.inc.glsl"
+#include "terrain_ray.inc.glsl"
 
 struct LightInfo
 {
@@ -167,6 +169,8 @@ float oceanWaveHeightAt(vec2 worldXZ, float waterDepth, float footprint)
 // Hard visibility ray against opaque TLAS geometry (alpha-masked detail is irrelevant at fog frequency).
 float volRayVisibility(vec3 origin, vec3 dir, float tMax)
 {
+    if (terrainRayMarch(origin, dir, 0.02, tMax) < tMax)
+        return 0.0;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.02, dir, tMax);
     while (rayQueryProceedEXT(rq)) {}

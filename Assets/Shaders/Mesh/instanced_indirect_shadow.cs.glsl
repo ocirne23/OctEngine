@@ -99,6 +99,22 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
             drawMeshInfo = in_meshInfos[meshIdx];
         }
     }
+    // A terrain node (its own mesh, one instance): a coarser shared index range over the same vertices by distance. The
+    // pass is bound by its vertices, and only the vertices these indices name run.
+    else if ((material.flags & MATERIAL_FLAG_TERRAIN) != 0u && u_terrain_shadowIndices.y > 0u)
+    {
+        const float reach = max(0.0, distance(centerPos, u_sceneFocus.xyz) - radius); // 0 = every node
+        if (reach >= u_shadow_terrainQuarterFrom)
+        {
+            drawMeshInfo.firstIndex = u_terrain_shadowIndices.z;
+            drawMeshInfo.indexCount = u_terrain_shadowIndices.w;
+        }
+        else if (reach >= u_shadow_terrainHalfFrom)
+        {
+            drawMeshInfo.firstIndex = u_terrain_shadowIndices.x;
+            drawMeshInfo.indexCount = u_terrain_shadowIndices.y;
+        }
+    }
 
     const uint firstInstance = in_firstInstances[meshIdx];
     const uint idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);

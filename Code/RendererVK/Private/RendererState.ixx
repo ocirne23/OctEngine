@@ -397,7 +397,7 @@ protected:
     void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
 
     uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false,
-        bool raytraced = true, uint32 vertexStride = sizeof(RendererVKLayout::MeshVertex));
+        bool raytraced = true);
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_rt.accel().getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
@@ -598,6 +598,14 @@ protected:
     // map - the cascades' pass that this layer must follow).
     bool grassNearShadowActive() const;
     void uploadGrassFrame(uint32 frameIdx);
+    // THE TERRAIN RAY MARCH's per-frame table (setTerrainRayNodes -> present, uploadTerrainRayFrame), read by device address (u_present_terrainRay).
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_terrainRayFrames;
+    oc::array<RendererVKLayout::TerrainRayFrameGpu*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedTerrainRayFrames{};
+    oc::vector<TerrainRayNode> m_terrainRayNodes;
+    oc::vector<RendererVKLayout::TerrainRayEntry> m_terrainRayEntries; // the table being built (kept memory)
+    float m_terrainRayChunkSize = 0.0f;
+    uint32 m_terrainRayLod0Res = 1;
+    void uploadTerrainRayFrame(uint32 frameIdx);
     bool m_groundTableValid = false; // this frame's ground table holds chunks (uploadGrassFrame): the clutter's ground
     // GROUND CLUTTER: the cull + buffers (the objects draw in m_staticMeshGraphicsPipeline). The patch grid and the
     // floor map go into the slot's clutter frame in present (uploadClutterFrame).
@@ -662,7 +670,8 @@ protected:
     uint32 m_cloudShadowMask = 0; // the cascades the primary renders this frame (bit per cascade)
     TerrainResources m_terrain;
     glm::vec4 m_terrainStitch{ 0.0f };      // setTerrainStitch: x = chunk size (0 = off), yz = the draw camera in chunks
-    glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks)
+    glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks), w = LOD0's quad size (m)
+    glm::uvec4 m_terrainShadowIndices{ 0u }; // setTerrainShadowIndices: xy = first index + count over every 2nd vertex, zw = over every 4th (0 = none yet)
     float m_riverNearCovered = 0.0f;        // setRiverNearCovered
     PostParams& m_postParams;
     RTParams& m_rtParams;

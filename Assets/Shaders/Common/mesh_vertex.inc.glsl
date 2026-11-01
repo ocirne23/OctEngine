@@ -15,20 +15,26 @@ struct MeshVertex
 
 #define meshVertexUV(v) vec2((v).positionU.w, (v).normalV.w)
 
-// RendererVKLayout::TerrainVertex: 20 B, a terrain node's vertex in the same mega-buffer, read through a second block on
+// RendererVKLayout::TerrainVertex: 12 B, a terrain node's vertex in the same mega-buffer, read through a second block on
 // the buffer's binding (in_terrainVertices). A mesh's vertexOffset counts these for a MATERIAL_FLAG_TERRAIN material.
 struct TerrainVertex
 {
-    float x, y, z;  // node-local X/Z, world Y
-    uint normalOct; // terrainVertexNormal
-    uint data;      // unpackUnorm4x8: x = the river influence, y = the flow speed / TERRAIN_VERTEX_SPEED_MAX,
-                    // z = 1 under river or lake water; the top byte = the node's LOD
+    float y;        // world Y
+    uint normalLod; // terrainVertexNormal, terrainVertexUnderWater, terrainVertexLod
+    uint data;      // bytes: the river influence, the flow speed / TERRAIN_VERTEX_SPEED_MAX, the grid column, the grid row
 };
 
-vec3 terrainVertexNormal(uint normalOct)
+vec3 terrainVertexNormal(uint normalLod)
 {
-    const vec2 e = unpackSnorm2x16(normalOct);
+    const vec2 e = vec2(int(normalLod & 0x3FFFu) - 8192, int((normalLod >> 14) & 0x3FFFu) - 8192) * (1.0 / 8191.0);
     return normalize(vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y));
+}
+float terrainVertexUnderWater(uint normalLod) { return float((normalLod >> 28) & 1u); }
+uint terrainVertexLod(uint normalLod) { return normalLod >> 29; }
+// Node-local X/Z from the grid position. lod0Quad: u_terrain_stitchBands.w.
+vec2 terrainVertexXZ(uint data, uint lod, float lod0Quad)
+{
+    return vec2((data >> 16) & 255u, data >> 24) * (lod0Quad * float(1u << lod));
 }
 
 #endif

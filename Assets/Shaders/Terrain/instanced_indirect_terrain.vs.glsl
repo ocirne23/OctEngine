@@ -158,10 +158,12 @@ void main()
     const InMeshInstancesData inst = in_instances[inst_idx];
 
     const TerrainVertex vertex = in_terrainVertices[gl_VertexIndex];
-    const vec3 in_pos = vec3(vertex.x, vertex.y, vertex.z);
+    const uint lod = terrainVertexLod(vertex.normalLod);
+    const vec2 localXZ = terrainVertexXZ(vertex.data, lod, u_terrain_stitchBands.w);
+    const vec3 in_pos = vec3(localXZ.x, vertex.y, localXZ.y);
     out_river = float(vertex.data & 255u) * (1.0 / 255.0);
-    out_normal = quat_transform(terrainVertexNormal(vertex.normalOct), inst.quat);
-    const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz, vertex.data >> 24), in_pos.z);
+    out_normal = quat_transform(terrainVertexNormal(vertex.normalLod), inst.quat);
+    const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz, lod), in_pos.z);
     out_pos    = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
 
     // Baked terrain fields, evaluated PER VERTEX and interpolated. Interpolation loses nothing: every field is
