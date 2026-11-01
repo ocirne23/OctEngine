@@ -68,6 +68,8 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   * **A hit's normal** = `terrainRayNormal(hitPos)`, the interpolated vertex normals (a second lookup after the march, so
     the march keeps nothing but t). **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
     mirror, `waterBedAlbedo` (the splat) in `traceScene`.
+  * **The RT sun shadow marches once per pixel** (`traceSunVisibility`), on its first ray: the rays are nearly parallel, and a march costs up to 256 steps
+    at low sun. A hit shadows the whole pixel; the terrain's penumbra is that ray's jitter over the frames. The other rays trace the TLAS only.
   * **The step view**: "Shadows/Debug mode" = Terrain march steps (`terrainMarchDebugColor`, baked as `SHADOW_DEBUG` 5) marches once toward
     the sun from every lit pixel, on the RT path or not. Bands of the step count, because tone mapping and fog move a ramp: 1..7 blue, 8..15 cyan,
     16..31 green, 32..63 yellow, 64..127 orange, 128..255 red; magenta = stopped at 256 steps.

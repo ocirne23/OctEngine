@@ -54,7 +54,10 @@ float traceSunVisibility(vec3 pos, vec3 N)
 		const float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 		const float phi = 6.2831853 * u.y;
 		const vec3 dir = T * (sinTheta * cos(phi)) + B * (sinTheta * sin(phi)) + L * cosTheta;
-		vis += rtShadowVisibility(origin, dir, 0.01, 10000.0);
+		// The terrain once, on the first ray: the rays are nearly parallel, so its penumbra is this ray's jitter over the frames.
+		if (i == 0u && terrainRayMarch(origin, dir, 0.01, 10000.0) < 10000.0)
+			return 0.0;
+		vis += rtShadowTlasVisibility(origin, dir, 0.01, 10000.0);
 	}
 	return vis / float(numRays);
 }

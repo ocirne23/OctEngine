@@ -52,11 +52,9 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 	return alpha >= in_materialInfos[materialIdx].opacity;
 }
 
-// Hard shadow visibility (1 = unoccluded) that respects alpha-masked geometry.
-float rtShadowVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
+// The TLAS alone, without the terrain: hard shadow visibility (1 = unoccluded) that respects alpha-masked geometry.
+float rtShadowTlasVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
 {
-	if (terrainRayMarch(origin, dir, tMin, tMax) < tMax)
-		return 0.0;
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, origin, tMin, dir, tMax);
 	while (rayQueryProceedEXT(rq))
@@ -65,6 +63,14 @@ float rtShadowVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
 			rayQueryConfirmIntersectionEXT(rq);
 	}
 	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? 0.0 : 1.0;
+}
+
+// The terrain and the TLAS.
+float rtShadowVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
+{
+	if (terrainRayMarch(origin, dir, tMin, tMax) < tMax)
+		return 0.0;
+	return rtShadowTlasVisibility(origin, dir, tMin, tMax);
 }
 
 #endif
