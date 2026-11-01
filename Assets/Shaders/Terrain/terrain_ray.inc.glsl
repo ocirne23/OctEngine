@@ -21,11 +21,10 @@
 
 // "Shadows/Debug mode" = Terrain march steps (terrainMarchDebugColor, instanced_indirect_lit.inc.glsl): compiled out otherwise.
 #if defined(SHADOW_DEBUG) && SHADOW_DEBUG == 5
-uint g_terrainRaySkips = 0u;
-uint g_terrainRayCells = 0u;
-#define TERRAIN_RAY_COUNT(counter) ++counter
+uint g_terrainRaySteps = 0u;
+#define TERRAIN_RAY_COUNT_STEP() ++g_terrainRaySteps
 #else
-#define TERRAIN_RAY_COUNT(counter)
+#define TERRAIN_RAY_COUNT_STEP()
 #endif
 
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TerrainRayFloats { float f[]; };
@@ -104,6 +103,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
     float side = 0.0; // the ray's side of the surface at the last step: > 0 above, < 0 below, 0 unknown
     for (uint i = 0u; i < TERRAIN_RAY_MAX_STEPS && t < tEnd; ++i)
     {
+        TERRAIN_RAY_COUNT_STEP();
         const vec3 p = o + d * t;
         const ivec2 chunk = ivec2(floor(p.xz / chunkSize));
         const ivec2 cellInTable = clamp(chunk - table.tableMin, ivec2(0), ivec2(int(dim) - 1));
@@ -114,7 +114,6 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         if (entry.firstVertex == TERRAIN_RAY_NO_NODE)
         {
             side = 0.0;
-            TERRAIN_RAY_COUNT(g_terrainRaySkips);
         }
         else
         {
@@ -140,7 +139,6 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
                     stepSide = -1.0;
                 else
                 {
-                    TERRAIN_RAY_COUNT(g_terrainRayCells);
                     const vec2 cellLo = nodeLo + vec2(cell) * quad;
                     exitT = min(exitT, terrainRayExit(o.xz, invD.xz, cellLo, quad));
                     const uint a = (entry.firstVertex + cell.y * vpr + cell.x) * 3u;
@@ -167,7 +165,6 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         }
         if (stepSide != 0.0)
         {
-            TERRAIN_RAY_COUNT(g_terrainRaySkips);
             if (side != 0.0 && (side < 0.0) != (stepSide < 0.0))
                 return t;
             side = stepSide;

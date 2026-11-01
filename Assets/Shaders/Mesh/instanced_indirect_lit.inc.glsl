@@ -181,24 +181,22 @@ void resolveLiveDepth(vec3 worldPos)
 }
 
 #if defined(SHADOW_DEBUG) && SHADOW_DEBUG == 5
-// One march toward the sun, on the RT path or not. Red = cell steps, green = skips (a chunk or a brick), each sqrt(steps / 256):
-// half at 64, full at 256. Blue = the ray hit the terrain. A black and white checker = it stopped at TERRAIN_RAY_MAX_STEPS (a false
-// miss): a pattern, because no colour survives the fog. Near black = faces away from the sun.
+// One march toward the sun, on the RT path or not. Bands of the step count, because tone mapping and fog move a ramp: 1..7 blue,
+// 8..15 cyan, 16..31 green, 32..63 yellow, 64..127 orange, 128..255 red. Magenta = it stopped at TERRAIN_RAY_MAX_STEPS (a false
+// miss). Black = no step; near black = faces away from the sun.
 vec3 terrainMarchDebugColor(vec3 worldPos, vec3 N)
 {
 	const vec3 L = u_sunDirection.xyz;
 	if (dot(N, L) <= 0.0)
 		return vec3(0.02);
-	g_terrainRaySkips = 0u;
-	g_terrainRayCells = 0u;
-	const float tMax = 10000.0;
-	const float t = terrainRayMarch(worldPos + N * 0.02, L, 0.01, tMax);
-	if (g_terrainRaySkips + g_terrainRayCells >= TERRAIN_RAY_MAX_STEPS)
-	{
-		const ivec2 block = ivec2(gl_FragCoord.xy) / 8;
-		return vec3(float((block.x + block.y) & 1));
-	}
-	return vec3(sqrt(float(g_terrainRayCells) / 256.0), sqrt(float(g_terrainRaySkips) / 256.0), t < tMax ? 0.25 : 0.0);
+	g_terrainRaySteps = 0u;
+	terrainRayMarch(worldPos + N * 0.02, L, 0.01, 10000.0);
+	if (g_terrainRaySteps == 0u)
+		return vec3(0.0);
+	if (g_terrainRaySteps >= TERRAIN_RAY_MAX_STEPS)
+		return vec3(1.0, 0.0, 1.0);
+	const vec3 bands[6] = vec3[6](vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.5, 0.0), vec3(1.0, 0.0, 0.0));
+	return bands[max(findMSB(g_terrainRaySteps), 2) - 2];
 }
 #endif
 
