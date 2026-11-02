@@ -425,7 +425,7 @@ Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ran
 `BitRangeAllocator<true>` (lock-free) free lists in `MeshDataManager` (see "The graphics-queue mutex" ([CONTEXT.md](CONTEXT.md)) for its grow lock).
 A full pool grows by **1.1x** (at least the request, rounded up to whole buckets), not 2x: these are the largest
 device-local buffers, and a doubling leaves up to half of one unused. Each grow is a GPU drain + a full GPU copy.
-Their initial sizes (`INITIAL_VERTEX_DATA` 512 MiB, about 11 M `MeshVertex`, `INITIAL_INDEX_DATA` 45 M indices = 180 MiB), the
+Their initial sizes (`INITIAL_VERTEX_DATA` 700 MiB, about 15 M `MeshVertex`, `INITIAL_INDEX_DATA` 45 M indices = 180 MiB), the
 mesh instance capacity (`INITIAL_INSTANCE_DATA` 1048576), the render node capacity (`INITIAL_RENDER_NODES` 65536) and
 the GI TLAS instance capacity (`GI_INITIAL_TLAS_INSTANCES` 32768) are set so the world's load does not grow them (each
 grow idles the GPU). The unique mesh capacity starts at `INITIAL_UNIQUE_MESHES` (2048) and grows up to

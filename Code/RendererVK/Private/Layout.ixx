@@ -521,7 +521,7 @@ export namespace RendererVKLayout
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
     // load does not grow them:
-    constexpr size_t INITIAL_VERTEX_DATA = 512 * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_VERTEX_DATA = 700ull * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
     constexpr size_t INITIAL_INDEX_DATA = 45 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
