@@ -47,8 +47,9 @@ namespace Procedural::Diffusion
 		}
 
 		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
-		oc::wstring widenPath(const oc::string& p)
+		oc::wstring widenPath(const oc::string& path)
 		{
+			const oc::string p = FileSystem::resolve(path);
 			const int len = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), nullptr, 0);
 			oc::wstring wide((size_t)oc::max(len, 0), L' ');
 			if (len > 0)

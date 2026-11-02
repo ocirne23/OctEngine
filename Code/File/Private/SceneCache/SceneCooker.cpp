@@ -68,6 +68,8 @@ namespace
     // oc::string is not a std::filesystem::path source under either backing (and is a distinct
     // type entirely under EASTL), so the cooker crosses into <filesystem> through this one seam.
     std::filesystem::path toPath(oc::string_view path) { return std::filesystem::path(oc::toStd(path)); }
+    // toPath for a disk call: an Assets-relative path made absolute. The stamps store the path as given.
+    std::filesystem::path diskPath(oc::string_view path) { return toPath(FileSystem::resolve(path)); }
 
     uint64 fileMTimeTicks(const std::filesystem::path& path, std::error_code& ec)
     {
@@ -144,7 +146,7 @@ namespace
         const ITextureData::Pixel* pPixels = texData.getPixels();
         if (!pPixels)
         {
-            stbi_uc* pDecoded = stbi_load(resolvedFile.c_str(), &w, &h, &comp, 4);
+            stbi_uc* pDecoded = stbi_load(FileSystem::resolve(resolvedFile).c_str(), &w, &h, &comp, 4);
             if (!pDecoded)
                 return img;
             img.pixels = { pDecoded, [](uint8* p) { stbi_image_free(p); } };
@@ -352,7 +354,7 @@ namespace
     bool copyDdsWithRoughnessFloor(const oc::string& srcPath, const oc::string& outPath, oc::string& outReason)
     {
         std::error_code ec;
-        const uint64 size = std::filesystem::file_size(toPath(srcPath), ec);
+        const uint64 size = std::filesystem::file_size(diskPath(srcPath), ec);
         if (ec || size < sizeof(dds::Header::magic) + sizeof(dds::Header::header))
         {
             outReason = "unreadable";
@@ -361,7 +363,7 @@ namespace
         oc::vector<uint8> fileData((size_t)size);
         {
             FILE* pFile = nullptr;
-            fopen_s(&pFile, srcPath.c_str(), "rb");
+            fopen_s(&pFile, FileSystem::resolve(srcPath).c_str(), "rb");
             if (!pFile)
             {
                 outReason = "unreadable";
@@ -408,7 +410,7 @@ namespace
         raiseRoughnessFloor(fileData.data() + dataOffset, (fileData.size() - dataOffset) / blockStride, blockStride);
 
         FILE* pFile = nullptr;
-        fopen_s(&pFile, outPath.c_str(), "wb");
+        fopen_s(&pFile, FileSystem::resolve(outPath).c_str(), "wb");
         if (!pFile)
         {
             outReason = "output not writable";
@@ -482,7 +484,7 @@ namespace
         }
 
         FILE* pFile = nullptr;
-        fopen_s(&pFile, outPath.c_str(), "wb");
+        fopen_s(&pFile, FileSystem::resolve(outPath).c_str(), "wb");
         if (!pFile)
             return false;
         const bool ok = fwrite(fileData.data(), 1, fileData.size(), pFile) == fileData.size();
@@ -539,7 +541,7 @@ namespace
         }
 
         FILE* pFile = nullptr;
-        fopen_s(&pFile, outPath, "wb");
+        fopen_s(&pFile, FileSystem::resolve(outPath).c_str(), "wb");
         if (!pFile)
             return false;
         const bool ok = fwrite(fileData.data(), 1, fileData.size(), pFile) == fileData.size();
@@ -735,7 +737,7 @@ namespace
         // A recook regenerates every conversion, so clear out the previous set first - otherwise .dds
         // files of textures the scene no longer references would pile up.
         std::error_code ecPurge;
-        std::filesystem::remove_all(toPath(texFolder), ecPurge);
+        std::filesystem::remove_all(diskPath(texFolder), ecPurge);
         bool texFolderCreated = false;
         for (uint32 texIdx = 0; texIdx < numTextures; ++texIdx)
         {
@@ -755,12 +757,12 @@ namespace
                     continue;
                 std::error_code ec;
                 const std::filesystem::path nextToModel = toPath(modelFolder) / oc::toStd(originalPath);
-                resolvedFile = std::filesystem::exists(nextToModel, ec) ? oc::fromStd(nextToModel.string()) : originalPath;
+                resolvedFile = std::filesystem::exists(diskPath(oc::fromStd(nextToModel.string())), ec) ? oc::fromStd(nextToModel.string()) : originalPath;
                 isAuthoredDds = toPath(resolvedFile).extension() == ".dds";
                 // Already streamable - except in a roughness slot, where a copy gets the roughness floor.
                 if (isAuthoredDds && usage[texIdx] != (uint8)ETexUsage::Data)
                     continue;
-                if (!std::filesystem::exists(toPath(resolvedFile), ec))
+                if (!std::filesystem::exists(diskPath(resolvedFile), ec))
                 {
                     Log::warning(oc::format("SceneCache: texture '{}' of '{}' not found; keeping original reference", originalPath, sourcePath));
                     continue;
@@ -778,7 +780,7 @@ namespace
             if (!texFolderCreated)
             {
                 std::error_code ec;
-                std::filesystem::create_directories(toPath(texFolder), ec);
+                std::filesystem::create_directories(diskPath(texFolder), ec);
                 texFolderCreated = true;
             }
             if (isAuthoredDds)
@@ -803,8 +805,8 @@ namespace
                 CookedTexStamp& stamp = ctx.texStamps.emplace_back();
                 stamp.sourcePathOffset = ctx.strings.add(resolvedFile);
                 stamp.cookedPathOffset = ctx.strings.add(cookedPath);
-                stamp.size = std::filesystem::file_size(toPath(resolvedFile), ec);
-                stamp.mtime = fileMTimeTicks(toPath(resolvedFile), ec);
+                stamp.size = std::filesystem::file_size(diskPath(resolvedFile), ec);
+                stamp.mtime = fileMTimeTicks(diskPath(resolvedFile), ec);
             }
         }
     }
@@ -893,7 +895,7 @@ namespace
     void gcStaleCaches()
     {
         std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator("Local/Cooked", ec))
+        for (const auto& entry : std::filesystem::directory_iterator(diskPath("Local/Cooked"), ec))
         {
             if (!entry.is_regular_file(ec) || entry.path().extension() != ".vsc")
                 continue;
@@ -913,8 +915,8 @@ namespace
                 else if (_fseeki64(pFile, (int64)(header.stringsOffset + header.sourcePathOffset), SEEK_SET) == 0
                     && fread(sourcePath, 1, sizeof(sourcePath) - 1, pFile) > 0)
                 {
-                    const uint64 srcSize = std::filesystem::file_size(sourcePath, ec);
-                    stale = ec || srcSize != header.sourceSize || fileMTimeTicks(toPath(sourcePath), ec) != header.sourceMTime || ec;
+                    const uint64 srcSize = std::filesystem::file_size(diskPath(sourcePath), ec);
+                    stale = ec || srcSize != header.sourceSize || fileMTimeTicks(diskPath(sourcePath), ec) != header.sourceMTime || ec;
                 }
             }
             if (stale)
@@ -965,9 +967,9 @@ namespace
         memcpy(ctx.blob.data.data(), &header, sizeof(header));
 
         std::error_code ec;
-        std::filesystem::create_directories(toPath(cachePath).parent_path(), ec);
+        std::filesystem::create_directories(diskPath(cachePath).parent_path(), ec);
         FILE* pFile = nullptr;
-        fopen_s(&pFile, cachePath.c_str(), "wb");
+        fopen_s(&pFile, FileSystem::resolve(cachePath).c_str(), "wb");
         if (!pFile)
         {
             Log::warning(oc::format("SceneCache: could not write '{}'", cachePath));
@@ -1129,7 +1131,7 @@ void TextureConvert::compressBlockRows(const uint8* pRgba, uint32 width, uint32 
 bool TextureConvert::convertToDds(const char* srcPath, EUsage usage, const char* outPath)
 {
     int w = 0, h = 0, comp = 0;
-    stbi_uc* pDecoded = stbi_load(srcPath, &w, &h, &comp, 4);
+    stbi_uc* pDecoded = stbi_load(FileSystem::resolve(srcPath).c_str(), &w, &h, &comp, 4);
     if (!pDecoded)
     {
         Log::warning(oc::format("TextureConvert: could not decode '{}'", srcPath));
@@ -1150,7 +1152,7 @@ bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPat
         if (!srcPaths[channel])
             continue;
         int w = 0, h = 0, comp = 0;
-        stbi_uc* pGray = stbi_load(srcPaths[channel], &w, &h, &comp, 1);
+        stbi_uc* pGray = stbi_load(FileSystem::resolve(srcPaths[channel]).c_str(), &w, &h, &comp, 1);
         if (!pGray)
         {
             Log::warning(oc::format("TextureConvert: could not decode '{}'", srcPaths[channel]));
@@ -1193,7 +1195,7 @@ bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsa
             if (strcmp(d.path, path) == 0)
                 return d.pixels;
         int w = 0, h = 0, comp = 0;
-        stbi_uc* pPixels = stbi_load(path, &w, &h, &comp, 4);
+        stbi_uc* pPixels = stbi_load(FileSystem::resolve(path).c_str(), &w, &h, &comp, 4);
         if (!pPixels)
         {
             Log::warning(oc::format("TextureConvert: could not decode '{}'", path));

@@ -15,9 +15,13 @@ its back — a library that needs the disk links File.
 
 Paths are plain UTF-8 `oc::string`; **no `std::filesystem::path` leaks into any consumer.**
 
-`initialize()` walks up from the working directory to the repo root, makes `Assets/` the working
-directory, and registers `Dependencies/Dll/` (`AddDllDirectory`). Main thread, at startup — exempt by
-nature.
+`initialize()` picks the root (see Packs: normally `Assets/`) and registers `Dependencies/Dll/` (`AddDllDirectory`). Main
+thread, at startup — exempt by nature.
+
+**The process's working directory never changes, and nothing depends on it after `initialize()`.** A relative path means
+relative to the root: every `FileSystem` call and `NativeFile` resolves it. An API outside `FileSystem` (Assimp, stb, ONNX
+Runtime, `fopen`) gets `FileSystem::resolve(path)`; a child process gets absolute paths built from `rootPath()`. Listings
+report paths under the folder as the caller spelled it. `currentPath()` is only for a path typed in a shell.
 
 | Group | API |
 |---|---|
@@ -25,7 +29,7 @@ nature.
 | Queries | `exists`, `isDirectory`, `isRegularFile`, `fileSize` (0 when missing), `lastWriteTimeSec`, `lastWriteTimeTicks` (file clock ticks, what the cooked caches stamp), `stat` (existence + size + mtime in one lookup) |
 | Mutations | `createDirectories`, `remove`, `removeAll`, `rename`, `copyFile`, `copyLastWriteTime` |
 | Listing | `listDirectory`, `listDirectoryRecursive` → `DirEntry{path, name, extension, isDirectory, size}`. **Unsorted**; false when the directory cannot be read; `out` is cleared either way. |
-| Working dir / resolution | `currentPath`, `setCurrentPath`, `absolutePath`, `canonicalPath` (requires the path to exist), `weaklyCanonicalPath`, `relativePath` |
+| Resolution | `rootPath`, `resolve`, `currentPath`, `absolutePath`, `canonicalPath` (requires the path to exist), `weaklyCanonicalPath`, `relativePath` |
 
 `lastWriteTimeSec` is seconds since the *file clock's* epoch — **only ever compared or stored, never
 formatted.** `copyLastWriteTime` stamps a destination with a source's mtime; ScriptHost marks a built
@@ -126,12 +130,13 @@ root, and the first match wins:
 
 1. The working directory holds `Assets/` or is `Assets/`: `Assets/` is the root and nothing mounts. This is a development
    run (the VS targets, `Tools/profile.ps1`, `Tools/screenshot.ps1`); `--packs` mounts the packs on top of it.
-2. `.dat` files next to the executable: they mount and **the executable's folder is the root and working directory**,
-   also when a repo lies above it. So a loose file is read only from that folder, and `Local/` output goes there.
+2. `.dat` files next to the executable: they mount and **the executable's folder is the root**, also when a repo lies
+   above it. So a loose file is read only from that folder, and `Local/` output goes there.
 3. `Assets/` above the working directory or the executable: `Assets/` is the root and nothing mounts.
 4. Nothing: an error.
 
-The one-shot tools skip step 2 (`initialize(false)`): they work on `Assets/`. Without `Assets/`, `--pack-build` refuses
+The one-shot tools skip step 2 (`initialize(false)`): they work on `Assets/`. A pack or folder path on their command line
+is relative to the shell's folder (`--pack-config` and `--pack-mount` are `Assets/`-relative). Without `Assets/`, `--pack-build` refuses
 to run unless it has a path and `--pack-source`: the source `.` would be the executable's folder, and the update would
 drop every file from the packs.
 

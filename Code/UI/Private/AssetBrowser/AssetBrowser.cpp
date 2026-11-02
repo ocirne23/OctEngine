@@ -138,9 +138,9 @@ static oc::string truncateLabel(const oc::string& name, float maxWidth)
 
 void AssetBrowser::initialize()
 {
-	m_rootPath = FileSystem::canonicalPath(FileSystem::currentPath(/*allowMainThread*/ true), true);
+	m_rootPath = FileSystem::canonicalPath(FileSystem::rootPath(), true);
 	if (m_rootPath.empty())
-		m_rootPath = FileSystem::currentPath(/*allowMainThread*/ true);
+		m_rootPath = FileSystem::rootPath();
 	m_currentPath = m_rootPath;
 }
 

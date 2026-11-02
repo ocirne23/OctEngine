@@ -448,7 +448,7 @@ renderer state.** It fires, for each side:
 
 # Assets, prefabs and tint
 
-* **`AssetRegistry`** (`Globals::assetRegistry`) — `scanDirectory()` (cwd = `Assets/`) registers
+* **`AssetRegistry`** (`Globals::assetRegistry`) — `scanDirectory()` (paths relative to `Assets/`) registers
   ObjectContainers (`.oc`), clips (`.anm`), animator graphs (`.apl`) and prefabs (`.pre`) by name.
 * **`savePrefab(root, path)`** serializes through the per-component `write*SpawnInfo`s — **the spawn
   recipe IS the serialization.** Spawned prefabs are locked instances, unpackable in the Scene panel;

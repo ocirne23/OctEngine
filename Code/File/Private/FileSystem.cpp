@@ -71,8 +71,6 @@ namespace
     oc::atomic<bool> g_packsMounted = false; // false = every call is the plain disk path, no lookup at all
 
     oc::string g_rootDir;                  // absolute Assets/, '/' separated, '/'-terminated
-    oc::string g_cwdRel;                   // the working directory relative to g_rootDir, '/'-terminated
-    bool g_cwdInRoot = true;
     bool g_assetsFolderIsRoot = false;     // set by initialize()
 
     // Paths this process wrote / removed / renamed while packs were mounted: lowercase root-relative path hashes,
@@ -87,6 +85,18 @@ namespace
     bool isAbsoluteView(oc::string_view path)
     {
         return (path.size() >= 2 && path[1] == ':') || (!path.empty() && (path[0] == '/' || path[0] == '\\'));
+    }
+
+    // The path a disk call uses: a relative path is relative to the root.
+    std::filesystem::path diskPath(oc::string_view path)
+    {
+        if (isAbsoluteView(path) || g_rootDir.empty())
+            return toPath(path);
+        oc::string full;
+        full.reserve(g_rootDir.size() + path.size());
+        full += g_rootDir;
+        full.append(path.data(), path.size());
+        return toPath(full);
     }
 
     // path -> Assets-relative, normalized. False when it lies outside Assets/ (the disk alone serves it).
@@ -110,16 +120,7 @@ namespace
                 return false;
             return Pack::normalizeRelative(path.substr(rootLength), out, outLength);
         }
-        if (!g_cwdInRoot)
-            return false;
-        if (g_cwdRel.empty())
-            return Pack::normalizeRelative(path, out, outLength);
-        char joined[Pack::MAX_PATH_CHARS * 2];
-        if (g_cwdRel.size() + path.size() >= sizeof(joined))
-            return false;
-        memcpy(joined, g_cwdRel.data(), g_cwdRel.size());
-        memcpy(joined + g_cwdRel.size(), path.data(), path.size());
-        return Pack::normalizeRelative(oc::string_view(joined, g_cwdRel.size() + path.size()), out, outLength);
+        return Pack::normalizeRelative(path, out, outLength);
     }
 
     struct VfsPath
@@ -204,7 +205,7 @@ namespace
     bool diskExists(oc::string_view path)
     {
         std::error_code ec;
-        return std::filesystem::exists(toPath(path), ec);
+        return std::filesystem::exists(diskPath(path), ec);
     }
 
     enum class EWhere : uint8 { Disk, Pack, Missing };
@@ -305,7 +306,7 @@ namespace
     bool diskStat(oc::string_view path, FileSystem::FileStat& out)
     {
         std::error_code ec;
-        const std::filesystem::path fsPath = toPath(path);
+        const std::filesystem::path fsPath = diskPath(path);
         const std::filesystem::file_status status = std::filesystem::status(fsPath, ec);
         if (ec || !std::filesystem::exists(status))
             return false;
@@ -370,7 +371,7 @@ namespace
 
     bool writeBytes(const oc::string& path, const void* data, size_t size)
     {
-        const std::filesystem::path fsPath = toPath(path);
+        const std::filesystem::path fsPath = diskPath(path);
         std::ofstream file(fsPath, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!file.is_open())
         {
@@ -416,14 +417,13 @@ bool FileSystem::initialize(bool mountExecutablePacks)
 
     std::cout.setf(std::ios::unitbuf);
 
-    constexpr const char* ASSETS_DIR = "/Assets/";
     constexpr const char* DLL_DIR = "/Dependencies/Dll/";
 
     // A repo root is a folder holding Assets/.
     auto hasAssets = [&](const std::filesystem::path& dir)
     {
         std::error_code ec;
-        return std::filesystem::exists(std::filesystem::path(dir.string() + ASSETS_DIR), ec);
+        return std::filesystem::exists(dir / "Assets", ec);
     };
     auto findRootAbove = [&](std::filesystem::path dir, std::filesystem::path& outRoot)
     {
@@ -466,26 +466,19 @@ bool FileSystem::initialize(bool mountExecutablePacks)
 
     if (haveAssets)
     {
-        std::filesystem::current_path(std::filesystem::path(rootDir.string() + ASSETS_DIR));
         std::filesystem::path dllDir = std::filesystem::path(rootDir.string() + DLL_DIR);
         if (std::filesystem::exists(dllDir))
         {
             AddDllDirectory(dllDir.wstring().c_str());
         }
     }
-    else
-    {
-        // the packs next to the executable stand in for Assets/ (a shipped build)
-        std::filesystem::current_path(exeDir);
-    }
 
     {
         std::unique_lock lock(g_mountMutex);
-        g_rootDir = fromPath(std::filesystem::current_path());
+        // without Assets/, the packs next to the executable stand in for it (a shipped build)
+        g_rootDir = fromPath(haveAssets ? rootDir / "Assets" : exeDir);
         if (g_rootDir.empty() || g_rootDir.back() != '/')
             g_rootDir += '/';
-        g_cwdRel.clear();
-        g_cwdInRoot = true;
         ensureDiskMount();
     }
 
@@ -500,6 +493,19 @@ bool FileSystem::initialize(bool mountExecutablePacks)
 bool FileSystem::assetsFolderIsRoot()
 {
     return g_assetsFolderIsRoot;
+}
+
+oc::string FileSystem::rootPath()
+{
+    oc::string root = g_rootDir;
+    if (root.size() > 1 && root.back() == '/')
+        root.pop_back();
+    return root;
+}
+
+oc::string FileSystem::resolve(oc::string_view path)
+{
+    return fromPath(diskPath(path));
 }
 
 oc::string FileSystem::executableDir()
@@ -534,7 +540,7 @@ oc::string FileSystem::readFileStr(const oc::string& path, bool allowMainThread)
             return content;
         }
     }
-    std::ifstream file(toPath(path), std::ios::in | std::ios::binary | std::ios::ate);
+    std::ifstream file(diskPath(path), std::ios::in | std::ios::binary | std::ios::ate);
     if (!file.is_open())
         return oc::string();
 
@@ -561,7 +567,7 @@ bool FileSystem::readFileBytes(const oc::string& path, oc::vector<uint8>& out, b
         if (where == EWhere::Pack)
             return readPacked(*hit.mount->pack, hit.key, out);
     }
-    std::ifstream file(toPath(path), std::ios::in | std::ios::binary | std::ios::ate);
+    std::ifstream file(diskPath(path), std::ios::in | std::ios::binary | std::ios::ate);
     if (!file.is_open())
         return false;
     const std::ifstream::pos_type size = file.tellg();
@@ -627,7 +633,7 @@ bool FileSystem::isDirectory(const oc::string& path, bool allowMainThread)
             return false;
     }
     std::error_code ec;
-    return std::filesystem::is_directory(toPath(path), ec);
+    return std::filesystem::is_directory(diskPath(path), ec);
 }
 
 bool FileSystem::isRegularFile(const oc::string& path, bool allowMainThread)
@@ -644,7 +650,7 @@ bool FileSystem::isRegularFile(const oc::string& path, bool allowMainThread)
             return where == EWhere::Pack;
     }
     std::error_code ec;
-    return std::filesystem::is_regular_file(toPath(path), ec);
+    return std::filesystem::is_regular_file(diskPath(path), ec);
 }
 
 uint64 FileSystem::fileSize(const oc::string& path, bool allowMainThread)
@@ -683,7 +689,7 @@ bool FileSystem::createDirectories(const oc::string& path, bool allowMainThread)
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::createDirectories");
     std::error_code ec;
-    std::filesystem::create_directories(toPath(path), ec);
+    std::filesystem::create_directories(diskPath(path), ec);
     return !ec;
 }
 
@@ -700,7 +706,7 @@ bool FileSystem::remove(const oc::string& path, bool allowMainThread)
         packed = packedFile(p, path, key) != nullptr;
     }
     std::error_code ec;
-    const bool removed = std::filesystem::remove(toPath(path), ec);
+    const bool removed = std::filesystem::remove(diskPath(path), ec);
     recordOverride(path); // hides a packed copy too
     return removed || packed;
 }
@@ -710,7 +716,7 @@ uint64 FileSystem::removeAll(const oc::string& path, bool allowMainThread)
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::removeAll");
     std::error_code ec;
-    const auto count = std::filesystem::remove_all(toPath(path), ec);
+    const auto count = std::filesystem::remove_all(diskPath(path), ec);
     recordOverride(path);
     recordOverriddenDir(path);
     return ec ? 0ull : (uint64)count;
@@ -721,7 +727,7 @@ bool FileSystem::rename(const oc::string& from, const oc::string& to, bool allow
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::rename");
     std::error_code ec;
-    std::filesystem::rename(toPath(from), toPath(to), ec);
+    std::filesystem::rename(diskPath(from), diskPath(to), ec);
     if (ec && packsMounted())
     {
         // a packed file: copy it out, then hide the packed source
@@ -754,7 +760,7 @@ bool FileSystem::copyLastWriteTime(const oc::string& from, const oc::string& to,
     if (!statImpl(from, stat))
         return false;
     std::error_code ec;
-    std::filesystem::last_write_time(toPath(to),
+    std::filesystem::last_write_time(diskPath(to),
         std::filesystem::file_time_type(std::filesystem::file_time_type::duration(stat.mtimeTicks)), ec);
     if (!ec)
         recordOverride(to);
@@ -792,7 +798,7 @@ bool FileSystem::copyFile(const oc::string& from, const oc::string& to, bool ove
         }
     }
     std::error_code ec;
-    const bool copied = std::filesystem::copy_file(toPath(from), toPath(to), overwrite
+    const bool copied = std::filesystem::copy_file(diskPath(from), diskPath(to), overwrite
         ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::none, ec);
     if (copied)
         recordOverride(to);
@@ -801,9 +807,14 @@ bool FileSystem::copyFile(const oc::string& from, const oc::string& to, bool ove
 
 namespace
 {
+    // Every path is reported below dir as the caller spelled it, not below the resolved folder that was listed.
     template <typename Iterator>
-    bool listImpl(Iterator begin, oc::vector<FileSystem::DirEntry>& out)
+    bool listImpl(Iterator begin, const oc::string& dir, const std::filesystem::path& listed, oc::vector<FileSystem::DirEntry>& out)
     {
+        const size_t listedLength = fromPath(listed).size();
+        oc::string prefix = fromPath(toPath(dir));
+        if (!prefix.empty() && prefix.back() != '/')
+            prefix += '/';
         std::error_code ec;
         for (auto it = begin; it != Iterator(); it.increment(ec))
         {
@@ -811,7 +822,12 @@ namespace
                 return false;
             const std::filesystem::directory_entry& e = *it;
             FileSystem::DirEntry entry;
-            entry.path = fromPath(e.path());
+            const oc::string fullPath = fromPath(e.path());
+            size_t relative = listedLength;
+            if (relative < fullPath.size() && fullPath[relative] == '/')
+                ++relative;
+            entry.path = prefix;
+            entry.path.append(fullPath.data() + relative, fullPath.size() - relative);
             entry.name = fromPath(e.path().filename());
             entry.extension = fromPath(e.path().extension());
             std::error_code sec;
@@ -829,13 +845,14 @@ namespace
     bool listDisk(const oc::string& dir, bool recursive, oc::vector<FileSystem::DirEntry>& out)
     {
         std::error_code ec;
+        const std::filesystem::path listed = diskPath(dir);
         if (recursive)
         {
-            std::filesystem::recursive_directory_iterator it(toPath(dir), ec);
-            return !ec && listImpl(it, out);
+            std::filesystem::recursive_directory_iterator it(listed, ec);
+            return !ec && listImpl(it, dir, listed, out);
         }
-        std::filesystem::directory_iterator it(toPath(dir), ec);
-        return !ec && listImpl(it, out);
+        std::filesystem::directory_iterator it(listed, ec);
+        return !ec && listImpl(it, dir, listed, out);
     }
 
     // A packed entry in the format the disk listing produces: the listed folder as given + '/' + the relative path.
@@ -985,37 +1002,12 @@ oc::string FileSystem::currentPath(bool allowMainThread)
     return fromPath(std::filesystem::current_path(ec));
 }
 
-bool FileSystem::setCurrentPath(const oc::string& path, bool allowMainThread)
-{
-    assertIoThread(allowMainThread);
-    const IoScope profileScope("FileSystem::setCurrentPath");
-    std::error_code ec;
-    std::filesystem::current_path(toPath(path), ec);
-    if (ec)
-        return false;
-    // relative paths now resolve against the new folder: keep the pack lookups in step
-    const oc::string cwd = fromPath(std::filesystem::current_path(ec));
-    std::unique_lock lock(g_mountMutex);
-    g_cwdRel.clear();
-    g_cwdInRoot = false;
-    char rel[Pack::MAX_PATH_CHARS];
-    uint32 length = 0;
-    if (toRootRelative(cwd, rel, length))
-    {
-        g_cwdInRoot = true;
-        g_cwdRel.assign(rel, length);
-        if (length > 0)
-            g_cwdRel += '/';
-    }
-    return true;
-}
-
 oc::string FileSystem::absolutePath(const oc::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::absolutePath");
     std::error_code ec;
-    const std::filesystem::path result = std::filesystem::absolute(toPath(path), ec);
+    const std::filesystem::path result = std::filesystem::absolute(diskPath(path), ec);
     return ec ? path : fromPath(result);
 }
 
@@ -1024,7 +1016,7 @@ oc::string FileSystem::canonicalPath(const oc::string& path, bool allowMainThrea
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::canonicalPath");
     std::error_code ec;
-    const std::filesystem::path result = std::filesystem::canonical(toPath(path), ec);
+    const std::filesystem::path result = std::filesystem::canonical(diskPath(path), ec);
     if (!ec)
         return fromPath(result);
     if (packsMounted())
@@ -1055,7 +1047,7 @@ oc::string FileSystem::weaklyCanonicalPath(const oc::string& path, bool allowMai
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::weaklyCanonicalPath");
     std::error_code ec;
-    const std::filesystem::path result = std::filesystem::weakly_canonical(toPath(path), ec);
+    const std::filesystem::path result = std::filesystem::weakly_canonical(diskPath(path), ec);
     return ec ? oc::string() : fromPath(result);
 }
 
@@ -1064,9 +1056,7 @@ oc::string FileSystem::relativePath(const oc::string& path, const oc::string& ba
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::relativePath");
     std::error_code ec;
-    const std::filesystem::path result = base.empty()
-        ? std::filesystem::relative(toPath(path), ec)
-        : std::filesystem::relative(toPath(path), toPath(base), ec);
+    const std::filesystem::path result = std::filesystem::relative(diskPath(path), diskPath(base), ec);
     return ec ? oc::string() : fromPath(result);
 }
 
@@ -1174,7 +1164,7 @@ uint32 FileSystem::mountPacksIn(const oc::string& dir, bool allowMainThread)
     assertIoThread(allowMainThread);
     oc::vector<oc::string> packs;
     std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(toPath(dir), ec))
+    for (const auto& entry : std::filesystem::directory_iterator(diskPath(dir), ec))
     {
         std::error_code fileEc;
         if (entry.is_regular_file(fileEc) && pathEquals(fromPath(entry.path().extension()), ".dat"))

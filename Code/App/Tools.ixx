@@ -26,6 +26,9 @@ namespace
 
     double megabytes(uint64 bytes) { return (double)bytes / (1024.0 * 1024.0); }
 
+    // A pack or folder path typed in the shell: relative to the shell's folder, not to Assets/.
+    oc::string shellPath(const char* path) { return FileSystem::join(FileSystem::currentPath(true), path); }
+
     // The value after `flag` on the command line, or null (also when the next argument is another flag).
     const char* argValue(int argc, char* argv[], oc::string_view flag)
     {
@@ -100,9 +103,9 @@ namespace
         if (const char* output = argValue(argc, argv, "--pack-build"))
         {
             PackBuildOptions options;
-            options.outputPath = output;
+            options.outputPath = shellPath(output);
             if (source)
-                options.sourceDir = source;
+                options.sourceDir = shellPath(source);
             applyBuildFlags(argc, argv, options);
             return runPackBuild(options);
         }
@@ -160,7 +163,7 @@ namespace
     {
         const char* path = argValue(argc, argv, "--pack-verify");
         oc::string error;
-        if (!path || !PackBuilder::verify(path, error, true))
+        if (!path || !PackBuilder::verify(shellPath(path), error, true))
         {
             Log::error("Pack verify failed: " + (path ? error : oc::string("no pack path")));
             return false;
@@ -169,7 +172,7 @@ namespace
         return true;
     }
 
-    // --pack-unpack <pack.dat> --pack-out <folder> [--pack-overwrite]: writes the pack's files as loose files. Relative paths are relative to Assets/.
+    // --pack-unpack <pack.dat> --pack-out <folder> [--pack-overwrite]: writes the pack's files as loose files.
     bool unpackPack(int argc, char* argv[])
     {
         const char* path = argValue(argc, argv, "--pack-unpack");
@@ -180,8 +183,8 @@ namespace
             return false;
         }
         PackUnpackOptions options;
-        options.packPath = path;
-        options.outputDir = output;
+        options.packPath = shellPath(path);
+        options.outputDir = shellPath(output);
         options.overwrite = hasArg(argc, argv, "--pack-overwrite");
         const PackUnpackResult r = PackBuilder::unpack(options, true);
         if (!r.ok)
@@ -201,7 +204,7 @@ namespace
         oc::string error;
         uint32 files = 0;
         uint64 bytes = 0;
-        const bool ok = path && PackBuilder::list(path, [&](const PackFileInfo& file)
+        const bool ok = path && PackBuilder::list(shellPath(path), [&](const PackFileInfo& file)
         {
             ++files;
             bytes += file.size;
@@ -226,13 +229,13 @@ namespace
         const oc::string prefix = mountPoint.empty() ? oc::string() : FileSystem::normalize(mountPoint) + "/";
         oc::vector<oc::pair<oc::string, uint64>> files;
         oc::string error;
-        if (!path || !PackBuilder::list(path, [&](const PackFileInfo& file) { files.push_back({ prefix + oc::string(file.path), file.size }); }, error, true))
+        if (!path || !PackBuilder::list(shellPath(path), [&](const PackFileInfo& file) { files.push_back({ prefix + oc::string(file.path), file.size }); }, error, true))
         {
             Log::error("Pack check failed: " + (path ? error : oc::string("no pack path")));
             return false;
         }
         FileSystem::unmountAll();
-        if (!FileSystem::mountPack(path, FileSystem::PACK_PRIORITY_DEFAULT, mountPoint, true))
+        if (!FileSystem::mountPack(shellPath(path), FileSystem::PACK_PRIORITY_DEFAULT, mountPoint, true))
             return false;
         FileSystem::setDiskEnabled(false);
 
@@ -354,7 +357,7 @@ export void mountCommandLinePacks(int argc, char* argv[])
                 priority = std::atoi(path.c_str() + at + 1);
                 path.resize(at);
             }
-            FileSystem::mountPack(path, priority, {}, true);
+            FileSystem::mountPack(shellPath(path.c_str()), priority, {}, true);
         }
         else if (arg == "--pack-only")
             FileSystem::setDiskEnabled(false);

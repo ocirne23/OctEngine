@@ -14,6 +14,7 @@ import Core.glm;
 import Animation;
 
 import File.fwd;
+import :FileSystem;
 import :SceneData;
 import :Assimp;
 import :MeshData;
@@ -146,7 +147,7 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
     // (every triangle carries 3 unique vertices - Bistro is ~3.5x duplicated). Welding restores real
     // connectivity, without which meshopt_simplify treats every vertex as complex and LOD generation
     // stalls at level 0 - and it cuts vertex memory by the same factor.
-    m_pScene = m_importer.ReadFile(filePath, aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_CalcTangentSpace | optimizationFlags);
+    m_pScene = m_importer.ReadFile(FileSystem::resolve(filePath).c_str(), aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_CalcTangentSpace | optimizationFlags);
     if (!m_pScene)
     {
         assert(false && "Failed to load scene");
@@ -305,7 +306,7 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
 {
     // No graph optimization: node names must survive so channels resolve against targetSkeleton by name.
     Assimp::Importer importer;
-    const aiScene* pScene = importer.ReadFile(filePath, 0);
+    const aiScene* pScene = importer.ReadFile(FileSystem::resolve(filePath).c_str(), 0);
     if (!pScene || pScene->mNumAnimations == 0)
     {
         assert(false && "loadAnimations: file has no animations (or failed to load)");

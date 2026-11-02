@@ -73,7 +73,8 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 * Reconfigure ONLY when files are added or removed — all sources are globbed. **Never edit
   CMakeLists to add files.**
 * Output: `Build/Code/App/<Config>/App.exe`. `FileSystem::initialize()` finds `Assets/` by walking up and makes it the
-  working directory, so all asset paths are relative to `Assets/`. **Exception:** with `.dat` files next to the exe and
+  root, so all asset paths are relative to `Assets/`. The working directory never changes: an API outside `FileSystem`
+  gets `FileSystem::resolve(path)`. **Exception:** with `.dat` files next to the exe and
   a working directory that neither holds `Assets/` nor is `Assets/`, it runs on the packs, with the exe's folder as the
   root. Run from the repo root for the loose files (see Packs in
   [`Docs/Context/File/CONTEXT.md`](../Docs/Context/File/CONTEXT.md)).

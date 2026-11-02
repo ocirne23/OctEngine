@@ -17,7 +17,7 @@ neither API leaks, because every public type holds an opaque `uint64` handle:
 |---|---|
 | `initialize()` | Opens the default output device — 48 kHz stereo — then the Steam Audio context and HRTF (`IPL_SIMDLEVEL_AVX2`, `IPL_HRTFTYPE_DEFAULT`). Applies the `Audio/System → Master Volume` tweak (`Globals::settings.audio.masterVolume`, registered in `Code/Settings`) and attaches its listener. Returns false and logs on failure. |
 | `update(camera[, listenerVelocity])` | **Once per frame, game thread.** Places the listener and recomputes every source's HRTF direction, distance attenuation and doppler. The audio thread reads the results through the node's atomics. |
-| `loadSound(path)` | WAV / FLAC / MP3, relative to `Assets/`. |
+| `loadSound(path, fileBytes)` | Decodes a WAV / FLAC / MP3 file's bytes. Audio does not link File: the caller reads them through `FileSystem` (so packs work); `path` names the sound in the log. |
 | `createBuffer(format, pcm, rate)` | Procedural sounds. |
 | `createSource()` | A free-standing voice. |
 | `playOneShot(buffer, pos, gain, pitch)` / `playOneShot2D` | Fire-and-forget from a pool of `MaxOneShotSources` (32): the first idle slot, else a round-robin steal. |

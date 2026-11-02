@@ -75,7 +75,6 @@ namespace Procedural::Diffusion
 
 	oc::string ModelAssets::modelDir()
 	{
-		// CWD is Assets/ (FileSystem::initialize).
 		return "TerrainDiffusion";
 	}
 

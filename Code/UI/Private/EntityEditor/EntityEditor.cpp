@@ -150,7 +150,7 @@ static void gatherScriptFiles(oc::vector<oc::string>& out)
 {
 	out.clear();
 	std::error_code ec;
-	const oc::string root = FileSystem::currentPath(/*allowMainThread*/ true);
+	const oc::string root = FileSystem::rootPath();
 	oc::vector<FileSystem::DirEntry> entries;
 	FileSystem::listDirectoryRecursive(root, entries, /*allowMainThread*/ true);
 	for (const FileSystem::DirEntry& entry : entries)

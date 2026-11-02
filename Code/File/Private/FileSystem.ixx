@@ -34,7 +34,7 @@ export class FileSystem final
 {
 public:
 
-    // Picks the root and makes it the working directory. Main thread, at startup - exempt by nature.
+    // Picks the root that relative paths resolve against. The working directory never changes. Main thread, at startup - exempt by nature.
     // First match wins:
     // 1. the working directory holds Assets/ (or is Assets/): Assets/ is the root, nothing mounts
     // 2. .dat files next to the executable: they mount (mountPacksIn), the executable's folder is the root
@@ -46,6 +46,12 @@ public:
 
     // True when Assets/ is the root (steps 1 and 3 above).
     static bool assetsFolderIsRoot();
+
+    // The root as an absolute path, '/' separated, no trailing '/'.
+    static oc::string rootPath();
+    // path as an absolute path (a relative one is relative to the root), for an API outside FileSystem: a child
+    // process, a third-party file loader.
+    static oc::string resolve(oc::string_view path);
 
     // The folder of the running executable, '/' separated, no trailing '/'.
     static oc::string executableDir();
@@ -118,9 +124,9 @@ public:
     static bool listDirectory(const oc::string& dir, oc::vector<DirEntry>& out, bool allowMainThread = false);
     static bool listDirectoryRecursive(const oc::string& dir, oc::vector<DirEntry>& out, bool allowMainThread = false);
 
+    // The process's working directory: only for a path the user typed in a shell. Everything else is relative to the root.
     static oc::string currentPath(bool allowMainThread = false);
-    static bool setCurrentPath(const oc::string& path, bool allowMainThread = false);
-    // Resolve against the working directory / symlinks (canonical requires the path to exist).
+    // Resolve against the root / symlinks (canonical requires the path to exist).
     static oc::string absolutePath(const oc::string& path, bool allowMainThread = false);
     static oc::string canonicalPath(const oc::string& path, bool allowMainThread = false);
     static oc::string weaklyCanonicalPath(const oc::string& path, bool allowMainThread = false);

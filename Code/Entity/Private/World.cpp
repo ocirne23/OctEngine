@@ -1359,7 +1359,9 @@ oc::shared_ptr<AudioBuffer> WorldState::getOrLoadAudioBuffer(const oc::string& p
 {
     if (auto it = m_audioBuffers.find(path); it != m_audioBuffers.end())
         return it->second;
-    auto buffer = oc::make_shared<AudioBuffer>(Globals::audio.loadSound(path));
+    oc::vector<uint8> fileBytes;
+    FileSystem::readFileBytes(path, fileBytes, /*allowMainThread*/ true);
+    auto buffer = oc::make_shared<AudioBuffer>(Globals::audio.loadSound(path, fileBytes));
     m_audioBuffers.emplace(path, buffer);
     return buffer;
 }

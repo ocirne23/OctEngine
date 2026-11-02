@@ -9,6 +9,7 @@ module File;
 import Core;
 
 import :NativeFile;
+import :FileSystem;
 
 namespace
 {
@@ -19,8 +20,9 @@ namespace
         oc::vector<wchar_t> heap;
         const wchar_t* str = local;
 
-        explicit WidePath(oc::string_view path)
+        explicit WidePath(oc::string_view relativeOrAbsolute)
         {
+            const oc::string path = FileSystem::resolve(relativeOrAbsolute);
             const int length = path.empty() ? 0 : MultiByteToWideChar(CP_UTF8, 0, path.data(), (int)path.size(), nullptr, 0);
             wchar_t* out = local;
             if (length + 1 > (int)oc::size(local))

@@ -153,14 +153,14 @@ AudioBuffer AudioSystem::createBuffer(EAudioFormat format, oc::span<const std::b
     return buffer;
 }
 
-AudioBuffer AudioSystem::loadSound(oc::string_view path)
+AudioBuffer AudioSystem::loadSound(oc::string_view path, oc::span<const uint8> fileBytes)
 {
     if (!m_initialized)
         return {};
     const oc::string pathStr(path);
     ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0); // native channels/rate
     ma_decoder decoder;
-    if (ma_decoder_init_file(pathStr.c_str(), &decoderConfig, &decoder) != MA_SUCCESS)
+    if (fileBytes.empty() || ma_decoder_init_memory(fileBytes.data(), fileBytes.size(), &decoderConfig, &decoder) != MA_SUCCESS)
     {
         Log::error("Audio: could not open '" + pathStr + "'");
         return {};

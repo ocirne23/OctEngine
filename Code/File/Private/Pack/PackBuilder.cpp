@@ -95,7 +95,8 @@ namespace
 
     std::filesystem::path toFsPath(oc::string_view path)
     {
-        return std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(path.data()), path.size()));
+        const oc::string full = FileSystem::resolve(path);
+        return std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(full.data()), full.size()));
     }
 
     // Runs func(i) for every i in [0, count) on up to `threads` threads (this one included).

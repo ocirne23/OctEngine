@@ -23,7 +23,7 @@ public:
 	void update(const Camera& camera, const glm::vec3& listenerVelocity = glm::vec3(0.0f));
 
     AudioBuffer createBuffer(EAudioFormat format, oc::span<const std::byte> pcmData, uint32 sampleRate);
-    AudioBuffer loadSound(oc::string_view path); // WAV/FLAC/MP3, relative to Assets/
+    AudioBuffer loadSound(oc::string_view path, oc::span<const uint8> fileBytes); // a WAV/FLAC/MP3 file's bytes; path names it in the log
 
     AudioSource createSource();
 

@@ -168,7 +168,7 @@ const oc::string& ScriptHost::findVcvars()
     const oc::string vswhere = programFiles + "\\Microsoft Visual Studio\\Installer\\vswhere.exe";
     if (FileSystem::exists(vswhere, /*allowMainThread*/ true))
     {
-        const oc::string outDir = FileSystem::join(FileSystem::currentPath(true), "Local/Scripts");
+        const oc::string outDir = FileSystem::join(FileSystem::rootPath(), "Local/Scripts");
         FileSystem::createDirectories(outDir, true);
         const oc::string outFile = FileSystem::join(outDir, "vswhere.out");
 
@@ -206,7 +206,7 @@ bool ScriptHost::compile(const oc::string& sourcePath, const oc::string& pdbPath
 
     // Compiling blocks the main thread by design (F6 / editor save / a spawn needing its module).
     const FileSystem::AllowMainThreadIO allowIo;
-    const oc::string assetsDir = FileSystem::currentPath();
+    const oc::string assetsDir = FileSystem::rootPath();
     const oc::string outDir = FileSystem::join(assetsDir, "Local/Scripts");
     const oc::string repoDir = FileSystem::parentPath(assetsDir);
     const oc::string includeDir = FileSystem::join(repoDir, "Code/Script/Public"); // the one ScriptAPI.h (ABI source of truth)
@@ -272,7 +272,7 @@ bool ScriptHost::compile(const oc::string& sourcePath, const oc::string& pdbPath
 
 oc::string ScriptHost::scriptDllPath(const oc::string& sourcePath) const
 {
-    return FileSystem::join(FileSystem::join(FileSystem::currentPath(/*allowMainThread*/ true), "Local/Scripts"),
+    return FileSystem::join(FileSystem::join(FileSystem::rootPath(), "Local/Scripts"),
         FileSystem::stem(sourcePath) + ".dll");
 }
 
@@ -476,7 +476,7 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
 
 void ScriptHost::unloadAll()
 {
-    const oc::string outDir = FileSystem::join(FileSystem::currentPath(/*allowMainThread*/ true), "Local/Scripts");
+    const oc::string outDir = FileSystem::join(FileSystem::rootPath(), "Local/Scripts");
     for (auto& [path, script] : scripts)
     {
         if (script.module) FreeLibrary((HMODULE)script.module);

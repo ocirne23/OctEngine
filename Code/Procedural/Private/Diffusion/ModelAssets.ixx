@@ -74,7 +74,7 @@ export namespace Procedural::Diffusion
 		const PipelineData& data() const { return m_data; }
 		const oc::string& error() const { return m_error; }
 
-		// Assets/TerrainDiffusion, relative to the CWD (FileSystem::initialize sets it to Assets/).
+		// Assets/TerrainDiffusion, as an Assets-relative path.
 		static oc::string modelDir();
 		static oc::string assetPath(oc::string_view fileName);
 		// The model file to load for `stem` ("coarse_model", "base_model", "decoder_model") at the requested
