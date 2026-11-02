@@ -53,8 +53,16 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Te
     TerrainRayEntry entries[];
 };
 
+// The node grid: with the frame UBO its values bake (the locks), so the sizes below fold and nothing of them stays live across the loop.
 #ifndef TERRAIN_RAY_TABLE
 #define TERRAIN_RAY_TABLE TerrainRayTable(u_present_terrainRay.xy)
+#define TERRAIN_RAY_CHUNK_SIZE u_terrain_rayChunkSize
+#define TERRAIN_RAY_LOD0_QUAD u_terrain_rayLod0Quad
+#define TERRAIN_RAY_LOD0_RES u_terrain_rayLod0Res
+#else
+#define TERRAIN_RAY_CHUNK_SIZE table.chunkSize
+#define TERRAIN_RAY_LOD0_QUAD table.lod0Quad
+#define TERRAIN_RAY_LOD0_RES table.lod0Res
 #endif
 
 // The t at which the ray leaves the XZ box [lo, lo + size]. invD: 1 / d.xz.
@@ -83,7 +91,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         return tMax;
 
     // Clip to the table's box and its height band. A zero component gets a huge inverse (never 0 x inf).
-    const float chunkSize = table.chunkSize;
+    const float chunkSize = TERRAIN_RAY_CHUNK_SIZE;
     const vec3 invD = vec3(1.0) / mix(d, vec3(1e-8), lessThan(abs(d), vec3(1e-8)));
     const vec3 boxLo = vec3(float(table.tableMin.x) * chunkSize, table.minHeight, float(table.tableMin.y) * chunkSize);
     const vec3 boxHi = vec3(boxLo.x + float(dim) * chunkSize, table.maxHeight, boxLo.z + float(dim) * chunkSize);
@@ -95,9 +103,9 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
         return tMax;
 
     TerrainRayFloats floats = TerrainRayFloats(table.vertices);
-    const uint res = table.lod0Res;
+    const uint res = TERRAIN_RAY_LOD0_RES;
     const uint vpr = res + 1u;
-    const float lod0Quad = table.lod0Quad;
+    const float lod0Quad = TERRAIN_RAY_LOD0_QUAD;
     const uint bricksPerSide = max(res >> TERRAIN_BRICK_SHIFT, 1u);
     const uint brickCells = min(1u << TERRAIN_BRICK_SHIFT, res);
     const uint blocksPerSide = max(bricksPerSide >> TERRAIN_BLOCK_SHIFT, 1u);
@@ -194,7 +202,7 @@ float terrainRayMarch(vec3 o, vec3 d, float tMin, float tMax)
 vec3 terrainRayNormal(vec3 hitPos)
 {
     TerrainRayTable table = TERRAIN_RAY_TABLE;
-    const float chunkSize = table.chunkSize;
+    const float chunkSize = TERRAIN_RAY_CHUNK_SIZE;
     const ivec2 chunk = ivec2(floor(hitPos.xz / chunkSize));
     const ivec2 cellInTable = clamp(chunk - table.tableMin, ivec2(0), ivec2(int(table.tableDim) - 1));
     const TerrainRayEntry entry = table.entries[uint(cellInTable.y) * table.tableDim + uint(cellInTable.x)];
@@ -203,8 +211,8 @@ vec3 terrainRayNormal(vec3 hitPos)
 
     const int span = 1 << entry.lod;
     const vec2 nodeLo = vec2((chunk >> entry.lod) * span) * chunkSize;
-    const float quad = table.lod0Quad * float(span);
-    const uint res = table.lod0Res;
+    const float quad = TERRAIN_RAY_LOD0_QUAD * float(span);
+    const uint res = TERRAIN_RAY_LOD0_RES;
     const uint vpr = res + 1u;
     const vec2 local = clamp((hitPos.xz - nodeLo) / quad, vec2(0.0), vec2(float(res) - 1e-3));
     const uvec2 cell = uvec2(local);

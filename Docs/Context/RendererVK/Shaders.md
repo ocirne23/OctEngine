@@ -190,11 +190,11 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 `float16_t -> float` widening).
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants, the tree and foliage FS
-too), tree_volume_march 64/0, grass FS 64/16, grass VS 48/0, clutter / flower FS 64/16, flower VS 70/0 (textured 68/0),
-terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 80/16, river FS 64/32, rock 64/16, sky.fs 56,
-aerial_lut 73, particle_sim 56, particle VS 56, vol_scatter 60/0, vol_apply FS 64/16, cloud_march / cloud_sky 64/0,
-cloud_shadow 39/0, cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 96/0, gi_volume_bake 55/0, clutter_cull 80/0,
-decal 53/0, force_union FS 72/48. The driver moves its
+too), tree_volume_march 64/0, grass FS 56/48, grass VS 48/0, clutter / flower FS 64/16, flower VS 70/0 (textured 68/0),
+terrain ground FS 64/32, tessellated ground 64/48, film 56/80, ocean 80/32, river FS 72/16, rock 64/16, sky.fs 56,
+aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0, vol_apply FS 64/16, cloud_march /
+cloud_sky 64/0, cloud_shadow 39/0, cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 128/0, gi_volume_bake 55/0,
+clutter_cull 80/0, decal 53/0, force_union FS 72/48. The driver moves its
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.
 
 * **The rules:**
@@ -269,6 +269,7 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
   interpolated across a patch. What is left is structural: split a peak into its own pass (the film's overlay
   precedent), or a thread-per-ray trace.
 * **Tried and dropped:**
+  * gi_probe_trace's light loop without the terrain march: still 128/0, only 12 KB less code.
   * The film's lights in the lit core's loop (one loop, one shadow ray per light for both lobes; less code): 80/64. The
     film surface must then be resolved BEFORE that loop and its values stay live across the shadow ray query; with the
     film surface after the loop it spilled worse. Same register count as the film's own loop, so no occupancy gain, and

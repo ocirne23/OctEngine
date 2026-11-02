@@ -65,6 +65,9 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   * **No descriptor**: a device address, `u_present_terrainRay.xy` (the preamble enables `GL_EXT_buffer_reference` and
     `_uvec2` in every shader); `pc_terrainRay` in the rain occlusion, which binds no frame UBO (`#define TERRAIN_RAY_TABLE`).
     The table holds the vertex mega-buffer's address, and reads through it are not bounds-checked: the march clamps every index.
+  * **The node grid is baked**: `u_terrain_rayChunkSize`, `u_terrain_rayLod0Res`, `u_terrain_rayLod0Quad` (lockable UBO values), so
+    the march's sizes fold and do not stay live across its loop (this took the tessellated ground and the foliage FS from 72 to 64
+    registers). The rain occlusion has no frame UBO and reads the same values from the table.
   * **A hit's normal** = `terrainRayNormal(hitPos)`, the interpolated vertex normals (a second lookup after the march, so
     the march keeps nothing but t). **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
     mirror, `waterBedAlbedo` (the splat) in `traceScene`.

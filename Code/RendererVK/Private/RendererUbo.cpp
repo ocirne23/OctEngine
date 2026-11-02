@@ -1268,6 +1268,10 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("terrain_stitch", [this] { return m_terrainStitch; }, UboLive);
         list.add("terrain_stitchBands", [this] { return m_terrainStitchBands; }, UboLive);
         list.add("terrain_shadowIndices", [this] { return m_terrainShadowIndices; }, UboLive); // the shadow cull's coarser ranges (setTerrainShadowIndices)
+        // The terrain ray march's node grid (terrain_ray.inc.glsl).
+        list.add("terrain_rayChunkSize", [&t] { return (float)glm::max(t.chunkSize, 1); }, t.chunkSize);
+        list.add("terrain_rayLod0Res", [&t] { return (uint32)glm::max(t.lod0Res, 1); }, t.lod0Res);
+        list.add("terrain_rayLod0Quad", [&t] { return (float)glm::max(t.chunkSize, 1) / (float)glm::max(t.lod0Res, 1); }, t.chunkSize, t.lod0Res);
         list.add("terrain_splatBase", [this] { return m_terrain.getSplatBaseMaterial() < 0 ? -1.0f : (float)m_terrain.getSplatBaseMaterial(); }, UboLive);
         list.add("terrain_numGround", [this] { return (float)m_terrain.getSplatCounts().numGround; }, UboLive);
         list.add("terrain_numRock", [this] { return (float)m_terrain.getSplatCounts().numRock; }, UboLive);
