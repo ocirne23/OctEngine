@@ -72,9 +72,11 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 
 * Reconfigure ONLY when files are added or removed — all sources are globbed. **Never edit
   CMakeLists to add files.**
-* Output: `Build/Code/App/<Config>/App.exe`. Run it from anywhere inside the repo:
-  `FileSystem::initialize()` walks up to find `Assets/` and makes it the working directory, so all
-  asset paths are relative to `Assets/`.
+* Output: `Build/Code/App/<Config>/App.exe`. `FileSystem::initialize()` finds `Assets/` by walking up and makes it the
+  working directory, so all asset paths are relative to `Assets/`. **Exception:** with `.dat` files next to the exe and
+  a working directory that neither holds `Assets/` nor is `Assets/`, it runs on the packs, with the exe's folder as the
+  root. Run from the repo root for the loose files (see Packs in
+  [`Docs/Context/File/CONTEXT.md`](../Docs/Context/File/CONTEXT.md)).
 * VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`.
   `packs`: BUILDING it runs `App.exe --pack-build` (the `.dat` packs of `Assets/dat.cfg`, next to App.exe, in the
   target's configuration); as the Startup Project, F5 runs App on them (`--packs`).
@@ -545,7 +547,7 @@ A binary folder tree (default: `Assets/` minus the per-machine `Local/` caches) 
 by priority next to the loose files (`--packs`, `--pack <path>[@priority]`, `--pack-only`), so no caller changes.
 **`Assets/dat.cfg` lists the packs** (`Pack <name>` blocks: output, include / exclude, compression, mount priority;
 grammar in its header). Built and updated IN PLACE by `--pack-build` (only new and changed files are written), NEXT
-TO App.exe; `--packs` mounts them, and a run with no `Assets/` folder mounts them by itself. Paths are looked up through two
+TO App.exe; `--packs` mounts them, and a run whose working directory has no `Assets/` mounts them by itself. Paths are looked up through two
 baked `Core.BitPathTrie` tries. **Layout, mount rules and the update in
 [`Docs/Context/File/CONTEXT.md`](../Docs/Context/File/CONTEXT.md) (Packs).**
 

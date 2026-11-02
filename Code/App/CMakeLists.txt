@@ -6,6 +6,8 @@ add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Apps)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+# F5 on App runs on the loose files, also when a .dat lies next to the exe (FileSystem::initialize).
+set_target_properties(${PROJECT_NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Core Settings Animation RendererVK UI Entity File Input Script Physics Network Audio Spatial Threading Procedural Particle Force Game AppScripts)
 

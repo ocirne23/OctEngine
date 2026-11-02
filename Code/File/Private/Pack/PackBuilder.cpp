@@ -726,6 +726,163 @@ bool PackBuilder::loadConfig(const oc::string& path, oc::vector<PackConfig>& out
     return true;
 }
 
+namespace
+{
+    // A pack path that stays below the folder it is written into: already normal (no "..", no leading '/'), and no segment that Win32 would rewrite
+    // (it strips a segment's trailing dots and spaces, so ".. " could climb too). The trie's alphabet has no ':' or '\'.
+    bool isSafeUnpackPath(oc::string_view path)
+    {
+        char normal[Pack::MAX_PATH_CHARS];
+        uint32 length = 0;
+        if (!Pack::normalizeRelative(path, normal, length) || length != path.size() || memcmp(normal, path.data(), length) != 0)
+            return false;
+        for (size_t i = 0; i < path.size(); ++i)
+        {
+            const bool segmentEnd = i + 1 == path.size() || path[i + 1] == '/';
+            if (segmentEnd && (path[i] == '.' || path[i] == ' '))
+                return false;
+        }
+        return true;
+    }
+}
+
+PackUnpackResult PackBuilder::unpack(const PackUnpackOptions& options, bool allowMainThread)
+{
+    FileSystem::assertIoThread(allowMainThread);
+    ProfileScope profileScope("PackBuilder::unpack", EProfileCategory::File);
+    const Clock::time_point start = Clock::now();
+    PackUnpackResult result;
+    auto fail = [&](oc::string error)
+    {
+        result.ok = false;
+        result.error = oc::move(error);
+        result.seconds = std::chrono::duration<double>(Clock::now() - start).count();
+        return result;
+    };
+    if (options.outputDir.empty())
+        return fail("no output folder");
+
+    PackFile pack;
+    oc::string error;
+    if (!pack.open(options.packPath, error))
+        return fail(oc::move(error));
+
+    struct File
+    {
+        oc::string path;
+        uint32 key = 0;
+    };
+    oc::vector<File> files;
+    files.reserve(pack.fileCount());
+    oc::vector<oc::string> dirs;
+    bool safe = true;
+    pack.files().forEach([&](const oc::BitmapPathTrieEntry& file)
+    {
+        if (!isSafeUnpackPath(file.path))
+        {
+            if (safe)
+                error = oc::format("the pack holds an unsafe path: {}", file.path);
+            safe = false;
+        }
+        files.push_back(File{ oc::string(file.path), file.key });
+    });
+    pack.directories().forEach([&](const oc::BitmapPathTrieEntry& dir)
+    {
+        if (!isSafeUnpackPath(dir.path))
+        {
+            if (safe)
+                error = oc::format("the pack holds an unsafe path: {}", dir.path);
+            safe = false;
+        }
+        dirs.push_back(oc::string(dir.path));
+    });
+    if (!safe)
+        return fail(oc::move(error));
+    result.files = (uint32)files.size();
+
+    std::error_code ec;
+    const std::filesystem::path root = std::filesystem::weakly_canonical(toFsPath(options.outputDir), ec);
+    if (ec)
+        return fail("bad output folder " + options.outputDir);
+    std::filesystem::create_directories(root, ec);
+    if (ec)
+        return fail("cannot create " + options.outputDir);
+    oc::string rootPrefix = fromFsPath(root);
+    if (rootPrefix.empty() || rootPrefix.back() != '/')
+        rootPrefix += '/';
+    for (const oc::string& dir : dirs)
+    {
+        std::filesystem::create_directories(toFsPath(rootPrefix + dir), ec);
+        if (ec)
+            return fail("cannot create " + rootPrefix + dir);
+    }
+
+    oc::atomic<uint32> written = 0;
+    oc::atomic<uint32> skipped = 0;
+    oc::atomic<uint64> bytesWritten = 0;
+    oc::atomic<bool> failed = false;
+    std::mutex errorMutex;
+    auto reportError = [&](oc::string text)
+    {
+        std::lock_guard lock(errorMutex);
+        if (!failed.exchange(true))
+            error = oc::move(text);
+    };
+
+    const uint32 threads = options.threads ? options.threads : oc::max(1u, std::thread::hardware_concurrency());
+    parallelFor((uint32)files.size(), threads, [&](uint32 i)
+    {
+        if (failed.load(oc::memory_order_relaxed))
+            return;
+        const File& file = files[i];
+        const oc::string target = rootPrefix + file.path;
+        std::error_code fileEc;
+        if (!options.overwrite && std::filesystem::exists(toFsPath(target), fileEc))
+        {
+            ++skipped;
+            return;
+        }
+
+        const Pack::Entry& e = pack.entry(file.key);
+        oc::vector<uint8> decompressed;
+        const uint8* content = pack.storedBytes(file.key).data();
+        if (!pack.isRaw(file.key))
+        {
+            decompressed.resize((size_t)e.size);
+            if (!pack.read(file.key, decompressed.data()))
+                return reportError(file.path + ": cannot decompress");
+            content = decompressed.data();
+        }
+        if (Pack::hashBytes(content, e.size) != e.hash)
+            return reportError(file.path + ": content hash mismatch");
+
+        const oc::string tmp = target + ".unpack.tmp";
+        NativeFile out;
+        if (!out.open(tmp, NativeFile::EMode::Create))
+            return reportError("cannot create " + tmp);
+        const bool wroteAll = out.writeAt(0, content, e.size);
+        out.close();
+        if (wroteAll)
+            std::filesystem::last_write_time(toFsPath(tmp), std::filesystem::file_time_type(std::filesystem::file_time_type::duration(e.mtimeTicks)), fileEc);
+        if (!wroteAll || fileEc || !NativeFile::replaceFile(tmp, target))
+        {
+            NativeFile::removeFile(tmp);
+            return reportError("cannot write " + target);
+        }
+        ++written;
+        bytesWritten += e.size;
+    });
+
+    result.written = written;
+    result.skipped = skipped;
+    result.bytesWritten = bytesWritten;
+    if (failed)
+        return fail(oc::move(error));
+    result.ok = true;
+    result.seconds = std::chrono::duration<double>(Clock::now() - start).count();
+    return result;
+}
+
 bool PackBuilder::verify(const oc::string& packPath, oc::string& outError, bool allowMainThread)
 {
     FileSystem::assertIoThread(allowMainThread);

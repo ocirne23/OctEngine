@@ -21,7 +21,7 @@ nature.
 
 | Group | API |
 |---|---|
-| Reads / writes | `readFileStr`, `readFileBytes`, `writeFileStr`, `writeFileBytes`; byte ranges through `FileReader` (below) |
+| Reads / writes | `readFileStr`, `readFileBytes`, `writeFileStr`, `writeFileBytes` (a write creates the file's folder when missing); byte ranges through `FileReader` (below) |
 | Queries | `exists`, `isDirectory`, `isRegularFile`, `fileSize` (0 when missing), `lastWriteTimeSec`, `lastWriteTimeTicks` (file clock ticks, what the cooked caches stamp), `stat` (existence + size + mtime in one lookup) |
 | Mutations | `createDirectories`, `remove`, `removeAll`, `rename`, `copyFile`, `copyLastWriteTime` |
 | Listing | `listDirectory`, `listDirectoryRecursive` → `DirEntry{path, name, extension, isDirectory, size}`. **Unsorted**; false when the directory cannot be read; `out` is cleared either way. |
@@ -121,11 +121,20 @@ compresses `.dds` / `.vsc` (the streamers read those in ranges).
 `MountPoint` it was built with). `mountPacksIn(dir)` mounts every `.dat` in a folder that way, in name order. The disk
 is a mount too (`DISK_PRIORITY_DEFAULT` 0); packs default to 100.
 
-**Packs live next to the executable** (`dat.cfg`'s `Output $(ExeDir)/...`; `executableDir()`). `--packs` mounts them.
-`initialize()` looks for `Assets/` above the working directory, then above the executable; **when there is none (a
-shipped build) the executable's folder becomes the root and working directory and its packs mount by themselves** —
-it fails only when there are none either. With `Assets/` present nothing mounts on its own, so a development run never
-reads a stale pack over edited loose files.
+**Packs live next to the executable** (`dat.cfg`'s `Output $(ExeDir)/...`; `executableDir()`). `initialize()` picks the
+root, and the first match wins:
+
+1. The working directory holds `Assets/` or is `Assets/`: `Assets/` is the root and nothing mounts. This is a development
+   run (the VS targets, `Tools/profile.ps1`, `Tools/screenshot.ps1`); `--packs` mounts the packs on top of it.
+2. `.dat` files next to the executable: they mount and **the executable's folder is the root and working directory**,
+   also when a repo lies above it. So a loose file is read only from that folder, and `Local/` output goes there.
+3. `Assets/` above the working directory or the executable: `Assets/` is the root and nothing mounts.
+4. Nothing: an error.
+
+The one-shot tools skip step 2 (`initialize(false)`): they work on `Assets/`. Without `Assets/`, `--pack-build` refuses
+to run unless it has a path and `--pack-source`: the source `.` would be the executable's folder, and the update would
+drop every file from the packs.
+
 **A lookup walks the mounts highest priority first and the first that has the file serves it**; ties go to the later
 mount. So:
 
@@ -184,6 +193,16 @@ over Content), both next to the executable.
 
 Loads, hashing and compression run on `threads` plain threads (File cannot link Threading) in windows of 256 MB.
 An unreadable file keeps its packed version; an unreadable NEW file fails the build.
+
+### Unpacking
+
+`PackBuilder::unpack(PackUnpackOptions)` (App: `--pack-unpack`) writes every file of a pack as a loose file below a
+folder, on plain threads. It reads the pack directly, never the mounts, so the priority order does not change what comes
+out. Files keep their stored case and mtime, so a `--pack-build` from that folder sees them as unchanged. Folders that
+held no file are not in a pack, so they do not come back. An existing file stays unless `overwrite` is set. Each file is
+hash-checked, then written to `<file>.unpack.tmp` and renamed, so a failure leaves no partial file. The first failure
+stops the unpack; files already written stay. A pack path that could leave the folder (`..`, a leading `/`, a segment
+with a trailing dot or space) refuses the whole pack before anything is written.
 
 ## `ImageIO` (`File:ImageIO`)
 

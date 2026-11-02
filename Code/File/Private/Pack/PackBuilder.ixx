@@ -82,6 +82,26 @@ export struct PackFileInfo
     bool compressed = false;
 };
 
+export struct PackUnpackOptions
+{
+    oc::string packPath;
+    oc::string outputDir;   // created when missing; relative paths are relative to Assets/
+    bool overwrite = false; // false = a file that already exists stays as it is (PackUnpackResult::skipped)
+    uint32 threads = 0;     // 0 = the hardware threads
+};
+
+export struct PackUnpackResult
+{
+    bool ok = false;
+    oc::string error;
+
+    uint32 files = 0;        // in the pack
+    uint32 written = 0;
+    uint32 skipped = 0;      // already there, overwrite off
+    uint64 bytesWritten = 0;
+    double seconds = 0.0;
+};
+
 // One `Pack` block of a pack config (Assets/dat.cfg).
 export struct PackConfig
 {
@@ -101,6 +121,11 @@ public:
     // running executable. False with the first problem in outError: a parse error, an unknown key (a typo must not
     // silently pack the wrong set), a block without Output.
     static bool loadConfig(const oc::string& path, oc::vector<PackConfig>& out, oc::string& outError, bool allowMainThread = false);
+
+    // Writes every file of a pack as a loose file below outputDir, with its stored case and mtime (so a later --pack-build from that folder sees it
+    // unchanged). Reads the pack itself, never the mounts. Each file is hash-checked, then goes through a temp file, so a failure leaves no partial file.
+    // A pack path that could leave outputDir (a ".." segment) refuses the whole pack before anything is written.
+    static PackUnpackResult unpack(const PackUnpackOptions& options, bool allowMainThread = false);
 
     // Opens the pack and re-hashes every file. False with the first problem in outError.
     static bool verify(const oc::string& packPath, oc::string& outError, bool allowMainThread = false);

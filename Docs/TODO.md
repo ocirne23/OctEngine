@@ -375,7 +375,7 @@ See [File](Context/File/CONTEXT.md).
 * GC cannot collect caches whose `.oc` import options changed.
 * Only cooked scenes provide a mesh stream source.
 * Packs: an Assimp `IOSystem` over `FileReader` would let model imports (and skinned scenes) read from a pack.
-* Packs: no editor view of the mounts (`FileSystem::mounts()` / `sourceOf` exist), no extract tool.
+* Packs: no editor view of the mounts (`FileSystem::mounts()` / `sourceOf` exist).
 * Packs: a shipped build (no `Assets/`) still loads `Dependencies/Dll` DLLs from beside the exe only; nothing copies them.
 * Packs: an update could reuse dead gaps before appending; now only a full rewrite reclaims them.
 * Packs: `FileReader` could issue async / unbuffered reads for the page-aligned big files (DirectStorage style).

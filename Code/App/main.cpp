@@ -35,7 +35,7 @@ int main(int argc, char* argv[])
 {
     Globals::profiler.endStaticInit();
     ProfileScope initScope("main() initialize", EProfileCategory::App);
-    FileSystem::initialize();
+    FileSystem::initialize(/*mountExecutablePacks*/ !isCommandLineTool(argc, argv));
     oc::optional<FileSystem::AllowMainThreadIO> startupIo;
     startupIo.emplace();
     mountCommandLinePacks(argc, argv);

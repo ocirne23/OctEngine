@@ -90,16 +90,28 @@ namespace
     bool buildPack(int argc, char* argv[])
     {
         FileSystem::unmountAll(); // a full rewrite cannot replace a mapped pack
+        // Without Assets/ the source "." is the executable's folder: the update would drop every file from the packs.
+        const char* source = argValue(argc, argv, "--pack-source");
+        if (!FileSystem::assetsFolderIsRoot() && !source)
+        {
+            Log::error("--pack-build found no Assets/ folder to pack (use --pack-source <dir> with an output path)");
+            return false;
+        }
         if (const char* output = argValue(argc, argv, "--pack-build"))
         {
             PackBuildOptions options;
             options.outputPath = output;
-            if (const char* source = argValue(argc, argv, "--pack-source"))
+            if (source)
                 options.sourceDir = source;
             applyBuildFlags(argc, argv, options);
             return runPackBuild(options);
         }
 
+        if (!FileSystem::assetsFolderIsRoot())
+        {
+            Log::error("--pack-build found no Assets/ folder to pack");
+            return false;
+        }
         oc::vector<PackConfig> configs;
         if (!loadPackConfig(argc, argv, configs))
             return false;
@@ -154,6 +166,31 @@ namespace
             return false;
         }
         Log::info(oc::format("Pack {} verified", path));
+        return true;
+    }
+
+    // --pack-unpack <pack.dat> --pack-out <folder> [--pack-overwrite]: writes the pack's files as loose files. Relative paths are relative to Assets/.
+    bool unpackPack(int argc, char* argv[])
+    {
+        const char* path = argValue(argc, argv, "--pack-unpack");
+        const char* output = argValue(argc, argv, "--pack-out");
+        if (!path || !output)
+        {
+            Log::error("--pack-unpack needs the pack path and --pack-out <folder>");
+            return false;
+        }
+        PackUnpackOptions options;
+        options.packPath = path;
+        options.outputDir = output;
+        options.overwrite = hasArg(argc, argv, "--pack-overwrite");
+        const PackUnpackResult r = PackBuilder::unpack(options, true);
+        if (!r.ok)
+        {
+            Log::error("Pack unpack failed: " + r.error);
+            return false;
+        }
+        Log::info(oc::format("Pack {} unpacked to {}: {} files, {} written, {} already there, {:.1f} MB, {:.1f} s",
+            path, output, r.files, r.written, r.skipped, megabytes(r.bytesWritten), r.seconds));
         return true;
     }
 
@@ -279,11 +316,22 @@ namespace
         { "--pack-verify", verifyPack },
         { "--pack-list", listPack },
         { "--pack-check", checkPack },
+        { "--pack-unpack", unpackPack },
     };
 }
 
+// True when a one-shot tool's flag is on the command line. main asks before FileSystem::initialize: a tool works on Assets/, not on the packs next to the exe.
+export bool isCommandLineTool(int argc, char* argv[])
+{
+    for (int i = 1; i < argc; ++i)
+        for (const Tool& tool : c_tools)
+            if (tool.flag == argv[i])
+                return true;
+    return false;
+}
+
 // --pack <path>[@priority] (repeatable; without @, the priority the pack was built with), --packs (every .dat next to
-// the executable, as FileSystem::initialize does by itself when there is no Assets/), --pack-only (no loose files),
+// the executable, as FileSystem::initialize does by itself unless the working directory holds Assets/), --pack-only (no loose files),
 // --disk-priority <n>. main calls it right after FileSystem::initialize, before the first asset or settings read.
 export void mountCommandLinePacks(int argc, char* argv[])
 {

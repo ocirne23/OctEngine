@@ -73,6 +73,7 @@ namespace
     oc::string g_rootDir;                  // absolute Assets/, '/' separated, '/'-terminated
     oc::string g_cwdRel;                   // the working directory relative to g_rootDir, '/'-terminated
     bool g_cwdInRoot = true;
+    bool g_assetsFolderIsRoot = false;     // set by initialize()
 
     // Paths this process wrote / removed / renamed while packs were mounted: lowercase root-relative path hashes,
     // plus removed folders ('/'-terminated). They are served from the disk from then on.
@@ -369,9 +370,18 @@ namespace
 
     bool writeBytes(const oc::string& path, const void* data, size_t size)
     {
-        std::ofstream file(toPath(path), std::ios::out | std::ios::binary | std::ios::trunc);
+        const std::filesystem::path fsPath = toPath(path);
+        std::ofstream file(fsPath, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!file.is_open())
-            return false;
+        {
+            // The folder may not exist yet (Local/ next to the exe, on the packs). Only a failed open pays for this.
+            std::error_code ec;
+            std::filesystem::create_directories(fsPath.parent_path(), ec);
+            file.clear();
+            file.open(fsPath, std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!file.is_open())
+                return false;
+        }
         if (size > 0)
             file.write(reinterpret_cast<const char*>(data), (std::streamsize)size);
         return file.good();
@@ -396,7 +406,7 @@ void FileSystem::assertIoThread(bool allowMainThread)
     (void)allowMainThread;
 }
 
-bool FileSystem::initialize()
+bool FileSystem::initialize(bool mountExecutablePacks)
 {
     ProfileScope scope("FileSystem::initialize", EProfileCategory::File);
     g_mainThreadId = std::this_thread::get_id();
@@ -409,13 +419,17 @@ bool FileSystem::initialize()
     constexpr const char* ASSETS_DIR = "/Assets/";
     constexpr const char* DLL_DIR = "/Dependencies/Dll/";
 
-    // From the working directory, then from the executable: a repo root is a folder holding Assets/.
-    auto findRoot = [&](std::filesystem::path dir, std::filesystem::path& outRoot)
+    // A repo root is a folder holding Assets/.
+    auto hasAssets = [&](const std::filesystem::path& dir)
     {
         std::error_code ec;
+        return std::filesystem::exists(std::filesystem::path(dir.string() + ASSETS_DIR), ec);
+    };
+    auto findRootAbove = [&](std::filesystem::path dir, std::filesystem::path& outRoot)
+    {
         for (;;)
         {
-            if (std::filesystem::exists(std::filesystem::path(dir.string() + ASSETS_DIR), ec))
+            if (hasAssets(dir))
             {
                 outRoot = dir;
                 return true;
@@ -425,9 +439,31 @@ bool FileSystem::initialize()
             dir = dir.parent_path();
         }
     };
+
+    // The source of the files, first match wins:
+    // 1. the working directory holds Assets/ (or is Assets/): the loose files, a development run
+    // 2. .dat files next to the executable: those, with the executable's folder as the root, whatever repo lies above it
+    // 3. Assets/ above the working directory or the executable: the loose files
+    // 4. nothing: the executable's folder
+    const std::filesystem::path currDir = std::filesystem::current_path();
     const std::filesystem::path exeDir = toPath(executableDir());
     std::filesystem::path rootDir;
-    const bool haveAssets = findRoot(std::filesystem::current_path(), rootDir) || findRoot(exeDir, rootDir);
+    bool haveAssets = false;
+    if (hasAssets(currDir))
+    {
+        rootDir = currDir;
+        haveAssets = true;
+    }
+    else if (pathEquals(fromPath(currDir.filename()), "Assets") && hasAssets(currDir.parent_path()))
+    {
+        rootDir = currDir.parent_path();
+        haveAssets = true;
+    }
+    const bool packsMountedHere = !haveAssets && mountExecutablePacks && mountPacksIn(executableDir()) > 0;
+    if (!haveAssets && !packsMountedHere)
+        haveAssets = findRootAbove(currDir, rootDir) || findRootAbove(exeDir, rootDir);
+    g_assetsFolderIsRoot = haveAssets;
+
     if (haveAssets)
     {
         std::filesystem::current_path(std::filesystem::path(rootDir.string() + ASSETS_DIR));
@@ -439,7 +475,7 @@ bool FileSystem::initialize()
     }
     else
     {
-        // no Assets/ anywhere: a shipped build, its packs next to the executable stand in for Assets/
+        // the packs next to the executable stand in for Assets/ (a shipped build)
         std::filesystem::current_path(exeDir);
     }
 
@@ -453,12 +489,17 @@ bool FileSystem::initialize()
         ensureDiskMount();
     }
 
-    if (!haveAssets && mountPacksIn(executableDir()) == 0)
+    if (!haveAssets && !packsMountedHere && mountExecutablePacks)
     {
         assert(false && "Could not find project root directory, and no .dat packs next to the executable");
         return false;
     }
     return true;
+}
+
+bool FileSystem::assetsFolderIsRoot()
+{
+    return g_assetsFolderIsRoot;
 }
 
 oc::string FileSystem::executableDir()

@@ -34,11 +34,18 @@ export class FileSystem final
 {
 public:
 
-    // Walks up from the working directory to the repo root, makes Assets/ the working directory
-    // and registers Dependencies/Dll/. Main thread, at startup - exempt by nature.
-    // NO Assets/ found (a shipped build): the executable's folder becomes the root and working
-    // directory, and every .dat next to the executable mounts (mountPacksIn).
-    static bool initialize();
+    // Picks the root and makes it the working directory. Main thread, at startup - exempt by nature.
+    // First match wins:
+    // 1. the working directory holds Assets/ (or is Assets/): Assets/ is the root, nothing mounts
+    // 2. .dat files next to the executable: they mount (mountPacksIn), the executable's folder is the root
+    // 3. Assets/ above the working directory or the executable: Assets/ is the root, nothing mounts
+    // 4. nothing: the executable's folder is the root; an error unless mountExecutablePacks is false
+    // With Assets/ as the root it also registers Dependencies/Dll/.
+    // mountExecutablePacks false skips step 2: the one-shot tools work on Assets/, not on a pack.
+    static bool initialize(bool mountExecutablePacks = true);
+
+    // True when Assets/ is the root (steps 1 and 3 above).
+    static bool assetsFolderIsRoot();
 
     // The folder of the running executable, '/' separated, no trailing '/'.
     static oc::string executableDir();
@@ -67,7 +74,7 @@ public:
 
     static oc::string readFileStr(const oc::string& path, bool allowMainThread = false);
     static bool readFileBytes(const oc::string& path, oc::vector<uint8>& out, bool allowMainThread = false);
-    // Writes (creating/truncating). Returns false if the file could not be opened/written.
+    // Writes (creating/truncating, and creating the file's folder when missing). Returns false if the file could not be opened/written.
     static bool writeFileStr(const oc::string& path, const oc::string& content, bool allowMainThread = false);
     static bool writeFileBytes(const oc::string& path, oc::span<const uint8> data, bool allowMainThread = false);
 
