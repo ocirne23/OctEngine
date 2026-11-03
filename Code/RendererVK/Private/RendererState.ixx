@@ -405,8 +405,7 @@ protected:
     void freeMeshLodGroup(uint32 groupIdx) { const std::lock_guard lock(m_spawnMutex); m_meshLods.freeGroup(groupIdx); } // see freeMeshInfoRange
     uint32 allocateLodStateRange(uint32 count) { return m_meshLods.allocateStateRange(count); } // lock-free
 
-    void noteTextureUse(const RenderNode& node, uint32 passMask);
-    void noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances);
+    void noteInstanceUse(const RenderNode& node, uint32 passMask);
 
     void waitForGpuAndFlushStaging();
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes); // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.

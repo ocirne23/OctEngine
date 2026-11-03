@@ -666,7 +666,7 @@ void RendererState::beginFrame()
         m_treeCullPieces = 0;
         m_treeCullRtPieces = 0;
         m_treeCullTaken.store(false, oc::memory_order_relaxed);
-        // Both read from any job during the entity pass (noteTextureUse), so set before returning.
+        // Both read from any job during the entity pass (noteInstanceUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         if (Globals::settings.renderer.freezeSceneFocus != m_sceneFocusFrozen)
         {

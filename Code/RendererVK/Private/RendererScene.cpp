@@ -56,12 +56,7 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
     if (startIdx == UINT32_MAX)
         return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame
 
-    noteTextureUse(node, passMask);
-    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
-    {
-        m_instances.noteMeshInstances(instance.meshIdx, 1);
-        Globals::meshStreamer.noteUse(instance.meshIdx);
-    }
+    noteInstanceUse(node, passMask);
 
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -77,57 +72,59 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
     }
     instances.mappedPassMasks[node.m_transformIdx] = InstanceStream::stampedPassMask(passMask, m_uboFrameIndex); // the push frame: see InstanceStream
     memcpy(instances.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
-    if (node.m_lodStateBase != UINT32_MAX) // allocated at spawn only when the node has a LOD chain
-        noteLodChainUse(node, startIdx, instances); // benign races: same-value stamp + thread-safe noteUse
+    // Publish the cull's hysteresis-state addressing for this node: stateSlot = instanceIdx + bias.
+    if (node.m_lodStateBase != UINT32_MAX)
+        instances.mappedLodStateBias[node.m_transformIdx] = (int32)node.m_lodStateBase - (int32)startIdx;
 }
 
-void RendererState::noteTextureUse(const RenderNode& node, uint32 passMask)
+void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask)
 {
-    if (!Globals::textureStreamer.isStreamingEnabled())
-        return;
-    const Sphere bounds = node.getWorldBounds();
-    const float dist = oc::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
-    const float projPixels = bounds.radius * m_mipPixelScale / dist;
-    float log2P = std::log2(oc::max(1.0f, projPixels));
-    if (!(passMask & RendererVKLayout::PASS_MAIN))
-        log2P -= 2.0f; // off-screen (shadow/GI-only) nodes tolerate two mips coarser
+    const bool streamTextures = Globals::textureStreamer.isStreamingEnabled();
+    float log2P = 0.0f;
+    if (streamTextures)
+    {
+        const Sphere bounds = node.getWorldBounds();
+        const float dist = oc::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
+        const float projPixels = bounds.radius * m_mipPixelScale / dist;
+        log2P = std::log2(oc::max(1.0f, projPixels));
+        if (!(passMask & RendererVKLayout::PASS_MAIN))
+            log2P -= 2.0f; // off-screen (shadow/GI-only) nodes tolerate two mips coarser
+    }
 
+    const bool hasLodChain = node.m_lodStateBase != UINT32_MAX; // allocated at spawn only when the node has a LOD chain
     const oc::span<const RendererVKLayout::MaterialInfo> materials =
         m_materials.getBuffer().getBackingStoreAs<RendererVKLayout::MaterialInfo>();
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
     {
-        const RendererVKLayout::MaterialInfo& material = materials[instance.materialIdx];
-        Globals::textureStreamer.noteUse(material.diffuseTexIdx, log2P);
-        Globals::textureStreamer.noteUse(material.normalTexIdx, log2P);
-        Globals::textureStreamer.noteUse(material.metalRoughnessTexIdx, log2P);
-    }
-}
+        m_instances.noteMeshInstances(instance.meshIdx, 1);
+        Globals::meshStreamer.noteUse(instance.meshIdx);
 
-void RendererState::noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances)
-{
-    // The GPU cull picks each instance's level, so every level of a referenced chain must stay warm in
-    // the mesh streamer. Only AUTHORED chains (no error data) need this: their levels are independent
-    // mesh sets, and a cold one would draw nothing while it re-streams. Generated chains share LOD0's
-    // set, which the caller's per-instance noteUse already touched. Stamped once per group per frame;
-    // races on the stamp are benign: both threads write the same frame value, worst case double-noting.
-    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
-    {
-        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh(instance.meshIdx); // the instance references the chain's LOD0 mesh
-        if (groupIdx == UINT32_MAX)
-            continue;
-        MeshLodGroup& group = m_meshLods.getGroup(groupIdx);
-        if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
+        // The GPU cull picks each instance's level, so every level of a referenced chain must stay warm in
+        // the mesh streamer. Only AUTHORED chains (no error data) need this: their levels are independent
+        // mesh sets, and a cold one would draw nothing while it re-streams. Generated chains share LOD0's
+        // set, which the noteUse above already touched. Stamped once per group per frame;
+        // races on the stamp are benign: both threads write the same frame value, worst case double-noting.
+        const uint32 groupIdx = hasLodChain ? m_meshLods.getGroupIdxForMesh(instance.meshIdx) : UINT32_MAX; // the instance references the chain's LOD0 mesh
+        if (groupIdx != UINT32_MAX)
         {
-            oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
-            for (uint8 k = 1; k < group.numLods; ++k)
-                Globals::meshStreamer.noteUse(group.meshIdx[k]);
+            MeshLodGroup& group = m_meshLods.getGroup(groupIdx);
+            if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
+            {
+                oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
+                for (uint8 k = 1; k < group.numLods; ++k)
+                    Globals::meshStreamer.noteUse(group.meshIdx[k]);
+            }
+        }
+
+        if (streamTextures)
+        {
+            const RendererVKLayout::MaterialInfo& material = materials[instance.materialIdx];
+            Globals::textureStreamer.noteUse(material.diffuseTexIdx, log2P);
+            Globals::textureStreamer.noteUse(material.normalTexIdx, log2P);
+            Globals::textureStreamer.noteUse(material.metalRoughnessTexIdx, log2P);
         }
     }
-    // Publish the cull's hysteresis-state addressing for this node: stateSlot = instanceIdx + bias.
-    instances.mappedLodStateBias[node.m_transformIdx] = (int32)node.m_lodStateBase - (int32)startIdx;
 }
-
-
 
 uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color)
 {
