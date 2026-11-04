@@ -54,7 +54,7 @@ export struct TerrainSettings
 {
 	// --- "Terrain": the generator config (a change marks the streamer config-dirty) and the streaming ring ---
 	bool  enabled = false;
-	bool  v3LoadModels = false; // off = the terrain runs on the existing .tile cache only (no weights loaded)
+	bool  v3LoadModels = false; // off = the terrain runs on the existing .tile cache only (no weights loaded), if the seed has any
 	int   seed = 516121;
 	// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z).
 	float originX = -132221.9f;

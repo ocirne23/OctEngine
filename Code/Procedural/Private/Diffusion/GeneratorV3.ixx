@@ -225,6 +225,9 @@ export namespace Procedural
 		// True when the tile is already in the disk cache: a fetch is then a read, not inference. Disk
 		// access - never from the main thread without an AllowMainThreadIO scope.
 		bool isFullTileCached(int32 ti, int32 tj) const;
+		// The seed's disk cache holds at least one full-detail tile (coarse tiles do not count: a preview writes those,
+		// and the terrain on them alone has no detail). Lists the folder - same main-thread rule as above.
+		static bool hasFullTilesOnDisk(uint32 seed, bool useFp16);
 		// Generates (or loads) the tile into the runtime's cache and drops the handle. Blocking - on a
 		// job the wait parks the fiber. A no-op while the models are not ready.
 		void prefetchFullTile(int32 ti, int32 tj) const;

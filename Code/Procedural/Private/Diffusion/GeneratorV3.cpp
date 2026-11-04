@@ -479,6 +479,13 @@ namespace Procedural
 						else
 							unload = !m_cacheOnly.load(oc::memory_order_acquire);
 					}
+					else if (m_cacheOnly.load(oc::memory_order_acquire))
+					{
+						// Leave the cache-only state HERE, so isReady() is already false for the rebuild that follows:
+						// it waits for the load and swaps the world in, instead of publishing a generator over no pipeline.
+						m_cacheOnly.store(false, oc::memory_order_release);
+						m_loadStarted = false; // the next beginLoad starts it
+					}
 					Log::info(enabled ? "[Diffusion] model loading enabled"
 					                  : "[Diffusion] model loading disabled - using the tile cache only");
 				}
@@ -1430,6 +1437,16 @@ namespace Procedural
 	}
 
 	bool TerrainGenV3::isFullTileCached(int32 ti, int32 tj) const { return DiffusionRuntime::get().isTileCached(ti, tj); }
+
+	bool TerrainGenV3::hasFullTilesOnDisk(uint32 seed, bool useFp16)
+	{
+		oc::vector<FileSystem::DirEntry> entries;
+		FileSystem::listDirectory(FileSystem::parentPath(tileCachePath((uint64)seed, useFp16, false, 0, 0)), entries);
+		for (const FileSystem::DirEntry& e : entries)
+			if (e.extension == ".tile" && e.name.find("full_") == 0)
+				return true;
+		return false;
+	}
 
 	void TerrainGenV3::prefetchFullTile(int32 ti, int32 tj) const
 	{

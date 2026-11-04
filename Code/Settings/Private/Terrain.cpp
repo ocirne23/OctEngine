@@ -258,6 +258,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::boolean("Terrain/V3", "FP16 inference", &s.v3Fp16);
 	// "Load models" (registered above): off = never load the 2.28 GB of diffusion weights: the terrain runs on the
 	// .tile files already in Local/Diffusion/<seed>/ (a missing tile falls back to the coarse stage, else sea level).
+	// A seed with no full tile there loads them anyway (TerrainStreamer::rebuildMaps).
 	// Turning it off with the models up unloads them.
 
 	// Rivers (Docs/Context/Procedural/Rivers.md): the coarse drainage network. Runoff = rain - evaporation (the Budyko curve over the

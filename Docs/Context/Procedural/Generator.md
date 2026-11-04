@@ -81,7 +81,12 @@ in cache-only only switches the cache folder (and clears the RAM caches) — it 
 preview and the seeder gate on `canGenerate()`: the models are up, or loading is off and the caches
 serve (a preview then shows only coarse tiles generated before). **A tile missing from disk is retried
 from disk on every fetch** — cheap per call, but a camera flying far past the cached area pays one
-failed read per tile per grid.
+failed read per tile per grid. Turning it on leaves the cache-only state at once (`isReady()` false), so the streamer
+waits for the load and rebuilds, with no toggle of "Terrain/Enabled".
+
+**A seed with no full tile on disk loads the models with the tweak off** (`hasFullTilesOnDisk`, coarse tiles do not
+count), so a new seed generates its terrain at startup. `rebuildMaps` decides this once per seed + precision: the tiles
+that load writes must not unload the models at the next rebuild. Turning the tweak on and off again clears the decision.
 
 ### `TerrainSeeder` — pre-generating the playable area's tiles
 

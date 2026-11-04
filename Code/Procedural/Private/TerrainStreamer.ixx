@@ -247,6 +247,8 @@ export namespace Procedural
 		// V3 can't generate until its models are downloaded+loaded. Building chunks before then would bake a
 		// flat sea-level world into the resident cache, so the streamer idles instead and rebuilds on ready.
 		bool m_v3AwaitingModels = false;
+		bool m_v3AutoLoadModels = false;   // the seed had no full tiles on disk: load the models with "Load models" off (rebuildMaps)
+		uint64 m_v3TileFolderKey = ~0ull;  // the seed + precision that decision was made for
 		double m_v3LastStatusLog = 0.0; // rate-limits the download/load progress log
 
 		bool m_configDirty = false; // set by the settings listeners (initialize); consumed at the top of update()

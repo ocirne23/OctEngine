@@ -667,7 +667,21 @@ namespace Procedural
 		// and drops isReady(), so a check taken before it would publish a generator whose pipeline is
 		// being torn down underneath it - and every chunk built meanwhile would bake a flat sea-level
 		// world into the resident cache and never be revisited.
-		TerrainGenV3::setModelLoadingEnabled(m_settings.v3LoadModels); // before any construction below kicks a load
+		// "Load models" off with no full tile of this seed on disk: nothing could generate, so load them anyway. Decided
+		// once per seed + precision, or the tiles this load writes would unload the models at the next rebuild. The
+		// tweak turned on and off again wins: it clears the decision, and the same key does not make it again.
+		const uint64 tileFolderKey = ((uint64)cfg.seed << 1) | (cfg.useFp16 ? 1u : 0u);
+		const bool tileFolderChanged = tileFolderKey != m_v3TileFolderKey;
+		m_v3TileFolderKey = tileFolderKey;
+		if (m_settings.v3LoadModels)
+			m_v3AutoLoadModels = false;
+		else if (tileFolderChanged)
+		{
+			m_v3AutoLoadModels = !TerrainGenV3::hasFullTilesOnDisk(cfg.seed, cfg.useFp16);
+			if (m_v3AutoLoadModels)
+				Log::info(oc::format("[Terrain] no tiles on disk for seed {} - loading the models to generate them", cfg.seed));
+		}
+		TerrainGenV3::setModelLoadingEnabled(m_settings.v3LoadModels || m_v3AutoLoadModels); // before any construction below kicks a load
 		TerrainGenV3::setPrecision(m_settings.v3Fp16);
 
 		oc::shared_ptr<const ITerrainSampler> maps;
