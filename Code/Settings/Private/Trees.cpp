@@ -28,6 +28,9 @@ void Settings::registerTrees(TreeSettings& s)
 	Tweak::intVar("Trees/World", "Near radius (chunks)", &s.nearRadius, 1, 32, 1.0f, respawn);
 	Tweak::intVar("Trees/World", "Set capacity (pieces)", &s.worldCapacity, 10000, 8000000, 1000.0f, respawn);
 	Tweak::intVar("Trees/World", "Expand per frame", &s.expandPerFrame, 1, 32, 1.0f);
+	Tweak::boolean("Trees/World/Colliders", "Enabled", &s.colliders);
+	Tweak::floatVar("Trees/World/Colliders", "Radius (m)", &s.colliderRadius, 4.0f, 512.0f, 1.0f);
+	Tweak::intVar("Trees/World/Colliders", "Bodies per frame", &s.collidersPerFrame, 1, 4096, 1.0f);
 	static constexpr oc::string_view FAR_MODES[] = { "Billboards", "None" };
 	Tweak::enumVar("Trees", "Far mode", &s.farMode, FAR_MODES, reload);
 	static constexpr oc::string_view BILLBOARD_VIEWS[] = { "2 (side + top)", "4 (+ other side + bottom)" };

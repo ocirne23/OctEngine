@@ -46,6 +46,9 @@ export namespace Procedural
 			const float* density = nullptr;
 			glm::vec3 densityMin{ 0.0f };
 			glm::vec3 densityMax{ 0.0f };
+			// The COLLIDER: the LOD chain's LAST level, rock-local (TreeSystem's world colliders build their mesh from it).
+			oc::span<const glm::vec3> collisionPositions;
+			oc::span<const uint32> collisionIndices;
 		};
 		struct WorldType
 		{
@@ -86,6 +89,9 @@ export namespace Procedural
 		{
 			RockVariant data;
 			RenderMesh mesh;
+			// The LOD chain's last level, kept past the upload (finishLoad frees the rest): the world colliders' mesh.
+			oc::vector<glm::vec3> collisionPositions;
+			oc::vector<uint32> collisionIndices;
 		};
 		struct Type
 		{

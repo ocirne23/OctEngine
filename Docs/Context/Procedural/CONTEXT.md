@@ -178,7 +178,9 @@ build, creates / destroys the static bodies (layer "Terrain"; box3d create/destr
 (`joinUpdate`) right before `kickPostUpdateJobs`**: the Sim batch (the game's nav feed) reads body
 positions, and the next frame's main-thread physics users (player controls, scripts, net receive, the
 step) must not overlap a body create/destroy. Between the kick and the join main runs only the ocean, the terrain
-render kick, trees / rocks / clutter, particles, force and the UI kick — none touches box3d. Sub-scopes `"Terrain collider clear"` /
+render kick, trees / rocks / clutter, particles, force and the UI kick — of them only the trees touch box3d: their
+world colliders' static bodies (Trees.md, World mode, THE COLLIDERS), created / destroyed under the same
+`g_bodyLifecycleMutex`. Sub-scopes `"Terrain collider clear"` /
 `"... create body"` / `"... evict"` show the box3d cost.
 
 Tiles clear and rebuild on a sampler identity change, exactly like the streamer's residents; eviction

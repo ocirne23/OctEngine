@@ -371,6 +371,14 @@ namespace Procedural
 			size_t triangles[ROCK_MAX_LODS] = {};
 			for (Variant& variant : type.variants)
 			{
+				// The world colliders' mesh: the chain's last (coarsest) level, kept past the CPU meshes' free below.
+				for (uint32 k = variant.data.lodCount; k-- > 0;)
+					if (!variant.data.lods[k].indices.empty())
+					{
+						variant.collisionPositions = variant.data.lods[k].positions;
+						variant.collisionIndices = variant.data.lods[k].indices;
+						break;
+					}
 				RenderMeshData data[ROCK_MAX_LODS];
 				const RenderMeshData* levels[ROCK_MAX_LODS] = {};
 				uint32 numLevels = 0;
@@ -413,7 +421,8 @@ namespace Procedural
 					hi = glm::max(hi, p);
 				}
 				world.variants.push_back({ &variant.mesh,(lo + hi) * 0.5f, glm::length(hi - lo) * 0.5f, variant.data.height,
-					variant.data.density.empty() ? nullptr : variant.data.density.data(), variant.data.densityMin, variant.data.densityMax });
+					variant.data.density.empty() ? nullptr : variant.data.density.data(), variant.data.densityMin, variant.data.densityMax,
+					variant.collisionPositions, variant.collisionIndices });
 			}
 			if (!world.variants.empty())
 				m_worldTypes.push_back(oc::move(world));

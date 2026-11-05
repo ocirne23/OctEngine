@@ -11,6 +11,7 @@ import Core.Sphere;
 
 import RendererVK;
 import File;
+import Physics;
 
 import :TreeSystem;
 import :TreeSpecies;
@@ -235,7 +236,9 @@ namespace Procedural
 	void TreeSystem::destroyTreeSet()
 	{
 		stopExpansion();
-		m_near.clear();
+		m_near.clear(); // the collider bodies first: they use the rock meshes below
+		m_colliderBodies = 0;
+		m_rockColliderMeshes.clear();
 		m_expandContext = nullptr;
 		// Without world mode the far volume has no record types (it ignores the records).
 		if (m_recordTypesSet)
@@ -1264,7 +1267,15 @@ namespace Procedural
 						type.solidOwnColour = rockType.ownColour;
 						type.albedo = rockType.ownAlbedo;
 					}
-					rock.variants.push_back({ (uint32)gpuTypes.size(), variant.centre, variant.radius, variant.height });
+					// The COLLIDER: a BVH of the LOD chain's last level (its own copy: RockSystem may free its meshes first).
+					int32 colliderMesh = -1;
+					if (!variant.collisionIndices.empty())
+						if (PhysicsMesh mesh = Globals::physics.createCollisionMesh(variant.collisionPositions, variant.collisionIndices); mesh.isValid())
+						{
+							colliderMesh = (int32)m_rockColliderMeshes.size();
+							m_rockColliderMeshes.push_back(oc::move(mesh));
+						}
+					rock.variants.push_back({ (uint32)gpuTypes.size(), variant.centre, variant.radius, variant.height, colliderMesh });
 					gpuTypes.push_back(type);
 				}
 			}
@@ -1307,6 +1318,17 @@ namespace Procedural
 				out.bushRadius = undergrowth.y;
 				if (undergrowth.x > 0.0f)
 					context->bushRadius = glm::max(context->bushRadius, undergrowth.y);
+				// The COLLIDER: the trunk as an 8-sided cylinder at scale 1, from just under the ground to its mean height.
+				const float radius = species.desc.trunkRadius * (1.0f + 0.5f * species.desc.trunkFlare);
+				const float height = 0.5f * (species.desc.trunkHeight.x + species.desc.trunkHeight.y);
+				if (radius > 0.0f && height > 0.0f)
+					for (int i = 0; i < 8; ++i)
+					{
+						const float a = (float)i * (6.28318531f / 8.0f);
+						const glm::vec2 c = glm::vec2(std::cos(a), std::sin(a)) * radius;
+						out.colliderPoints.push_back(glm::vec3(c.x, -0.3f, c.y));
+						out.colliderPoints.push_back(glm::vec3(c.x, height, c.y));
+					}
 			}
 		}
 		for (size_t s = 0; s < m_species.size(); ++s)
@@ -1542,6 +1564,7 @@ namespace Procedural
 				m_vegChunkOf.erase(it->first);
 				Globals::terrain.restampVegetation(coord);
 			}
+			m_colliderBodies -= it->second.liveBodies; // its bodies go with it
 			it = m_near.erase(it); // a pending one: its result finds no entry
 		}
 
@@ -1560,6 +1583,7 @@ namespace Procedural
 			if (result.generation != m_expandGeneration || it == m_near.end() || !it->second.pending)
 				continue;
 			it->second.pending = false;
+			it->second.colliders = oc::move(result.colliders); // their bodies: updateColliders
 			const uint32 setChunk = m_treeSet.addChunk(result.pieces);
 			if (setChunk == UINT32_MAX)
 			{
@@ -1594,7 +1618,7 @@ namespace Procedural
 						ExpandResult result;
 						result.coord = coord;
 						result.generation = generation;
-						expandChunk(*context, coord, chunkRecords, result.pieces);
+						expandChunk(*context, coord, chunkRecords, result.pieces, result.colliders);
 						std::lock_guard<std::mutex> lk(m_expandMutex);
 						m_expandResults.push_back(oc::move(result));
 						m_expandInFlight.fetch_sub(1, oc::memory_order_relaxed);
@@ -1602,6 +1626,8 @@ namespace Procedural
 					if (m_expandInFlight.load(oc::memory_order_relaxed) >= MAX_IN_FLIGHT)
 						break;
 				}
+
+		updateColliders(camera);
 	}
 
 	void TreeSystem::stopExpansion()
@@ -1612,14 +1638,100 @@ namespace Procedural
 		m_expandResults.clear();
 	}
 
+	void TreeSystem::updateColliders(const Camera& camera)
+	{
+		if (!m_settings.colliders)
+		{
+			if (m_colliderBodies > 0)
+				for (auto& [k, chunk] : m_near)
+				{
+					chunk.bodies.clear();
+					chunk.liveBodies = 0;
+				}
+			m_colliderBodies = 0;
+			return;
+		}
+		ProfileScope scope("Tree colliders", EProfileCategory::Procedural);
+		const float radius = m_settings.colliderRadius;
+		const float out2 = (radius * 1.1f) * (radius * 1.1f), in2 = radius * radius;
+		const glm::vec2 cam(camera.position.x, camera.position.z);
+		const float chunkSize = m_expandContext->chunkSize;
+		int32 budget = glm::max(m_settings.collidersPerFrame, 1);
+		const uint64 layer = PhysicsLayers::bit("Vegetation");
+
+		for (auto& [k, chunk] : m_near)
+		{
+			if (chunk.colliders.empty())
+				continue;
+			const glm::vec2 lo = glm::vec2((float)(int32)(uint32)k, (float)(int32)(uint32)(k >> 32)) * chunkSize;
+			const glm::vec2 nearest = glm::clamp(cam, lo - 8.0f, lo + chunkSize + 8.0f); // a rock's centre may sit past the border
+			const glm::vec2 d = nearest - cam;
+			if (glm::dot(d, d) > out2)
+			{
+				if (chunk.liveBodies > 0)
+				{
+					m_colliderBodies -= chunk.liveBodies;
+					chunk.bodies.clear();
+					chunk.liveBodies = 0;
+				}
+				continue;
+			}
+			if (chunk.bodies.size() != chunk.colliders.size())
+				chunk.bodies.resize(chunk.colliders.size());
+			for (size_t i = 0; i < chunk.colliders.size(); ++i)
+			{
+				const ExpandCollider& c = chunk.colliders[i];
+				const glm::vec2 e = glm::vec2(c.transform.pos.x, c.transform.pos.z) - cam;
+				const float dist2 = glm::dot(e, e);
+				PhysicsBody& body = chunk.bodies[i];
+				if (body.isValid())
+				{
+					if (dist2 > out2)
+					{
+						body.destroy();
+						--chunk.liveBodies;
+						--m_colliderBodies;
+					}
+					continue;
+				}
+				if (dist2 > in2 || budget <= 0)
+					continue;
+				PhysicsShape shape;
+				shape.categoryBits = layer;
+				if (c.rockMesh >= 0)
+				{
+					shape.type = EPhysicsShapeType::Mesh;
+					shape.mesh = &m_rockColliderMeshes[(size_t)c.rockMesh];
+				}
+				else
+				{
+					shape.type = EPhysicsShapeType::Hull;
+					shape.hullPoints = m_expandContext->species[c.species].colliderPoints;
+					shape.maxHullVertices = 16;
+				}
+				PhysicsBodyDesc desc;
+				desc.type = EPhysicsBodyType::Static;
+				desc.transform = c.transform;
+				body = Globals::physics.createBody(desc, oc::span<const PhysicsShape>(&shape, 1));
+				--budget;
+				if (body.isValid())
+				{
+					++chunk.liveBodies;
+					++m_colliderBodies;
+				}
+			}
+		}
+	}
+
 	// One chunk's trees + bushes from its records: the preview's placeVariant rules (variant, scale, yaw from the seed),
 	// the record's seed for the tree, the ground from one Full grid at 2 m (the terrain's LOD 0 spacing) over the chunk
 	// plus the bushes' reach. MIRRORED on the GPU by the far volume (tree_volume_splat.cs's TREE_SPLAT_RECORDS,
 	// tree_volume_records.cs) - keep the hashes and the order of the choices in step.
 	void TreeSystem::expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
-		oc::vector<RenderTreeSet::Piece>& out)
+		oc::vector<RenderTreeSet::Piece>& out, oc::vector<ExpandCollider>& outColliders)
 	{
 		out.clear();
+		outColliders.clear();
 		if (records.empty() || !context.maps)
 			return;
 		const float cs = context.chunkSize;
@@ -1649,7 +1761,8 @@ namespace Procedural
 			return t.waterKind == ETerrainWater::River || t.waterKind == ETerrainWater::Lake || t.height < t.waterLevel
 				|| t.river > context.riverClear;
 		};
-		auto placeVariant = [&](const ExpandSpecies& species, uint32 seed, glm::vec2 p)
+		// `collider`: the species index of a TREE (its trunk cylinder, when it has one); -1 = a bush (no collider).
+		auto placeVariant = [&](const ExpandSpecies& species, uint32 seed, glm::vec2 p, int32 collider)
 		{
 			if (species.variants.empty())
 				return;
@@ -1662,6 +1775,8 @@ namespace Procedural
 			piece.centre = piece.transform.transformPoint(variant.farCentre);
 			piece.radius = variant.farRadius * scale;
 			piece.type = variant.type;
+			if (collider >= 0 && !species.colliderPoints.empty())
+				outColliders.push_back({ piece.transform, -1, (uint32)collider });
 		};
 
 		// A ROCK record: one piece. The variant and the yaw from the seed as a tree's, the scale from rockRecordScale
@@ -1682,6 +1797,8 @@ namespace Procedural
 			piece.centre = piece.transform.transformPoint(variant.centre);
 			piece.radius = variant.radius * scale;
 			piece.type = variant.type;
+			if (variant.colliderMesh >= 0)
+				outColliders.push_back({ piece.transform, variant.colliderMesh, 0 });
 		};
 
 		const glm::vec2 chunkOrigin = glm::vec2(coord) * cs;
@@ -1699,7 +1816,7 @@ namespace Procedural
 			if (s < 0)
 				continue;
 			const ExpandSpecies& tree = context.species[(size_t)s];
-			placeVariant(tree, seed, p);
+			placeVariant(tree, seed, p, s); // a bush placed on its own has no collider points: none
 			// The species' undergrowth (bushUndergrowth): the whole part always, the fraction by chance, out of the trunk's
 			// way (1.5 m) to its bush radius (area-uniform), a bush species of its climate by weight.
 			if (tree.bushes.empty() || tree.bushesPerTree <= 0.0f)
@@ -1714,7 +1831,7 @@ namespace Procedural
 				const ExpandSpecies& bush = context.species[tree.bushes[treeHash(bushSeed, 113u) % (uint32)tree.bushes.size()]];
 				const glm::vec2 at = p + glm::vec2(std::cos(angle), std::sin(angle)) * radius;
 				if (!inWater(at))
-					placeVariant(bush, bushSeed, at);
+					placeVariant(bush, bushSeed, at, -1);
 			}
 		}
 	}

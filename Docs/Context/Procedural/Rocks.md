@@ -258,4 +258,6 @@ serves the world through `worldEnabled()` / `worldRules()` / `typesRevision()` /
 `Reload types` re-reads the files (a new `typesRevision`); `Respawn preview` re-places in front of the camera; `Grid
 resolution` regenerates the MESHES only (`clearMeshes` + `kickGeneration`: the types stay as read, so the revision and
 TreeWorld's placement stay too; only the world generation changes). After the upload the variants' CPU meshes are
-freed (`finishLoad`; the density grid and the shape numbers stay). RT sees the rocks through the chain's one BLAS.
+freed (`finishLoad`; the density grid and the shape numbers stay) - except the LOD chain's LAST level's positions and
+indices (`Variant::collisionPositions` / `Indices`, served as `WorldVariant::collisionPositions` / `Indices`): TreeSystem's
+world colliders build a BVH from it (Trees.md, World mode, THE COLLIDERS). RT sees the rocks through the chain's one BLAS.

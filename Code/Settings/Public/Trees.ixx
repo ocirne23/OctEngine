@@ -29,6 +29,11 @@ export struct TreeSettings
 	int nearRadius = 3;               // chunks (Chebyshev) around the camera chunk whose trees are expanded
 	int worldCapacity = 600000;       // the dynamic set's piece slots (trees + bushes)
 	int expandPerFrame = 2;           // expanded chunks added to the set per frame
+	// COLLIDERS (world mode, "Trees/World/Colliders"): static bodies on the "Vegetation" layer for the expanded trees (a
+	// cylinder each: the trunk) and rocks (their LOD chain's last level as a mesh) within colliderRadius of the camera.
+	bool colliders = true;
+	float colliderRadius = 80.0f;     // m (horizontal); a body goes again 10 % past it
+	int collidersPerFrame = 64;       // bodies created per frame (removals are not budgeted)
 	int farMode = 0;                  // 0 = billboards, 1 = none (reloads)
 	int billboardViews = 0;           // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
 	float farDistanceScale = 3.0f;    // x every species' billboard distance; 0 = off

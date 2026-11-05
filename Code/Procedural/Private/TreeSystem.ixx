@@ -6,6 +6,7 @@ import Core.Camera;
 import Core.Transform;
 
 import RendererVK;
+import Physics;
 import Threading;
 import Settings;
 
@@ -198,6 +199,9 @@ export namespace Procedural
 			oc::vector<uint32> bushes;  // trees: the bush species of their climate (indices into species), each `Weight` times
 			float bushesPerTree = 0.0f; // trees: their undergrowth (bushUndergrowth)
 			float bushRadius = 1.5f;    // trees: bushes out to this from the tree (m)
+			// Trees: the COLLIDER - the trunk as a cylinder at scale 1 (its base radius with half the flare, its mean height),
+			// tree-local; the body's scale is the tree's. Empty: none (a bush).
+			oc::vector<glm::vec3> colliderPoints;
 		};
 		// A ROCK type of the world (RockSystem's WorldType, Docs/Context/Procedural/Rocks.md): a record expands to ONE piece -
 		// its variant, scale (rockRecordScale) and yaw from the record's seed, laid on the ground under its footprint
@@ -208,6 +212,7 @@ export namespace Procedural
 			glm::vec3 centre{ 0.0f };   // rock-local bounds
 			float radius = 0.0f;
 			float height = 1.0f;        // nominal
+			int32 colliderMesh = -1;    // into m_rockColliderMeshes (its LOD chain's last level); -1 = none
 		};
 		struct ExpandRock
 		{
@@ -231,22 +236,38 @@ export namespace Procedural
 			float bushRadius = 1.5f;    // the LARGEST species' bush radius (m): the ground grid's margin
 			float riverClear = 1.0f;    // "Terrain/Rivers/Vegetation clear": no bush where the river influence is above it
 		};
+		// THE WORLD COLLIDERS ("Trees/World/Colliders"): what the expansion places a static body for - a tree's trunk (its
+		// species' cylinder) or a rock (its mesh); the bodies exist only within the radius of the camera (updateColliders).
+		struct ExpandCollider
+		{
+			Transform transform;  // the piece's: a tree's base (scale = the tree's), a rock's ground transform
+			int32 rockMesh = -1;  // into m_rockColliderMeshes; -1 = a tree
+			uint32 species = 0;   // a tree: into ExpandContext::species (its colliderPoints)
+		};
 		struct ExpandResult
 		{
 			glm::ivec2 coord{ 0 };
 			uint32 generation = 0;
 			oc::vector<RenderTreeSet::Piece> pieces;
+			oc::vector<ExpandCollider> colliders;
 		};
 		struct NearChunk
 		{
 			uint32 setChunk = UINT32_MAX; // the set chunk once added
 			bool pending = true;          // an expansion job runs (or its result waits)
+			oc::vector<ExpandCollider> colliders;
+			oc::vector<PhysicsBody> bodies; // parallel to colliders once any is near (invalid: no body)
+			uint32 liveBodies = 0;
 		};
 		void spawnWorld(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps);
 		void updateWorld(Renderer& renderer, const Camera& camera);
 		void stopExpansion(); // joins the jobs, drops their results
 		static void expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
-			oc::vector<RenderTreeSet::Piece>& out);
+			oc::vector<RenderTreeSet::Piece>& out, oc::vector<ExpandCollider>& outColliders);
+		// Main thread, in updateWorld: creates the near chunks' bodies within "Radius (m)" of the camera ("Bodies per frame"
+		// at most) and destroys those 10 % past it; with the tweak off, all of them. box3d create / destroy serialize on
+		// g_bodyLifecycleMutex (the terrain collider's job may create its tiles meanwhile).
+		void updateColliders(const Camera& camera);
 
 		TreeSettings& m_settings = Globals::settings.trees; // "Trees" (the buttons are cleared here)
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
@@ -281,6 +302,10 @@ export namespace Procedural
 		uint32 m_rockGeneration = 0;
 		bool m_setHasRocks = false;
 		oc::shared_ptr<const ExpandContext> m_expandContext;
+		// The rocks' collision BVHs (spawnWorld, from RockSystem's last LOD levels): declared before m_near, so the bodies
+		// (its chunks') destruct first; destroyTreeSet frees them after the chunks.
+		oc::vector<PhysicsMesh> m_rockColliderMeshes;
+		uint32 m_colliderBodies = 0; // live, over every near chunk
 		oc::unordered_map<uint64, NearChunk> m_near;
 		uint32 m_expandGeneration = 0;
 		std::mutex m_expandMutex;

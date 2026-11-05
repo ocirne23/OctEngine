@@ -794,6 +794,18 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   (`m_vegChunkOf`) and re-stamped in the terrain (`restampVegetation`). A chunk past near + 1 is removed
   (`removeChunk`, deferred reuse) and re-stamped; a pending one's result is dropped.
 * A respawn joins the jobs (`stopExpansion`: the generation bumps, the results are cleared).
+* **THE COLLIDERS** ("Trees/World/Colliders": `Enabled`, `Radius (m)` 80, `Bodies per frame` 64): the expansion also
+  lists per chunk what gets a STATIC body (`ExpandCollider`: the piece's transform) - every TREE (not the bushes: theirs
+  is empty) its species' trunk as an 8-sided cylinder HULL (`ExpandSpecies::colliderPoints`: the base radius with half
+  the flare, from 0.3 m under the ground to the mean trunk height, at scale 1; the body's scale is the tree's), every
+  ROCK its LOD chain's LAST level as a MESH (`m_rockColliderMeshes`: one BVH per variant, built by `spawnWorld` from
+  `RockSystem::WorldVariant::collisionPositions` / `Indices` - TreeSystem's own copy, so RockSystem may free its meshes
+  first). Layer "Vegetation". `updateColliders` (main, at the end of `updateWorld`) creates the bodies within the radius
+  of the camera (horizontal; at most `Bodies per frame`) and destroys those 10 % past it; a chunk wholly past it drops
+  all of its bodies, a chunk leaving the near radius takes them along, and the tweak off drops every body. Only the near
+  chunks' trees ever have one - millions of records, a few hundred bodies. box3d create / destroy serialize on
+  `g_bodyLifecycleMutex`: the terrain collider's update job may create its tiles at the same time. `destroyTreeSet`
+  (a respawn, RockSystem's mesh-user hook) drops the bodies before the rock meshes.
 * **THE WORLD'S ROCKS**: `spawnWorld` appends RockSystem's loaded types (`Globals::rocks.worldTypes()`) to the set - a
   GPU type per variant: ONE mesh, the LOD chain's level 0 in the `bark` slot on `LitRock`, no billboard (RendererVK:
   the culls pick its level, no wind) - and maps TreeWorld's rock record types to them by name. `expandChunk` turns a

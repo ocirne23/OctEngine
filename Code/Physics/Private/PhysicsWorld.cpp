@@ -21,21 +21,59 @@ static_assert(B3_MAX_WORKERS == 32, "the Physics/World Worker count range (Setti
 
 // box3d hands DrawShapeFcn a *user* shape handle, created on demand the first time each shape is
 // drawn and destroyed when that shape is modified or removed. Without these callbacks there is no
-// handle to pass and shapes are never drawn at all. The handle is a copy of box3d's b3DebugShape:
-// its union points at box3d-owned geometry that stays valid for as long as the handle does, which
-// is exactly the lifetime destroyDebugShape delimits.
+// handle to pass and shapes are never drawn at all. The handle is a copy of box3d's b3DebugShape -
+// and of the small geometry its union points at: a sphere's / capsule's / mesh's (the b3Mesh: the
+// data pointer + the scale) live INSIDE box3d's shape array, which MOVES when it grows, so a kept
+// pointer dangled (a crash in drawMesh once many shapes were created: the trees' colliders while
+// moving). A hull's b3HullData, and a mesh's b3MeshData (ours: it outlives its shapes), are separate
+// heap blocks and stay valid for as long as the handle does - the lifetime destroyDebugShape delimits.
 namespace
 {
-oc::vector<oc::unique_ptr<b3DebugShape>> g_debugShapes;
+struct DebugShapeCopy
+{
+    b3DebugShape shape; // first: the handle box3d passes back is this struct's address
+    union
+    {
+        b3Sphere sphere;
+        b3Capsule capsule;
+        b3Mesh mesh;
+    };
+};
+oc::vector<oc::unique_ptr<DebugShapeCopy>> g_debugShapes;
 
 void* createDebugShapeFcn(const b3DebugShape* debugShape, void*)
 {
-    return g_debugShapes.emplace_back(oc::make_unique<b3DebugShape>(*debugShape)).get();
+    DebugShapeCopy& copy = *g_debugShapes.emplace_back(oc::make_unique<DebugShapeCopy>());
+    copy.shape = *debugShape;
+    switch (debugShape->type)
+    {
+    case b3_sphereShape:
+        copy.sphere = *debugShape->sphere;
+        copy.shape.sphere = &copy.sphere;
+        break;
+    case b3_capsuleShape:
+        copy.capsule = *debugShape->capsule;
+        copy.shape.capsule = &copy.capsule;
+        break;
+    case b3_meshShape:
+        copy.mesh = *debugShape->mesh;
+        copy.shape.mesh = &copy.mesh;
+        break;
+    default: // a hull: separate heap data
+        break;
+    }
+    return &copy;
 }
 
 void destroyDebugShapeFcn(void* userShape, void*)
 {
-    oc::erase_if(g_debugShapes, [userShape](const oc::unique_ptr<b3DebugShape>& shape) { return shape.get() == userShape; });
+    for (size_t i = 0; i < g_debugShapes.size(); ++i)
+        if (g_debugShapes[i].get() == userShape)
+        {
+            oc::swap(g_debugShapes[i], g_debugShapes.back()); // the order does not matter: no shifting
+            g_debugShapes.pop_back();
+            return;
+        }
 }
 } // namespace
 

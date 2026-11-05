@@ -269,7 +269,9 @@ bit 0. Two shapes collide when **each one's mask contains the other's category**
 matching `groupIndex` overrides (negative = never, positive = always).
 
 In a `.pre`: `Layer Debris` + `CollidesWith Default, Player` (or `All` / `None`) + optional
-`Group <int>`. Demo: `Entities/Debug/physicsSphere.pre`.
+`Group <int>`. Demo: `Entities/Debug/physicsSphere.pre`. The engine's own static layers: `"Terrain"` (Procedural's
+terrain collider tiles) and `"Vegetation"` (the world trees' trunk cylinders and the rocks' meshes near the camera,
+Procedural Trees.md) - a body that leaves one out of its `CollidesWith` passes through it.
 
 ## Buoyancy
 
@@ -295,6 +297,11 @@ the ocean's render job (kicked from `TerrainStreamer::render`, after the entity 
 joined before present), so no buoyancy read overlaps it.
 
 ## Debug draw
+
+**The debug-shape handles COPY their small geometry** (`createDebugShapeFcn`'s `DebugShapeCopy`): box3d's
+`b3DebugShape` points a sphere / capsule / mesh (`b3Mesh`: data + scale) INTO its shape array, which moves when it
+grows - a kept pointer dangled and `drawMesh` crashed once many shapes were created (the trees' colliders while
+moving). A hull's `b3HullData` and a mesh's `b3MeshData` are separate heap blocks and stay valid for the handle's life.
 
 The App registers a line sink and a view-position source ONCE through `setDebugDrawCallback`, which
 keeps Physics free of any renderer dependency. The view position is a **callback rather than an
