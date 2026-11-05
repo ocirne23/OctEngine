@@ -58,6 +58,11 @@ nap.** The thread claims a reserved scheduler context through
 > external-helper registration. A wait can stall behind a helped job, so never call it per frame.
 > `setTitle` is a queued async op.
 
+**Clipboard writes go through here too** (the relay in `Renderer.cpp`, installed over the ImGui SDL backend's hooks, so
+every `ImGui::SetClipboardText` is covered). A write sends a message to the clipboard's previous owner; when that is our
+own window, a caller on any other thread waits for a pump that main cannot ask for while it waits, until Windows times
+out after 5 s. A read before the pump gets the text in flight.
+
 `servePump` SNAPS the served epoch to the observed request epoch: one serve can cover several queued
 requests, and a `+1` would deadlock `waitPumpDone`.
 

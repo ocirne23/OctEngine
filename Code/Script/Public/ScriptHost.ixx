@@ -57,6 +57,14 @@ export typedef void(*ScriptLoadedCallback)(const ScriptModule* script, const oc:
 // DSL/Transpiler.ixx) are both just a source file whose body-only C++ compiles under the same ScriptAPI.h ABI --
 // getOrLoad never inspects the extension, only the file's content. Pure compile/load only: it knows nothing
 // about the engine - no renderer, entity or input.
+export struct ScriptCompileReport
+{
+    oc::string path;
+    bool success = false;
+    bool rebuildNeeded = false; // cooked build: it compiles, and only a rebuild of App runs it
+    oc::string errors;          // cl's whole output on a failure
+};
+
 export class ScriptHost final
 {
 public:
@@ -68,14 +76,12 @@ public:
     // keeps the previous build on failure; first-time failures are cached so they aren't retried each frame.
     // The returned pointer is stable until shutdown().
     const ScriptModule* getOrLoad(const oc::string& path, bool forceRecompile = false);
-    void handleScriptReloadRequests(const oc::vector<oc::string>& paths)
-    {
-        if (paths.empty())
-            return;
-        ProfileScope profileScope("Script Reloads", EProfileCategory::Script);
-		for (const oc::string& path : paths)
-			getOrLoad(path, true);
-    }
+    // A save's request. Hot-reload build: a forced getOrLoad, blocking main as ever. Cooked build (SCRIPTS_STATIC): the
+    // running code cannot change, so it only checks that the file compiles, with cl on a background thread.
+    void handleScriptReloadRequests(const oc::vector<oc::string>& paths);
+    // What became of every forced rebuild and check since the last call, oldest first. Any thread.
+    oc::vector<ScriptCompileReport> takeCompileReports();
+    bool isCompileCheckRunning();
 
 	void setCurrentScriptPath(const oc::string& path) { m_currentScriptPath = path; }
 	void reloadCurrentScript() { if (!m_currentScriptPath.empty()) getOrLoad(m_currentScriptPath, true); }
@@ -100,6 +106,9 @@ private:
     };
     bool loadDll(CachedScript& slot, const oc::string& dll);
     void unloadAll();
+    void pushCompileReport(const oc::string& path, bool success, bool rebuildNeeded, const oc::string& errors);
+    void startCompileCheck(const oc::string& path);
+    void runCompileChecks(oc::string path); // the worker: this path, then whatever was asked for meanwhile
 
 private:
 
@@ -119,6 +128,13 @@ private:
     oc::vector<oc::string> pendingPdbDeletes;             // superseded PDBs the debugger still holds; retried later
 
 	oc::string m_currentScriptPath;                        // the script the editor panel is currently editing (F6 recompiles it)
+
+    std::mutex m_reportMutex;                              // guards everything below but the thread object
+    oc::vector<ScriptCompileReport> m_compileReports;
+    // One check at a time, because cl's temp files and log are shared; a save during one replaces any waiting save.
+    bool m_compileCheckRunning = false;
+    oc::string m_compileCheckPending;
+    std::thread m_compileCheckThread;
 };
 
 export namespace Globals

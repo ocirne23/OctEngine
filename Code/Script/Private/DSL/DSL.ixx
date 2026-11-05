@@ -550,6 +550,24 @@ export inline int dslEnclosingBlockHeader(const DSLScriptFile& file, int lineInd
 	return -1;
 }
 
+// Whether a block header is a loop: what a `break` needs around it.
+export inline bool dslIsLoopHeader(const DSLSymbol* head)
+{
+	if (head == nullptr || head->type != DSLSymbol::SymbolType::FlowControl)
+		return false;
+	const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(head->data).control;
+	return control == DSLFlowControl::While || control == DSLFlowControl::For || control == DSLFlowControl::ForEach;
+}
+
+// Whether line `lineIndex` sits inside a loop, through any number of other blocks.
+export inline bool dslIsInsideLoop(const DSLScriptFile& file, int lineIndex)
+{
+	for (int header = lineIndex >= 0 ? dslEnclosingBlockHeader(file, lineIndex) : -1; header >= 0; header = dslEnclosingBlockHeader(file, header))
+		if (dslIsLoopHeader(file.lines[header]->head()))
+			return true;
+	return false;
+}
+
 // Index of the FunctionDeclaration header line enclosing `fromIndex` (walking backward; `fromIndex` itself
 // counts if it IS a header -- its parameters belong to it), or -1 when outside any function.
 export inline int dslEnclosingFunctionHeader(const DSLScriptFile& file, int fromIndex)

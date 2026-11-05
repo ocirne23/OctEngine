@@ -461,6 +461,8 @@ void ScriptEditor::beginCompose()
 
 void ScriptEditor::refreshCandidates()
 {
+	m_candidateNavigated = false;
+
 	// The sidebar-root binding objects (just "self" today) offered wherever a dot-into makes sense --
 	// consumable only via '.'/confirm into MemberSelect, never as bare values (see receiverCandidates).
 	// Component bindings (physics/audio/force) are reached through self's own members instead, gated there by
@@ -889,11 +891,463 @@ bool ScriptEditor::tryResolveCandidateOnSpace()
 	const Candidate* picked = selectedCandidate();
 	if (picked == nullptr || isParameterizedFunction(*picked))
 		return false; // parameterized functions resolve through tryBeginValueCallStaging instead
-	top.terms.push_back(PendingExprTerm{ false, *picked, {}, {} });
+	// The term rests as the pending term, like a just-closed group: only an operator or a confirm continues from it. It
+	// can never join the frame on its own, where a second term would land with no operator between the two.
+	m_exprPendingGroup = PendingExprTerm{ false, *picked, {}, {} };
+	m_exprHasPendingGroup = true;
 	m_pendingWord.clear();
-	refreshCandidates();
+	m_candidates.clear();
 	m_composePrefix = exprBasePrefix() + exprComposePrefixFromStack();
 	return true;
+}
+
+void ScriptEditor::beginMemberReassign(const Candidate& member, oc::string pendingOperator)
+{
+	const oc::string lead = m_composePrefix + member.label + " ";
+	m_reassignTarget = m_memberReceiver;
+	m_reassignMemberPath = m_memberPath;
+	m_reassignMemberPath.push_back(member.label);
+	m_reassignOp = DSLOperator::Assign;
+	m_reassignEditExpr = nullptr;
+	m_memberReceiver = nullptr;
+	m_memberReturnMode = ComposeMode::None;
+	m_memberPath.clear();
+	enterCompose(ComposeMode::ReassignOp, lead, oc::move(pendingOperator));
+}
+
+oc::string ScriptEditor::composeHint() const
+{
+	switch (m_composeMode)
+	{
+	case ComposeMode::None:
+		return hasLineSelection()
+			? "Alt+Up / Alt+Down or drag: move   Shift+Up / Shift+Down: select more   Del: delete   Ctrl+C / Ctrl+X: copy / cut   Esc: stop selecting"
+			: "Type to edit.  Enter: new line   Del: delete   Alt+Up / Alt+Down: move   Shift+Up / Shift+Down: select   Ctrl+Z / Ctrl+Y: undo / redo   Ctrl+S: save";
+	case ComposeMode::FilterCandidates:
+		return "A statement: a keyword, a type to declare, a variable to assign, a function to call, # for a comment.";
+	case ComposeMode::DeclareName: case ComposeMode::ForVarName: case ComposeMode::ForEachName: case ComposeMode::IfExistName:
+		return "The new name. Space or = continues.";
+	case ComposeMode::Rename:
+		return "The new name. Enter renames every use, Esc keeps the old name.";
+	case ComposeMode::DeclareValue: case ComposeMode::ReassignValue: case ComposeMode::EditExpr: case ComposeMode::ReturnValue:
+		return "The value: operators and ( ) build an expression. Enter commits.";
+	case ComposeMode::ConditionLeft: case ComposeMode::ForConditionLeft:
+		return "The left side: then a comparator (< > = !). A bool value alone is a condition too, Enter commits it.";
+	case ComposeMode::ConditionOp: case ComposeMode::ForConditionOp:
+		return "A comparator: == != < > <= >=";
+	case ComposeMode::ConditionRight:
+		return "The right side. && or || adds a term, Enter commits.";
+	case ComposeMode::FunctionDeclareName:
+		return "The function's name. ( opens its parameters.";
+	case ComposeMode::FunctionParamType: case ComposeMode::ForVarType: case ComposeMode::ForEachType: case ComposeMode::IfExistType:
+		return "A type.";
+	case ComposeMode::FunctionParamName:
+		return "The parameter's name. , adds the next one, ) closes the list.";
+	case ComposeMode::FunctionDeclareDone:
+		return "Enter creates the function, - adds a return type.";
+	case ComposeMode::FunctionReturnType: case ComposeMode::FunctionDeclareReturnType:
+		return "The return type.";
+	case ComposeMode::ForVarValue:
+		return "The start value. , continues to the condition.";
+	case ComposeMode::ForConditionValue:
+		return "The bound. , continues to the increment.";
+	case ComposeMode::ForIncrementOp: case ComposeMode::ReassignOp:
+		return "An assignment: = += -= *= /= %=";
+	case ComposeMode::ForIncrementValue:
+		return "The step. Enter creates the loop.";
+	case ComposeMode::ReplaceOperator:
+		return "The new operator. Enter replaces it.";
+	case ComposeMode::CallArgValue:
+		return "This argument. , goes to the next one, ) closes the call.";
+	case ComposeMode::CommentText:
+		return "Comment text. Enter commits.";
+	case ComposeMode::MemberSelect:
+		return "A member or function of this object. . goes deeper.";
+	case ComposeMode::ForEachSource: case ComposeMode::IfExistSource:
+		return "What to read from. Enter commits.";
+	case ComposeMode::IfExistKey:
+		return "The index. Enter commits.";
+	}
+	return {};
+}
+
+void ScriptEditor::resetAfterDocumentReplaced()
+{
+	m_cursorLine = 0;
+	m_cursorSpan = 0;
+	m_pendingSelectTarget = nullptr;
+	m_pendingSelectOperatorIndex = -1;
+	m_pendingSelectGroupClose = false;
+	m_pendingSelectLineEnd = -1;
+	m_pendingComposeReturnValue = false;
+	m_selectAnchor = -1;
+	m_lineDrag = LineDrag::None;
+	// The old lines point into the symbols that just died, and a second key can arrive before the next render.
+	m_formatted = Syntax::format(m_document.file, m_compact);
+}
+
+bool ScriptEditor::isChainContinuationLine(int line) const
+{
+	const DSLCodeLine* source = m_formatted[line].sourceLine;
+	const DSLSymbol* head = source != nullptr ? source->head() : nullptr;
+	if (head == nullptr || head->type != ST::FlowControl)
+		return false;
+	const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(head->data).control;
+	return control == DSLFlowControl::Else || control == DSLFlowControl::ElseIf;
+}
+
+int ScriptEditor::blockEndLine(int line) const
+{
+	const DSLCodeLine* source = m_formatted[line].sourceLine;
+	if (source == nullptr || !Syntax::isBlockOpener(source->head()) || isChainContinuationLine(line))
+		return line;
+	const DSLSymbol* head = source->head();
+	for (int i = line + 1; i < static_cast<int>(m_formatted.size()); ++i)
+		if (m_formatted[i].sourceLine == nullptr && m_formatted[i].endOfSymbol == head)
+			return i;
+	return line;
+}
+
+int ScriptEditor::statementStartLine(int line) const
+{
+	if (m_formatted[line].sourceLine == nullptr)
+	{
+		for (int i = line - 1; i >= 0; --i)
+			if (m_formatted[i].sourceLine != nullptr && m_formatted[i].sourceLine->head() == m_formatted[line].endOfSymbol)
+				return i;
+		return line;
+	}
+	if (isChainContinuationLine(line))
+	{
+		// The body lines between the branches are deeper, so the nearest non-continuation at this level is the chain's own head.
+		for (int i = line - 1; i >= 0; --i)
+			if (m_formatted[i].scopeLevel == m_formatted[line].scopeLevel && !isChainContinuationLine(i))
+				return i;
+	}
+	return line;
+}
+
+void ScriptEditor::selectedLineRange(int& outFirst, int& outLast) const
+{
+	const int count = static_cast<int>(m_formatted.size());
+	const int anchor = oc::clamp(hasLineSelection() ? m_selectAnchor : m_cursorLine, 0, count - 1);
+	const int cursor = oc::clamp(m_cursorLine, 0, count - 1);
+	int first = oc::min(anchor, cursor);
+	int last = oc::max(anchor, cursor);
+	int level = m_formatted[first].scopeLevel;
+	for (int i = first; i <= last; ++i)
+		level = oc::min(level, m_formatted[i].scopeLevel);
+	while (first > 0 && m_formatted[first].scopeLevel > level)
+		--first;
+	first = statementStartLine(first);
+	for (int i = first; i <= last; ++i)
+	{
+		const int end = blockEndLine(i);
+		last = oc::max(last, end);
+		i = end;
+	}
+	// Line 0 is the document's fixed blank line (see render), never part of a selection that holds anything else.
+	if (first == 0 && last > 0)
+		first = 1;
+	outFirst = first;
+	outLast = last;
+}
+
+void ScriptEditor::extendLineSelection(int direction)
+{
+	if (!hasLineSelection())
+	{
+		m_selectAnchor = m_cursorLine; // the first press selects the statement under the cursor
+		return;
+	}
+	const int count = static_cast<int>(m_formatted.size());
+	int target = m_cursorLine;
+	if (direction > 0)
+		target = oc::min(blockEndLine(m_cursorLine) + 1, count - 1);
+	else if (m_cursorLine > 1)
+		target = statementStartLine(m_cursorLine - 1);
+	m_cursorLine = target;
+	m_cursorSpan = 0;
+}
+
+namespace
+{
+	using DocumentLines = oc::vector<oc::pair<int, oc::string>>;
+
+	// What a move must not cause and the loader accepts, counted so that a document that already has one can still be
+	// edited: a function with a return type that does not end in a return. With no return at all that is C4716; one
+	// earlier in the body compiles, but leaves code after it that never runs.
+	int countCompileProblems(const DocumentLines& lines, oc::string& outProblem)
+	{
+		int problems = 0;
+		for (int i = 0; i < static_cast<int>(lines.size()); ++i)
+		{
+			const auto& [scope, text] = lines[i];
+			if (scope == 0 && text.rfind("function ", 0) == 0 && text.find(" -> ") != oc::string::npos)
+			{
+				int end = i + 1;
+				while (end < static_cast<int>(lines.size()) && lines[end].first > 0)
+					++end;
+				const bool endsInReturn = end - 1 > i && lines[end - 1].first == 1 && lines[end - 1].second.rfind("return", 0) == 0;
+				if (!endsInReturn)
+				{
+					++problems;
+					outProblem = "a function with a return type must end in a return";
+				}
+			}
+		}
+		return problems;
+	}
+
+	oc::string loaderReason(const oc::string& error)
+	{
+		const size_t reason = error.find("): ");
+		return reason != oc::string::npos ? error.substr(reason + 3) : error;
+	}
+}
+
+bool ScriptEditor::replaceDocumentLines(const DocumentLines& lines, const char* verb)
+{
+	DocumentLines current;
+	for (const SyntaxLine& line : m_formatted)
+		current.emplace_back(line.scopeLevel, line.text);
+	oc::string problem, ignored;
+	if (countCompileProblems(lines, problem) > countCompileProblems(current, ignored))
+	{
+		showError(oc::string(verb) + ": " + problem + ".");
+		return false;
+	}
+	oc::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
+	for (const auto& [scope, body] : lines)
+	{
+		text += "//@";
+		for (int t = 0; t < scope; ++t)
+			text += '\t';
+		text += body;
+		text += '\n';
+	}
+	text += "//@@end\n";
+	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(m_document, text, "move", m_builtins, m_bindings);
+	if (!result.success)
+	{
+		showError(oc::string(verb) + ": " + loaderReason(result.error));
+		return false;
+	}
+	m_undoDirty = true;
+	return true;
+}
+
+bool ScriptEditor::moveSelectedLines(int direction)
+{
+	int first = 0, last = 0;
+	selectedLineRange(first, last);
+	if (first == 0)
+	{
+		showError("The first line stays: it is where a new function goes.");
+		return false;
+	}
+	const int count = static_cast<int>(m_formatted.size());
+	const int level = m_formatted[first].scopeLevel;
+
+	// The result is always four runs of the old lines: before, then the selection and what it passes in the new order, then after.
+	int passFirst = 0, passLast = 0; // the neighbour that changes sides with the selection
+	int gapFirst = 0, gapLast = -1;  // blank lines between them, which stay in the middle
+	int scopeDelta = 0;
+	if (level == 0)
+	{
+		const auto isBlank = [&](int line) { return isBlankStatementLine(m_formatted[line]); };
+		int neighbour = direction > 0 ? last + 1 : first - 1;
+		while (neighbour > 0 && neighbour < count && isBlank(neighbour))
+			neighbour += direction;
+		if (neighbour >= count || neighbour <= 0)
+		{
+			setNotice(direction > 0 ? "Already the last one." : "Already the first one.");
+			return false;
+		}
+		passFirst = direction > 0 ? neighbour : statementStartLine(neighbour);
+		passLast = direction > 0 ? blockEndLine(neighbour) : neighbour;
+		gapFirst = direction > 0 ? last + 1 : neighbour + 1;
+		gapLast = direction > 0 ? neighbour - 1 : first - 1;
+	}
+	else
+	{
+		const int neighbour = direction > 0 ? last + 1 : first - 1;
+		const SyntaxLine& line = m_formatted[neighbour];
+		const bool isEnd = line.sourceLine == nullptr;
+		const bool isContinuation = isChainContinuationLine(neighbour);
+		const bool isOpener = !isEnd && !isContinuation && Syntax::isBlockOpener(line.sourceLine->head());
+		if (level == 1 && ((direction > 0 && isEnd) || (direction < 0 && isOpener)))
+		{
+			showError("Statements stay inside their function.");
+			return false;
+		}
+		if (direction > 0)
+			scopeDelta = isEnd ? -1 : (isOpener ? +1 : 0);     // out past an `end`, or into the block below
+		else
+			scopeDelta = isEnd ? +1 : (isOpener ? -1 : 0);     // into the block above, or out over its header
+		passFirst = passLast = neighbour;
+	}
+
+	DocumentLines lines;
+	lines.reserve(m_formatted.size());
+	const auto append = [&](int from, int to, int delta = 0)
+	{
+		for (int i = from; i <= to; ++i)
+			lines.emplace_back(m_formatted[i].scopeLevel + delta, m_formatted[i].text);
+	};
+	if (direction > 0)
+	{
+		append(0, first - 1);
+		append(passFirst, passLast);
+		append(gapFirst, gapLast);
+		append(first, last, scopeDelta);
+		append(passLast + 1, count - 1);
+	}
+	else
+	{
+		append(0, passFirst - 1);
+		append(first, last, scopeDelta);
+		append(gapFirst, gapLast);
+		append(passFirst, passLast);
+		append(last + 1, count - 1);
+	}
+
+	const int passSize = passLast - passFirst + 1;
+	const int gapSize = gapLast - gapFirst + 1;
+	const int shift = direction > 0 ? passSize + gapSize : -(passSize + gapSize);
+	const int cursorLine = m_cursorLine + shift;
+	const int cursorSpan = m_cursorSpan;
+	const int anchor = hasLineSelection() ? m_selectAnchor + shift : -1;
+	if (!replaceDocumentLines(lines, "Not moved"))
+		return false;
+	resetAfterDocumentReplaced();
+	m_cursorLine = oc::clamp(cursorLine, 0, static_cast<int>(m_formatted.size()) - 1);
+	m_cursorSpan = cursorSpan;
+	m_selectAnchor = anchor;
+	clampCursor();
+	return true;
+}
+
+void ScriptEditor::deleteSelectedLines()
+{
+	int first = 0, last = 0;
+	selectedLineRange(first, last);
+	if (first == 0)
+		return;
+	DocumentLines lines;
+	for (int i = 0; i < static_cast<int>(m_formatted.size()); ++i)
+		if (i < first || i > last)
+			lines.emplace_back(m_formatted[i].scopeLevel, m_formatted[i].text);
+	if (!replaceDocumentLines(lines, "Not deleted"))
+		return;
+	resetAfterDocumentReplaced();
+	m_pendingSelectLineEnd = first - 1;
+	m_cursorLine = oc::clamp(first - 1, 0, static_cast<int>(m_formatted.size()) - 1);
+}
+
+void ScriptEditor::trackUndo()
+{
+	// A press or a release is what can change the document; comparing text only then keeps an idle panel free of it.
+	const ImGuiIO& io = ImGui::GetIO();
+	if (ImGui::IsAnyItemActive() || io.MouseReleased[0])
+		m_undoDirty = true;
+	if (!m_undoDirty || m_composeMode != ComposeMode::None)
+		return;
+	m_undoDirty = false;
+	oc::string text = documentText();
+	if (m_undoCurrentText.empty())
+	{
+		m_savedText = text; // the first look after a load is the state on disk
+		m_undoCurrentText = oc::move(text);
+	}
+	else if (text != m_undoCurrentText)
+	{
+		// The net under "everything always compiles": whatever an edit did (un-nesting a body next to a declaration of the
+		// same name, say), a document the loader refuses never stands. Save would otherwise write a file that cannot be opened.
+		oc::string error;
+		if (!documentLoads(error))
+		{
+			const int line = m_undoCursorLine, span = m_undoCursorSpan;
+			ScriptLoader::loadFromText(m_document, m_undoCurrentText, "undo", m_builtins, m_bindings);
+			resetAfterDocumentReplaced();
+			m_cursorLine = line;
+			m_cursorSpan = span;
+			showError("Not applied: " + loaderReason(error));
+			return;
+		}
+		static constexpr size_t c_maxSteps = 500;
+		if (m_undoStack.size() >= c_maxSteps)
+			m_undoStack.erase(m_undoStack.begin());
+		m_undoStack.push_back(UndoEntry{ oc::move(m_undoCurrentText), m_undoCursorLine, m_undoCursorSpan });
+		m_redoStack.clear();
+		m_undoCurrentText = oc::move(text);
+	}
+	m_undoCursorLine = m_cursorLine;
+	m_undoCursorSpan = m_cursorSpan;
+}
+
+void ScriptEditor::stepUndo(bool redo)
+{
+	cancelCompose();
+	oc::vector<UndoEntry>& from = redo ? m_redoStack : m_undoStack;
+	oc::vector<UndoEntry>& to = redo ? m_undoStack : m_redoStack;
+	if (from.empty())
+	{
+		setNotice(redo ? "Nothing to redo." : "Nothing to undo.");
+		return;
+	}
+	UndoEntry entry = oc::move(from.back());
+	from.pop_back();
+	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(m_document, entry.text, "undo", m_builtins, m_bindings);
+	if (!result.success)
+	{
+		showError("Undo failed: " + result.error);
+		return;
+	}
+	to.push_back(UndoEntry{ oc::move(m_undoCurrentText), m_cursorLine, m_cursorSpan });
+	m_undoCurrentText = oc::move(entry.text);
+	resetAfterDocumentReplaced();
+	m_cursorLine = entry.cursorLine;
+	m_cursorSpan = entry.cursorSpan;
+	m_undoCursorLine = entry.cursorLine;
+	m_undoCursorSpan = entry.cursorSpan;
+}
+
+void ScriptEditor::deleteCurrentStatement()
+{
+	if (m_cursorLine < 0 || m_cursorLine >= static_cast<int>(m_formatted.size()))
+		return;
+	const SyntaxLine& line = m_formatted[m_cursorLine];
+	if (line.sourceLine == nullptr)
+	{
+		showError("An end goes with its block: select the block's first word.");
+		return;
+	}
+	// The head's own span is where Backspace deletes the statement: a keyword, a call's name, an assignment's operator, a
+	// declaration's type. Everything else on the line would only open for editing.
+	const DSLSymbol* head = line.sourceLine->head();
+	int headSpan = -1;
+	for (int s = 0; s < static_cast<int>(line.spans.size()) && headSpan < 0; ++s)
+	{
+		const SyntaxSpan& span = line.spans[s];
+		const bool isDeclarationType = span.symbol != nullptr && span.symbol->type == ST::TypeDeclaration && head != nullptr
+			&& head->type == ST::VariableDeclaration && oc::get<DSLSymbol::VariableDeclaration>(head->data).typeSymbol == span.symbol;
+		if (isDeclarationType || (span.symbol == head && span.slot.kind == SlotRef::Kind::LineHead))
+			headSpan = s;
+	}
+	if (headSpan < 0)
+		return;
+	const int previousSpan = m_cursorSpan;
+	m_cursorSpan = headSpan;
+	SDL_Event backspace{};
+	backspace.type = SDL_EVENT_KEY_DOWN;
+	backspace.key.scancode = SDL_SCANCODE_BACKSPACE;
+	handleKeyEvent(backspace);
+	if (m_composeMode != ComposeMode::None)
+	{
+		cancelCompose();
+		m_cursorSpan = previousSpan;
+	}
 }
 
 // See the declaration in ScriptEditor.ixx. Clearing the old candidate list before refreshing matters for the
@@ -948,6 +1402,11 @@ bool ScriptEditor::hasCandidateList() const
 void ScriptEditor::confirmCompose(bool allowCommit)
 {
 	if (m_composeMode == ComposeMode::None)
+		return;
+
+	// A statement word that matches nothing stays in the box to be corrected: a confirm has nothing to apply, and what
+	// was typed must not vanish.
+	if (m_composeMode == ComposeMode::FilterCandidates && !m_pendingWord.empty() && m_candidates.empty())
 		return;
 
 	// A matched parameterized-Function candidate in a chain compose stages its arguments before anything else
@@ -1039,19 +1498,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 				// left for this keystroke to do.
 				if (!picked->memberWritable)
 					return;
-				// A writable member as an assignment TARGET: stage `root.path = value` through the Reassign
-				// flow ('=' authored; compound member assigns are a later nicety).
-				m_reassignTarget = m_memberReceiver;
-				m_reassignMemberPath.clear();
-				for (const oc::string& segment : m_memberPath)
-					m_reassignMemberPath.push_back(segment);
-				m_reassignMemberPath.push_back(picked->label);
-				m_reassignOp = DSLOperator::Assign;
-				m_reassignEditExpr = nullptr;
-				m_memberReceiver = nullptr;
-				m_memberReturnMode = ComposeMode::None;
-				m_memberPath.clear();
-				enterChainStage(ComposeMode::ReassignValue);
+				// A writable member as an assignment TARGET: stage `root.path op value` through the Reassign flow.
+				beginMemberReassign(*picked, {});
 				return;
 			}
 			// A zero-argument dot-call statement ("physics.isAwake()") commits its whole line -- Enter only.
@@ -1676,6 +2124,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// comparator character/confirm advances it as-is.
 		const PendingExprChain seed = loopVarSeedChain();
 		enterChainStage(ComposeMode::ForConditionLeft, &seed);
+		m_forSeedFresh = true;
 		return;
 	}
 
@@ -1829,12 +2278,12 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 	if (chosen.kind == Candidate::Kind::Reassign)
 	{
 		// Staged flow starts here too: a reassignment never appears in the document until its WHOLE (possibly
-		// compound, possibly parenthesized) value is resolved -- see commitReassignStatement. Space-confirming
-		// authors a plain `=`; typing an operator character instead routes through the ReassignOp stage first
-		// (see handleKeyEvent), which is where "i += 1" gets its compound operator.
+		// compound, possibly parenthesized) value is resolved -- see commitReassignStatement. The ReassignOp stage
+		// comes next either way, so "i += 1" reads the same with spaces as "i+=1" without; a value typed straight
+		// away ("i 1") takes the highlighted `=`.
 		m_reassignTarget = chosen.refSymbol;
 		m_reassignOp = DSLOperator::Assign;
-		enterChainStage(ComposeMode::ReassignValue);
+		enterCompose(ComposeMode::ReassignOp, chosen.label + " ");
 		return;
 	}
 
@@ -4765,8 +5214,72 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 
 	const bool shift = (evt.key.mod & SDL_KMOD_SHIFT) != 0;
 	const bool ctrl = (evt.key.mod & SDL_KMOD_CTRL) != 0;
-	const bool composing = m_composeMode != ComposeMode::None;
+	// A modifier arrives as a key press of its own, before the key it modifies, and means nothing yet: it must not end a
+	// selection, clear the status line or use up a one-key state.
+	if (evt.key.scancode >= SDL_SCANCODE_LCTRL && evt.key.scancode <= SDL_SCANCODE_RGUI)
+		return;
 
+	const bool composing = m_composeMode != ComposeMode::None;
+	const bool forSeedFresh = m_forSeedFresh;
+	m_forSeedFresh = false;
+	m_statusMessage.clear();
+	m_undoDirty = true;
+
+	static constexpr uint16 c_kmodAlt = 0x0100u | 0x0200u; // SDL_KMOD_LALT | SDL_KMOD_RALT, a #define (see Core.SDL)
+	const bool alt = (evt.key.mod & c_kmodAlt) != 0;
+	const bool verticalArrow = evt.key.scancode == SDL_SCANCODE_UP || evt.key.scancode == SDL_SCANCODE_DOWN;
+	if (composing && alt && verticalArrow)
+	{
+		setNotice("Finish this edit first: Enter commits, Esc cancels.");
+		return;
+	}
+	if (!composing)
+	{
+		if (alt && verticalArrow)
+		{
+			moveSelectedLines(evt.key.scancode == SDL_SCANCODE_UP ? -1 : +1);
+			return;
+		}
+		if (shift && verticalArrow)
+		{
+			extendLineSelection(evt.key.scancode == SDL_SCANCODE_UP ? -1 : +1);
+			return;
+		}
+		if (hasLineSelection())
+		{
+			if (ctrl && evt.key.scancode == SDL_SCANCODE_C)
+			{
+				copySelection();
+				return;
+			}
+			if ((ctrl && evt.key.scancode == SDL_SCANCODE_X) || evt.key.scancode == SDL_SCANCODE_DELETE || evt.key.scancode == SDL_SCANCODE_BACKSPACE)
+			{
+				if (ctrl && evt.key.scancode == SDL_SCANCODE_X)
+					copySelection();
+				deleteSelectedLines();
+				return;
+			}
+			const bool wasEscape = evt.key.scancode == SDL_SCANCODE_ESCAPE;
+			m_selectAnchor = -1; // anything else acts on the cursor alone
+			if (wasEscape)
+				return;
+		}
+	}
+
+	if (ctrl && (evt.key.scancode == SDL_SCANCODE_Z || evt.key.scancode == SDL_SCANCODE_Y))
+	{
+		stepUndo(/*redo*/ evt.key.scancode == SDL_SCANCODE_Y || shift);
+		return;
+	}
+	if (ctrl && evt.key.scancode == SDL_SCANCODE_X)
+	{
+		if (!composing)
+		{
+			copySelection();
+			deleteCurrentStatement();
+		}
+		return;
+	}
 	// Ctrl+S saves from anywhere, composing included -- a compose never touches the document, so what lands on
 	// disk is exactly the committed state. Copy reads the same committed state; paste cancels any in-flight
 	// compose first (a compose never touches the document, so cancelling is lossless).
@@ -4788,11 +5301,26 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 
 	switch (static_cast<int>(evt.key.scancode))
 	{
+	// While composing, a key that moves the cursor leaves an edit only when it would lose nothing: what has been typed
+	// stays until Esc says otherwise.
 	case SDL_SCANCODE_LEFT:
-		if (composing) cancelCompose(); else moveHorizontal(-1);
-		return;
 	case SDL_SCANCODE_RIGHT:
-		if (composing) cancelCompose(); else moveHorizontal(+1);
+		if (composing && composeHasContent())
+		{
+			setNotice("Backspace steps back, Esc cancels this edit.");
+			return;
+		}
+		cancelCompose();
+		moveHorizontal(evt.key.scancode == SDL_SCANCODE_LEFT ? -1 : +1);
+		return;
+	case SDL_SCANCODE_DELETE:
+		if (!composing)
+			deleteCurrentStatement();
+		return;
+	case SDL_SCANCODE_PAGEUP:
+	case SDL_SCANCODE_PAGEDOWN:
+		if (!composing)
+			moveVertical(evt.key.scancode == SDL_SCANCODE_PAGEUP ? -20 : +20);
 		return;
 	case SDL_SCANCODE_TAB:
 		// An autocomplete confirm like Space while composing (same allowCommit=false -- Tab never finishes a
@@ -4802,20 +5330,38 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		if (composing) confirmCompose(/*allowCommit*/ false); else moveHorizontal(shift ? -1 : +1);
 		return;
 	case SDL_SCANCODE_HOME:
-		if (composing) cancelCompose(); else moveHome();
-		return;
 	case SDL_SCANCODE_END:
-		if (composing) cancelCompose(); else moveEnd();
+		if (composing && composeHasContent())
+		{
+			setNotice("Backspace steps back, Esc cancels this edit.");
+			return;
+		}
+		cancelCompose();
+		if (ctrl)
+		{
+			m_cursorLine = evt.key.scancode == SDL_SCANCODE_HOME ? 0 : oc::max(0, static_cast<int>(m_formatted.size()) - 1);
+			m_cursorSpan = 0;
+		}
+		else if (evt.key.scancode == SDL_SCANCODE_HOME)
+			moveHome();
+		else
+			moveEnd();
 		return;
 	case SDL_SCANCODE_UP:
 		if (hasCandidateList() && !m_candidates.empty())
+		{
 			m_candidateSelected = (m_candidateSelected - 1 + static_cast<int>(m_candidates.size())) % static_cast<int>(m_candidates.size());
+			m_candidateNavigated = true;
+		}
 		else if (!composing)
 			moveVertical(-1);
 		return;
 	case SDL_SCANCODE_DOWN:
 		if (hasCandidateList() && !m_candidates.empty())
+		{
 			m_candidateSelected = (m_candidateSelected + 1) % static_cast<int>(m_candidates.size());
+			m_candidateNavigated = true;
+		}
 		else if (!composing)
 			moveVertical(+1);
 		return;
@@ -4876,6 +5422,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// is always true there) -- otherwise leave the whole if alone rather than lose that content.
 				if (attachedElseChainEmpty(span->symbol))
 					deleteBlockKeepBody(span->symbol);
+				else
+					showError("Not deleted: its elseif / else branches still have content.");
 			}
 			else if (selectedControl != nullptr && (*selectedControl == DSLFlowControl::Else || *selectedControl == DSLFlowControl::ElseIf))
 			{
@@ -4889,17 +5437,26 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// whole chain, see DSL.ixx/ScriptLang.cpp), so there's no un-nesting/renumbering to do either way.
 				if (isBlockBodyEmpty(span->symbol))
 					deleteLine(*span->symbol->line);
+				else
+					showError("Not deleted: this branch still has content.");
 			}
 			else if (selectedFunctionHeader)
 			{
 				// A LOCKED entry-point function can only go away via its EXPORTS checkbox (toggleEntryFunction) --
 				// never this way, regardless of body/reference state.
 				if (isLockedEntryFunction(span->symbol))
+				{
+					showError("An entry point goes away through its EXPORTS checkbox.");
 					return;
+				}
 				// Only remove an uncalled function whose body is empty (or nothing but its auto-seeded return)
 				// this way -- otherwise leave it alone entirely (no fallback to beginCompose(), which would
 				// otherwise let a stray keystroke replace the whole header via the statement candidate list).
-				if (isFunctionBodyDeletable(span->symbol) && !AutoCompleteRules::isFunctionReferenced(span->symbol, m_document.file))
+				if (!isFunctionBodyDeletable(span->symbol))
+					showError("Not deleted: the function's body still has content.");
+				else if (AutoCompleteRules::isFunctionReferenced(span->symbol, m_document.file))
+					showError("Not deleted: the function is still called.");
+				else
 					deleteEmptyBlock(span->symbol);
 			}
 			else if (span != nullptr && span->slot.kind == SlotRef::Kind::FunctionReturnType)
@@ -4936,6 +5493,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// needs its attached else branch empty, exactly as an if does, and deleteEmptyBlock takes it too.
 				if (isBlockBodyEmpty(span->symbol) && attachedElseChainEmpty(span->symbol))
 					deleteEmptyBlock(span->symbol);
+				else
+					showError("Not deleted: its body uses what the header binds, so empty the body first.");
 			}
 			else if (selectedDeclarationType != nullptr)
 			{
@@ -4943,6 +5502,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// declaration can't be removed out from under its uses.
 				if (!AutoCompleteRules::isVariableReferenced(selectedDeclarationType, m_document.file))
 					deleteLine(*selectedDeclarationType->line);
+				else
+					showError("Not deleted: the variable is still used.");
 			}
 			else if (span != nullptr && span->groupClose)
 			{
@@ -4971,6 +5532,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// editable; only removing the function or its return type takes it away).
 				if (span->symbol->line != nullptr && !isProtectedBottomReturn(span->symbol->line))
 					deleteLine(*span->symbol->line);
+				else
+					showError("Not deleted: a function with a return type keeps its last return.");
 			}
 			else if (m_cursorLine >= 0 && m_cursorLine < static_cast<int>(m_formatted.size()) && isBlankStatementLine(m_formatted[m_cursorLine]))
 			{
@@ -5012,7 +5575,11 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				PendingExprTerm resolved = oc::move(m_exprPendingGroup);
 				m_exprHasPendingGroup = false;
 				m_composePrefix = exprBasePrefix() + exprComposePrefixFromStack(); // now excludes the term itself
-				if (resolved.candidate.kind == Candidate::Kind::Function && resolved.candidate.receiver != nullptr)
+				if (tryRestoreMemberTermIntoMemberSelect(resolved))
+				{
+					// A member term reopens in the stage that authored it: its segments peel from there.
+				}
+				else if (resolved.candidate.kind == Candidate::Kind::Function && resolved.candidate.receiver != nullptr)
 				{
 					const oc::string name = resolved.candidate.label;
 					const oc::string receiverPath = resolved.candidate.receiverPath;
@@ -5024,6 +5591,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				else
 				{
 					m_pendingWord = resolved.candidate.label;
+					refreshCandidates();
 				}
 			}
 			else if (m_exprHasPendingGroup)
@@ -5150,28 +5718,10 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			}
 			else if (m_composeMode == ComposeMode::ReassignValue && m_reassignTarget != nullptr)
 			{
-				if (!m_reassignMemberPath.empty())
-				{
-					// A fresh member-assign steps back into its MemberSelect, the written member re-typed
-					// ("test.x = |" -> "test.|x") -- the '.'-flow's own reverse.
-					DSLSymbol* root = m_reassignTarget;
-					oc::vector<oc::string> path = m_reassignMemberPath;
-					m_reassignTarget = nullptr;
-					m_reassignMemberPath.clear();
-					const oc::string last = path.back();
-					path.pop_back();
-					enterCompose(ComposeMode::FilterCandidates, "");
-					enterMemberSelect(root);
-					restoreMemberPath(joinedMemberPath(path));
-					m_pendingWord = last;
-					refreshCandidates();
-				}
-				else
-				{
-					// The NEW-statement flow steps back to re-pick the assignment operator, name kept.
-					enterCompose(ComposeMode::ReassignOp,
-						oc::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name + " ");
-				}
+				// The NEW-statement flow steps back to re-pick the assignment operator, target kept.
+				const oc::string root = oc::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name;
+				enterCompose(ComposeMode::ReassignOp,
+					(m_reassignMemberPath.empty() ? root : root + "." + joinedMemberPath(m_reassignMemberPath)) + " ");
 			}
 			else if (m_composeMode == ComposeMode::ReturnValue && m_flowEditLine != nullptr
 				&& !isProtectedBottomReturn(m_flowEditLine))
@@ -5506,6 +6056,21 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			if (commentLine != nullptr)
 				deleteLine(*commentLine);
 		}
+		else if (m_composeMode == ComposeMode::ReassignOp && !m_reassignMemberPath.empty())
+		{
+			// A member target steps back into its MemberSelect, the written member re-typed ("test.x = |" -> "test.|x").
+			DSLSymbol* root = m_reassignTarget;
+			oc::vector<oc::string> path = m_reassignMemberPath;
+			m_reassignTarget = nullptr;
+			m_reassignMemberPath.clear();
+			const oc::string last = path.back();
+			path.pop_back();
+			enterCompose(ComposeMode::FilterCandidates, "");
+			enterMemberSelect(root);
+			restoreMemberPath(joinedMemberPath(path));
+			m_pendingWord = last;
+			refreshCandidates();
+		}
 		else if (m_composeMode == ComposeMode::ReassignOp)
 		{
 			// Step back into the statement compose with the target's name re-typed for further editing.
@@ -5575,7 +6140,24 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 	case SDL_SCANCODE_RETURN:
 	case SDL_SCANCODE_KP_ENTER:
 		if (composing)
+		{
+			const ComposeMode modeBefore = m_composeMode;
+			const oc::string boxBefore = m_composePrefix + m_pendingWord;
 			confirmCompose();
+			// Nothing moved: say why instead of leaving a key press with no effect.
+			if (m_composeMode == modeBefore && m_composePrefix + m_pendingWord == boxBefore)
+				showError(m_composeMode == ComposeMode::FilterCandidates && m_pendingWord == "break"
+					? "A break needs a loop around it."
+					: m_composeMode == ComposeMode::FilterCandidates && m_pendingWord == "function"
+					? "A function goes at the top level, outside any other function."
+					: m_pendingWord.size() > 1 && m_pendingWord.front() == '-' && m_candidates.empty()
+					? "A minus sign is only part of a number: write 0 - " + m_pendingWord.substr(1) + "."
+					: hasCandidateList() && m_candidates.empty() && !m_pendingWord.empty()
+					? "\"" + m_pendingWord + "\" matches nothing here."
+					: !hasCandidateList() && !m_pendingWord.empty()
+					? "\"" + m_pendingWord + "\" cannot be used: the name is taken or reserved."
+					: "Not complete yet. " + composeHint());
+		}
 		else
 			insertLineAfterCursor();
 		return;
@@ -5586,6 +6168,9 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		break;
 	}
 
+	if (ctrl || alt)
+		return; // a shortcut this panel does not have is not typing
+
 	const char c = charFromKeycode(static_cast<int>(evt.key.key), shift);
 	if (c == 0)
 		return;
@@ -5594,7 +6179,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 	// text, and an OPEN string literal (leading '"' not yet closed) inside any value compose.
 	if (m_composeMode == ComposeMode::CommentText)
 	{
-		m_pendingWord += c;
+		if (c != ' ' || !m_pendingWord.empty()) // "# " already holds the space a person types after the '#'
+			m_pendingWord += c;
 		return;
 	}
 	if (composing && !m_pendingWord.empty() && m_pendingWord.front() == '"'
@@ -5667,8 +6253,9 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		}
 		if (!composing)
 		{
-			const SyntaxSpan* span = currentSpan(m_formatted, m_cursorLine, m_cursorSpan);
-			if (span != nullptr && span->slot.kind == SlotRef::Kind::LineHead)
+			// A blank line only: over anything else the comment would replace the line, and with it whatever its
+			// symbols declare, while other lines still refer to them.
+			if (isBlankStatementLine(m_formatted[m_cursorLine]))
 				enterCompose(ComposeMode::CommentText, "# ");
 		}
 		return;
@@ -5691,10 +6278,76 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 
 	if (c == ' ')
 	{
+		if (forSeedFresh)
+		{
+			m_forSeedFresh = true; // the space after the for-loop's ',': the seed has not been answered yet
+			return;
+		}
+		// "foreach int x in list", "return x" on a seeded return: the box already holds the word typed out of habit.
+		if (((m_composeMode == ComposeMode::ForEachSource || m_composeMode == ComposeMode::IfExistSource) && m_pendingWord == "in")
+			|| (m_composeMode == ComposeMode::IfExistKey && m_pendingWord == "at")
+			|| (m_composeMode == ComposeMode::ReturnValue && m_pendingWord == "return"))
+		{
+			m_pendingWord.clear();
+			refreshCandidates();
+			return;
+		}
+		// Nothing typed and nothing chosen: a space between two words of a line, never a vote for the highlighted default.
+		// Tab is the key that accepts it.
+		if (hasCandidateList() && m_pendingWord.empty() && !m_candidateNavigated && !m_candidates.empty())
+			return;
 		// Space advances stages WITHIN a line but never finishes one -- only Enter commits (see confirmCompose)
 		// -- so a space typed while reaching for "&&", an operator, or just out of habit can't cut a line short.
 		confirmCompose(/*allowCommit*/ false);
 		return;
+	}
+
+	// A value right after the assignment's operator stage ("a =\"text\"", "a (b + 1)") takes the highlighted operator.
+	if (m_composeMode == ComposeMode::ReassignOp && (c == '"' || c == '('))
+		confirmCompose();
+
+	// "float x=1": the '=' a declaration's name is followed by already belongs to the box, so it just moves on.
+	if (c == '=' && (m_composeMode == ComposeMode::DeclareName || m_composeMode == ComposeMode::ForVarName) && !m_pendingWord.empty())
+	{
+		confirmCompose(/*allowCommit*/ false);
+		return;
+	}
+
+	// A written-out assignment to a member ("self.pos.y += 1", "self.pos.y=1"): the operator character over a matched
+	// writable member starts the same ReassignOp stage a plain variable's does.
+	if (m_composeMode == ComposeMode::MemberSelect && m_memberReturnMode == ComposeMode::FilterCandidates
+		&& isAssignOperatorChar(c) && !m_pendingWord.empty())
+	{
+		const Candidate* picked = selectedCandidate();
+		if (picked != nullptr && picked->kind == Candidate::Kind::Member && picked->memberWritable)
+		{
+			beginMemberReassign(*picked, oc::string(1, c));
+			return;
+		}
+	}
+
+	// No character resolves an untouched default into a value: an operator or a separator on an empty term ("for int i =
+	// 0", "foo()") is scaffolding the box already shows, and only Tab / Enter accept what is highlighted.
+	if (isChainComposeMode() && (isOperatorChar(c) || c == ',' || c == ')') && m_pendingWord.empty() && !m_candidateNavigated
+		&& !m_exprHasPendingGroup && m_exprStack.back().terms.size() == m_exprStack.back().ops.size()
+		&& !(m_composeMode == ComposeMode::CallArgValue && c == ')' && m_callStack.back().argChains.size()
+			>= oc::get<DSLSymbol::FunctionDeclaration>(m_callStack.back().func->data).parameterVarDeclarations.size())
+		&& !(c == ')' && m_exprStack.size() > 1))
+	{
+		if (c == ')' && m_composeMode == ComposeMode::CallArgValue)
+			showError("This call needs a value here.");
+		return;
+	}
+	if (m_composeMode == ComposeMode::MemberSelect && (c == ',' || c == ')') && m_pendingWord.empty())
+		return;
+
+	// "if (a > 0)": parentheses around one comparison hold nothing a chain term could. They only say what the keyword
+	// already does, so the comparator drops them and the ')' is ignored like any other scaffolding.
+	if (m_composeMode == ComposeMode::ConditionLeft && isOperatorChar(c) && m_exprStack.size() == 2 && m_exprStack[0].terms.empty())
+	{
+		ExprFrame inner = oc::move(m_exprStack.back());
+		m_exprStack.pop_back();
+		m_exprStack.back() = oc::move(inner);
 	}
 
 	// Building a new function's parameter list free-types "type name" pairs -- ')' always closes the list right
@@ -6015,8 +6668,18 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			return;
 		}
 
-		// The term the typed operator/`)` acts on: a just-closed parenthesized group, or the matched candidate.
-		const bool haveTerm = m_exprHasPendingGroup || selectedCandidate() != nullptr;
+		// A leading '-' on an empty term is a negative literal ("a = -1"), the one sign the language has.
+		if (c == '-' && m_pendingWord.empty() && !m_exprHasPendingGroup && !m_candidateNavigated)
+		{
+			m_pendingWord += c;
+			refreshCandidates();
+			return;
+		}
+
+		// The term the typed operator/`)` acts on: a just-closed parenthesized group, or the matched candidate -- which
+		// something typed or an arrow key must have chosen: an operator never resolves an untouched default.
+		const bool haveTerm = m_exprHasPendingGroup
+			|| (selectedCandidate() != nullptr && (!m_pendingWord.empty() || m_candidateNavigated));
 		auto takeCurrentTerm = [&]() -> PendingExprTerm
 		{
 			if (m_exprHasPendingGroup)
@@ -6136,10 +6799,16 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		|| m_composeMode == ComposeMode::IfExistName)
 	{
 		if (!isIdentifierChar(c, m_pendingWord.empty()))
+		{
+			setNotice("'" + oc::string(1, c) + "' cannot be part of a name.");
 			return; // not a valid (or valid-so-far) identifier character -- e.g. a leading digit, or '.'
+		}
 	}
 	else if (!isComposeChar(c))
 	{
+		// Scaffolding the box already shows is typed out of habit; anything else gets a word.
+		if (c != '=' && c != ',' && c != ')' && c != '>')
+			setNotice("'" + oc::string(1, c) + "' means nothing at this position. " + composeHint());
 		return; // not a valid identifier/number character -- ignore rather than corrupt the composed text
 	}
 
@@ -6149,6 +6818,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 	{
 		if (!m_pendingWord.empty() && m_pendingWord.front() == '"')
 			return; // a CLOSED string literal takes no more characters -- confirm/operate on it, or Backspace in
+		if (forSeedFresh && m_composeMode == ComposeMode::ForConditionLeft)
+			m_pendingWord.clear(); // the seed was a suggestion, and this is the answer ("for int i = 0, n > i, ...")
 		m_pendingWord += c;
 		if (hasCandidateList())
 			refreshCandidates();
@@ -6307,8 +6978,10 @@ void ScriptEditor::renderTextArea()
 	ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * m_fontScale);
 	m_lineHeight = ImGui::GetTextLineHeightWithSpacing();
 
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
-	ImGui::BeginChild("##se_view", avail, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+	ImVec2 avail = ImGui::GetContentRegionAvail();
+	avail.y -= ImGui::GetFrameHeightWithSpacing(); // the status line below
+	// NoMove: a drag here selects or moves lines, and must never reach the window behind it.
+	ImGui::BeginChild("##se_view", avail, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
 
 	ImGuiIO& io = ImGui::GetIO();
 	if (ImGui::IsWindowHovered() && io.KeyCtrl && io.MouseWheel != 0.0f)
@@ -6339,11 +7012,18 @@ void ScriptEditor::renderTextArea()
 	// Fixed for this frame (font/scale don't change mid-loop) -- measured once instead of once per line.
 	const float indentUnitWidth = ImGui::CalcTextSize("    ").x;
 
+	int selectedFirst = 0, selectedLast = -1;
+	if (hasLineSelection() && !m_formatted.empty())
+		selectedLineRange(selectedFirst, selectedLast);
+
 	for (int i = 0; i < static_cast<int>(m_formatted.size()); ++i)
 	{
 		const SyntaxLine& line = m_formatted[i];
 		const ImVec2 lineOrigin = ImGui::GetCursorScreenPos();
 		const float indent = static_cast<float>(line.scopeLevel) * indentUnitWidth;
+		if (i >= selectedFirst && i <= selectedLast)
+			drawList->AddRectFilled(lineOrigin, ImVec2(lineOrigin.x + oc::max(avail.x, ImGui::GetContentRegionAvail().x), lineOrigin.y + m_lineHeight),
+				ImGui::GetColorU32(ImVec4(0.26f, 0.45f, 0.75f, 0.35f)));
 		ImGui::Dummy(ImVec2(indent, 0.0f));
 		ImGui::SameLine(0.0f, 0.0f);
 
@@ -6423,6 +7103,7 @@ void ScriptEditor::renderTextArea()
 	// as keyboard navigation does).
 	if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_formatted.empty())
 	{
+		m_statusMessage.clear();
 		if (composing)
 			cancelCompose();
 
@@ -6448,8 +7129,71 @@ void ScriptEditor::renderTextArea()
 				bestSpan = s;
 			}
 		}
-		m_cursorLine = clickedLine;
-		m_cursorSpan = bestSpan;
+		if (io.KeyShift)
+		{
+			if (!hasLineSelection())
+				m_selectAnchor = m_cursorLine;
+			m_cursorLine = clickedLine;
+			m_cursorSpan = 0;
+		}
+		else
+		{
+			// Like selected text in any editor: a press inside the selection grabs it, and one that never moves is a click.
+			const bool inSelection = clickedLine >= selectedFirst && clickedLine <= selectedLast;
+			m_lineDrag = inSelection ? LineDrag::Move : LineDrag::Select;
+			m_lineDragStartLine = clickedLine;
+			m_lineDragStartSpan = bestSpan;
+			m_lineDragMoved = false;
+			if (!inSelection)
+			{
+				m_selectAnchor = -1;
+				m_cursorLine = clickedLine;
+				m_cursorSpan = bestSpan;
+			}
+		}
+	}
+
+	if (m_lineDrag != LineDrag::None)
+	{
+		if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		{
+			if (m_lineDrag == LineDrag::Move && !m_lineDragMoved)
+			{
+				m_selectAnchor = -1;
+				m_cursorLine = m_lineDragStartLine;
+				m_cursorSpan = m_lineDragStartSpan;
+			}
+			m_lineDrag = LineDrag::None;
+		}
+		else if (!m_formatted.empty())
+		{
+			const int count = static_cast<int>(m_formatted.size());
+			const int mouseLine = oc::clamp(static_cast<int>((ImGui::GetMousePos().y - m_textOriginY) / m_lineHeight), 0, count - 1);
+			if (m_lineDrag == LineDrag::Select)
+			{
+				if (mouseLine != m_lineDragStartLine || hasLineSelection())
+				{
+					m_selectAnchor = m_lineDragStartLine;
+					m_cursorLine = mouseLine;
+					m_cursorSpan = 0;
+				}
+			}
+			else
+			{
+				// One step per line crossed; a refusal stops here and the status line says why. The whole drag is one
+				// undo step, since trackUndo only compares when the button comes up. Nothing below reads the old lines.
+				for (int step = 0; step < count; ++step)
+				{
+					int first = 0, last = 0;
+					selectedLineRange(first, last);
+					if (mouseLine >= first && mouseLine <= last)
+						break;
+					if (!moveSelectedLines(mouseLine < first ? -1 : +1))
+						break;
+					m_lineDragMoved = true;
+				}
+			}
+		}
 	}
 
 	// Keep the selection in view.
@@ -6464,7 +7208,97 @@ void ScriptEditor::renderTextArea()
 	ImGui::EndChild();
 	ImGui::PopFont();
 
+	if (m_statusMessage.empty() || m_statusIsError)
+		ImGui::TextDisabled("%s", composeHint().c_str());
+	else
+		ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", m_statusMessage.c_str());
+
 	renderAutocompletePopup();
+	renderErrorBox();
+}
+
+// Floats just above the cursor, where the eyes are, leaving the space below it to the candidate list. It takes no input
+// and no focus, so typing goes on through it; the next key, a click in the text or the timeout ends it.
+namespace
+{
+	// cl's output for the box: the error lines, without the path and the line number, which count the generated C++ and
+	// mean nothing next to the DSL. The whole output is in the log.
+	oc::string summarizeCompileErrors(const oc::string& output)
+	{
+		static constexpr int c_maxLines = 5;
+		oc::string summary;
+		int found = 0;
+		size_t pos = 0;
+		while (pos < output.size())
+		{
+			const size_t newline = output.find('\n', pos);
+			oc::string line = output.substr(pos, newline == oc::string::npos ? oc::string::npos : newline - pos);
+			pos = newline == oc::string::npos ? output.size() : newline + 1;
+			const size_t marker = line.find(": error ");
+			const size_t linkerMarker = line.find(": fatal error ");
+			const size_t at = marker != oc::string::npos ? marker + 8 : linkerMarker != oc::string::npos ? linkerMarker + 14 : oc::string::npos;
+			if (at == oc::string::npos)
+				continue;
+			if (++found <= c_maxLines)
+			{
+				while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+					line.pop_back();
+				summary += "\n" + line.substr(at);
+			}
+		}
+		if (found > c_maxLines)
+			summary += "\n(" + oc::to_string(found - c_maxLines) + " more in the log)";
+		return found > 0 ? summary : "\n" + output.substr(0, 300);
+	}
+}
+
+void ScriptEditor::pollCompileReports()
+{
+	for (const ScriptCompileReport& report : Globals::scriptHost.takeCompileReports())
+	{
+		if (report.path != m_document.filePath)
+			continue;
+		if (!report.success)
+			showError("Saved, but it does not compile:" + summarizeCompileErrors(report.errors), /*seconds*/ 30.0);
+		else if (report.rebuildNeeded)
+			setNotice("Saved, and it compiles. Scripts are built into this App: rebuild it to run the change.");
+		else
+			setNotice("Saved, compiled and reloaded.");
+	}
+}
+
+void ScriptEditor::renderErrorBox()
+{
+	if (m_statusMessage.empty() || !m_statusIsError)
+		return;
+	static constexpr float c_maxWidth = 520.0f;
+	const double now = ImGui::GetTime();
+	if (m_errorShownAt < 0.0)
+		m_errorShownAt = now;
+	else if (now - m_errorShownAt > m_errorSeconds)
+	{
+		m_statusMessage.clear();
+		return;
+	}
+
+	const ImVec2 windowPos = ImGui::GetWindowPos();
+	const ImVec2 windowSize = ImGui::GetWindowSize();
+	const float x = oc::clamp(m_cursorScreenX, windowPos.x, oc::max(windowPos.x, windowPos.x + windowSize.x - c_maxWidth));
+	const bool above = m_cursorScreenY - windowPos.y > m_lineHeight * 3.0f;
+	ImGui::SetNextWindowPos(ImVec2(x, above ? m_cursorScreenY - 2.0f : m_cursorScreenY + m_lineHeight + 2.0f), ImGuiCond_Always, ImVec2(0.0f, above ? 1.0f : 0.0f));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.42f, 0.09f, 0.09f, 0.97f));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.35f, 0.30f, 1.0f));
+	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.93f, 0.90f, 1.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
+		| ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+	ImGui::Begin("##se_error", nullptr, flags);
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + c_maxWidth);
+	ImGui::TextUnformatted(m_statusMessage.c_str());
+	ImGui::PopTextWrapPos();
+	ImGui::End();
+	ImGui::PopStyleVar();
+	ImGui::PopStyleColor(3);
 }
 
 // Just the candidate list, floated below the cursor's own highlight rectangle -- the composed text itself
@@ -6472,10 +7306,19 @@ void ScriptEditor::renderTextArea()
 // DeclareName/Rename (free-typing an identifier, no candidates to filter against).
 void ScriptEditor::renderAutocompletePopup()
 {
-	if (!hasCandidateList())
+	// An empty list with nothing typed is a resolved term waiting for an operator or a confirm: nothing was looked for.
+	if (!hasCandidateList() || (m_candidates.empty() && m_pendingWord.empty()))
 		return;
 
-	ImGui::SetNextWindowPos(ImVec2(m_cursorScreenX, m_cursorScreenY + m_lineHeight));
+	// A long list (a vector's 23 functions, every global) shows a window of rows that follows the selection, and opens
+	// upward when it would run off the bottom of the display.
+	static constexpr int c_maxRows = 12;
+	const int count = static_cast<int>(m_candidates.size());
+	const int rows = oc::min(count, c_maxRows);
+	const int firstRow = count <= c_maxRows ? 0 : oc::clamp(m_candidateSelected - c_maxRows / 2, 0, count - c_maxRows);
+	const float rowsHeight = (oc::max(rows, 1) + (count > rows ? 1 : 0)) * ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().WindowPadding.y * 2.0f;
+	const bool below = m_cursorScreenY + m_lineHeight + rowsHeight <= ImGui::GetIO().DisplaySize.y;
+	ImGui::SetNextWindowPos(ImVec2(m_cursorScreenX, below ? m_cursorScreenY + m_lineHeight : m_cursorScreenY), ImGuiCond_Always, ImVec2(0.0f, below ? 0.0f : 1.0f));
 	ImGui::SetNextWindowBgAlpha(0.97f);
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
 		| ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
@@ -6484,15 +7327,27 @@ void ScriptEditor::renderAutocompletePopup()
 
 	if (m_candidates.empty())
 		ImGui::TextDisabled("(no matches)");
-	for (int i = 0; i < static_cast<int>(m_candidates.size()); ++i)
+	for (int i = firstRow; i < firstRow + rows; ++i)
 	{
-		const bool selected = i == m_candidateSelected;
-		if (selected)
-			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-		ImGui::TextUnformatted(m_candidates[i].label.c_str());
-		if (selected)
-			ImGui::PopStyleColor();
+		const Candidate& candidate = m_candidates[i];
+		if (i == m_candidateSelected)
+		{
+			const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+			const ImVec2 textSize = ImGui::CalcTextSize(candidate.label.c_str());
+			ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(rowMin.x - 2.0f, rowMin.y), ImVec2(rowMin.x + oc::max(textSize.x, ImGui::GetContentRegionAvail().x) + 2.0f, rowMin.y + textSize.y),
+				ImGui::GetColorU32(ImGuiCol_Header));
+		}
+		ImGui::TextUnformatted(candidate.label.c_str());
+		// What the value would be: the difference between two entries of the same name shape.
+		const DSLType type = candidateValueType(candidate);
+		if (type != DSLType::Void)
+		{
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", dslTypeName(type));
+		}
 	}
+	if (count > rows)
+		ImGui::TextDisabled("%d of %d", m_candidateSelected + 1, count);
 	ImGui::End();
 }
 
@@ -6594,7 +7449,7 @@ void ScriptEditor::toggleEntryFunction(const EntryPointDef& def, bool enable)
 		return;
 	if (!isFunctionBodyDeletable(existing) || AutoCompleteRules::isFunctionReferenced(existing, m_document.file))
 	{
-		Log::warning(oc::string("Can't remove '") + def.name + "' -- it has a body, or is still called elsewhere");
+		showError(oc::string("Can't remove '") + def.name + "' -- it has a body, or is still called elsewhere");
 		return;
 	}
 	deleteEmptyBlock(existing);
@@ -6622,8 +7477,9 @@ void ScriptEditor::renderSidebarPanel()
 			loadDocument(m_document.filePath);
 		ImGui::EndDisabled();
 		ImGui::SameLine();
-		ImGui::TextDisabled("%s", hasDocument
-			? FileSystem::filename(m_document.filePath).c_str() : "<no script open>");
+		const bool hasUnsavedChanges = !m_undoCurrentText.empty() && m_undoCurrentText != m_savedText;
+		ImGui::TextDisabled("%s%s", hasDocument
+			? FileSystem::filename(m_document.filePath).c_str() : "<no script open>", hasUnsavedChanges ? " *" : "");
 		if (hasDocument && ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", m_document.filePath.c_str());
 		ImGui::Separator();
@@ -6704,7 +7560,7 @@ void ScriptEditor::renderSidebarPanel()
 						else if (!isComponentMemberReferenced(member.type))
 							oc::erase(m_document.requiredComponents, member.requiredComponent);
 						else
-							Log::warning(oc::string("Can't un-require '") + member.name + "' -- the script still references it");
+							showError(oc::string("Can't un-require '") + member.name + "' -- the script still references it");
 					}
 					ImGui::SameLine();
 					if (!dslIsComponentRequired(m_document, member.requiredComponent))
@@ -6777,7 +7633,7 @@ void ScriptEditor::renderSidebarPanel()
 			if (!isDataFieldReferenced(field.name))
 				m_document.dataFields.erase(m_document.dataFields.begin() + static_cast<std::ptrdiff_t>(i));
 			else
-				Log::warning("Can't remove '" + field.name + "' -- the script still references it");
+				showError("Can't remove '" + field.name + "' -- the script still references it");
 		}
 		ImGui::PopID();
 	}
@@ -6807,11 +7663,11 @@ void ScriptEditor::renderSidebarPanel()
 		{
 			const oc::string name = m_pendingDataFieldName;
 			if (!isValidIdentifierName(name))
-				Log::warning("'" + name + "' isn't a valid field name");
+				showError("'" + name + "' isn't a valid field name");
 			else if (AutoCompleteRules::isReservedWord(name))
-				Log::warning("'" + name + "' is reserved");
+				showError("'" + name + "' is reserved");
 			else if (dslFindDataField(m_document.dataFields, name) != nullptr)
-				Log::warning("'" + name + "' is already a script data field");
+				showError("'" + name + "' is already a script data field");
 			else
 			{
 				m_document.dataFields.push_back(DSLDataField{ name, m_pendingDataFieldType });
@@ -6840,7 +7696,7 @@ void ScriptEditor::renderSidebarPanel()
 			if (!isEventReferenced(name))
 				m_document.eventNames.erase(m_document.eventNames.begin() + static_cast<std::ptrdiff_t>(i));
 			else
-				Log::warning("Can't remove '" + name + "' -- the script still references it");
+				showError("Can't remove '" + name + "' -- the script still references it");
 		}
 		ImGui::PopID();
 	}
@@ -6851,11 +7707,11 @@ void ScriptEditor::renderSidebarPanel()
 	{
 		const oc::string name = m_pendingEventName;
 		if (!isValidIdentifierName(name))
-			Log::warning("'" + name + "' isn't a valid event name");
+			showError("'" + name + "' isn't a valid event name");
 		else if (AutoCompleteRules::isReservedWord(name))
-			Log::warning("'" + name + "' is reserved");
+			showError("'" + name + "' is reserved");
 		else if (dslFindEventIndex(m_document.eventNames, name) >= 0)
-			Log::warning("'" + name + "' is already an event");
+			showError("'" + name + "' is already an event");
 		else
 		{
 			m_document.eventNames.push_back(name);
@@ -6955,6 +7811,9 @@ void ScriptEditor::render()
 			++m_pendingSelectLineEnd;
 	}
 
+	trackUndo();
+	pollCompileReports();
+
 	m_formatted = Syntax::format(m_document.file, m_compact);
 	clampCursor();
 
@@ -7043,19 +7902,24 @@ void ScriptEditor::saveDocument()
 	const oc::string& path = m_document.filePath;
 	if (path.empty())
 	{
-		Log::warning("No script open -- double-click a .dsl in the Content browser to open one");
+		showError("No script open -- double-click a .dsl in the Content browser to open one");
 		return;
 	}
 	if (ScriptLoader::save(m_document, path, Transpiler::transpile(m_document, m_bindings)))
 	{
 		Log::info("Script saved to " + path);
+		setNotice("Saved " + path + ", compiling...");
+		m_savedText = documentText();
 		// The saved file's generated-C++ header is always current (see ScriptLoader::save) -- queue it for
 		// ScriptHost to (re)compile + hot-reload, same as the node editor's "Compile & Run" (UI.cpp); drained
 		// by main.cpp via UI::takeScriptReloadRequests, which merges this queue in.
 		m_pendingReloadRequests.push_back(path);
 	}
 	else
+	{
 		Log::error("Failed to write " + path);
+		showError("Not saved: cannot write " + path);
+	}
 }
 
 void ScriptEditor::loadDocument(const oc::string& path)
@@ -7067,17 +7931,16 @@ void ScriptEditor::loadDocument(const oc::string& path)
 	if (!result.success)
 	{
 		Log::error("Failed to load script: " + result.error);
+		showError("Not opened: " + result.error); // its line number means something here: it is the file's own
 		return;
 	}
 	m_document.filePath = path;
 	// Every symbol pointer from the replaced document is dead -- reset all selection/landing state.
-	m_cursorLine = 0;
-	m_cursorSpan = 0;
-	m_pendingSelectTarget = nullptr;
-	m_pendingSelectOperatorIndex = -1;
-	m_pendingSelectGroupClose = false;
-	m_pendingSelectLineEnd = -1;
-	m_pendingComposeReturnValue = false;
+	resetAfterDocumentReplaced();
+	m_undoStack.clear();
+	m_redoStack.clear();
+	m_undoCurrentText.clear();
+	m_undoDirty = true;
 	Log::info("Script loaded from " + path);
 }
 
@@ -7094,29 +7957,8 @@ void ScriptEditor::copySelection()
 	const int idx = oc::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
 	int first = idx, last = idx;
 
-	const SyntaxLine& cur = expanded[idx];
-	if (cur.sourceLine == nullptr && cur.endOfSymbol != nullptr)
-	{
-		// A synthetic `end` selects the whole block it closes, header included.
-		for (first = idx - 1; first >= 0; --first)
-			if (expanded[first].sourceLine != nullptr && expanded[first].sourceLine->head() == cur.endOfSymbol)
-				break;
-		if (first < 0)
-			return;
-	}
-	else if (cur.sourceLine != nullptr && Syntax::isBlockOpener(cur.sourceLine->head()))
-	{
-		// A block header selects through its own synthetic `end` -- matched by head symbol rather than by
-		// scope-level walking, so an if/elseif/else CHAIN comes as one unit (the end ties to the original if).
-		// An elseif/else header finds no end of its own and degrades to the single line; pasting that fragment
-		// is then refused by the loader, which is the honest outcome for half a chain.
-		DSLSymbol* head = cur.sourceLine->head();
-		for (last = idx + 1; last < static_cast<int>(expanded.size()); ++last)
-			if (expanded[last].sourceLine == nullptr && expanded[last].endOfSymbol == head)
-				break;
-		if (last >= static_cast<int>(expanded.size()))
-			last = idx;
-	}
+	if (hasLineSelection())
+		selectedLineRange(first, last);
 
 	oc::string text;
 	const int base = expanded[first].scopeLevel;
@@ -7181,6 +8023,26 @@ void ScriptEditor::pasteClipboard()
 			return; // nothing but whitespace
 		for (auto& [tabs, body] : clipLines)
 			tabs = indent + oc::max(0, tabs - minTabs);
+
+		// A block header copied on its own (Ctrl+C with no selection takes just the line) arrives without its `end`, and
+		// the document has no way to hold that: `end` is synthetic. It lands as an empty block, closed here.
+		oc::vector<int> openBlocks;
+		for (const auto& [tabs, body] : clipLines)
+		{
+			if (body == "end")
+			{
+				if (!openBlocks.empty())
+					openBlocks.pop_back();
+			}
+			else
+			{
+				for (const char* opener : { "function ", "if ", "while ", "for ", "foreach ", "ifexist " })
+					if (body.rfind(opener, 0) == 0)
+						openBlocks.push_back(tabs);
+			}
+		}
+		for (; !openBlocks.empty(); openBlocks.pop_back())
+			clipLines.emplace_back(openBlocks.back(), oc::string("end"));
 	}
 
 	oc::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
@@ -7207,19 +8069,157 @@ void ScriptEditor::pasteClipboard()
 	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(m_document, text, "paste", m_builtins, m_bindings);
 	if (!result.success)
 	{
-		Log::warning("Paste rejected: " + result.error);
+		showError("Not pasted: " + loaderReason(result.error));
 		return;
 	}
 
 	// Every symbol pointer from the replaced document is dead -- same reset as loadDocument, landing on the
 	// last pasted line.
-	m_cursorLine = 0;
-	m_cursorSpan = 0;
-	m_pendingSelectTarget = nullptr;
-	m_pendingSelectOperatorIndex = -1;
-	m_pendingSelectGroupClose = false;
-	m_pendingComposeReturnValue = false;
+	resetAfterDocumentReplaced();
 	m_pendingSelectLineEnd = insertAfter + static_cast<int>(clipLines.size());
+}
+
+bool ScriptEditor::loadText(const oc::string& text, oc::string& outError)
+{
+	if (!m_built)
+	{
+		m_bindings.build(m_document.sidebar, m_builtins);
+		m_built = true;
+	}
+	cancelCompose();
+	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(m_document, text, "text", m_builtins, m_bindings);
+	if (!result.success)
+	{
+		outError = result.error;
+		return false;
+	}
+	m_document.filePath.clear();
+	resetAfterDocumentReplaced();
+	m_undoStack.clear();
+	m_redoStack.clear();
+	m_undoCurrentText.clear();
+	m_undoDirty = true;
+	return true;
+}
+
+oc::string ScriptEditor::documentText()
+{
+	oc::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
+	for (const SyntaxLine& line : Syntax::format(m_document.file, /*compact*/ false))
+	{
+		text += "//@";
+		for (int t = 0; t < line.scopeLevel; ++t)
+			text += '\t';
+		text += line.text;
+		text += '\n';
+	}
+	return text + "//@@end\n";
+}
+
+bool ScriptEditor::documentLoads(oc::string& outError)
+{
+	const oc::string text = documentText();
+	DSL copy;
+	copy.sidebar = oc::move(m_document.sidebar); // the bindings are built once, and the loader resolves names against them
+	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(copy, text, "text", m_builtins, m_bindings);
+	m_document.sidebar = oc::move(copy.sidebar);
+	if (!result.success)
+		outError = result.error;
+	return result.success;
+}
+
+namespace
+{
+	const char* composeModeName(int mode)
+	{
+		static constexpr const char* names[] = {
+			"None", "FilterCandidates", "DeclareName", "DeclareValue", "Rename", "ConditionLeft", "ConditionOp", "ConditionRight",
+			"FunctionDeclareName", "FunctionParamType", "FunctionParamName", "FunctionReturnType",
+			"ForVarType", "ForVarName", "ForVarValue", "ForConditionOp", "ForConditionValue", "ForIncrementOp", "ForIncrementValue",
+			"ReassignValue", "EditExpr", "ReplaceOperator", "ReturnValue", "CallArgValue", "ForConditionLeft", "ReassignOp", "CommentText",
+			"MemberSelect", "FunctionDeclareDone", "FunctionDeclareReturnType", "ForEachType", "ForEachName", "ForEachSource",
+			"IfExistType", "IfExistName", "IfExistSource", "IfExistKey",
+		};
+		return mode >= 0 && mode < static_cast<int>(std::size(names)) ? names[mode] : "?";
+	}
+}
+
+// The cursor line as renderTextArea draws it, minus the colors: the same selection / compose-box column logic.
+oc::string ScriptEditor::describeCursorLine() const
+{
+	if (m_cursorLine < 0 || m_cursorLine >= static_cast<int>(m_formatted.size()))
+		return "(no line)";
+	const SyntaxLine& line = m_formatted[m_cursorLine];
+	oc::string indent(static_cast<size_t>(line.scopeLevel) * 2, ' ');
+	const bool composing = m_composeMode != ComposeMode::None;
+	if (line.spans.empty())
+		return indent + (composing ? "<<" + m_composePrefix + m_pendingWord + "|>>" : line.text);
+	const SyntaxSpan& span = line.spans[oc::clamp(m_cursorSpan, 0, static_cast<int>(line.spans.size()) - 1)];
+	const bool wholeLine = composing && (m_redeclareTarget != nullptr || m_reassignEditExpr != nullptr || m_flowEditLine != nullptr);
+	const bool cover = composing && !wholeLine && m_composeCoverStart >= 0;
+	const int selStart = wholeLine ? 0 : cover ? m_composeCoverStart : span.startCol;
+	const int selEnd = wholeLine ? static_cast<int>(line.text.size()) : cover ? m_composeCoverEnd : span.endCol;
+	const oc::string inner = composing ? "<<" + m_composePrefix + m_pendingWord + "|>>" : "[" + line.text.substr(selStart, selEnd - selStart) + "]";
+	return indent + line.text.substr(0, selStart) + inner + line.text.substr(selEnd);
+}
+
+oc::string ScriptEditor::describeState(int contextLines) const
+{
+	oc::string out = "mode " + oc::string(composeModeName(static_cast<int>(m_composeMode))) + ", line " + oc::to_string(m_cursorLine)
+		+ " of " + oc::to_string(m_formatted.size()) + "\n";
+	if (!m_statusMessage.empty())
+		out += oc::string(m_statusIsError ? "error box: " : "status: ") + m_statusMessage + "\n";
+	const int count = static_cast<int>(m_formatted.size());
+	const int first = contextLines < 0 ? 0 : oc::max(0, m_cursorLine - contextLines);
+	const int last = contextLines < 0 ? count - 1 : oc::min(count - 1, m_cursorLine + contextLines);
+	int selectedFirst = 0, selectedLast = -1;
+	if (hasLineSelection() && count > 0)
+		selectedLineRange(selectedFirst, selectedLast);
+	for (int i = first; i <= last; ++i)
+	{
+		out += (i == m_cursorLine ? "> " : (i >= selectedFirst && i <= selectedLast) ? "| " : "  ");
+		out += i == m_cursorLine ? describeCursorLine() : oc::string(static_cast<size_t>(m_formatted[i].scopeLevel) * 2, ' ') + m_formatted[i].text;
+		out += '\n';
+		if (i == m_cursorLine && hasCandidateList())
+		{
+			if (m_candidates.empty() && !m_pendingWord.empty())
+				out += "    (no matches)\n";
+			for (int c = 0; c < static_cast<int>(m_candidates.size()); ++c)
+				out += oc::string(c == m_candidateSelected ? "    * " : "      ") + m_candidates[c].label + "\n";
+		}
+	}
+	return out;
+}
+
+oc::string ScriptEditor::describeStateShort() const
+{
+	oc::string out = oc::string(composeModeName(static_cast<int>(m_composeMode))) + " | " + describeCursorLine();
+	if (hasLineSelection() && !m_formatted.empty())
+	{
+		int first = 0, last = 0;
+		selectedLineRange(first, last);
+		out += "  sel " + oc::to_string(first) + "-" + oc::to_string(last);
+	}
+	if (!m_statusMessage.empty())
+		out += "  !" + m_statusMessage;
+	if (hasCandidateList())
+	{
+		out += "  {" + oc::to_string(m_candidates.size()) + ":";
+		const int count = oc::min(static_cast<int>(m_candidates.size()), 5);
+		for (int c = 0; c < count; ++c)
+		{
+			const int index = (m_candidateSelected + c) % static_cast<int>(m_candidates.size());
+			out += (c == 0 ? " *" : " ") + m_candidates[index].label;
+		}
+		out += count < static_cast<int>(m_candidates.size()) ? " ...}" : "}";
+	}
+	return out;
+}
+
+void ScriptEditor::linePosition(int line, float& outX, float& outY) const
+{
+	outX = m_textOriginX + 40.0f;
+	outY = m_textOriginY + (static_cast<float>(line) + 0.5f) * m_lineHeight;
 }
 
 void ScriptEditor::requestOpen(const oc::string& path)

@@ -747,7 +747,8 @@ oc::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, con
 		addIfMatches(out, Candidate{ "foreach", Candidate::Kind::KeywordForEach }, typedPrefix);
 		addIfMatches(out, Candidate{ "ifexist", Candidate::Kind::KeywordIfExist }, typedPrefix);
 		addIfMatches(out, Candidate{ "return", Candidate::Kind::KeywordReturn }, typedPrefix);
-		addIfMatches(out, Candidate{ "break", Candidate::Kind::KeywordBreak }, typedPrefix);
+		if (dslIsInsideLoop(file, dslLineIndex(file, &atLine)))
+			addIfMatches(out, Candidate{ "break", Candidate::Kind::KeywordBreak }, typedPrefix);
 
 		// else/elseif: only meaningful on a statement INSIDE an if/elseif branch, and only when it's the LAST
 		// line of that branch -- statements below would silently stay in the current branch while the new one
@@ -797,7 +798,12 @@ oc::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, con
 		// atLine.scopeLevel == 0 is exactly "not inside any function body" (every scope-1+ line lives inside
 		// some function's body, per the grammar; see DSL.ixx).
 		if (atLine.scopeLevel == 0)
+		{
+			// ...and nothing else is: every other statement would transpile to C++ at file scope, which does not compile.
+			out.clear();
 			addIfMatches(out, Candidate{ "function", Candidate::Kind::DeclareFunction }, typedPrefix);
+			return out;
+		}
 
 		for (const Candidate& typeCandidate : typeKeywordCandidates(typedPrefix))
 			out.push_back(typeCandidate);

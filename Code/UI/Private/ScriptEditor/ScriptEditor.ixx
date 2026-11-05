@@ -14,7 +14,12 @@ import Script;
 // renders INLINE in place of the selected span, inside its highlight rectangle (renderTextArea), with the
 // candidate list (AutoCompleteRules, filtered against whatever the selected span's SlotRef expects) floating
 // below it (renderAutocompletePopup). Space advances between a line's stages; only Enter (or a closing gesture
-// like a call's ')') COMMITS a line -- see confirmCompose's allowCommit. Confirming most candidates (a keyword, an existing
+// like a call's ')') COMMITS a line -- see confirmCompose's allowCommit. The highlighted candidate is only a suggestion
+// until it is chosen: by typing toward it, by an arrow key, or by Tab / Enter. A space, an operator or a separator on an
+// empty term never picks it, so a line typed the way code is written comes out as that line (the regression file is
+// Assets/Scenarios/script-editor-typing.txt, run by Code/Tools/ScriptEditorSim). The status line below the text says
+// what a stage expects, and anything refused shows as a box at the cursor (showError). Reordering is separate from all of this: see "Line selection and
+// moving" below. Confirming most candidates (a keyword, an existing
 // variable/function, a literal) applies immediately via applyCandidate, replacing the slot's occupant wholesale
 // -- which is also where the "always compilable" guarantee lives: a freshly-inserted call gets Placeholder
 // arguments for everything it requires, matching its callee's declared types.
@@ -235,8 +240,69 @@ public:
 	// empty or already the open document.
 	void requestOpen(const oc::string& path);
 
+	// ---- Test surface (Code/Tools/ScriptEditorSim) ----
+	// Replaces the document from .dsl text with NO file path behind it, so a Ctrl+S in a simulated session can never
+	// overwrite an asset. False (with the loader's error in `outError`) leaves the document untouched.
+	bool loadText(const oc::string& text, oc::string& outError);
+	// The committed document as a loadable .dsl block (directives + expanded view) -- what a save writes below the C++.
+	oc::string documentText();
+	// Whether documentText() parses back ("everything always compiles"). The document itself stays as it is.
+	bool documentLoads(oc::string& outError);
+	// The state a key press produced, as text: the compose mode, the cursor line (selection in [brackets], the compose
+	// box in <<...>>) and the candidate list. `contextLines` < 0 lists the whole document around it.
+	oc::string describeState(int contextLines) const;
+	// One line per key press: the mode, the cursor line and the first few candidates.
+	oc::string describeStateShort() const;
+	// Gives a document from loadText a path, so a simulated Ctrl+S writes there and takes the whole save path.
+	void setDocumentPath(const oc::string& path) { m_document.filePath = path; }
+	// Where a formatted line is on screen as of the last frame, so a simulated mouse can aim at it.
+	void linePosition(int line, float& outX, float& outY) const;
+
 private:
 
+	oc::string describeCursorLine() const;
+	// Undo / redo work on whole-document text snapshots, reloaded through the loader like a paste: one step per committed
+	// change, whatever its kind, keys and sidebar alike. A compose never touches the document, so it never makes a step.
+	void trackUndo();
+	void stepUndo(bool redo);
+	void resetAfterDocumentReplaced();
+	// Feedback, both ended by the next key. An error is something refused (a paste, a delete, a move, a save) and shows as a
+	// box at the cursor, so it cannot be missed. A notice is a small remark on a key and replaces the hint in the status line.
+	void showError(oc::string message, double seconds = 8.0)
+	{
+		m_statusMessage = oc::move(message);
+		m_statusIsError = true;
+		m_errorShownAt = -1.0;
+		m_errorSeconds = seconds;
+	}
+	void pollCompileReports(); // what ScriptHost has to say about a save
+	void setNotice(oc::string message)
+	{
+		m_statusMessage = oc::move(message);
+		m_statusIsError = false;
+	}
+	void renderErrorBox();
+	oc::string composeHint() const;
+	bool composeHasContent() const { return !m_pendingWord.empty() || !m_composePrefix.empty(); }
+	void beginMemberReassign(const Candidate& member, oc::string pendingOperator); // a writable member as an assignment target
+	void deleteCurrentStatement(); // Delete / Ctrl+X: the cursor line's whole statement, by the rules Backspace has for its head
+
+	// ---- Line selection and moving ----
+	// A selection is always whole statements: selectedLineRange widens anchor..cursor (formatted-line indices) until no
+	// block is cut in half, and with no selection it is the statement under the cursor. Moves and selection deletes edit
+	// the expanded TEXT and reparse it, like a paste: the loader decides, all or nothing, so a move cannot break a reference.
+	bool hasLineSelection() const { return m_selectAnchor >= 0; }
+	void selectedLineRange(int& outFirst, int& outLast) const;
+	bool isChainContinuationLine(int line) const; // an else / elseif header
+	int blockEndLine(int line) const;   // a block header's synthetic `end`; any other line returns itself
+	int statementStartLine(int line) const; // the header of the block an `end` or an else / elseif belongs to; else itself
+	void extendLineSelection(int direction); // Shift+Up/Down: by one statement at a time
+	// Alt+Up/Down, and each line of a mouse drag. A statement steps one visible line, into and out of blocks; a function
+	// swaps with its neighbour, and the blank lines between them stay where they are. False = refused, the status line says why.
+	bool moveSelectedLines(int direction);
+	void deleteSelectedLines();
+	// `lines` (scope level, text) as the whole document: false = refused, with `verb` and the reason in the status line.
+	bool replaceDocumentLines(const oc::vector<oc::pair<int, oc::string>>& lines, const char* verb);
 	void renderTextArea();
 	void renderAutocompletePopup();
 	void saveDocument(); // sidebar Save / Ctrl+S: writes m_document to its OWN filePath (ScriptLoader::save).
@@ -246,13 +312,13 @@ private:
 	// (which passes the open document's own path to re-read it from disk). On success every selection/compose
 	// state resets (all old symbol pointers are dead); on failure nothing changes.
 	void loadDocument(const oc::string& path);
-	// Ctrl+C / Ctrl+V. Copy takes the cursor's LINE -- or, on a block header (or its synthetic `end`), the
-	// whole block -- as plain expanded-view DSL text, tab-indented and rebased to column 0, so it also reads
-	// correctly pasted into any outside text editor. Paste splices the clipboard below the cursor (into a
-	// header's body when the cursor sits on one, same rule as Enter) and REPARSES the whole candidate document
-	// through ScriptLoader::loadFromText: anything that doesn't resolve there -- an unknown name, bad nesting,
-	// a fragment missing its `end` -- rejects the paste with the loader's own error and leaves the document
-	// untouched. That loader gate is what keeps "everything always compiles" true for text from anywhere.
+	// Ctrl+C / Ctrl+V. Copy takes the line selection, or with none just the cursor's whole LINE, as plain
+	// expanded-view DSL text, tab-indented and rebased to column 0, so it also reads correctly pasted into any
+	// outside text editor. Paste splices the clipboard below the cursor (into a header's body when the cursor sits
+	// on one, same rule as Enter), closes any block header left open with an `end`, and REPARSES the whole candidate
+	// document through ScriptLoader::loadFromText: anything that doesn't resolve there -- an unknown name, bad
+	// nesting, a lone else -- rejects the paste with the loader's own error and leaves the document untouched.
+	// That loader gate is what keeps "everything always compiles" true for text from anywhere.
 	void copySelection();
 	void pasteClipboard();
 	DSLSymbol* pushSymbol(DSLCodeLine& line, DSLSymbol::SymbolType type, DSLSymbol::Data data); // constructs a fresh symbol owned by `line`, returns the raw ptr -- shared by every apply/commit function below
@@ -359,16 +425,13 @@ private:
 	// it consumed the keystroke (something was completed); false = nothing to complete, caller's plain
 	// `if (!allowCommit) return;` behavior is unchanged either way.
 	bool tryCompleteCandidateOnSpace();
-	// Space on the SAME terminal stages as tryCompleteCandidateOnSpace, but for when there's nothing left to
-	// TYPE toward the highlighted candidate (nothing typed at all -- relying purely on the default/arrow-
-	// navigated selection -- or it's already spelled out in full): Space must still DO something with it
-	// instead of silently eating the keystroke, so this resolves it as a term right into the chain (the exact
-	// rule exprTryFinalize's own "awaiting a term" branch uses) and keeps composing -- an operator, or a later
-	// confirm, still finishes the value, same as MemberSelect's own value-context delivery. Tries
-	// tryCompleteCandidateOnSpace first, so partially-typed text still completes instead of resolving early.
-	// True when the keystroke DID something (completed a partially-typed word, or consumed the highlighted
-	// candidate into the chain as a resolved term) -- a stage that has somewhere to advance to uses that to keep
-	// one keystroke doing exactly one thing: resolve now, advance on the next.
+	// Space (or Tab) on the SAME terminal stages as tryCompleteCandidateOnSpace, for when there's nothing left to
+	// TYPE toward the chosen candidate (it's spelled out in full, arrow-navigated to, or Tab accepts the default;
+	// Space on an untouched default never reaches this, see handleKeyEvent): resolves it as the chain's PENDING term
+	// (m_exprPendingGroup) and keeps composing -- an operator, or a later confirm, still finishes the value, same as
+	// MemberSelect's own value-context delivery. Tries tryCompleteCandidateOnSpace first, so partially-typed text
+	// still completes instead of resolving early. True when the keystroke DID something -- a stage that has
+	// somewhere to advance to uses that to keep one keystroke doing exactly one thing: resolve now, advance next.
 	bool tryResolveCandidateOnSpace();
 	// The one-stop stage transition every staged flow uses: sets the compose box to `prefix` (+ `pendingWord`,
 	// for step-backs that restore previously-typed text), switches to `mode`, and rebuilds the candidate list
@@ -641,6 +704,36 @@ private:
 	oc::string m_pendingWord;
 	oc::vector<Candidate> m_candidates;
 	int m_candidateSelected = 0;
+	// An arrow key chose the highlighted candidate. Only then does a Space or an operator accept it with nothing typed:
+	// the untouched default is a suggestion, and a spacebar is what a person hits between any two words of a line.
+	bool m_candidateNavigated = false;
+	// ForConditionLeft still shows its loop-variable seed untouched: a typed character replaces it instead of extending it.
+	bool m_forSeedFresh = false;
+
+	struct UndoEntry
+	{
+		oc::string text;
+		int cursorLine = 0;
+		int cursorSpan = 0;
+	};
+	oc::vector<UndoEntry> m_undoStack;
+	oc::vector<UndoEntry> m_redoStack;
+	oc::string m_undoCurrentText;  // the document as of the last step; empty = no baseline yet (just loaded)
+	oc::string m_savedText;        // the document as on disk, for the unsaved-changes mark
+	int m_undoCursorLine = 0;      // the cursor when the document last rested: where a step undoes back to
+	int m_undoCursorSpan = 0;
+	bool m_undoDirty = true;       // something may have changed the document since trackUndo last compared it
+	oc::string m_statusMessage;
+	bool m_statusIsError = false;
+	double m_errorShownAt = -1.0;  // ImGui time of the box's first frame; -1 = not drawn yet
+	double m_errorSeconds = 8.0;
+
+	int m_selectAnchor = -1;       // formatted line the line selection started on; -1 = none
+	enum class LineDrag { None, Select, Move };
+	LineDrag m_lineDrag = LineDrag::None;
+	int m_lineDragStartLine = 0;   // where the press landed: a press in a selection that never moves becomes a plain click
+	int m_lineDragStartSpan = 0;
+	bool m_lineDragMoved = false;
 	DSLType m_pendingDeclareType = DSLType::Void; // DeclareName/DeclareValue: which type was picked in step 1
 	oc::string m_pendingDeclareName;             // DeclareValue: the name resolved in step 2
 	DSLSymbol* m_renameTarget = nullptr;           // Rename: the VariableDeclaration being renamed

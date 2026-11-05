@@ -1260,6 +1260,60 @@ void RendererState::captureScreenshot(const oc::string& path)
         Log::warning("Screenshot: could not write " + path);
 }
 
+// ---- Clipboard relay ----
+// Taking over the Windows clipboard sends a message to its previous owner, and from the second copy on that owner is
+// our own window, whose messages only the window thread reads. That thread pumps when main asks it to, so a write from
+// main waited on itself until Windows gave up, 5 s later. Writes therefore run on the window thread, at the next pump,
+// and no caller waits. A read that arrives before the pump gets the text that is on its way.
+namespace
+{
+    Window* g_clipboardWindow = nullptr;
+    void (*g_backendSetClipboard)(ImGuiContext*, const char*) = nullptr;
+    const char* (*g_backendGetClipboard)(ImGuiContext*) = nullptr;
+    std::mutex g_clipboardMutex;
+    int g_clipboardWritesInFlight = 0;
+    oc::string g_clipboardLatestWrite;
+    oc::string g_clipboardReadBack;
+
+    void setClipboardThroughWindowThread(ImGuiContext* ctx, const char* text)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(g_clipboardMutex);
+            g_clipboardLatestWrite = text;
+            ++g_clipboardWritesInFlight;
+        }
+        g_clipboardWindow->runOnWindowThread([ctx, copy = oc::string(text)]
+        {
+            g_backendSetClipboard(ctx, copy.c_str());
+            const std::lock_guard<std::mutex> lock(g_clipboardMutex);
+            --g_clipboardWritesInFlight;
+        });
+    }
+
+    const char* getClipboardOrWriteInFlight(ImGuiContext* ctx)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(g_clipboardMutex);
+            if (g_clipboardWritesInFlight > 0)
+            {
+                g_clipboardReadBack = g_clipboardLatestWrite;
+                return g_clipboardReadBack.c_str();
+            }
+        }
+        return g_backendGetClipboard(ctx);
+    }
+
+    void installClipboardRelay(Window& window)
+    {
+        ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+        g_clipboardWindow = &window;
+        g_backendSetClipboard = platform.Platform_SetClipboardTextFn;
+        g_backendGetClipboard = platform.Platform_GetClipboardTextFn;
+        platform.Platform_SetClipboardTextFn = setClipboardThroughWindowThread;
+        platform.Platform_GetClipboardTextFn = getClipboardOrWriteInFlight;
+    }
+}
+
 void RendererState::initImgui(Window& window)
 {
     ImGui::CreateContext();
@@ -1273,6 +1327,7 @@ void RendererState::initImgui(Window& window)
 
     // Creates the SDL system cursors among other window-affine work: on the window thread.
     window.runOnWindowThread([&] { ImGui_ImplSDL3_InitForVulkan((SDL_Window*)window.getWindowHandle()); }, /*wait*/ true);
+    installClipboardRelay(window);
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.ApiVersion = Globals::instance.getApiVersion();
     init_info.Instance = Globals::instance.getInstance();

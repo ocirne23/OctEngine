@@ -1721,6 +1721,16 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::str
 		DSLSymbol* head = parser.parseStatement(src.tokens, *line);
 		if (head == nullptr)
 			return failAt(src.fileLineNo, parser.error);
+		if (head->type == ST::FlowControl && oc::get<DSLSymbol::FlowControl>(head->data).control == DSLFlowControl::Break)
+		{
+			// The transpiler emits it as it stands, and cl refuses a break with no loop around it (C2043).
+			const bool inLoop = oc::any_of(openBlocks.begin(), openBlocks.end(), [](const DSLSymbol* block)
+			{
+				return dslIsLoopHeader(block);
+			});
+			if (!inLoop)
+				return failAt(src.fileLineNo, "a break needs a loop around it");
+		}
 		if (Syntax::isBlockOpener(head))
 		{
 			openBlocks.push_back(head);
@@ -1752,6 +1762,12 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::str
 				+ " re-renders as \"" + expected + "\" (file has \"" + blockLines[i].text + "\")");
 	}
 
+	// The old contents stay alive until the check passes: a refusal must leave the document as it was, which is the
+	// contract paste, undo and moving all rest on.
+	DSLScriptFile previousFile = oc::move(document.file);
+	oc::vector<DSLType> previousRequired = oc::move(document.requiredComponents);
+	oc::vector<DSLDataField> previousFields = oc::move(document.dataFields);
+	oc::vector<oc::string> previousEvents = oc::move(document.eventNames);
 	document.file.lines = oc::move(rebuilt.lines);
 	document.requiredComponents = oc::move(requiredComponents);
 	document.dataFields = oc::move(dataFields);
@@ -1762,7 +1778,10 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::str
 	int badLine = 0;
 	if (!checkContainerMutations(document, mutationError, badLine))
 	{
-		document.file.lines.clear();
+		document.file = oc::move(previousFile);
+		document.requiredComponents = oc::move(previousRequired);
+		document.dataFields = oc::move(previousFields);
+		document.eventNames = oc::move(previousEvents);
 		return failAt(badLine >= 0 && badLine < static_cast<int>(blockLines.size())
 			? blockLines[badLine].fileLineNo : 1, mutationError);
 	}

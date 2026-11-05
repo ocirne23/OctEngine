@@ -92,6 +92,9 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 * **Shader fp16 work:** `Tools/fp16conv.ps1 <shader>.glsl` lists every fp16 <-> fp32 conversion in the
   shader's SPIR-V dump by source line (glslang never warns about implicit widening). Rules and results in
   "Half floats" in [`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md).
+* **Script Editor work:** `ScriptEditorSim` (see [its CONTEXT](../Docs/Context/ScriptEditorSim/CONTEXT.md)) drives the real
+  panel with simulated keys, with no window or engine: about 5 s to rebuild, under 0.1 s to run. Its `--check` runs the
+  typing regression file.
 * No test suite, no linter. Verifying = it compiles, plus the user runs it.
 
 ### Global compile flags
@@ -376,8 +379,9 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
                   (+ EASTL, vulkan, SDL3, imgui, Windows libs — all PRIVATE wrappers)
 ```
 
-Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Entity + Script + File). They and
-`AppScripts` (the cooked build's static scripts) live in `Code/Tools/`.
+Standalone executables: `NetFuzz` (Core + Network), `DslCompiler` (Core + Entity + Script + File) and `ScriptEditorSim`
+(the same, plus imgui and the Script Editor's own sources from `Code/UI`). They and `AppScripts` (the cooked build's
+static scripts) live in `Code/Tools/`.
 
 ## Where each library documents itself
 
@@ -432,6 +436,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Hotbar](../Docs/Context/Game/Hotbar.md) | The RTS grid hotbar pages, bases, structure health + labels, unit selection, interaction modes |
 | ↳ [Units](../Docs/Context/Game/Units.md) | Units (split, targets, damage, far tick, parked spawns) and the player (the shield battery) |
 | [DslCompiler](../Docs/Context/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
+| [ScriptEditorSim](../Docs/Context/ScriptEditorSim/CONTEXT.md) | **The Script Editor with simulated keys, no window or engine** — how Claude iterates on the editor's UX: key programs, traces, screenshots, the random-key test, the typing regression file |
 
 ---
 
@@ -568,6 +573,7 @@ Checked-in inputs for repeatable runs:
   `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-base-38k.txt" -ScenarioAt 2 -After 30`.
   **`profile.ps1`'s `-Scenario` default (`march-64-units.txt`) no longer exists**: pass `-Scenario` explicitly.
 * `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.
+* `script-editor-typing.txt` — `ScriptEditorSim --check`: key programs and the line each must produce.
 
 ## `Assets/Local/`
 

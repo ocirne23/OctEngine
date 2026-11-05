@@ -29,6 +29,8 @@ file's content.
 * `getOrLoad(path, forceRecompile = false)` returns the cached module, compiling on first use. **On
   failure it returns null and KEEPS the previous build**, and first-time failures are cached so they
   are not retried every frame. The returned pointer is stable until shutdown.
+* `takeCompileReports()` returns the verdict of every forced rebuild and cooked-build check, from any thread. The Script
+  Editor shows them; cl's whole output also goes to the log.
 * `handleScriptReloadRequests(paths)` and `setCurrentScriptPath` / `reloadCurrentScript` — **F6
   recompiles whatever the editor panel is editing.**
 * `m_loadMutex` serializes the cache and a miss's compile/load, because concurrent `ScriptComponent`
@@ -87,6 +89,9 @@ its own namespace and compiles it into the engine, linking every engine library 
   `thunk_foo(x)` instead of a function-pointer call, so `/GL` + `/LTCG` inlines it.
 * All-or-nothing: one broken script fails the aggregate. Adding, renaming or removing a script needs a
   reconfigure; editing a body just recompiles the aggregate.
+* **A save cannot change the running code here, so `handleScriptReloadRequests` only checks the file:** `cl` on a plain
+  background thread (`runCompileChecks`, one at a time, its outputs deleted), so the editor can say at once whether the
+  next App build would fail.
 * Off it is an empty INTERFACE library, so App's link line names it unconditionally.
 * In a tree configured with `SCRIPTS_STATIC=OFF` (the hot-reload DLL path), VS target `run-cooked` builds a
   sibling `Build-Cooked/` tree with `SCRIPTS_STATIC=ON`.

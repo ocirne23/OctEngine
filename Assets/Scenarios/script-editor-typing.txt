@@ -1,0 +1,114 @@
+ScriptEditorSim --check: code typed the way a person types it must become exactly that code.
+A "doc" line sets the document for the cases below it. Each case runs its keys on a fresh copy, and the line after the arrow must then exist.
+
+doc function Update(float deltaSeconds)\n\tfloat a = 1.0\n\tint n = 3\n\tvec3 v = vec3(1, 2, 3)\n\t\nend
+
+{down*4}float b = 1.5{enter} ==> float b = 1.5
+{down*4}float b=1.5{enter} ==> float b = 1.5
+{down*4}float b = -1{enter} ==> float b = -1
+{down*4}a = 2{enter} ==> a = 2
+{down*4}a=2{enter} ==> a = 2
+{down*4}a 2{enter} ==> a = 2
+{down*4}a += 2{enter} ==> a += 2
+{down*4}a+=2{enter} ==> a += 2
+{down*4}a = -1{enter} ==> a = -1
+{down*4}a = a - 1{enter} ==> a = a - 1
+{down*4}self.pos.y += a{enter} ==> self.pos.y += a
+{down*4}self.pos.y+=a{enter} ==> self.pos.y += a
+{down*4}v.x = 2{enter} ==> v.x = 2
+{down*4}float b = (a + 1) * 2{enter} ==> float b = (a + 1) * 2
+{down*4}float b = ((a + 1) * 2) / 3{enter} ==> float b = ((a + 1) * 2) / 3
+{down*4}float b = self.pos.y + 1{enter} ==> float b = self.pos.y + 1
+{down*4}float b = math.sin(a) * 2{enter} ==> float b = math.sin(float angleDeg = a) * 2
+{down*4}float b = v.dot(vec3(1, 2, 3)) * 2{enter} ==> float b = v.dot(vec3 other = vec3(1, 2, 3)) * 2
+{down*4}vec3 w = vec3(1, 2, 3){enter} ==> vec3 w = vec3(1, 2, 3)
+{down*4}vec3 w = vec3(1,2,3){enter} ==> vec3 w = vec3(1, 2, 3)
+{down*4}bool b = a > 1 && n < 2{enter} ==> bool b = a > 1 && n < 2
+{down*4}if a > 0{enter} ==> if a > 0
+{down*4}if (a > 0){enter} ==> if a > 0
+{down*4}if a > 0 && n < 2{enter} ==> if a > 0 && n < 2
+{down*4}if isKeyDown("w"){enter} ==> if isKeyDown(string keyName = "w")
+{down*4}while n < 3{enter} ==> while n < 3
+{down*4}for int i = 0, i < 10, i += 1{enter} ==> for int i = 0, i < 10, i += 1
+{down*4}for int i=0,i<10,i+=1{enter} ==> for int i = 0, i < 10, i += 1
+{down*4}for int i = 0, n > i, i += 1{enter} ==> for int i = 0, n > i, i += 1
+{down*4}foreach Entity e in world.entitiesInRadius(v, 5){enter} ==> foreach Entity e in world.entitiesInRadius(vec3 position = v, float radius = 5)
+{down*4}ifexist Entity e in self.parent{enter} ==> ifexist Entity e in self.parent
+{down*4}printf("x=%d", n){enter} ==> printf(string format = "x=%d", n)
+{down*4}world.drawLine(v, v, v){enter} ==> world.drawLine(vec3 from = v, vec3 to = v, vec3 color = v)
+{down*4}self.setEnabled(true){enter} ==> self.setEnabled(bool enabled = true)
+{down*4}break{enter} ==> vec3 v = vec3(1, 2, 3) ;;  ;; end
+{down*4}while n < 3{enter}break{enter} ==> while n < 3 ;; break ;; end
+{down*4}while n < 3{enter}if n > 1{enter}break{enter} ==> while n < 3 ;; if n > 1 ;; break ;; end ;; end
+{down*4}# hello world{enter} ==> # hello world
+{down*4}return{enter} ==> return
+{down*4}float b = 1{left}{right}{home}{end}{enter} ==> float b = 1
+{down*4}float b = 1{enter}{c-z}{c-y} ==> float b = 1
+{down*4}a = {tab}{enter} ==> a = a
+{c-end}{enter}function foo(int a, float b) -> float{enter}return b{enter} ==> return b
+{down}{home}{right}#{enter} ==> float a = 1.0
+
+Deleting the if would leave two x in one scope, so the if stays.
+doc function Update(float deltaSeconds)\n\tint x = 2\n\tif deltaSeconds > 0\n\t\tint y = 1\n\tend\n\tif deltaSeconds > 1\n\t\tint z = 1\n\tend\n\tint z = 3\nend
+{down*5}{home}{bs} ==> if deltaSeconds > 1
+{down*2}{home}{bs} ==> int y = 1
+
+Moving. In a case, " ;; " separates lines that must follow each other. A refused move must leave the order alone.
+doc function Update(float deltaSeconds)\n\tfloat a = 1.0\n\tfloat b = 2.0\n\tif a > 0\n\t\tb = 1\n\tend\n\twhile a < 1\n\t\tbreak\n\tend\n\ta = b\nend\n\nfunction Second() -> int\n\treturn 1\nend\n\nfunction Third()\n\tprintf(string format = "x")\nend
+
+Statements swap, and a use cannot pass its declaration.
+{down}{a-down} ==> float b = 2.0 ;; float a = 1.0
+{down*2}{a-up} ==> float b = 2.0 ;; float a = 1.0
+{down*9}{a-up}{a-up}{a-up}{a-up}{a-up}{a-up}{a-up}{a-up} ==> float b = 2.0 ;; a = b ;; if a > 0
+{down*2}{a-down} ==> float a = 1.0 ;; float b = 2.0 ;; if a > 0
+Into a block, out of it, and never out of the function.
+{down*9}{a-up} ==> break ;; a = b ;; end ;; end
+{down*9}{a-up}{a-up}{a-up} ==> a = b ;; while a < 1 ;; break ;; end ;; end
+{down*9}{a-up}{a-up}{a-up}{a-up} ==> b = 1 ;; a = b ;; end ;; while a < 1
+{down*4}{a-down} ==> if a > 0 ;; end ;; b = 1 ;; while a < 1
+{down*4}{a-up} ==> b = 1 ;; if a > 0 ;; end
+{down}{a-up} ==> function Update(float deltaSeconds) ;; float a = 1.0
+{down*9}{a-down}{a-down} ==> a = b ;; end ;;  ;; function Second() -> int
+A whole block moves as one, and its `end` line stands for it.
+{down*3}{a-up} ==> float b = 2.0 ;; if a > 0 ;; b = 1 ;; end ;; while a < 1
+{down*5}{a-down} ==> while a < 1 ;; if a > 0 ;; b = 1 ;; end ;; break ;; end
+{down*5}{a-down}{a-down} ==> while a < 1 ;; break ;; if a > 0 ;; b = 1 ;; end ;; end
+{down*5}{a-down}{a-down}{a-down} ==> while a < 1 ;; break ;; end ;; if a > 0 ;; b = 1 ;; end ;; a = b
+The compile gate: a break stays in a loop, and a typed function ends in a return.
+{down*7}{a-down} ==> while a < 1 ;; break ;; end
+{down*7}{a-up} ==> while a < 1 ;; break ;; end
+{down*6}{home}{bs} ==> while a < 1 ;; break ;; end
+{down*12}{enter}int z = 1{enter}{a-down} ==> int z = 1 ;; return 1 ;; end
+{down*12}{enter}int z = 1{enter}{down}{a-up} ==> int z = 1 ;; return 1 ;; end
+Functions swap past the blank lines between them, which stay where they are.
+{down}{home}{up}{a-down} ==> end ;;  ;; function Update(float deltaSeconds)
+{down*16}{a-up} ==> function Third() ;; printf(string format = "x") ;; end ;;  ;; function Second() -> int
+{down*16}{a-down} ==> function Second() -> int ;; return 1 ;; end ;;  ;; function Third()
+{down*16}{a-up}{a-up} ==>  ;; function Third() ;; printf(string format = "x") ;; end ;;  ;; function Update(float deltaSeconds)
+Selections grow by whole statements and move, delete and copy together.
+{down*3}{s-down}{s-down}{a-down} ==> float b = 2.0 ;; a = b ;; if a > 0 ;; b = 1 ;; end ;; while a < 1 ;; break ;; end ;; end
+{down*3}{s-down}{s-down}{a-up} ==> float a = 1.0 ;; float b = 2.0 ;; if a > 0
+{down}{s-down}{s-down}{a-down} ==> float a = 1.0 ;; float b = 2.0 ;; if a > 0
+{down*3}{s-down}{del} ==> float b = 2.0 ;; while a < 1
+{down*3}{s-down}{s-down}{del} ==> float b = 2.0 ;; a = b
+{down}{s-down}{del} ==> float a = 1.0 ;; float b = 2.0
+{down*12}{s-down}{s-down}{del} ==> end ;;  ;; function Third()
+{down*13}{s-down}{del} ==> function Second() -> int ;; return 1 ;; end
+{down*3}{s-down}{c-c}{esc}{down*5}{c-v} ==> break ;; end ;; if a > 0 ;; b = 1 ;; end ;; a = b
+{down*3}{s-down}{s-down}{c-c}{esc}{down*2}{c-v} ==> break ;; end ;; if a > 0 ;; b = 1 ;; end ;; while a < 1 ;; break ;; end ;; a = b
+With no selection, Ctrl+C takes the cursor's line alone, and a lone block header pastes as an empty block.
+{down*9}{c-c}{c-v} ==> a = b ;; a = b ;; end
+{down*3}{c-c}{down*5}{c-v} ==> break ;; end ;; if a > 0 ;; end ;; a = b
+{down*5}{c-c}{c-v} ==> b = 1 ;; end
+{down*9}{a-up}{c-z} ==> end ;; a = b ;; end
+{down*9}{a-up}{c-z}{c-y} ==> break ;; a = b ;; end
+The mouse: a drag selects, and a press inside a selection drags it.
+{mdown:4}{mmove:7}{mup}{a-down} ==> float b = 2.0 ;; a = b ;; if a > 0
+{mdown:4}{mup}{sclick:7}{a-down} ==> float b = 2.0 ;; a = b ;; if a > 0
+{mdown:17}{mmove:18}{mup}{mdown:18}{mmove:14}{mup} ==> function Third() ;; printf(string format = "x") ;; end ;;  ;; function Second() -> int
+{mdown:17}{mmove:18}{mup}{mdown:18}{mmove:14}{mup}{c-z} ==> function Second() -> int ;; return 1 ;; end ;;  ;; function Third()
+{mdown:17}{mmove:18}{mup}{mdown:18}{mup}{a-down} ==> function Third() ;; printf(string format = "x")
+
+A refused move must not lose the document: the container rule is checked after the parse.
+doc @data int[] list\nfunction Fill()\n\tforeach int k in self.data.list\n\t\tprintf(string format = "x")\n\tend\n\tself.data.list.clear()\nend
+{down*4}{a-up} ==> printf(string format = "x") ;; end ;; self.data.list.clear() ;; end

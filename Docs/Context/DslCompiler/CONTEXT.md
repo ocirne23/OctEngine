@@ -104,7 +104,7 @@ function name([ref] <type> <paramName>, ...) [-> <returnType>]
 	name = <value>                   # assignment; also += -= *= /= %=
 	self.pos.y += 1                  # member-chain assignment (every hop must be writable)
 	return [<value>]
-	break
+	break                            # only inside a while / for / foreach, through any other blocks: a load error elsewhere
 end
 ```
 

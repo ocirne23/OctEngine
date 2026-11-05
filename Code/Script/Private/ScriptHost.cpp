@@ -426,6 +426,8 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     if (!compile(path, pdbPath, tempDll, errors))
     {
         Log::error("Script compile failed (" + path + "):\n" + errors);
+        if (forceRecompile)
+            pushCompileReport(path, false, false, errors);
         if (it != scripts.end()) return &it->second.entries;             // keep previous build
         ScriptModule* scriptModule = &scripts.emplace(key, CachedScript{}).first->second.entries; // cache the failure
         scriptModule->scriptPath = path;
@@ -444,6 +446,8 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     {
         FileSystem::remove(tempDll, true);
         Log::error("Script: could not place DLL (" + finalDll + ")");
+        if (forceRecompile)
+            pushCompileReport(path, false, false, "could not place DLL " + finalDll);
         slot.entries = ScriptModule{}; slot.dllPath.clear();
         return &slot.entries;
     }
@@ -455,6 +459,8 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     if (!loadDll(slot, finalDll))
     {
         Log::info("Script: DLL load failed, no exported symbols (" + finalDll + ")");
+        if (forceRecompile)
+            pushCompileReport(path, false, false, "it compiled, but exports no entry points");
         FileSystem::remove(finalDll, /*allowMainThread*/ true);
         slot.entries = ScriptModule{}; slot.dllPath.clear();
         retirePdbs(outDir, stem, pdbPath);
@@ -470,8 +476,87 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     sweepPendingPdbs();
 
     Log::info("Script loaded: " + path);
+    if (forceRecompile)
+        pushCompileReport(path, true, false, {});
     return &slot.entries;
 #endif
+}
+
+void ScriptHost::handleScriptReloadRequests(const oc::vector<oc::string>& paths)
+{
+    if (paths.empty())
+        return;
+    ProfileScope profileScope("Script Reloads", EProfileCategory::Script);
+    for (const oc::string& path : paths)
+    {
+#ifdef SCRIPTS_STATIC
+        startCompileCheck(path);
+#else
+        getOrLoad(path, true);
+#endif
+    }
+}
+
+void ScriptHost::pushCompileReport(const oc::string& path, bool success, bool rebuildNeeded, const oc::string& errors)
+{
+    const std::lock_guard lock(m_reportMutex);
+    m_compileReports.push_back(ScriptCompileReport{ path, success, rebuildNeeded, errors });
+}
+
+oc::vector<ScriptCompileReport> ScriptHost::takeCompileReports()
+{
+    const std::lock_guard lock(m_reportMutex);
+    oc::vector<ScriptCompileReport> reports = oc::move(m_compileReports);
+    m_compileReports.clear();
+    return reports;
+}
+
+bool ScriptHost::isCompileCheckRunning()
+{
+    const std::lock_guard lock(m_reportMutex);
+    return m_compileCheckRunning;
+}
+
+void ScriptHost::startCompileCheck(const oc::string& path)
+{
+    const std::lock_guard lock(m_reportMutex);
+    if (m_compileCheckRunning)
+    {
+        m_compileCheckPending = path;
+        return;
+    }
+    // The worker's last act is to clear the flag under this lock, so a thread seen as not running has nothing left to do.
+    if (m_compileCheckThread.joinable())
+        m_compileCheckThread.join();
+    m_compileCheckRunning = true;
+    m_compileCheckThread = std::thread(&ScriptHost::runCompileChecks, this, path);
+}
+
+void ScriptHost::runCompileChecks(oc::string path)
+{
+    for (;;)
+    {
+        const oc::string outDir = FileSystem::join(FileSystem::rootPath(), "Local/Scripts");
+        const oc::string checkPdb = FileSystem::join(outDir, FileSystem::stem(path) + ".check.pdb");
+        oc::string dll, errors;
+        const bool success = compile(path, checkPdb, dll, errors);
+        // Only the verdict is wanted: the running code comes from the App build.
+        if (!dll.empty())
+            FileSystem::remove(dll);
+        FileSystem::remove(checkPdb);
+        if (!success)
+            Log::error("Script compile failed (" + path + "):\n" + errors);
+
+        const std::lock_guard lock(m_reportMutex);
+        m_compileReports.push_back(ScriptCompileReport{ path, success, success, errors });
+        if (m_compileCheckPending.empty())
+        {
+            m_compileCheckRunning = false;
+            return;
+        }
+        path = oc::move(m_compileCheckPending);
+        m_compileCheckPending.clear();
+    }
 }
 
 void ScriptHost::unloadAll()
@@ -489,4 +574,9 @@ void ScriptHost::unloadAll()
 }
 
 ScriptHost::ScriptHost() {}
-ScriptHost::~ScriptHost() { unloadAll(); }
+ScriptHost::~ScriptHost()
+{
+    if (m_compileCheckThread.joinable())
+        m_compileCheckThread.join();
+    unloadAll();
+}
