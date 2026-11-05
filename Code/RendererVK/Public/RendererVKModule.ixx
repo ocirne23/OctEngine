@@ -12,5 +12,6 @@ export import :RenderParticleEmitter;
 export import :RenderForceEmitter;
 export import :RenderForceQuery;
 export import :Light;
+export import :EntityPreviewTypes;
 export import :RenderParams; // OceanParams + the GPU allocation report types
 export import :TreeRecords; // the world tree records' API types (Procedural's world trees hand the far volume their record types)

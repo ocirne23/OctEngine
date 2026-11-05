@@ -43,6 +43,8 @@ import :CloudPipeline;
 import :BakedWorldMap;
 import :SceneColor;
 import :DebugLinePipeline;
+import :EntityPreviewPipeline;
+import :EntityPreviewTypes;
 import :ParticlePipeline;
 import :TreeVolumePipeline;
 import :TreeRecordPool;
@@ -471,6 +473,7 @@ protected:
     RayTracingScene m_rt;
     GIProbePipeline m_giProbePipeline;
     DebugLinePipeline m_debugLinePipeline;
+    EntityPreviewPipeline m_entityPreviewPipeline;
     ParticlePipeline m_particlePipeline;
     // BAKED TREE RECORDS (RendererTrees.cpp, tree_cull.inc.glsl): the live sets (dead ones recycled by id). The culls
     // bind ONE set's static buffers (m_treeCullSet, bindTreeSet; a change re-records them) and build the
@@ -703,6 +706,14 @@ protected:
     glm::ivec2 m_windowSize;
     const void* m_imguiDrawData = nullptr;
     oc::atomic<const void*> m_imguiPendingDrawData = nullptr;
+    // The Entity Editor's preview. Parked like the ImGui snapshot: the widget pass submits, updateImGuiTextures promotes on main, present records.
+    std::mutex m_entityPreviewMutex;
+    EntityPreviewFrame m_entityPreviewPending;
+    oc::atomic<bool> m_entityPreviewHasPending = false;
+    EntityPreviewFrame m_entityPreviewFrame;
+    bool m_entityPreviewActive = false;                 // the panel submitted for this frame
+    uint64 m_entityPreviewImGuiId = 0;                  // the target's descriptor set, 0 until created
+    oc::atomic<uint64> m_entityPreviewTextureId = 0;    // published after the target's first record: only then is it in a readable layout
     Rect m_viewportRect = Rect();
     // Render resolution (see updateRenderExtent): the render-size targets, their scale from the swapchain, and
     // the scene's rect in them.

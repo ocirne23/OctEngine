@@ -56,3 +56,14 @@ const typename T::SpawnInfo* getSpawnInfo(const Entity* entity)
     const size_t idx = size_t(oc::popcnt(below));
     return idx < tmpl->spawnInfos.size() ? static_cast<const typename T::SpawnInfo*>(tmpl->spawnInfos[idx].get()) : nullptr;
 }
+
+// The same read on a template alone, no entity needed (the Entity Editor loads its documents from templates).
+export template <typename T>
+const typename T::SpawnInfo* getTemplateSpawnInfo(const EntitySpawnTemplate& tmpl)
+{
+    if (!(tmpl.archetype.typeBits & (1u << T::getId())))
+        return nullptr;
+    const uint16 below = uint16(tmpl.archetype.typeBits & ((1u << T::getId()) - 1));
+    const size_t idx = size_t(oc::popcnt(below));
+    return idx < tmpl.spawnInfos.size() ? static_cast<const typename T::SpawnInfo*>(tmpl.spawnInfos[idx].get()) : nullptr;
+}

@@ -1863,6 +1863,7 @@ void RendererState::recordCommandBuffers()
         ProfileScope sceneScope("Record scene secondaries", EProfileCategory::Renderer);
         recordSceneSecondaries(frameIdx);
         frameData.updated = true;
+        m_entityPreviewPipeline.invalidateTextures(frameIdx); // freed slots rewrite to the fallback here, like every other texture-array set
     }
 
     {
@@ -1941,6 +1942,15 @@ void RendererState::recordCommandBuffers()
             recordPrimaryVR(frameIdx, commandBuffer);
         else
             recordPrimaryDesktop(frameIdx, vkCommandBuffer);
+    }
+    // Outside the instance gate above: the preview draws nothing of the scene, so it works in an empty world too.
+    if (m_entityPreviewActive)
+    {
+        m_gpuProfiler.beginScope(vkCommandBuffer, "Entity preview");
+        m_entityPreviewPipeline.record(commandBuffer, frameIdx, m_entityPreviewFrame, m_meshInfos.items(),
+            Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(), m_materials.getBuffer());
+        m_gpuProfiler.endScope(vkCommandBuffer);
+        m_entityPreviewTextureId.store(m_entityPreviewImGuiId, oc::memory_order_release);
     }
     commandBuffer.end(); // "GPU Frame" stays open: recordPresentCommandBuffer closes it
 }

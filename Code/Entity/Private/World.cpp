@@ -982,10 +982,10 @@ oc::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const Ass
 
 void writeRenderSpawnInfo(const RenderComponent::SpawnInfo& info, AssetNode& out)
 {
-    if (!info.container)
+    if (info.containerName.empty())
         return;
     out.set("ObjectContainer", info.containerName);
-    out.set("Node", info.nodePath);
+    out.set("Node", info.nodePath.empty() ? oc::string("ROOT") : info.nodePath);
     AssetNode& typeNode = out.addChild("Type");
     typeNode.values.emplace_back(info.skinned ? "SkinnedMesh" : "StaticMesh");
     if (!info.rigType.empty())
@@ -1720,6 +1720,11 @@ oc::shared_ptr<const EntitySpawnTemplate> WorldState::getOrBuildPrefabTemplate(c
     return nullptr;
 }
 
+oc::shared_ptr<const EntitySpawnTemplate> World::buildDetachedTemplate(const AssetNode& declaration)
+{
+    return buildInlineTemplate(declaration);
+}
+
 oc::shared_ptr<const EntitySpawnTemplate> World::resolveAssetTemplate(const oc::string& path)
 {
     // Runtime callers pass Assets/-relative names ("Entities/Game/x.pre") - pure LEXICAL
@@ -1814,63 +1819,61 @@ void WorldState::handleEntityChange(EntityChange& change, const Camera& camera, 
         rep->newParent ? self().removeRootEntity(rep->entity.get()) : self().addRootEntity(oc::move(rep->entity));
     else if (auto* sp = oc::get_if<EntityChange::SavePrefab>(&change.type))
     {
-        if (savePrefab(sp->root.get(), sp->path, sp->text))
+        if (savePrefab(sp->root.get(), sp->path))
             invalidatePrefab(FileSystem::stem(sp->path));
     }
-    else if (auto* op = oc::get_if<EntityChange::OpenPrefabForEdit>(&change.type))
+    else if (auto* st = oc::get_if<EntityChange::SavePrefabText>(&change.type))
     {
-        EntityPtr e = self().spawnAssetFile(op->path, Transform(), false);
-        if (e)
+        if (savePrefabText(st->path, st->text))
         {
-            e->setPrefabInstance(false); // unpack: the Entity Editor edits it freely
-            self().addRootEntity(e);
-            if (m_onPrefabOpened)
-                m_onPrefabOpened(e, op->path);
+            const oc::string name = FileSystem::stem(st->path);
+            invalidatePrefab(name);
+            if (st->updateInstances)
+                respawnPrefabInstances(name);
         }
     }
-    else if (auto* np = oc::get_if<EntityChange::NewPrefab>(&change.type))
+}
+
+static void collectPrefabInstances(const EntityPtr& entity, const oc::string& prefabName, oc::vector<EntityPtr>& out)
+{
+    if (entity->isPrefabInstance() && entity->getPrefabName() == prefabName)
     {
-        EntityPtr e = self().createEmptyEntity(np->displayName);
-        self().addRootEntity(e);
-        if (m_onPrefabOpened)
-            m_onPrefabOpened(e, "");
+        out.push_back(entity); // its subtree comes from the same template: replaced with it
+        return;
     }
-    else if (auto* rs = oc::get_if<EntityChange::RespawnEntity>(&change.type))
+    if (SceneComponent* scene = getComponent<SceneComponent>(entity.get()))
+        for (const EntityPtr& child : scene->children)
+            collectPrefabInstances(child, prefabName, out);
+}
+
+// Replaces every live instance of a prefab from its rebuilt template, in place: same pose, same parent, same sibling slot.
+void WorldState::respawnPrefabInstances(const oc::string& name)
+{
+    const oc::shared_ptr<const EntitySpawnTemplate> tmpl = getOrBuildPrefabTemplate(name);
+    if (!tmpl)
+        return;
+    oc::vector<EntityPtr> instances;
+    for (const EntityPtr& root : m_rootEntities)
+        collectPrefabInstances(root, name, instances);
+
+    for (const EntityPtr& oldEntity : instances)
     {
-        // Entity::create() only stores a raw, non-owning pointer to the template - keep it alive for
-        // as long as the entity might reference it (World's own template caches do the same for
-        // prefabs; this one is ad-hoc, so nothing else would hold onto it).
-        self().keepTemplateAlive(rs->tmpl);
-
-        Transform t(rs->oldEntity->pos, rs->oldEntity->scale, rs->oldEntity->rot);
-        // Pre-set the frozen flag so component spawn already sees it - the respawn attaches to its parent
-        // only further down, so create() can't inherit it from there.
-        const uint8 initialFlags = rs->oldEntity->isFrozen() ? uint8(EEntityFlag_Frozen) : uint8(0);
-        EntityPtr newEntity = Entity::create(*rs->tmpl, t, initialFlags);
-        newEntity->setPrefabInstance(rs->oldEntity->isPrefabInstance()); // keep the editor's unpacked state despite the template's prefabName
-
-        // Preserve any existing children (the Entity Editor commits one entity's own component set at
-        // a time; whatever was already parented under it stays put).
-        if (SceneComponent* oldSc = getComponent<SceneComponent>(rs->oldEntity.get()))
-            if (SceneComponent* newSc = getComponent<SceneComponent>(newEntity.get()))
-                newSc->adoptChildren(*oldSc);
-        newEntity->refreshTreeCullBounds(); // RootOnly: create() measured the tree before the children arrived
-
-        // Re-attach where the old entity was: a root (in m_rootEntities) or a child (in its parent's
-        // SceneComponent::children) - replace it in place so siblings/order aren't disturbed.
-        if (Entity* parent = rs->oldEntity->parent)
+        EntityPtr newEntity = Entity::create(*tmpl, Transform(oldEntity->pos, oldEntity->scale, oldEntity->rot));
+        if (oldEntity->getName() != newEntity->getName())
+            newEntity->setName(oldEntity->getName()); // a name given to this instance
+        if (!oldEntity->isEnabled())
+            newEntity->setEnabled(false);
+        if (Entity* parent = oldEntity->parent)
         {
             newEntity->parent = parent;
-            if (SceneComponent* parentSc = getComponent<SceneComponent>(parent))
-                parentSc->replaceChild(rs->oldEntity.get(), newEntity);
+            if (SceneComponent* parentScene = getComponent<SceneComponent>(parent))
+                parentScene->replaceChild(oldEntity.get(), newEntity);
         }
         else
         {
-            oc::erase_if(m_rootEntities, [&](const EntityPtr& e) { return e.get() == rs->oldEntity.get(); });
+            self().removeRootEntity(oldEntity.get());
             self().addRootEntity(newEntity);
         }
-
-        if (m_onEntityRespawned)
-            m_onEntityRespawned(rs->oldEntity, newEntity);
     }
+    self().releaseBatch(oc::move(instances));
 }

@@ -650,6 +650,7 @@ void RendererState::initBindlessTextures()
             m_particlePipeline.resizeTextureDescriptors(count);
             m_decalPipeline.resizeTextureDescriptors(count);
             m_clutterPipeline.resizeTextureDescriptors(count);
+            m_entityPreviewPipeline.resizeTextureDescriptors(count);
             for (PerFrameData& perFrame : m_perFrameData)
             {
                 for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
@@ -669,6 +670,7 @@ void RendererState::initBindlessTextures()
             m_particlePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_decalPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_clutterPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
+            m_entityPreviewPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
         });
 }
 

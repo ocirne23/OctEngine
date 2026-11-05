@@ -997,6 +997,61 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
     return node;
 }
 
+Sphere ObjectContainer::appendPreviewMeshes(NodeSpawnIdx idx, bool skinned, const Transform& world, const glm::vec3& tint, bool highlighted, oc::vector<EntityPreviewMesh>& out) const
+{
+    if (skinned && m_isSkinned)
+    {
+        Sphere bounds{ glm::vec3(0.0f), 0.0f };
+        for (uint32 k = 0; k < m_numSkinnedMeshes; ++k)
+        {
+            const RendererVKLayout::SkinnedMeshSource& src = Globals::rendererVK.getSkinnedMeshSource(m_baseSkinnedMeshIdx + k);
+            EntityPreviewMesh& mesh = out.emplace_back();
+            mesh.world = world;
+            mesh.tint = tint;
+            mesh.highlighted = highlighted;
+            mesh.materialIdx = uint16(m_baseMaterialInfoIdx + src.materialLocalIdx);
+            mesh.indexCount = src.indexCount;
+            mesh.firstIndex = src.firstIndex;
+            mesh.vertexOffset = int32(src.baseVertexOffset);
+            Sphere meshBounds = src.bounds;
+            bounds.combineSphere(meshBounds);
+        }
+        bounds.pos = world.transformPoint(bounds.pos);
+        bounds.radius *= world.scale;
+        return bounds;
+    }
+
+    if (idx >= m_nodeMeshRanges.size())
+        idx = NodeSpawnIdx_ROOT;
+    if (m_nodeMeshRanges.empty())
+        return Sphere{ world.pos, 0.0f };
+    // The same rebase as spawnNodeForIdx: a sub-node's baked offsets are relative to the container root.
+    const bool rebase = idx != NodeSpawnIdx_ROOT;
+    const Transform invNode = rebase ? m_nodeRootTransforms[idx].inverse() : Transform();
+    const NodeMeshRange& range = m_nodeMeshRanges[idx];
+    for (uint32 i = 0; i < range.numNodes; ++i)
+    {
+        const uint32 meshInstanceIdx = range.startIdx + i;
+        const NodeInfo& nodeInfo = m_nodeInfos[meshInstanceIdx];
+        const Transform& offset = m_meshInstanceOffsets[meshInstanceIdx].transform;
+        EntityPreviewMesh& mesh = out.emplace_back();
+        mesh.world = composeTransform(world, rebase ? invNode * offset : offset);
+        mesh.tint = tint;
+        mesh.highlighted = highlighted;
+        mesh.materialIdx = uint16(m_baseMaterialInfoIdx + nodeInfo.materialInfoIdx);
+        mesh.meshIdx = uint16(m_baseMeshInfoIdx + nodeInfo.meshInfoIdx);
+    }
+    Sphere bounds = m_nodeBounds[idx];
+    if (rebase)
+    {
+        bounds.pos = invNode.transformPoint(bounds.pos);
+        bounds.radius *= invNode.scale;
+    }
+    bounds.pos = world.transformPoint(bounds.pos);
+    bounds.radius *= world.scale;
+    return bounds;
+}
+
 void ObjectContainer::getRootTransformForIdx(NodeSpawnIdx idx, Transform& transform)
 {
     transform = m_meshInstanceOffsets[m_nodeMeshRanges[idx].startIdx].transform;

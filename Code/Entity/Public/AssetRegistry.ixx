@@ -17,6 +17,7 @@ public:
     // For editor tooling (the Entity Editor) to offer searchable lists.
     const oc::unordered_map<oc::string, ObjectContainerDesc>& getObjectContainers() const { return m_objectContainers; }
     const oc::unordered_map<oc::string, AnimatorDesc>& getAnimators() const { return m_animators; }
+    const oc::unordered_map<oc::string, oc::string>& getPrefabs() const { return m_prefabs; }
 };
 
 export namespace Globals

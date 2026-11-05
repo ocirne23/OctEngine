@@ -94,7 +94,6 @@ See [Entity](Context/Entity/CONTEXT.md).
   (no shadow / GI); a visible entity past the outer radius is not selected (top-down assumption).
 * With the body disable off, a parked body woken by a contact moves without its entity.
 * RootOnly cull bounds use the rest pose; a limb swing can go outside them.
-* The Entity Editor Cull Mode combo respawns only the selected entity, not its children.
 * No "children changed" hook in SceneComponent (`addChild` / `removeChild` / ... are the place).
 * A bad `HumanoidAnimator` limb setup is only a warning; the model is silently absent.
 * SceneAnimatorComponent is PARKED. To revive: the checklist in `SceneAnimatorComponent.ixx`, a
@@ -359,9 +358,11 @@ See [Particle](Context/Particle/CONTEXT.md).
 
 See [UI](Context/UI/CONTEXT.md), [Input](Context/Input/CONTEXT.md), [App](Context/App/CONTEXT.md).
 
-* KNOWN ISSUE: EntityEditor `commitRespawn` draft builds run on the job and can import a container
-  that is not cached yet.
-* Entity Editor: physics, animator and script data are respawn-only.
+* Entity Editor preview: no animation playback (bind pose, HumanoidAnimator rest pose), no particles and no force shells (an
+  overlay only), no move / rotate gizmo in the image, no ground shadow.
+* Entity Editor: no component copy / paste, no layer list for Physics (`PhysicsLayers` keeps its names private), the
+  HumanoidAnimator bones are text only, no play button for an Audio clip.
+* `EEntityFlag_Frozen` has no setter left now that the Entity Editor's document is data: remove it with its checks, or use it.
 * ImGui has no viewports.
 * Input follow-up: check that drags leaving the window still work after the cross-thread
   cursor/capture change.

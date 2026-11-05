@@ -99,10 +99,6 @@ public:
         return changes;
     }
 
-    // Forwards the entity main.cpp just spawned/respawned for an EntityEditor request into the panel.
-    void onOpened(EntityPtr root, const oc::string& path) { m_entityEditor.onOpened(root, path); }
-    void onEntityRespawned(EntityPtr oldEntity, EntityPtr newEntity) { m_entityEditor.onRespawned(oldEntity, newEntity); }
-
     // Script paths the DSL Script Editor asked the host to (re)compile + hot-reload this frame -- every path it
     // just saved (a save always writes fresh generated C++, so it's ready to (re)compile the moment it lands).
     oc::vector<oc::string> takeScriptReloadRequests()

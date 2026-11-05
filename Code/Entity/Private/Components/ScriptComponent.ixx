@@ -3,6 +3,7 @@ export module Entity:ScriptComponent;
 import :Entity;
 import Core;
 import Core.Transform;
+import File;
 import Script;
 
 export struct ScriptComponent;
@@ -104,3 +105,5 @@ export struct ScriptComponent
 };
 
 export const ScriptComponent::SpawnInfo* getScriptSpawnInfo(const Entity* entity);
+// Serializes a script spawn recipe into a "Component Script" node.
+export void writeScriptSpawnInfo(const ScriptComponent::SpawnInfo& info, AssetNode& out);

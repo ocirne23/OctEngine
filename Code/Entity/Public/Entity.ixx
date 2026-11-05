@@ -189,27 +189,20 @@ export struct EntityChange
     {
         EntityPtr   root;
         oc::string path;
-        oc::string text; // pre-serialized document (Entity Editor's transform draft); empty → serialize root
     };
-    struct OpenPrefabForEdit
+    // The Entity Editor's save: its document is data, not an entity. updateInstances also respawns the prefab's live instances in the world.
+    struct SavePrefabText
     {
-        oc::string path; // .pre to load and unpack for the Prefab Editor
-    };
-    struct NewPrefab
-    {
-        oc::string displayName; // blank editable entity, name only (no source file yet)
-    };
-    struct RespawnEntity
-    {
-        EntityPtr oldEntity;
-        oc::shared_ptr<const EntitySpawnTemplate> tmpl; // freshly assembled from the entity's edited component set
+        oc::string path;
+        oc::string text;
+        bool updateInstances = false;
     };
     struct SetEnabled
     {
         EntityPtr entity;
         bool enabled;
     };
-    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, OpenPrefabForEdit, NewPrefab, RespawnEntity, SetEnabled> type;
+    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, SavePrefabText, SetEnabled> type;
 };
 
 // ---- Inline bodies ----

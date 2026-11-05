@@ -9,7 +9,7 @@ ImGui (docking branch) for all UI. Links Entity, RendererVK and Script (+ imgui 
 
 `Globals::ui` sits in init_seg `OC_SEG_UI` (XCU9) and **destructs before World and every other
 entity-holding global** (only Nav and the procedural systems go earlier): the panels hold EntityPtrs (Scene
-selection, the Entity Editor document, a pending prefab save) and EntityChange queues, which must be
+selection, a pending prefab save) and EntityChange queues, which must be
 released while everything an entity destructor touches is still alive.
 
 **The UI never mutates the world directly.** Panel mutations flow back as an `EntityChange` queue
@@ -41,8 +41,8 @@ phases.
 > uncapped or GPU-light, where the fence never blocks.
 
 The pass reads the frame's POST-sim state and no sim work overlaps it, **so there are no torn-read
-caveats**; the one writer near it is the gizmo / EntityEditor writing entity fields while main idles
-in the fence wait.
+caveats**; the one writer near it is the gizmo writing entity fields while main idles in the fence
+wait.
 
 ## `UI::update` — the main-thread half
 
@@ -64,8 +64,9 @@ Work the panels collected but must NOT run on a worker:
 
 * **TweakPanel `onChange` callbacks** (`flushDeferredCallbacks`) — they re-record renderers, reload
   shaders with `waitIdle` and poke box3d, so the panel only COLLECTS changed vars (and lock toggles).
-* **The Entity Editor's container imports** (`flushContainerLoads`) — panels use lookup-only
-  `World::findLoadedContainer`, and a miss queues the name, because an import creates GPU resources.
+* **The Entity Editor's document loads, dropped prefab children and container imports**
+  (`EntityEditor::flushMainThreadWork`) — panels use lookup-only `World::findLoadedContainer`, and a miss
+  queues the name, because an import creates GPU resources.
 
 Panel enable-toggles are `EntityChange::SetEnabled` for the same reason: `setEnabled` walks the
 subtree suspending physics bodies, which are main-thread-only box3d writes.
@@ -99,12 +100,6 @@ frame N+1, before the present that draws it.
 the snapshot as PENDING, and `updateImGuiTextures()` promotes it to what present records. Otherwise a
 fast pass that finished before present N recorded would be drawn a frame EARLY, with its textures still
 create requests (on frame 0 the atlas always is: imgui's `GetTexID` assert).
-
-## Known sharp edge
-
-EntityEditor's `commitRespawn` draft builds (`World::build*SpawnInfo`) run on the job and can import a
-container not yet cached — **only when authoring a NEW container name**, since the edited entity's own
-container is always already loaded.
 
 ---
 
@@ -160,7 +155,7 @@ spot.
 | **Script Editor** | The DSL text editor (autocomplete-driven). It handles RAW key events through `UI::handleKeyEvent`, which is why `isScriptEditorFocused()` exists — see the Input capture gate. A save queues a compile + hot-reload request (`takeScriptReloadRequests`). **The highlighted candidate is only a suggestion**: a space, an operator or a separator on an empty term never picks it, only typing, an arrow key, Tab or Enter do. Ctrl+Z / Ctrl+Y step through whole-document text snapshots reloaded through the loader, one per committed change, sidebar edits included; a change the loader would refuse is rolled back there, with its reason in the status line. Ctrl+X and Delete remove the line's statement, under Backspace's guards. **Line selection and moving:** Shift+Up/Down, a mouse drag or Shift+click select whole statements (a selection never cuts a block in half); Alt+Up/Down or a drag from inside the selection move them, with no selection the statement under the cursor. A statement steps one visible line, into and out of blocks and branches, never out of its function; a function swaps with its neighbour and the blank lines between stay. A move edits the expanded text and reparses it (`replaceDocumentLines`), so the loader refuses what breaks a reference or takes a `break` out of its loop, and `countCompileProblems` adds the one rule it does not hold: a typed function must end in a return. A selection's Delete / Ctrl+X go the same way. With no selection, Ctrl+C copies the cursor's line alone; a block header pasted without its `end` lands as an empty block. While composing, the arrow, Home and End keys do nothing once something is typed (Esc cancels). The status line under the text says what the stage expects. **Anything refused — a paste, a delete, a move, a save, an open, a sidebar edit — shows as a red box above the cursor** (`showError`, no focus, no input), until the next key, a click in the text or 8 s. So does a save that does not compile (`pollCompileReports`, ScriptHost's `takeCompileReports`, 30 s); small remarks on a key stay in the status line (`setNotice`). The editor's refusals do not go to the log. ` *` beside the file name marks unsaved changes. **Iterate on it with [ScriptEditorSim](../ScriptEditorSim/CONTEXT.md).** |
 | **Text Editor** | `UI:TextEditor` (plain `.txt` editing) compiles but is **NOT wired in**: `UI` holds no instance, and nothing drains the AssetBrowser's `takeTextOpenRequest`. |
 | **Log** (`OutputLog`) | `Core.Log` view with filters and search. |
-| **Entity Editor** | Authors a `.pre` document. See below. |
+| **Entity Editor** | Authors a `.pre` as plain data beside a preview image, with nothing in the world. See below. |
 | **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Settings.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Settings. A fold that is a **lock**'s category (Settings `TweakLock`) carries a right-aligned **Lock / Partly locked / Locked** toggle (`ImGuiTreeNodeFlags_AllowOverlap`) that sets every row under it; each covered row has its own **`L` / `U`** button in front (`drawTweakVar` with `deferredLocks`; the Settings page passes none). A locked row draws read-only (`BeginDisabled`, so the Settings page greys it too). Clicks are COLLECTED (`TweakLockToggle`) like an `onChange` and applied by `flushDeferredCallbacks` on main (`TweakRegistry::setLocked` / `setVarLocked`). **Search bar** on top (Ctrl+F focuses, Escape / `X` clears): space-separated terms, case-insensitive, ALL must hit the name, category path or group name. While it has terms the tree is replaced by a flat result list — one group-tinted `SeparatorText` per category path, matches highlighted in the row names (`drawTweakVar`'s `highlight`), `matches / total` inside the box — so the tree's fold state stays untouched. The list below the bar is a child window, so the bar stays put while scrolling. |
 | **Profiler**, **Memory** | |
 
@@ -170,18 +165,32 @@ The docked set lives inside a `"Root"` window with a dockspace (its first-time l
 
 ## Entity Editor
 
-Authors a `.pre`: name and transform plus one section per component, bound to draft `SpawnInfo`s.
+Authors a `.pre`. Source: `Private/EntityEditor/` - `EntityDocument` (the data, its load and its text), `EntityEditor.cpp` (open / save, undo, the
+toolbar, the hierarchy), `EntityEditorSections.cpp` (the properties form), `EntityEditorPreview.cpp` (the preview's scene, camera and overlays).
 
-**Changes queue a `RespawnEntity`** (`commitRespawn`), since most SpawnInfo fields are spawn-only.
-Drag widgets use `commitDrag(...)`, which also calls `applyDraftsLive()` per change frame — **so the
-viewport tracks the drag and there is ONE respawn on release.**
+**THE DOCUMENT IS DATA, NOT AN ENTITY.** `EntityDocNode` is a value type: name, transform, flags, one plain `SpawnInfo` per component, and its children by value.
+Opening a prefab spawns nothing, runs no script, creates no body and adds no render node. **The world sees only a save.** "Open Selected" reads a scene entity
+(its prefab file, or for one with no file, `serializePrefabText` of what it is now) and never changes it.
 
-`applyDraftsLive` only touches what is re-appliable in place: `RenderComponent::localTransform`,
-`ForceEmitter` setters, and `LightComponent`'s list. **Physics, animator and script data stay
-respawn-only.**
+* **Load:** the file's text is read on the worker, then `flushMainThreadWork` parses it and calls `World::buildDetachedTemplate` (main: it can import containers,
+  and it reads this text, past the prefab cache). `makeDocNode` copies the template out; the template is dropped.
+* **Save:** `serializeEntityDoc` writes the same text as Prefab.cpp through the same `write*SpawnInfo` functions; `EntityChange::SavePrefabText` writes it on main,
+  invalidates the prefab's template, and with "Update scene on save" respawns its live instances in place (`WorldState::respawnPrefabInstances`).
+* **A `Prefab <name>` child** keeps its parsed components and children for the preview, but they are read-only and never written: it saves as the reference plus
+  its name, transform and enabled overrides. Unpacking = clearing `prefabRef`.
+* **`HumanoidAnimator` is carried through whole** (a shared `SpawnInfo` with its source `AssetNode`): the bones are not editable here.
+* **Undo:** every edit calls `markEdited`; when no widget is active any more, `commitPendingEdit` pushes the previous copy of the tree. One drag or one typed name
+  is one step, and the dirty flag (the text against the baseline) is recomputed only there, never per frame.
+* **Structural tree edits** run after the tree walk (`m_deferredTreeAction`): the walk iterates the vectors they change.
 
-`UI::onOpened` / `onEntityRespawned` (World's `setOnPrefabOpened` / `setOnEntityRespawned` callbacks,
-installed by main) forward the spawned entity back into the panel.
+**The preview** walks the document every frame (`buildPreviewScene`) into an `EntityPreviewFrame` and submits it to the renderer: see "The Entity Editor's preview"
+in the [RendererVK CONTEXT](../RendererVK/CONTEXT.md). So every edit shows at once, with no respawn. A container not loaded yet is queued for
+`flushMainThreadWork` and shows a frame later. It draws the bind pose of skinned meshes and the rest pose of a HumanoidAnimator. The renderer's target is 2048 px
+and the view draws at 2:1 (`pixelScale`), so ImGui's bilinear sample antialiases it. Physics shapes, lights and force bubbles have no pixels of their own: they are
+`ImDrawList` lines over the image (`GizmoPainter`), on top of everything, so the preview's own light never changes with what is authored. A click picks the
+smallest bounds sphere under the cursor, and everything inside a prefab reference picks as the reference.
+
+`collectDocProblems` lists what would not work at spawn; a row with a problem is amber in the tree, and the lines show above its properties.
 
 ## Chat (`UI:ChatPanel`)
 

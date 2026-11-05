@@ -2,10 +2,14 @@ export module RendererVK:ObjectContainer;
 
 import Core;
 import Core.fwd;
+import Core.glm;
+import Core.Sphere;
+import Core.Transform;
 import Animation;
 
 import File.fwd;
 
+import :EntityPreviewTypes;
 import :Layout;
 import :ObjectContainerState; // the load steps and the bookkeeping
 
@@ -71,6 +75,11 @@ public:
     bool isSkinned() const { return m_isSkinned; }
     uint32 getNumSkeletonBones() const { return m_numSkeletonBones; }
     RenderNode spawnSkinnedNode(const Transform& transform);
+
+    // ---- The Entity Editor's preview: what a spawn would draw, as plain data, creating nothing ----
+
+    // Appends one mesh per instance of the node (skinned: the bind pose of every skinned mesh) placed at `world`, and returns the bounds in world space.
+    Sphere appendPreviewMeshes(NodeSpawnIdx idx, bool skinned, const Transform& world, const glm::vec3& tint, bool highlighted, oc::vector<EntityPreviewMesh>& out) const;
 
     // The container's own copy of the source skeleton (null if not skinned). Animators retarget their clips against this by bone name.
     const Skeleton* getSkeleton() const { return m_skeleton.get(); }

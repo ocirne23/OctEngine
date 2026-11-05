@@ -422,3 +422,18 @@ const ScriptComponent::SpawnInfo* getScriptSpawnInfo(const Entity* entity)
 {
     return getSpawnInfo<ScriptComponent>(entity);
 }
+
+void writeScriptSpawnInfo(const ScriptComponent::SpawnInfo& info, AssetNode& out)
+{
+    if (!info.scriptPath.empty())
+        out.set("Path", info.scriptPath);
+    out.set("Enabled", info.enabled);
+    // The AUTHORED initial values only (the Entity Editor's). A live edit from the Properties panel writes the running block and never reaches SpawnInfo, so
+    // it deliberately isn't saved here.
+    if (!info.initialValues.empty())
+    {
+        AssetNode& dataNode = out.addChild("Data");
+        for (const ScriptComponent::InitialFieldValue& field : info.initialValues)
+            dataNode.set(field.name, field.value);
+    }
+}

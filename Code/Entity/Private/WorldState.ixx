@@ -72,6 +72,7 @@ protected:
     // container was loaded before physics asked for it.
     bool ensureCollisionSource(const oc::string& containerName);
     void handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect); // one EntityChange (handleEntityChanges runs them all)
+    void respawnPrefabInstances(const oc::string& name); // every live instance of the prefab, from its rebuilt template
 
     oc::unordered_map<oc::string, oc::unique_ptr<ObjectContainer>> m_containers;
     CollisionCache m_collision; // collision snapshots + BVHs + occluders derived from loaded containers
@@ -197,7 +198,5 @@ protected:
     int (&m_simLodStats)[4] = Globals::settings.world.simLodStats; // last pass's per-tier entity counts (live readout tweaks)
     JobCost m_spawnBatchCost{ 20000 }; // spawnBatch auto-grain seed (~20us/entity until measured)
     JobCost m_destroyBatchCost{ 10000 }; // releaseBatch auto-grain seed
-    oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;
-    oc::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
     oc::function<void(const Entity*)> m_onRootEntityRemoved;
 };

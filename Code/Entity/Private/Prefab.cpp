@@ -103,19 +103,7 @@ static void writeEntityBody(Entity* entity, AssetNode& node, const oc::string& t
         else if (id == EComponentID_Script)
         {
             if (const ScriptComponent::SpawnInfo* si = getScriptSpawnInfo(entity))
-            {
-                if (!si->scriptPath.empty())
-                    comp.set("Path", si->scriptPath);
-                comp.set("Enabled", si->enabled);
-                // The AUTHORED initial values only (the Entity Editor's). A live edit from the Properties panel
-                // writes the running block and never reaches SpawnInfo, so it deliberately isn't saved here.
-                if (!si->initialValues.empty())
-                {
-                    AssetNode& dataNode = comp.addChild("Data");
-                    for (const ScriptComponent::InitialFieldValue& field : si->initialValues)
-                        dataNode.set(field.name, field.value);
-                }
-            }
+                writeScriptSpawnInfo(*si, comp);
         }
         else if (id == EComponentID_Scene)
             if (SceneComponent* sc = getComponent<SceneComponent>(entity))
@@ -240,20 +228,51 @@ oc::string serializePrefabText(Entity* root, const oc::string& id)
     return writeAssetText(doc);
 }
 
-bool savePrefab(Entity* root, const oc::string& path, const oc::string& text)
+bool savePrefab(Entity* root, const oc::string& path)
 {
     if (!root)
         return false;
     const oc::string id = FileSystem::stem(path);
     if (prefabWouldCycle(root, id))
     {
-        Log::warning("Prefab: refusing to save '" + id + "' â€” it contains a prefab instance of itself (cycle)");
+        Log::warning("Prefab: refusing to save '" + id + "': it contains a prefab instance of itself (cycle)");
         return false;
     }
 
-    if (!FileSystem::writeFileStr(path, text.empty() ? serializePrefabText(root, id) : text))
+    if (!FileSystem::writeFileStr(path, serializePrefabText(root, id)))
         return false;
 
+    Globals::assetRegistry.addPrefab(id, path);
+    return true;
+}
+
+bool prefabTextWouldCycle(const oc::string& text, const oc::string& id)
+{
+    AssetNode doc;
+    oc::string error;
+    if (!parseAssetText(text, doc, error))
+        return false;
+    oc::vector<oc::string> refs;
+    for (const AssetNode& decl : doc.children)
+        if (keyEq(decl.key, "Prefab"))
+            collectAssetPrefabRefs(decl, refs);
+    oc::unordered_set<oc::string> visited;
+    for (const oc::string& ref : refs)
+        if (prefabFileReaches(ref, id, visited))
+            return true;
+    return false;
+}
+
+bool savePrefabText(const oc::string& path, const oc::string& text)
+{
+    const oc::string id = FileSystem::stem(path);
+    if (prefabTextWouldCycle(text, id))
+    {
+        Log::warning("Prefab: refusing to save '" + id + "': it contains a prefab instance of itself (cycle)");
+        return false;
+    }
+    if (!FileSystem::writeFileStr(path, text))
+        return false;
     Globals::assetRegistry.addPrefab(id, path);
     return true;
 }

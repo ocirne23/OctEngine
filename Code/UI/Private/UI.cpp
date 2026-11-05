@@ -79,7 +79,7 @@ void UI::flushMainThreadWork()
     // After the widget pass joined: callbacks and imports the panels deferred because they are
     // main-thread work (renderer/physics onChange effects, container imports creating GPU meshes).
     m_tweakPanel.flushDeferredCallbacks();
-    m_entityEditor.flushContainerLoads();
+    m_entityEditor.flushMainThreadWork();
 }
 
 void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
@@ -396,7 +396,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         ProfileScope scope("Panel: Entity Editor", EProfileCategory::UI);
         if (ImGui::Begin("Entity Editor"))
         {
-            m_entityEditor.render(m_sceneView.getSelected());
+            m_entityEditor.render(m_sceneView.getSelected(), m_viewportRect);
 
             if (ImGui::BeginDragDropTargetCustom(
                 ImRect(ImGui::GetWindowPos(),
@@ -414,6 +414,12 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         // Route the entity editor's "Select Prefab" action into the asset browser.
         if (oc::string revealPath = m_entityEditor.takeRevealRequest(); !revealPath.empty())
             m_assetBrowser.selectFile(revealPath);
+        // ...and its "Open" beside a script into the Script Editor.
+        if (oc::string scriptPath = m_entityEditor.takeScriptOpenRequest(); !scriptPath.empty())
+        {
+            m_scriptEditor.requestOpen(scriptPath);
+            ImGui::SetWindowFocus("Script Editor");
+        }
     }
 
     {

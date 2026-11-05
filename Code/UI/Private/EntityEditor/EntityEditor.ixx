@@ -1,35 +1,23 @@
 export module UI:EntityEditor;
 
 import Core;
+import Core.Rect;
 import Core.Transform;
+import Core.glm;
 import Entity;
+import RendererVK;
+import :EntityDocument;
 
-// Panel for defining an entity's components (Render/Animator/Physics/Audio/Script) and saving/loading it
-// as a .pre file, instead of hand-editing the text. The entity being edited is spawned as a real root
-// entity in the running world (like everything else in this engine) and unpacked so it's freely editable.
-//
-// Components are inline-allocated in one buffer sized by typeBits at entity-creation time - there is no
-// live add/remove/resize API. So adding/removing a component, or committing a field edit, assembles a
-// fresh EntitySpawnTemplate from the entity's current component set and respawns it in place (see
-// commitRespawn()). This reuses the exact machinery Save/Load already rely on (World's buildXSpawnInfo
-// resolvers), just driven directly instead of through a file.
+// Authors a .pre as a DOCUMENT OF PLAIN DATA (EntityDocNode), beside a preview that draws it into its own image. Nothing of the document is in the live world:
+// opening a prefab spawns nothing, runs no script and creates no physics body. The world only sees a save (and, when asked, a respawn of its live instances).
 export class EntityEditor
 {
 public:
 
-	// sceneSelection is the main Scene panel's current selection (not this editor's own tree selection),
-	// used only to gate/drive the "Open Selected" toolbar button.
-	void render(Entity* sceneSelection);
+	// sceneSelection: the main Scene panel's selection, for "Open Selected". viewportRect: where "Spawn in Scene" aims.
+	void render(Entity* sceneSelection, const Rect& viewportRect);
 
-	// Called (via UI) once main.cpp has fulfilled an OpenPrefabForEdit/NewPrefab EntityChange and the
-	// entity actually exists in the world's root list.
-	void onOpened(EntityPtr root, const oc::string& path);
-
-	// Called once main.cpp has fulfilled a RespawnEntity change (a component was added/removed/edited).
-	void onRespawned(EntityPtr oldEntity, EntityPtr newEntity);
-
-	// Queues an open/new request, going through the unsaved-changes guard first. Safe to call from the
-	// toolbar, a drag-drop of ASSET_FILE onto the panel, or the asset browser's "Edit Entity" action.
+	// Queues an open / new request, through the unsaved-changes guard. From the toolbar, a drag-drop of a .pre onto the panel, or the asset browser's "Edit Entity".
 	void requestOpen(const oc::string& path);
 	void requestNew(const oc::string& name);
 
@@ -42,141 +30,217 @@ public:
 		m_changes.clear();
 	}
 
-	// "Select Prefab" toolbar button: the UI drains this and selects the .pre in the asset browser.
 	oc::string takeRevealRequest() { return oc::move(m_revealRequest); }
-	// Containers the render section needed but that were not loaded yet: the widget pass runs off
-	// the main thread and an import creates renderer resources (main-thread work), so render()
-	// only queues the name and UI::flushMainThreadWork calls this on main - the node list fills in
-	// a frame later.
-	void flushContainerLoads();
+	oc::string takeScriptOpenRequest() { return oc::move(m_scriptOpenRequest); }
+
+	// MAIN THREAD (UI::flushMainThreadWork): what the off-main widget pass cannot do, because a template build or a container import creates renderer resources -
+	// the document loads, the dropped prefab children and the containers the document names. Each lands a frame later.
+	void flushMainThreadWork();
 
 private:
 
-	void renderToolbar();
-	void renderOverwritePopup();
-	void renderUnsavedPopup();
-	void renderTree();
-	void renderTreeNode(Entity* node);
-	void renderNameAndTransform();
-	void renderComponents();
-	void renderSceneSection();
-	void renderRenderSection();
-	void renderAnimatorSection();
-	void renderPhysicsSection();
-	void renderAudioSection();
-	void renderParticleSection();
-	void renderForceSection();
-	void renderLightSection();
-	void renderNetworkSection();
-	void renderScriptSection();
-	// The INITIAL values of the picked script's exposed ScriptData fields -- serialized into the .pre and
-	// applied at every spawn, unlike the Properties panel's live edits of the same fields.
-	void renderScriptDataSection();
+	// ---- The document ----
 
-	// Editing an already-live scene entity in place (via "Open Selected") vs. a dedicated one this editor
-	// spawned itself (New / Open by path) - only the latter gets deleted when switching away/closing.
-	void requestOpenSelected(Entity* entity);
-	void requestClose();
-	void doSwitchOpenSelected(EntityPtr entity);
-	void doClose();
+	bool hasDocument() const { return m_root != nullptr; }
+	EntityDocNode* selectedNode() { return m_root ? findDocNode(*m_root, m_selectedId) : nullptr; }
+	void setDocument(EntityDocNode&& root, const oc::string& path);
+	void closeDocument();
+	oc::string documentId() const; // the file stem once saved / opened, else the root's name
+	bool isDirty() const { return m_dirty; }
 
-	void doSwitchOpen(const oc::string& path);
-	void doSwitchNew(const oc::string& name);
-	void closeCurrent(); // detaches m_editRoot bookkeeping; deletes it only if this editor owns it
+	// Every edit calls this. The undo step is taken when the edit ENDS (no widget active any more), so one drag or one typed name is one step.
+	void markEdited() { m_editPending = true; }
+	void commitPendingEdit();
+	void undo();
+	void redo();
 
-	void trySave(const oc::string& path);   // overwrite-confirms if the target file already exists
-	void queueSave(const oc::string& path);
-
-	bool isDirty() const;
-	void rebaseline();
-	oc::string serializeDocText() const; // document text; Sync off swaps in the transform draft for m_selected
-	oc::string currentId() const; // filename stem once saved/opened, else the root's display name
-
-	void selectEntity(EntityPtr entity); // switches which entity Name/Transform/Components edits
-	void addChild();                     // creates a blank inline child under m_selected (name box)
-	void removeChild(Entity* child);
-
-	void refreshDraftsFromEntity(); // re-reads every component's current SpawnInfo from m_selected
-
-	// Assembles a fresh EntitySpawnTemplate from the current draft state and queues a RespawnEntity for
-	// m_selected (not necessarily the document root - any node in the tree can be edited/respawned).
-	void commitRespawn();
-
-	// Pushes the drafts straight into m_selected's LIVE components, no respawn. Covers only what can be
-	// re-applied in place (render local transform, force emitter, lights); anything baked at spawn
-	// (physics bodies, animator graphs, script data) is untouched and still needs the respawn.
-	void applyDraftsLive();
-	// Standard binding for a draft drag widget: `commitDrag(ImGui::DragFloat(...))`. Live-applies on
-	// every change frame so the viewport tracks the drag, and respawns once on release.
-	void commitDrag(bool changed);
-
-	EntityPtr   m_editRoot; // the document's root entity
-	EntityPtr   m_selected; // entity currently shown in Name/Transform/Components (root or a descendant)
-	oc::string m_path; // empty until first save/open
-
-	Entity* m_sceneSelection = nullptr; // this frame's main Scene panel selection, set at the top of render()
-	bool    m_ownsEntity     = true;    // false when editing an existing scene entity in place ("Open Selected")
-	bool    m_wasPacked      = false;   // was m_editRoot a locked prefab instance before we unpacked it to edit?
-
-	oc::string m_baselineText; // serialized text at last load/save, for dirty-tracking
-
-	bool      m_syncTransform = false; // Transform floats mirror/edit the live entity; off = detached draft that saves as-is
-	Transform m_transformDraft;        // m_selected's transform as shown in the panel, refreshed on selection change
-	EEntityCullMode m_cullModeDraft = EEntityCullMode::PerEntity;
-
-	oc::vector<EntityChange> m_changes;
-	oc::string m_revealRequest; // .pre to select in the asset browser (drained by UI)
-	oc::vector<oc::string> m_containerLoadRequests; // see takeContainerLoadRequests
-
-	char m_pathBuf[256] = "Entities/NewEntity.pre";
-	char m_nameBuf[256] = {};
+	// ---- Open, save, close (guarded) ----
 
 	enum class PendingSwitch { None, New, OpenPath, OpenSelected, Close };
+	void requestOpenSelected(Entity* entity);
+	void requestClose();
+	void runSwitch(PendingSwitch what);
+	void doOpen(const oc::string& path);
+	void doNew(const oc::string& name);
+	void doOpenSelected();
+	void trySave(const oc::string& path); // overwrite-confirms when the target exists, refuses a prefab cycle
+	void queueSave(const oc::string& path);
+	void revert();
+
+	// ---- Tree edits ----
+
+	void addChild(uint64 parentId);
+	void removeNode(uint64 id);
+	void duplicateNode(uint64 id);
+	void copyNode(uint64 id);
+	void pasteNode(uint64 parentId);
+	void moveNode(uint64 id, int delta); // among its siblings
+	void reparentNode(uint64 id, uint64 newParentId);
+	void unpackNode(uint64 id);
+	void requestPrefabChild(uint64 parentId, const oc::string& path);
+
+	// ---- The panel ----
+
+	void handleShortcuts();
+	void renderToolbar(const Rect& viewportRect);
+	void renderOpenPopup();
+	void renderEmptyState();
+	void renderPrefabList(float height);
+	void renderOverwritePopup();
+	void renderUnsavedPopup();
+	void renderSaveAsPopup();
+	void renderMessagePopup();
+	void renderTree();
+	void renderTreeNode(EntityDocNode& node);
+	void renderProperties();
+	void renderProblems(const EntityDocNode& node);
+	void renderIdentity(EntityDocNode& node);
+	void renderReference(EntityDocNode& node);
+	void renderAddComponent(EntityDocNode& node);
+	void renderComponents(EntityDocNode& node);
+
+	void renderSceneSection(EntityDocNode& node);
+	void renderRenderSection(EntityDocNode& node);
+	void renderAnimatorSection(EntityDocNode& node);
+	void renderPhysicsSection(EntityDocNode& node);
+	void renderAudioSection(EntityDocNode& node);
+	void renderParticleSection(EntityDocNode& node);
+	void renderForceSection(EntityDocNode& node);
+	void renderLightSection(EntityDocNode& node);
+	void renderNetworkSection(EntityDocNode& node);
+	void renderGameUnitSection(EntityDocNode& node);
+	void renderGameStructureSection(EntityDocNode& node);
+	void renderGameProjectileSection(EntityDocNode& node);
+	void renderHumanoidSection(EntityDocNode& node);
+	void renderScriptSection(EntityDocNode& node);
+	// The INITIAL values of the picked script's exposed ScriptData fields -- serialized into the .pre and applied at every spawn, unlike the Properties panel's
+	// live edits of the same fields.
+	void renderScriptDataSection(EntityDocNode& node);
+
+	// ---- The preview (EntityEditorPreview.cpp) ----
+
+	struct PreviewPick
+	{
+		uint64 nodeId;
+		glm::vec3 center;
+		float radius;
+	};
+	struct PreviewWorld
+	{
+		uint64 nodeId;
+		Transform world;
+	};
+	void renderPreview();
+	void renderPreviewToolbar(const glm::vec2& imageMin, uint32 meshCount);
+	void buildPreviewScene();
+	void appendPreviewNode(const EntityDocNode& node, const Transform& parentWorld, bool isRoot, const glm::vec3& parentTint, uint64 pickId, bool highlighted);
+	void appendPreviewRender(const RenderComponent::SpawnInfo& render, const Transform& world, const glm::vec3& tint, uint64 pickId, bool highlighted);
+	void drawPreviewOverlays(const glm::mat4& viewProj, const glm::vec2& imageMin, const glm::vec2& imageMax);
+	void drawNodeGizmos(const EntityDocNode& node, const Transform& world, const glm::mat4& viewProj, const glm::vec2& imageMin, const glm::vec2& imageMax);
+	void frameCamera();
+	void needContainer(const oc::string& name);
+
+	oc::vector<oc::string> m_containerLoadRequests;
+
+	// ---- State ----
+
+	oc::unique_ptr<EntityDocNode> m_root;
+	uint64 m_selectedId = 0;
+	uint64 m_nextId = 1;
+	oc::string m_path;          // empty until first save / open
+	oc::string m_baselineText;  // the text at the last load / save, for the dirty flag
+	bool m_dirty = false;
+	bool m_editPending = false;
+	bool m_updateInstancesOnSave = true;
+
+	EntityDocNode m_committed;                // the document as of the last finished edit
+	oc::vector<EntityDocNode> m_undoStack;
+	oc::vector<EntityDocNode> m_redoStack;
+	oc::unique_ptr<EntityDocNode> m_nodeClipboard;
+
+	Entity* m_sceneSelection = nullptr;
+	oc::vector<EntityChange> m_changes;
+	oc::string m_revealRequest;
+	oc::string m_scriptOpenRequest;
+
+	// Main-thread work, see flushMainThreadWork. A document load carries the file's TEXT, read here on the worker.
+	struct PendingDocLoad
+	{
+		oc::string path;
+		oc::string text;
+		bool keepView = false; // a revert: same camera
+	};
+	struct PendingChildLoad
+	{
+		uint64 parentId;
+		oc::string path;
+	};
+	oc::vector<PendingDocLoad> m_docLoads;
+	oc::vector<PendingChildLoad> m_childLoads;
+
 	PendingSwitch m_pendingSwitch = PendingSwitch::None;
-	oc::string   m_pendingSwitchPath;
-	oc::string   m_pendingSwitchName;
-	EntityPtr     m_pendingSwitchEntity;
-	bool          m_openUnsavedPopup = false;
-
-	bool        m_openOverwritePopup = false;
+	oc::string m_pendingSwitchPath;
+	oc::string m_pendingSwitchName;
+	EntityPtr m_pendingSwitchEntity;
+	bool m_openUnsavedPopup = false;
+	bool m_openOverwritePopup = false;
+	bool m_openSaveAsPopup = false;
+	bool m_openOpenPopup = false;
 	oc::string m_pendingSavePath;
+	char m_saveAsBuf[256] = {};
+	oc::string m_message; // a refusal the user must see: a prefab cycle, a load failure
+	bool m_openMessagePopup = false;
 
-	// --- Component presence + draft state, for m_selected. Drafts hold the real SpawnInfo types directly
-	// (they're fully visible here since Entity.ixx exports :Component) so widgets bind straight to their
-	// fields; commit (Add/Remove, or a field's IsItemDeactivatedAfterEdit) calls commitRespawn(). ---
-	bool m_hasScene    = false;
-	bool m_hasRender   = false;
-	bool m_hasAnimator = false;
-	bool m_hasPhysics  = false;
-	bool m_hasAudio    = false;
-	bool m_hasParticle = false;
-	bool m_hasForce    = false;
-	bool m_hasLight    = false;
-	bool m_hasNetwork  = false;
-	bool m_hasScript   = false;
+	char m_prefabSearch[128] = {};
+	oc::vector<oc::string> m_prefabNames; // sorted, refreshed when the list opens
+	bool m_prefabNamesDirty = true;
 
-	RenderComponent::SpawnInfo   m_renderDraft;
-	AnimatorComponent::SpawnInfo m_animatorDraft;
-	PhysicsComponent::SpawnInfo  m_physicsDraft;
-	AudioComponent::SpawnInfo    m_audioDraft;
-	ParticleComponent::SpawnInfo m_particleDraft;
-	ForceComponent::SpawnInfo    m_forceDraft;
-	LightComponent::SpawnInfo    m_lightDraft;
-	NetworkComponent::SpawnInfo  m_networkDraft;
-	ScriptComponent::SpawnInfo   m_scriptDraft;
+	char m_renderPickerSearch[128] = {};
+	char m_renderNodePickerSearch[128] = {};
+	char m_animatorPickerSearch[128] = {};
+	char m_filePickerSearch[128] = {};
+	oc::vector<oc::string> m_filePickerFiles; // refreshed when a file picker opens
+	char m_physCollidesWithBuf[256] = {};
+	uint64 m_physCollidesWithNode = 0;
 
-	char m_particleEffectBuf[256] = {}; // edit buffer for m_particleDraft.effectPath
+	// Euler angles are kept as typed: re-deriving them from the quaternion each frame makes a drag flip at the gimbal.
+	struct EulerEdit
+	{
+		glm::quat quat{ 1.0f, 0.0f, 0.0f, 0.0f };
+		glm::vec3 degrees{ 0.0f };
+	};
+	EulerEdit m_eulerNode;
+	EulerEdit m_eulerRender;
+	bool rotationField(const char* label, glm::quat& quat, EulerEdit& edit);
 
-	char m_physCollidesWithBuf[256] = {}; // comma-joined display/edit buffer for physicsDraft.collidesWith
+	uint64 m_renameNodeId = 0;
+	bool m_renameFocusPending = false;
+	char m_renameBuf[128] = {};
+	oc::function<void()> m_deferredTreeAction; // a structural edit, run after the tree walk that asked for it
+	oc::vector<oc::string> m_problems;         // scratch: the selected node's, then each tree row's
+	bool m_previewDragged = false;             // the press on the image moved: a release is no pick
 
-	char m_renderPickerSearch[128]     = {}; // container (.oc) name picker
-	char m_renderNodePickerSearch[128] = {}; // node picker, scoped to the currently chosen container
-	char m_animatorPickerSearch[128]  = {};
-	char m_scriptPickerSearch[128]    = {};
-	oc::vector<oc::string> m_scriptPickerFiles; // .scr paths relative to Assets/, refreshed when the picker opens
+	// The preview camera orbits m_cameraTarget. Y up, like the world.
+	glm::vec3 m_cameraTarget{ 0.0f };
+	float m_cameraYaw = 0.65f;
+	float m_cameraPitch = 0.35f;
+	float m_cameraDistance = 5.0f;
+	static constexpr float c_cameraFovY = 0.7f;
+	bool m_framePending = true;       // frame the document as soon as it has bounds (its containers may still be loading)
+	bool m_showGrid = true;
+	bool m_showWireframe = false;
+	bool m_showAxes = true;
+	bool m_showBounds = false;
+	bool m_showPhysics = true;
+	bool m_showLights = true;
+	bool m_showForce = true;
+	bool m_overlaysAllNodes = false;  // gizmos of every node, not only the selected one
+	bool m_highlightSelected = true;
+	float m_gridY = 0.0f;
 
-	char m_newChildNameBuf[128] = "Entity";
-	Entity* m_pendingRemoveChild = nullptr; // set while walking the tree, applied after (avoids mutating mid-walk)
-
-	float m_treeHeight = 60.0f; // user-resizable via the drag handle below the hierarchy tree
+	EntityPreviewFrame m_previewFrame;
+	oc::vector<PreviewPick> m_previewPicks;
+	oc::vector<PreviewWorld> m_previewWorlds;
+	glm::vec3 m_previewBoundsCenter{ 0.0f };
+	float m_previewBoundsRadius = 0.0f;
 };

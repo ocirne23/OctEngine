@@ -92,8 +92,6 @@ public:
 
     // Applies a drained queue (takeEntityChanges() temporaries); the Delete handles are released as one parallel batch afterwards.
     void handleEntityChanges(oc::vector<EntityChange>&& changes, const Camera& camera, const Rect& viewportRect);
-    void setOnPrefabOpened(oc::function<void(const EntityPtr&, const oc::string&)> callback) { m_onPrefabOpened = oc::move(callback); }
-    void setOnEntityRespawned(oc::function<void(const EntityPtr&, const EntityPtr&)> callback) { m_onEntityRespawned = oc::move(callback); }
     void setOnRootEntityRemoved(oc::function<void(const Entity*)> callback) { m_onRootEntityRemoved = oc::move(callback); } // the Game layer; cleared at its shutdown
 
     // ---- Assets (the Entity Editor builds its templates from these) ----
@@ -106,6 +104,9 @@ public:
     oc::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName);
     oc::shared_ptr<PhysicsComponent::SpawnInfo> buildPhysicsSpawnInfo(const AssetNode& physicsNode, const oc::string& containerName, const oc::string& nodePath, const oc::string& ownerName);
     oc::shared_ptr<AudioComponent::SpawnInfo> buildAudioSpawnInfo(const AssetNode& audioNode, const oc::string& ownerName);
+    // A template from a parsed `Prefab <name>` declaration, past the prefab cache (it reads this text, not what the cache last built) and with no prefab
+    // identity: the Entity Editor loads its documents through this. Spawns nothing. Main thread: it can import containers.
+    oc::shared_ptr<const EntitySpawnTemplate> buildDetachedTemplate(const AssetNode& declaration);
 
     // ---- Physics contacts ----
 

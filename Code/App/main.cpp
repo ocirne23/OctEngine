@@ -157,8 +157,6 @@ int main(int argc, char* argv[])
         gizmo.initialize(Globals::world);
         Globals::ui.setGizmo(&gizmo);
         Globals::physics.setDebugDrawCallback([](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); }, [&camera]() { return camera.position; });
-        Globals::world.setOnPrefabOpened([](const EntityPtr& entity, const oc::string& path) { Globals::ui.onOpened(entity, path); });
-        Globals::world.setOnEntityRespawned([](const EntityPtr& oldEntity, const EntityPtr& newEntity) { Globals::ui.onEntityRespawned(oldEntity, newEntity); });
     }
 
     uint32 frameCount = 0;

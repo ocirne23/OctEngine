@@ -445,6 +445,7 @@ void Renderer::reloadShaders()
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_entityPreviewPipeline.reloadShaders(m_textures.getLayoutCap());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -884,6 +885,46 @@ void Renderer::updateImGuiTextures()
             std::lock_guard<std::mutex> queueLock(Globals::device.getGraphicsQueueMutex());
             ImGui_ImplVulkan_UpdateTexture(texture);
         }
+
+    // The Entity Editor's preview, on the same terms as the snapshot above: pass N's submit is what frame N+1 draws. No submit = the panel is hidden.
+    m_entityPreviewActive = m_entityPreviewHasPending.load(oc::memory_order_acquire);
+    if (m_entityPreviewActive)
+    {
+        {
+            const std::lock_guard lock(m_entityPreviewMutex);
+            oc::swap(m_entityPreviewFrame, m_entityPreviewPending);
+            m_entityPreviewHasPending.store(false, oc::memory_order_release);
+        }
+        if (!m_entityPreviewPipeline.isInitialized())
+        {
+            m_entityPreviewPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
+            m_entityPreviewImGuiId = (uint64)(VkDescriptorSet)ImGui_ImplVulkan_AddTexture(m_entityPreviewPipeline.getSampler(), m_entityPreviewPipeline.getView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        // A previewed mesh or texture must not go cold just because no instance of it is in the world.
+        const bool streamTextures = Globals::textureStreamer.isStreamingEnabled();
+        const oc::span<const RendererVKLayout::MaterialInfo> materials = m_materials.getBuffer().getBackingStoreAs<RendererVKLayout::MaterialInfo>();
+        for (const EntityPreviewMesh& mesh : m_entityPreviewFrame.meshes)
+        {
+            if (mesh.meshIdx != UINT16_MAX)
+                Globals::meshStreamer.noteUse(mesh.meshIdx);
+            if (streamTextures && mesh.materialIdx < materials.size())
+            {
+                constexpr float log2AllMips = 13.0f; // the viewer zooms in close: the largest mips
+                const RendererVKLayout::MaterialInfo& material = materials[mesh.materialIdx];
+                Globals::textureStreamer.noteUse(material.diffuseTexIdx, log2AllMips);
+                Globals::textureStreamer.noteUse(material.normalTexIdx, log2AllMips);
+                Globals::textureStreamer.noteUse(material.metalRoughnessTexIdx, log2AllMips);
+            }
+        }
+    }
+}
+
+void Renderer::submitEntityPreview(EntityPreviewFrame& frame)
+{
+    const std::lock_guard lock(m_entityPreviewMutex);
+    oc::swap(frame, m_entityPreviewPending);
+    m_entityPreviewHasPending.store(true, oc::memory_order_release);
 }
 
 void Renderer::present()

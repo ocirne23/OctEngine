@@ -74,7 +74,7 @@ read through `spawnTemplate` (which outlives the entity: World's caches, retired
 |---|---|
 | `PrefabInstance` | Root of a locked prefab instance; cleared by "unpack". |
 | `Enabled` | Off prunes the subtree from update and suspends its physics bodies. Serialized as entity-level `Enabled false`. |
-| `Frozen` | Scripts, animator and physics do not tick. **A SUBTREE state** written down the whole tree by `setFrozen`; `Entity::create` inherits it from the spawn parent and `reparentEntity` adopts the new parent's. Every check is a plain self `isFrozen()`, including entry points outside update (global script events, physics contacts). **Script `OnSpawn` runs even frozen.** What the Entity Editor sets on an open document. |
+| `Frozen` | Scripts, animator and physics do not tick. **A SUBTREE state** written down the whole tree by `setFrozen`; `Entity::create` inherits it from the spawn parent and `reparentEntity` adopts the new parent's. Every check is a plain self `isFrozen()`, including entry points outside update (global script events, physics contacts). **Script `OnSpawn` runs even frozen.** Nothing sets it now: the Entity Editor's document is no longer an entity. |
 | `RootAllocation` / `ContiguousAllocation` | See allocation below. |
 | `PhysicsSuspended` | Latch so the disable walk is not repeated every frame. **`reparentEntity` clears it up the new ancestor chain** — otherwise a body joining a disabled subtree stays live and collides invisibly. |
 | `Profiled` | Opt-in per-entity `ProfileScope`, one-way latch. |
@@ -200,8 +200,7 @@ through `spawnTemplate` (`getCullMode`).
   spawned tree (`gatherTreeCullBounds` composes the authored local transforms — child render nodes sit
   in parent-local space at spawn), then placed by the root's world transform every visit. They are
   the REST pose: a limb swing is not added. **HumanoidAnimator BONES count as render nodes
-  here** (`HumanoidAnimatorComponent::addRestBounds`). `refreshTreeCullBounds` re-measures (the
-  RespawnEntity change calls it after the child splice).
+  here** (`HumanoidAnimatorComponent::addRestBounds`). `refreshTreeCullBounds` re-measures.
 * An entity WITH an entry always culls itself, also under a RootOnly ancestor (a PerEntity entity
   reparented in). An entity with no entry and no covering root renders unculled.
 * **SIM LOD:** an entry-less child is always `simLodSelected` and gets the full delta, so a covered
@@ -215,8 +214,6 @@ through `spawnTemplate` (`getCullMode`).
   and never a `None` entity. `renderIsVisible` goes through `Entity::getCullOwner`.
 * Teleports outside the visit (`GameUnitComponent::updateFar`, the client snapshot apply) re-place
   the entry through `Entity::placeSpatialEntry`.
-* Entity Editor: the "Cull Mode" combo respawns the selected entity only; children change their
-  registration on the next load of the prefab.
 
 Demo: `Entities/Debug/CubeGuy.pre` (RootOnly — one entry for all body parts).
 
@@ -412,7 +409,7 @@ off-main UI pass — an import creates renderer resources.
 A variant queue applied by `handleEntityChange(change, camera, viewportRect)`:
 
 `CreateHierarchy` · `CreateViewport` · `AddSceneEntity` · `SpawnAtPosition` · `Delete` · `Reparent` ·
-`SavePrefab` · `OpenPrefabForEdit` · `NewPrefab` · `RespawnEntity` · `SetEnabled`
+`SavePrefab` · `SavePrefabText` · `SetEnabled`
 
 * **`SpawnAtPosition`** is the script spawn (`ctx->spawnEntity`), deferred rather than spawned in the
   thunk: spawning touches the World caches, box3d and the renderer, **none of which tolerate the
@@ -421,7 +418,8 @@ A variant queue applied by `handleEntityChange(change, camera, viewportRect)`:
   widget pass runs OFF the main thread and `setEnabled` walks the subtree suspending physics bodies —
   box3d writes, main-thread-only.
 
-UI notifications route back through `setOnPrefabOpened` / `setOnEntityRespawned`.
+* **`SavePrefabText`** is the Entity Editor's save: its document is data, not an entity (`savePrefabText`, cycle-checked on the text). With `updateInstances`,
+  `respawnPrefabInstances` replaces every live instance from the rebuilt template, in place: same pose, parent and sibling slot, the new one before the old one dies.
 
 ## Headless
 
