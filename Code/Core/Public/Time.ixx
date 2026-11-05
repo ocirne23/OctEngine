@@ -1,7 +1,5 @@
 export module Core.Time;
 
-import <queue>;
-
 import Core;
 import Core.Window;
 

@@ -4,8 +4,6 @@ module;
 
 module Core.Time;
 
-import <queue>;
-
 import Core;
 import Core.Windows;
 import Core.Window;
