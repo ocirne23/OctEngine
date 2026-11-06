@@ -116,8 +116,9 @@ namespace
 	};
 
 	// One leaf: origin at the petiole, `dir` along the blade. Pointed ellipse-like profile, lighter midrib,
-	// darker rim, one half slightly shaded (the fold). Its NORMAL (with a normal canvas): `cup` curves the sides up in a
-	// smooth cup (the normal leans in toward the midrib, growing toward the rim) and curls the tip down (leaning toward the tip),
+	// darker rim, one half slightly shaded (the fold). Its NORMAL (with a normal canvas): `cup` makes the blade a smooth
+	// CONVEX dome - the sides falling away from the midrib (the normal leaning out, growing toward the rim), the tip curled
+	// down (leaning toward the tip) -
 	// plus `tilt` - the whole leaf's own random lean, so neighbouring leaves catch the sun differently. VEINS: secondary
 	// veins leaving the midrib toward the tip and curving out to the edge (lighter, a groove in the normal, thicker - less
 	// sun through them); WRINKLE: fine noise bumps over the blade. Both break up the shading and the transmission.
@@ -180,7 +181,7 @@ namespace
 
 			float shade = 0.9f + 0.2f * s;
 			if (glm::abs(r) < glm::max(0.07f * h, px * 0.7f))
-				shade *= 1.18f;               // midrib
+				shade *= 1.08f;               // midrib
 			else if (edge < 2.0f * px)
 				shade *= 0.82f;               // rim
 			if (r > 0.0f)
@@ -189,10 +190,12 @@ namespace
 			cell.canvas.blend(x, y, glm::clamp(color * shade, 0.0f, 1.0f), alpha);
 			if (cell.normals)
 			{
-				// A smooth CUP: the slope grows linearly from the midrib (a parabolic blade), with only a faint crease
-				// there (a strong step read as a hard fold line through every leaf). The vein grooves and the bumps on top.
-				const float fold = cup * (0.8f * across + 0.05f * sideSign);
-				const glm::vec2 lean = side * -fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt
+				// A smooth CONVEX blade: across it the sides fall away from the midrib (the slope grows linearly - a
+				// parabolic blade, the normal leaning OUT toward the rim), along it the tip curls down - one dome. (Sides
+				// curving up toward the face made a saddle with the tip curl, lit on the wrong half; a crease at the midrib
+				// read as a bright ridge.) The vein grooves and the bumps on top.
+				const float fold = cup * 0.5f * across;
+				const glm::vec2 lean = side * fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt
 					+ veinGrad * (0.035f * veinSlope) + bump * 0.35f;
 				// The RIM (the transmission's thickness): thin toward the edge, thick on the veins, uneven with the bumps.
 				const float rim = glm::clamp(glm::abs(across) * (1.0f - 0.65f * glm::min(vein, 1.0f)) + 0.25f * bump.x, 0.0f, 1.0f);
@@ -240,7 +243,7 @@ namespace
 				* rng.range(glm::max(1.0f - 0.15f * variation, 0.3f), 1.0f + 0.12f * variation);
 			if (rng.next01() < species.accentShare)
 				color = species.accentColor * rng.range(0.85f, 1.1f);
-			const glm::vec2 tilt(rng.signed1() * 0.35f, rng.signed1() * 0.35f);
+			const glm::vec2 tilt(rng.signed1() * species.leafTilt, rng.signed1() * species.leafTilt);
 			// Inside the cell: the cell clips the drawing, and a large leaf (the tip leaf above all, which grows on from
 			// v = 0.88) lost its tip. Shrunk until its tip and its widest points (at about 0.6 of its length,
 			// drawLeaf's profile) fit, with a margin for the mip chain.

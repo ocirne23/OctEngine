@@ -341,6 +341,13 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   (punctual_lights.inc.glsl: one H, one Fresnel, one GGX, the diffuse N·L from the other normal; two `doLightH` calls ran
   the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing). A more curved leaf sweeps the highlight over a wider
   range, so some spot on it meets the half vector (a glint); from the shading normal it was a faint even sheen.
+  **Leaf specular** (`Trees/Leaf specular` 0.1, LitTree leaves only): the leaves' F0 - the includer's `LIT_SPECULAR_F0`
+  (`g_specularF0`, set before `computeLitColor`) in place of the lit core's 0.04: a waxy cuticle's brighter, white highlight.
+  **The front sun on the facing card face only** (`g_sunVisMaterial` = smoothstep(0, 0.1) of the interpolated vertex
+  normal . L, leaves only, as the terrain's relief gate): the seen face of a leaf lit from behind had half of every leaf
+  tilted into the sun by the normal map (x the specular curve), and toward a low sun Fresnel -> 1 turned that half white.
+  The back side keeps only the transmission. With `NormalBend` the gate follows the bent vertex normal (both faces lit as
+  the crown's shape, as intended).
   **Leaf sky wrap** (`LEAF_SKY_WRAP` + `g_leafSkyWrap` in `computeLitColor`, `Trees/Leaf sky wrap` 0.5): a leaf whose
   (bent) normal faces DOWN takes the GI irradiance of that normal mirrored toward the sky by that much - a thin leaf
   is lit through from the sky behind it; at its own side only it read the dark ground: dark leaves all through the

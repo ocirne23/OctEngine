@@ -35,6 +35,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
 #define LIT_EXTRA_LIGHT      // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
+float16_t g_specularF0 = float16_t(0.04);
+#define LIT_SPECULAR_F0 g_specularF0 // instanced_indirect_lit.inc.glsl: the leaves' own F0 ("Trees/Leaf specular")
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
@@ -152,6 +154,10 @@ void main()
 		// sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's shadow,
 		// which would leave the backlit view no glow.
 		const vec3 L = u_sunDirection.xyz;
+		// The FRONT sun only on the card face that faces it, whatever the normal map says: the seen face of a leaf lit from
+		// behind had half of each leaf tilted into the sun by the map (x "Leaf specular curve" for the highlight), and
+		// looking toward a low sun Fresnel -> 1 turned that half white. The back side gets the transmission below.
+		g_sunVisMaterial = float16_t(smoothstep(0.0, 0.1, dot(vec3(geoN), L) * inversesqrt(max(dot(vec3(geoN), vec3(geoN)), 1e-8))));
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		// x the leaf's THICKNESS: 1 - "Leaf transmission centre" at the midrib, 1 at the rim (leafRim).
@@ -165,6 +171,7 @@ void main()
 #ifdef LEAF_SKY_WRAP
 	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
 #endif
+	g_specularF0 = float16_t(leaf ? u_foliage_leafSpecular : 0.04); // "Trees/Leaf specular": a waxy leaf's white highlight
 	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 	out_motion = motionVector(in_prevWorldDelta);

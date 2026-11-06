@@ -291,6 +291,7 @@ namespace Procedural
 			readFloat(*leaves, "Cup", out.leafCup);
 			readFloat(*leaves, "Veins", out.leafVeins);
 			readFloat(*leaves, "Wrinkle", out.leafWrinkle);
+			readFloat(*leaves, "Tilt", out.leafTilt);
 		}
 
 		if (const AssetNode* bark = species->find("Bark"))
@@ -440,6 +441,7 @@ namespace Procedural
 		out.leafCup = glm::clamp(out.leafCup, 0.0f, 1.0f);
 		out.leafVeins = glm::clamp(out.leafVeins, 0.0f, 1.0f);
 		out.leafWrinkle = glm::clamp(out.leafWrinkle, 0.0f, 1.0f);
+		out.leafTilt = glm::clamp(out.leafTilt, 0.0f, 0.5f);
 		out.placement.density = glm::max(out.placement.density, 0.0f);
 		out.placement.climateWidth = glm::max(out.placement.climateWidth, 0.01f);
 		out.placement.temperature.y = glm::max(out.placement.temperature.y, out.placement.temperature.x);

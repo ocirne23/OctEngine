@@ -110,6 +110,7 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Leaf roughness", &s.leafRoughness, 0.05f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf normal strength", &s.leafNormalStrength, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf specular curve", &s.leafSpecCurve, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf specular", &s.leafSpecular, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Trees", "Leaf transmission centre", &s.leafTransmissionCentre, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission saturation", &s.transmissionSaturation, 1.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission warmth", &s.transmissionWarmth, 0.0f, 1.0f, 0.01f);

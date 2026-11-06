@@ -578,8 +578,9 @@ namespace
 			{
 				m.positions.push_back(corners[i]);
 				m.normals.push_back(n);
-				m.tangents.push_back(side); // dPos/dU on BOTH faces (same UVs): the back face's handedness flips instead
-				m.bitangents.push_back(along);
+				// The back face's tangent frame negated, as appendCard's: its normal-map normal the front's, negated.
+				m.tangents.push_back(face == 0 ? side : -side);
+				m.bitangents.push_back(face == 0 ? along : -along);
 				m.texCoords.push_back(glm::vec3(glm::vec2(uvs[i]), encodeWind(i == 0 ? wind : wind | TREE_WIND_TIP_BIT))); // all but the stem flutter
 				m.bones.push_back(bone);
 			}
@@ -618,14 +619,16 @@ namespace
 					if (glm::dot(bent, bent) > 1e-6f)
 						n = glm::normalize(bent);
 				}
-				// The tangent is dPos/dU on BOTH faces (they share the UVs) - the back face's handedness flips instead
-				// (RenderMesh's sign from n, t, b). A back face with -side mirrored the normal map's X: its bumps faced
-				// away from the light, and half the leaves shaded too dark.
+				// The BACK face's tangent AND bitangent are negated: its normal-map normal is then exactly the front's,
+				// negated (the same leaf seen from below: a cup convex, a tilt the other way). With t, b as the front's
+				// the slope stayed in the same world direction while z flipped - the surface mirrored through the card
+				// (concave from both sides); -t alone mirrored only X (half the leaves shaded too dark).
+				const float faceSign = face == 0 ? 1.0f : -1.0f;
 				const glm::vec3 t = side - n * glm::dot(side, n);
 				m.positions.push_back(corners[i]);
 				m.normals.push_back(n);
-				m.tangents.push_back(glm::dot(t, t) > 1e-8f ? glm::normalize(t) : side);
-				m.bitangents.push_back(along);
+				m.tangents.push_back((glm::dot(t, t) > 1e-8f ? glm::normalize(t) : side) * faceSign);
+				m.bitangents.push_back(along * faceSign);
 				m.texCoords.push_back(glm::vec3(uv, encodeWind(i >= 2 ? wind | TREE_WIND_TIP_BIT : wind))); // corners 2, 3: the tip
 				m.bones.push_back(bone);
 			}
@@ -1387,7 +1390,7 @@ namespace
 				// Dome: the card turned to face OUT of the crown and up to the sky - the direction from the module root (the
 				// trunk axis, inside the crown) to the card, plus `sky` x up, jittered. The card's length direction is laid
 				// into the dome's surface (its outward part taken out), so a twig pointing out no longer shows its edge.
-				if (sp.leafDome > 0.0f)
+				if (sp.leafDome > 0.0f && glm::dot(normal, normal) > 1e-8f)
 				{
 					const glm::vec3 outward = (s.pos + stemLift) / nominalLength + up * sp.leafDomeSky + randomDir * 0.25f;
 					if (glm::dot(outward, outward) > 1e-6f)
@@ -1396,7 +1399,10 @@ namespace
 						const glm::vec3 laid = along - dome * (glm::dot(along, dome) * sp.leafDome);
 						if (glm::dot(laid, laid) > 1e-4f)
 							along = glm::normalize(laid);
-						normal = glm::mix(glm::normalize(normal), dome, sp.leafDome);
+						// Into the dome's hemisphere first (the card is two-sided): a normal facing in would cancel against
+					// the dome direction in the blend and turn by an amount that depends on its sign.
+					const glm::vec3 n0 = glm::normalize(normal);
+					normal = glm::mix(glm::dot(n0, dome) < 0.0f ? -n0 : n0, dome, sp.leafDome);
 					}
 				}
 				normal -= along * glm::dot(normal, along);

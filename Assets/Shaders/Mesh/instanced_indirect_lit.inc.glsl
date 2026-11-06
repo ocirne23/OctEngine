@@ -370,7 +370,11 @@ float16_t g_leafSkyWrap = float16_t(0.0);
 vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
 	const f16vec3 V = f16vec3(Vf);
+#ifdef LIT_SPECULAR_F0
+	const f16vec3 specularColor = mix(f16vec3(LIT_SPECULAR_F0), materialColor, metalness); // the includer's dielectric F0
+#else
 	const f16vec3 specularColor = mix(f16vec3(0.04), materialColor, metalness);
+#endif
 	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so metalness is not live
 	// across the light loop (one register fewer).
 	const f16vec3 diffuseColOverPi = materialColor * (float16_t(INV_PI) * (float16_t(1.0) - metalness));

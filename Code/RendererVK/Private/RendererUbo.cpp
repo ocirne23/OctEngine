@@ -1631,6 +1631,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_minNoV", [&] { return glm::clamp(f.minNoV, 0.0f, 0.9f); }, f.minNoV);
         list.add("foliage_leafNormalStrength", [&] { return glm::clamp(f.leafNormalStrength, 0.0f, 4.0f); }, f.leafNormalStrength);
         list.add("foliage_leafSpecCurve", [&] { return glm::clamp(f.leafSpecCurve, 0.0f, 8.0f); }, f.leafSpecCurve);
+        list.add("foliage_leafSpecular", [&] { return glm::clamp(f.leafSpecular, 0.0f, 1.0f); }, f.leafSpecular);
         list.add("foliage_leafTransmissionCentre", [&] { return glm::clamp(f.leafTransmissionCentre, 0.0f, 1.0f); }, f.leafTransmissionCentre);
         list.add("foliage_leafRoughness", [&] { return glm::clamp(f.leafRoughness, 0.05f, 1.0f); }, f.leafRoughness);
         list.add("foliage_transmissionWarmth", [&] { return glm::clamp(f.transmissionWarmth, 0.0f, 1.0f); }, f.transmissionWarmth);

@@ -323,6 +323,9 @@ export struct FoliageParams
     // The mesh leaves' SUN SPECULAR from the normal map's slope x this (a more curved leaf: some spot on each meets the
     // highlight - a glint, not a faint even sheen); the diffuse keeps "Leaf normal strength". 0 = the shading normal.
     float leafSpecCurve = 3.0f;
+    // The mesh leaves' specular reflectance at normal incidence (F0; every other dielectric 0.04): a waxy cuticle's
+    // brighter, WHITE highlight over the green diffuse.
+    float leafSpecular = 0.1f;
     // The mesh leaves' transmission at the leaf's CENTRE x (1 - this), back to x 1 at its rim - from the leaf normal
     // map's tilt (the cup is flat at the midrib): a leaf is thicker in its centre. 0 = even.
     float leafTransmissionCentre = 0.4f;

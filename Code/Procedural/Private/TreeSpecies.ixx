@@ -216,6 +216,9 @@ export namespace Procedural
 		// the tone and the thickness) - both break up the leaf's shading and its transmission.
 		float leafVeins = 0.7f;
 		float leafWrinkle = 0.3f;
+		// Cluster Leaves: each texture leaf's own random lean in the normal map (0..0.5, `Leaves Tilt`, per axis). Small: the
+		// leaf specular curve multiplies it, and 0.35 lit whole leaves white next to dark ones on the same card.
+		float leafTilt = 0.08f;
 		float leafSize = 0.25f;     // length (m)
 		float leafAspect = 0.6f;    // width / length
 		int leavesPerBranch = 8;    // per average last-level branch; longer branches get proportionally more

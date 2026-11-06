@@ -78,13 +78,16 @@ TreeSpecies <name>
 	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
 	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafWidth (Leaves: a texture leaf's
 	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · Cup (Leaves: 0..1, default 0.5 - the
-	        leaf NORMAL MAP's smooth cup: the sides curving up from the midrib (a faint crease only - a strong one read as
-	        a hard fold line), the tip curled down, + a random tilt per leaf; "Trees/Leaf normal strength" scales it in the shader)
+	        leaf NORMAL MAP's smooth CONVEX dome: the sides falling away from the midrib, the tip curled down, + a random tilt
+	        per leaf; "Trees/Leaf normal strength" scales it in the shader. Sides curving UP made a saddle with the tip curl -
+	        lit on the wrong half - and a crease at the midrib read as a bright ridge)
 	        · Veins (Leaves: 0..1, default 0.7 - 4 pairs of wavy SECONDARY VEINS leaving the midrib toward the tip and
 	        curving out to the edge, at least ~1.6 texels wide (thinner ones aliased away; 7 pairs were too fine for the
 	        texture): lighter, a sunk groove in the normal map, thicker in the rim map - less sun through them) ·
 	        Wrinkle (Leaves: 0..1, default 0.3 - soft noise bumps, ~8 across a leaf, in the normal, the tone and the rim;
-	        ~20 read as blotches) · ClusterLeafSize (Needles: the needle
+	        ~20 read as blotches) · Tilt (Leaves: 0..0.5, default 0.08 - each texture leaf's own random lean in the normal
+	        map, per axis; "Trees/Leaf specular curve" multiplies it, and 0.35 lit whole leaves white next to dark ones on
+	        one card) · ClusterLeafSize (Needles: the needle
 	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default 0.7: card normals bent away
 	        from the module root, both faces)   (Cluster only, below)
 	        Align (0..1, default 0: cards stick out of the branch facing up; 1 = they lie ALONG the branch,
@@ -535,6 +538,9 @@ same height field (x along u, y along v — the tube's tangent / bitangent), eac
 * **`Cluster`** — alpha-tested CARDS (`LitTree`), each showing a twig with `ClusterLeaves` leaves. `Size` /
   `Aspect` are then the card's, `PerBranch` counts cards, and a card's stem starts at the branch centre (the
   texture's twig grows out of the wood). `Cross true` adds a second card at 90° about the stem axis.
+  **Both faces are separate triangles** (back-face culled); the BACK face's tangent and bitangent are the front's
+  NEGATED (`appendCard` / `appendLeaf`), so its normal-map normal is exactly the front's negated - the same leaf from
+  below, its cup convex. (The front's frame on the back mirrored the surface through the card: concave from both sides.)
   The texture is PROCEDURAL until authored textures exist (`TreeLeafTexture.cpp`): per species a 1024² 2×2
   atlas of cluster variants (stem at v = 0, each card picks a cell), sRGB colours from `Color Leaf` / `Bark`,
   and its OWN mip chain — every level's alpha is rescaled (binary search) so the fraction of texels passing
