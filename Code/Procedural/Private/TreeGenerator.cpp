@@ -1348,6 +1348,10 @@ namespace
 			{
 				const float t = glm::clamp(0.15f + 0.85f * ((float)k + 0.5f) / (float)numLeaves + rng.signed1() * 0.05f, 0.0f, 1.0f);
 				const BranchPath::Sample s = branch.path.sample(t);
+				// Keep: thinned everywhere, more near the module root (the crown's inside, in the shade of the outer leaves).
+				const float outside = glm::smoothstep(0.15f, 0.7f, glm::length(s.pos) / nominalLength);
+				if (rng.next01() >= sp.leafKeep.x * glm::mix(sp.leafKeep.y, 1.0f, outside))
+					continue;
 				glm::vec3 perp = glm::angleAxis(rng.next01() * TWO_PI, s.tangent) * anyPerpendicular(s.tangent);
 				// Top: the card's side direction blended into the branch's HORIZONTAL side (the nearer one), so it lies flat
 				// in the branch's sheet facing up (the normal below leans to `up`), its stem lifted onto the branch's top.
@@ -1379,6 +1383,21 @@ namespace
 					const glm::vec3 top = up - s.tangent * glm::dot(up, s.tangent);
 					if (glm::dot(top, top) > 1e-6f)
 						stemLift += glm::normalize(top) * ((s.radius * 1.15f + 0.05f * leafLength) * sp.leafFaceUp);
+				}
+				// Dome: the card turned to face OUT of the crown and up to the sky - the direction from the module root (the
+				// trunk axis, inside the crown) to the card, plus `sky` x up, jittered. The card's length direction is laid
+				// into the dome's surface (its outward part taken out), so a twig pointing out no longer shows its edge.
+				if (sp.leafDome > 0.0f)
+				{
+					const glm::vec3 outward = (s.pos + stemLift) / nominalLength + up * sp.leafDomeSky + randomDir * 0.25f;
+					if (glm::dot(outward, outward) > 1e-6f)
+					{
+						const glm::vec3 dome = glm::normalize(outward);
+						const glm::vec3 laid = along - dome * (glm::dot(along, dome) * sp.leafDome);
+						if (glm::dot(laid, laid) > 1e-4f)
+							along = glm::normalize(laid);
+						normal = glm::mix(glm::normalize(normal), dome, sp.leafDome);
+					}
 				}
 				normal -= along * glm::dot(normal, along);
 				normal = glm::dot(normal, normal) > 1e-6f ? glm::normalize(normal) : anyPerpendicular(along);

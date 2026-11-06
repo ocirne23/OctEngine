@@ -19,12 +19,12 @@ import :RockGenerator;
 // caller's AllowMainThreadIO.
 export namespace Procedural
 {
-	constexpr uint32 TREE_MESH_CACHE_VERSION = 20;// generateTreeLibrary, bakeTreeVariant, bakeTreeDensity
+	constexpr uint32 TREE_MESH_CACHE_VERSION = 23;// generateTreeLibrary, bakeTreeVariant, bakeTreeDensity
 	constexpr uint32 ROCK_MESH_CACHE_VERSION = 3;    // generateRockVariant (and RockShape's layout: the file holds it raw)
 	constexpr uint32 CLUTTER_MESH_CACHE_VERSION = 1; // generateClutterMeshes (its pebbles: generateRockVariant too)
 	// The bark / leaf / billboard generators, their mip chains (buildBarkMips, buildLeafClusterMips, buildNormalMips) and
 	// the BC encoders (TextureConvert)
-	constexpr uint32 TEXTURE_CACHE_VERSION = 1;
+	constexpr uint32 TEXTURE_CACHE_VERSION = 4;
 
 	constexpr const char* TREE_MESH_DIR = "Local/Trees/Meshes";
 	constexpr const char* ROCK_MESH_DIR = "Local/Rocks/Meshes";

@@ -139,6 +139,9 @@ namespace Procedural
 		readRange(*species, "Scale", out.scale);
 		if (const AssetNode* n = species->find("Kind"))
 			out.bush = iequals(n->asString(), "Bush");
+		// A bush's leaves face out, not up: its modules start at the ground and already point up and out.
+		if (out.bush)
+			out.leafDomeSky = 0.0f;
 		if (const AssetNode* n = species->find("Climate"))
 			for (size_t i = 0; i < n->numValues(); ++i) // a bush may list several (space-separated)
 				out.climate += (i > 0 ? " " : "") + n->asString(i);
@@ -269,6 +272,12 @@ namespace Procedural
 			readFloat(*leaves, "Top", out.leafTop);
 			readRange(*leaves, "Lift", out.leafLift);
 			readFloat(*leaves, "FaceUp", out.leafFaceUp);
+			if (const AssetNode* n = leaves->find("Dome"))
+			{
+				out.leafDome = n->asFloat(0, out.leafDome);
+				out.leafDomeSky = n->asFloat(1, out.leafDomeSky);
+			}
+			readRange(*leaves, "Keep", out.leafKeep);
 			if (const AssetNode* n = leaves->find("Pad"))
 			{
 				out.padCount = n->asInt(0, out.padCount);
@@ -397,6 +406,9 @@ namespace Procedural
 		out.leafTop = glm::clamp(out.leafTop, 0.0f, 1.0f);
 		out.leafLift = glm::max(out.leafLift, glm::vec2(0.0f));
 		out.leafFaceUp = glm::clamp(out.leafFaceUp, 0.0f, 1.0f);
+		out.leafDome = glm::clamp(out.leafDome, 0.0f, 1.0f);
+		out.leafDomeSky = glm::clamp(out.leafDomeSky, 0.0f, 2.0f);
+		out.leafKeep = glm::clamp(out.leafKeep, glm::vec2(0.0f), glm::vec2(1.0f));
 		out.padCount = glm::clamp(out.padCount, 0, 256);
 		out.padWidth = glm::max(out.padWidth, 0.0f);
 		out.padHeight = glm::max(out.padHeight, 0.0f);

@@ -100,6 +100,15 @@ TreeSpecies <name>
 	        above; it is raised onto the branch's top (x FaceUp: 1.15 x the radius + 0.05 card), or it cut through the
 	        wood. A card otherwise starts at the branch centre and reaches out to ONE side, so the branch always runs
 	        along its edge and shows between the cards, whatever the twigs do - the cedar's failed tries)
+	        Dome amount sky (default 0.6 0.4, a Bush 0.6 0: leaves grow to the light - each per-branch leaf / card turned to FACE OUT of
+	        the crown and up: the direction from the module root (on the trunk axis, inside the crown) to the leaf / the
+	        module length + `sky` x up, jittered; its length direction laid into that dome surface by `amount` (the outward
+	        part taken out), so a twig that points out of the crown no longer shows its card's edge. 0 = the cards stick out
+	        of their branch. Not the pads. A module does not know its height in the crown, but top modules point up and side
+	        modules out, so the directions from its root already form a dome)
+	        Keep all inside (default 0.85 0.6: the share of the per-branch leaves kept - `all` everywhere, x `inside` near
+	        the module root, the crown's shaded inside, faded to 1 from 0.15 to 0.7 of the module length out; PerBranch is
+	        the count before it. Not the pads)
 	        Pad count width height tilt start (Cluster; default 0 = off; tilt default 0.25, the cards' random tilt off
 	        level; start default 0.15: FOLIAGE PADS replace the per-branch leaves - per module
 	        `count` cards of Size scattered through a flat DOME over its limb: centred at a point of the limb from `start`

@@ -187,6 +187,13 @@ export namespace Procedural
 		// 0..1: the card's FACE turned toward up. With Align 1 a card lies along its branch, straddling it - facing up it
 		// covers the branch from above (its drawn spray over the real twig); Align alone faces it out sideways (curtains).
 		float leafFaceUp = 0.0f;
+		// 0..1: the leaves turned to face OUT of the crown and up (a dome toward the sun), laid into that surface instead of
+		// sticking out of their branch; `leafDomeSky` x up added to the outward direction. Per-branch leaves only, not pads.
+		float leafDome = 0.6f;
+		float leafDomeSky = 0.4f;
+		// The share of the per-branch leaves kept: x = everywhere, y = in addition near the module root (the crown's inside),
+		// faded to 1 from 0.15 to 0.7 of the module length out. Not the pads.
+		glm::vec2 leafKeep{ 0.85f, 0.6f };
 		// FOLIAGE PADS (Cluster; replaces the per-branch leaves): per module `padCount` big cards scattered through a flat
 		// DOME over its limb - padWidth x the module length either side, padHeight x it at the dome's top - mostly level
 		// (a cedar's tiers: clouds of foliage, the branches inside them). 0 = off.
