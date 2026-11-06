@@ -47,7 +47,7 @@ export struct TreeWorldSettings
 	bool enabled = true;
 	int seed = 1;
 	float cellSize = 5.0f;
-	float densityScale = 1.0f;
+	float densityScale = 1.5f;
 	float climateSharpness = 4.0f;  // the species pick by climate fit ^ this (0 = every fitting species alike)
 	float climateFadeStart = 0.10f; // a species' climate fit fades to 0 between these (fractions of its peak): no tail
 	float climateFadeEnd = 0.25f;
