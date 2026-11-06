@@ -76,7 +76,7 @@ TreeSpecies Oak
 		PerBranch 6
 		Levels 2
 		ClusterLeaves 10
-		ClusterLeafSize 0.3
+		ClusterLeafSize 0.27
 		NormalBend 0.0
 		Keep 0.95 0.75
 	Bark

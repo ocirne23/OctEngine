@@ -4,7 +4,7 @@
 # tip ends in a whorl of 3 leafy limbs rising at 55 degrees (Crown Top 3 0.5 55, Crown Angle 55 55 - a drooping
 # species grows its limbs at Crown Angle) that arch over a little (Module Droop 60); thin leafy limbs (Module
 # Radius 0.005, ~2 cm at the base) on split tips that taper only to 0.7 a round (~1.5 cm), BranchRadius 1.5: no step
-# in thickness where a leafy limb meets its tip (0.012 with BranchRadius 6 put ~5 cm limbs on ~5 mm tips). Broad OVAL leaves (ClusterLeafWidth 0.55, ClusterLeafSize 0.27; narrow or small
+# in thickness where a leafy limb meets its tip (0.012 with BranchRadius 6 put ~5 cm limbs on ~5 mm tips). Broad OVAL leaves (ClusterLeafWidth 0.5, ClusterLeafSize 0.17; narrow or small
 # ones, and strong droop, read as willow). Grey-brown, deeply furrowed bark. Temperate, a little drier and cooler than
 # Oak's core - Forest types make elm woods among the oaks.
 TreeSpecies Elm
@@ -87,7 +87,7 @@ TreeSpecies Elm
 		PerBranch 5
 		Levels 2
 		ClusterLeaves 11
-		ClusterLeafSize 0.20
+		ClusterLeafSize 0.17
 		ClusterLeafWidth 0.50
 		NormalBend 0.0
 	Bark
