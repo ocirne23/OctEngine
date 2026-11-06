@@ -154,7 +154,7 @@ int main(int argc, char* argv[])
     camera.position = glm::vec3(0.0f);
     if (!headlessServer)
     {
-        gizmo.initialize(Globals::world);
+        gizmo.initialize();
         Globals::ui.setGizmo(&gizmo);
         Globals::physics.setDebugDrawCallback([](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); }, [&camera]() { return camera.position; });
     }
@@ -339,7 +339,6 @@ int main(int argc, char* argv[])
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::rendererVK.kickGridBuilds(); // the force update is the frame's last light source and the emitters' last writer
 
-            Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
             if (game)
                 game->joinWorldLabels();
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec);

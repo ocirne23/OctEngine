@@ -166,7 +166,7 @@ uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color)
     RendererVKLayout::MaterialInfo material{};
     // No MATERIAL_FLAG_NO_RAYTRACING: the flag also drops the instance from the sun shadow caster cull,
     // and every tinted game entity (units, structures, the player) went shadowless. Tints cast shadows
-    // and sit in the TLAS like any lit material; gizmo exclusion lives in gizmos.oc.
+    // and sit in the TLAS like any lit material.
     material.flags = 0;
     material.opacity = 1.0f;
     material.diffuseTexIdx = texIdx;

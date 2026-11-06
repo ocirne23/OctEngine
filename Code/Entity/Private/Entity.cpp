@@ -257,19 +257,6 @@ void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Trans
             outChildren.push_back({ child.get(), world, childCullPassMask });
 }
 
-void Entity::updateDetached(Renderer& renderer, float deltaSeconds)
-{
-    update(renderer, deltaSeconds);
-}
-
-void EntityState::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask)
-{
-    oc::vector<EntityUpdateNode> children;
-    updateSelf(renderer, deltaSeconds, parentWorld, cullPassMask, children);
-    for (const EntityUpdateNode& child : children)
-        child.entity->update(renderer, deltaSeconds, child.parentWorld, child.cullPassMask);
-}
-
 // Recursive alloc size of the template's entity + its whole SceneComponent child tree, lazily cached on
 // the template (idempotent, so the racy relaxed store is benign - every writer stores the same value).
 static uint32 getTreeAllocSize(const EntitySpawnTemplate& tmpl)

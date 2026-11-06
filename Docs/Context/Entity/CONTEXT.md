@@ -47,7 +47,7 @@ Rules this library adds to the RendererVK ones (each was an MSVC failure):
   (`template<typename E = Entity> E& self()`, dependent, so it compiles where the derived class is complete); defining it in the API
   partition made every importer hit an internal compiler error on the IFC import ("base class undefined").
 * **An API inline body that takes a `Renderer&` goes in a `.cpp`**: `Renderer` is the unattached `RendererVK.fwd` declaration in the
-  Entity partitions, so an inline body there mangles against a different `Renderer` than its callers (an LNK2019 - `updateDetached`).
+  Entity partitions, so an inline body there mangles against a different `Renderer` than its callers (an LNK2019).
 * A public enum the state needs is opaque-declared there (`export enum EComponentID : uint16;`, `ENetRole`) and defined in the API file.
 * `getComponent` / `hasComponent` take `EntityState*` (so the state's own members pass `this`) and read the bits through
   `Entity::getTypeBits()` - no friend templates.
@@ -56,8 +56,7 @@ Rules this library adds to the RendererVK ones (each was an MSVC failure):
 
 [Entity.ixx](../../../Code/Entity/Public/Entity.ixx). Fields (in `EntityState`): `pos` / `scale` / `rot` (the only public data), `parent`,
 `spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits), `schedTick` (14 bits). Outside the
-library they are read through `getParent()`, `getSpawnTemplate()`, `getTypeBits()`, `getSpatialEntry()`. A tree not in the World (the
-gizmo entity) is updated by its owner with `updateDetached(renderer, dt)`; `detachFromOwner()` takes an entity out of its parent's
+library they are read through `getParent()`, `getSpawnTemplate()`, `getTypeBits()`, `getSpatialEntry()`. `detachFromOwner()` takes an entity out of its parent's
 children (the deletion path).
 
 ### Names
@@ -288,7 +287,7 @@ components:
 * `SpatialIndex::updateEntry`
 * audio follow, particle and force emitter slots
 
-**The pass NEVER writes to box3d.** The gizmo entity uses the serial path.
+**The pass NEVER writes to box3d.**
 
 ---
 

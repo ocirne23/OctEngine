@@ -14,8 +14,7 @@ void Settings::registerFreeFlyCamera(FreeFlyCameraSettings& s)
 
 void Settings::registerGizmo(GizmoSettings& s)
 {
-    Tweak::floatVar("Editor/Gizmo", "Screen Size", &s.screenSize, 0.01f, 0.5f, 0.001f);
-    Tweak::floatVar("Editor/Gizmo", "Axis Pick Frac", &s.axisPickFrac, 0.02f, 0.5f, 0.01f);
-    Tweak::floatVar("Editor/Gizmo", "Plane Pick Scale", &s.planePickScale, 0.1f, 4.0f, 0.1f);
-    Tweak::floatVar("Editor/Gizmo", "Ring Pick Scale", &s.ringPickScale, 0.1f, 4.0f, 0.1f);
+    Tweak::floatVar("Editor/Gizmo", "Size (px)", &s.sizePx, 40.0f, 400.0f, 1.0f);
+    Tweak::floatVar("Editor/Gizmo", "Pick Radius (px)", &s.pickRadiusPx, 2.0f, 24.0f, 0.5f);
+    Tweak::floatVar("Editor/Gizmo", "Line Thickness", &s.lineThickness, 1.0f, 8.0f, 0.5f);
 }

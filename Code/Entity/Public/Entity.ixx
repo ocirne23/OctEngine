@@ -44,8 +44,6 @@ public:
     // ---- Spawning ----
 
     static EntityPtr create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags = 0);
-    // A tree NOT in the World, visited serially by its owner (the gizmo entity): main thread, outside the parallel pass.
-    void updateDetached(Renderer& renderer, float deltaSeconds);
 
     // ---- The tree ----
 

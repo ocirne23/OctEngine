@@ -295,11 +295,9 @@ windows of a dockspace that is not kept alive, so the layout would not come back
 mouse listeners and viewport focus, which live below UI); main owns the object and calls
 `ui.setGizmo(&gizmo)`. **Non-owning — the controller detaches itself in its destructor.**
 
-The widget pass drives it last, from the frame's viewport rect and selection, after the panels settle.
-
-**But the gizmo ENTITY has to tick with the rest of the scene**, so main makes a separate
-`ui.drawGizmoEntity(renderer, dt)` call right before `ui.update` — *it needs the renderer, which
-`UI::update` has no business holding.*
+The widget pass drives it last, from the frame's viewport rect and selection, after the panels settle. It draws
+itself with ImGui inside that call (see GizmoController in the Input CONTEXT), so it has no entity and no renderer
+call of its own.
 
 ---
 

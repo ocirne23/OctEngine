@@ -66,12 +66,9 @@ public:
     // ---- Transform gizmo ----
     // Driven from here; the app owns the storage (the implementation lives in Input, below UI, so it
     // arrives as an IGizmo). NON-OWNING - the GizmoController detaches itself here in its destructor.
-    // update() drives it from the panel's own viewport rect + selection; the gizmo ENTITY has to tick
-    // with the rest of the scene, hence the separate call the app makes at that point in the frame
-    // (it needs the renderer, which UI::update has no business holding).
+    // The widget pass drives it from the panel's own viewport rect + selection; it draws itself with ImGui.
     void setGizmo(IGizmo* gizmo) { m_gizmo = gizmo; }
     IGizmo* getGizmo() const { return m_gizmo; }
-    void drawGizmoEntity(Renderer& renderer, float deltaSec);
 
     bool isViewportGrabbed() const { return m_isViewportGrabbed; }
     bool isViewportFocused() const { return m_isViewportFocused; }

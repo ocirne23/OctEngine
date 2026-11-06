@@ -104,7 +104,6 @@ protected:
 
     // ---- The per-entity visit (World's pass) ----
 
-    void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform(), uint32 cullPassMask = EntityCullPass_Own);
     void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren);
     // Teleport contract: re-places the spatial entry for an entity moved outside its visit (a root: pos is world).
     void placeSpatialEntry();

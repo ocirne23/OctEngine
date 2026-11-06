@@ -163,16 +163,30 @@ such as the gizmo owns the left-drag).
 **It lives in Input, not UI, because it needs mouse listeners and viewport focus** — main owns the
 instance and hands it to the UI through the interface (`ui.setGizmo(&gizmo)`).
 
-* Spawns `Entities/Gizmo.pre`, follows the Scene panel's selection, and keeps a **constant apparent
-  screen size** (world scale = distance × "Editor/Gizmo/Screen Size", default 0.06).
-* `applyMode` / `setChildEnabled` switch the visible handle set: Translate axes and planes, Rotate
-  rings, uniform Scale. T/R/G bind to the modes in the testbed.
-* **Picking is analytic** in gizmo space — ray vs axis line, plane quad, or ring — with separate
-  tolerances, the `Editor/Gizmo` tweaks (`Globals::settings.gizmo`): "Axis Pick Frac" (0.07 of arm
-  length), "Plane Pick Scale" (1.4× the handle's bounds radius), "Ring Pick Scale" (0.6×).
+* **No mesh and no entity: it is drawn in SCREEN SPACE with ImGui**, into the background draw list clipped to the
+  viewport (over the 3D view, under every ImGui window). `update()` runs inside the widget pass, so it can draw.
+* Follows the Scene panel's selection at a **constant screen size**: one arm is "Editor/Gizmo/Size (px)" pixels at the
+  origin's view depth. The other `Editor/Gizmo` tweaks: "Pick Radius (px)", "Line Thickness".
+* **Draw and pick read the same 2D shapes.** `buildShapes()` projects every handle of the mode into viewport pixels
+  once per update (`m_shapes`); `draw()` paints them and `pick()` hit-tests the mouse against them, with the camera
+  captured in that same update. So a click always grabs what is on screen. The hovered handle (viewport focused) and
+  the held one draw yellow.
+* Handles: **Translate** — three arrows, three plane squares (by normal axis), a centre dot that moves in the camera
+  plane. **Rotate** (object-local frame) — three rings, only their front half (the camera's half of the gizmo sphere)
+  grabbable, plus an outer circle about the view direction. **Scale** — three arms and a centre box, all UNIFORM
+  (Entity scale is one float). An arm that points at the camera and an edge-on plane fade out and are not pickable.
+  T/R/G bind to the modes in the testbed; the mode does not change while a drag is held.
 * **Dragging is ABSOLUTE, not incremental.** `beginDrag` snapshots the gizmo origin, the selected
   entity's parent world transform, the drag axis or plane normal, the grab hit point, and the start
-  rotation/scale — so there is no per-frame drift.
+  local transform — so there is no per-frame drift. A **right click during a drag puts the start transform back.**
+  * Move axis: the closest point of the mouse ray to the axis line (ignored past the axis' vanishing point). Move
+    plane / centre: the ray-plane hit.
+  * Rotate: a ring that faces the camera (`|axis · view| > 0.3`) and the view circle follow the ray / ring-plane hit,
+    unwrapped past half a turn; an edge-on ring has no usable hit, so the drag runs along the ring's SCREEN tangent at
+    the grab point (pixels per radian, with a minimum speed).
+  * Scale: one arm length of cursor travel along the grabbed arm's screen direction (top right for the box) adds the
+    start scale once more.
+  * While dragging, a label next to the cursor shows the offset, the angle or the factor.
 * The camera and viewport rect are captured in `update()`, so the **event-driven** drag can unproject
   without them being passed in.
 * A kinematic or static physics body does NOT follow a gizmo drag — see PhysicsComponent's

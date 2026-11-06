@@ -1,5 +1,0 @@
-ObjectContainer gizmos
-	Path "Models/gizmos.glb"
-	MaterialOverrides
-		PipelineIdx GizmoUI
-		ExcludeFromRayTracing true

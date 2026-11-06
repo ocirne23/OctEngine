@@ -23,13 +23,13 @@ public:
 
     virtual ~IGizmo() = default;
 
-    // Follows `selected`, keeping a constant apparent screen size within `viewport`.
+    // Follows `selected`, keeping a constant apparent screen size within `viewport`. Called inside the widget pass: it
+    // draws itself with ImGui.
     virtual void update(const Camera& camera, const Rect& viewport, Entity* selected, double deltaSec) = 0;
 
     virtual void setMode(EGizmoMode mode) = 0;
     virtual EGizmoMode getMode() const = 0;
 
-    virtual Entity* getGizmoEntity() const = 0;
     virtual bool isVisible() const = 0;
     virtual bool isDragging() const = 0;
 };

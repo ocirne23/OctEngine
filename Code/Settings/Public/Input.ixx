@@ -15,10 +15,9 @@ export struct FreeFlyCameraSettings
 // "Editor/Gizmo": the transform gizmo (GizmoController).
 export struct GizmoSettings
 {
-    float screenSize = 0.06f;     // gizmo apparent size: world scale = distance * screenSize
-    float axisPickFrac = 0.07f;   // axis pick tube radius as a fraction of the arm length
-    float planePickScale = 1.4f;  // plane pick radius as a multiple of the plane handle's bounds radius
-    float ringPickScale = 0.6f;   // rotate ring radial tolerance as a multiple of the arc's bounds radius
+    float sizePx = 110.0f;        // arm length / ring radius on screen, in pixels
+    float pickRadiusPx = 8.0f;    // how far from a drawn line or point a click still grabs it, in pixels
+    float lineThickness = 3.0f;   // handle line width, in pixels
 };
 
 export namespace Settings
