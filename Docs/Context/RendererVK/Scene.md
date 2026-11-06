@@ -299,7 +299,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `u_foliage_interiorEnd`, default 0.5 / 1), so a fully lit crown is not flat. **On the SUN** (direct and
   transmitted) that interior FADES OUT as the view lines up with the sun (x `Foliage interior view fade` (1) x |V·L|;
   the ambient keeps it): from the front the leaves seen through the gaps are lit through those same gaps.
-* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (5) x chord)`, the chord from the
+* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (1) x chord)`, the chord from the
   visible LEAF along L to where the crown ellipsoid (below) ends, in lateral radii (0 for a leaf outside it). The leaf
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
@@ -318,7 +318,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   keep a sphere of half the u length). The ellipsoid follows the card's own proportions (a sphere of half the tree
   height points a pine's normals up at its top and down at its bottom). It depends on the ray only, so both cards
   agree. The weight is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage crown normal`
-  (`u_foliage_crownNormal`, default 0.3) at half the LATERAL radius from it, so the outer crown keeps its baked
+  (`u_foliage_crownNormal`, default 0.5) at half the LATERAL radius from it, so the outer crown keeps its baked
   detail. **The baked normal is ROTATED, not replaced**: it turns by the rotation from the card's facing normal to the
   crown normal, x the weight as an angle - both cards agree on the mean direction, the leaf normals keep their
   scatter. Replacing it with the one smooth crown normal lights the axis strip brighter than the rest of the card (a
@@ -329,7 +329,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS
   (defined `FOLIAGE`) adds the instance origin as flat location 5.
 * **The leaf look** (`leaf_look.inc.glsl`, LitTree / LitFoliage leaves): the LitTree leaves take `Trees/Leaf
-  roughness` (0.44, a waxy sheen; the cluster normal map now gives every leaf its own facing, its slope x `Trees/Leaf
+  roughness` (0.35, a waxy sheen; the cluster normal map gives every leaf its own facing, its slope x `Trees/Leaf
   normal strength` (1; 0 = flat cards)) instead of 0.65; both
   variants tint the leaf colour by world-space PATCHES (`leafPatchTint`: two value noises at `Leaf patch size (m)`, 2 -
   ONE lattice, `leafValueNoise2`: each corner hash's low / high 16 bits, 8 hashes, not 16 -
@@ -341,7 +341,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   (punctual_lights.inc.glsl: one H, one Fresnel, one GGX, the diffuse N·L from the other normal; two `doLightH` calls ran
   the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing). A more curved leaf sweeps the highlight over a wider
   range, so some spot on it meets the half vector (a glint); from the shading normal it was a faint even sheen.
-  **Leaf specular** (`Trees/Leaf specular` 0.1, LitTree leaves only): the leaves' F0 - the includer's `LIT_SPECULAR_F0`
+  **Leaf specular** (`Trees/Leaf specular` 0.06, LitTree leaves only): the leaves' F0 - the includer's `LIT_SPECULAR_F0`
   (`g_specularF0`, set before `computeLitColor`) in place of the lit core's 0.04: a waxy cuticle's brighter, white highlight.
   **The front sun on the facing card face only** (`g_sunVisMaterial` = smoothstep(0, 0.1) of the interpolated vertex
   normal . L, leaves only, as the terrain's relief gate): the seen face of a leaf lit from behind had half of every leaf
@@ -354,8 +354,8 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   crowns. One lookup still.
 * **Leaf transmission** (`MATERIAL_FLAG_LEAF`, bit 30, **LitTree / LitFoliage only**; LitMasked ignores the flag):
   the FS adds the sun THROUGH the leaf, tinted by its colour DEEPENED (`leafTransmitColor`: the colour ^ `Foliage
-  transmission saturation` (2), x a yellow by `Foliage transmission warmth` (0.5: red up to x 1.8, blue down to
-  x 0.45), back at its own luminance - light through a leaf passes its pigment about twice and its red edge lets more
+  transmission saturation` (1 = the leaf colour itself), x a yellow by `Foliage transmission warmth` (0 = none; at 1 red up to
+  x 1.8, blue down to x 0.45), back at its own luminance - light through a leaf passes its pigment about twice and its red edge lets more
   red through: a yellow-green glow (the squared colour alone came out a deeper green); formed only where light comes
   through - a sun-facing leaf seen with the sun behind skips its per-channel pow; on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
   transmission centre` (0.4) at the midrib, 1 at the rim, from the leaf normal map's A (the RIM, Procedural
@@ -365,7 +365,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   visibility = `mix(1, sun shadow, Foliage transmission shadow)` × (LitFoliage) the interior term: a leaf seen from
   the shaded side is in its own crown's shadow, which would leave no glow. `u_foliage_transmission` /
   `transmissionFocus` / `transmissionGlow` / `transmissionShadow`.
-* **Leaves seen edge-on:** their N is bent toward the viewer until N·V reaches `Trees/Foliage min N.V` (default 0.25,
+* **Leaves seen edge-on:** their N is bent toward the viewer until N·V reaches `Trees/Foliage min N.V` (default 0.04,
   `u_foliage_minNoV`, 0 = off) - the cards' bent normals let N·V approach 0 with N·L > 0, and the sun's GGX at
   grazing (Fresnel → 1, the Smith term growing) lights one leaf near the sun hundreds of times brighter than its
   diffuse: a blinding spot with bloom.

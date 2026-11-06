@@ -270,11 +270,11 @@ export struct ShadowParams
 // UBO-driven (u_foliage), so changes apply live.
 export struct FoliageParams
 {
-    float crownNormal = 0.3f; // blend of the shading normal toward a CROWN normal - the view ray's hit on a
+    float crownNormal = 0.5f; // blend of the shading normal toward a CROWN normal - the view ray's hit on a
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
-    float shadowLength = 1.5f;  // the sun shadow fades in over this many metres between the receiver and its
+    float shadowLength = 2.0f;  // the sun shadow fades in over this many metres between the receiver and its
                                 // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
@@ -293,7 +293,7 @@ export struct FoliageParams
     // THE CROWN SELF-SHADOW (billboards): the sun x exp(-this x the chord from the view ray's entry on the crown
     // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
     // side-lit one darker. 0 = off.
-    float selfShadow = 5.0f;
+    float selfShadow = 1.0f;
     float transmissionSelfShadow = 0.12f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
                                          // through the leaves: at 1 a crown seen toward the sun hid the transmission)
     float interiorTopCardScale = 2.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
@@ -309,15 +309,15 @@ export struct FoliageParams
     // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
-    float transmission = 1.5f;
+    float transmission = 1.0f;
     float transmissionFocus = 8.0f;
-    float transmissionGlow = 1.0f;
+    float transmissionGlow = 6.0f;
     float transmissionShadow = 0.95f;
     // LEAVES (MATERIAL_FLAG_LEAF) seen nearly edge-on: their shading normal is bent toward the viewer until N.V reaches
     // this (0 = off). The cards' normals are bent (NormalBend), so N.V can approach 0 while N.L > 0: the sun's GGX at
     // grazing (Fresnel -> 1, the Smith term growing) lit a single leaf near the sun hundreds of times brighter than
     // its diffuse - a blinding spot with bloom.
-    float minNoV = 0.25f;
+    float minNoV = 0.04f;
     // THE LEAF LOOK (LitTree's cluster leaves; the transmission colour on LitFoliage too):
     float leafNormalStrength = 1.0f;     // x the cluster leaves' normal-map slope (0 = flat cards)
     // The mesh leaves' SUN SPECULAR from the normal map's slope x this (a more curved leaf: some spot on each meets the
@@ -325,16 +325,16 @@ export struct FoliageParams
     float leafSpecCurve = 3.0f;
     // The mesh leaves' specular reflectance at normal incidence (F0; every other dielectric 0.04): a waxy cuticle's
     // brighter, WHITE highlight over the green diffuse.
-    float leafSpecular = 0.1f;
+    float leafSpecular = 0.06f;
     // The mesh leaves' transmission at the leaf's CENTRE x (1 - this), back to x 1 at its rim - from the leaf normal
     // map's tilt (the cup is flat at the midrib): a leaf is thicker in its centre. 0 = even.
     float leafTransmissionCentre = 0.4f;
-    float leafRoughness = 0.44f;        // the leaves' roughness (a waxy sheen in the sun; was the 0.65 default)
+    float leafRoughness = 0.35f;        // the leaves' roughness (a waxy sheen in the sun)
     // The transmitted sun's colour: the leaf colour ^ this, back at the leaf colour's luminance - light through a leaf
     // passes its pigment about twice, so it comes out deeper and more yellow-green (1 = the leaf colour itself).
-    float transmissionSaturation = 2.0f;
+    float transmissionSaturation = 1.0f;
     // ... shifted toward yellow by this (0 = none, 1 = red x 1.8, blue x 0.45 before the luminance is restored).
-    float transmissionWarmth = 0.5f;
+    float transmissionWarmth = 0.0f;
     // PATCHES of leaf colour over the crown (a world-space noise of this size, m): x 1 -+ variation in brightness, and
     // toward yellow / toward a deeper green with it. 0 = off.
     float leafPatchVariation = 0.4f;
@@ -539,7 +539,7 @@ export struct FarTreeParams
     uint32 maxSteps = 600;
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 1.5f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
     float normalStrength = 0.5f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 0.5f; // how much darker the sky light is at the ground than at the volume's top
     float interiorShadow = 2.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
@@ -548,8 +548,8 @@ export struct FarTreeParams
     float forwardScatter = -0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
     // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
     // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 0.4f;
-    float transmissionFocus = 0.5f;
+    float transmission = 0.75f;
+    float transmissionFocus = 0.6f;
     float albedoScale = 0.75f;   // x the leaf colour
     float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
