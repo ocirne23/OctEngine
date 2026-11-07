@@ -486,6 +486,7 @@ private:
 
     // The baked state (the FRONT: what the march reads): re-bake when any of it changes.
     bool m_dirty = true;
+    double m_dirtySinceSec = -1.0; // real time m_dirty was first seen set since the last bake start (-1: clean)
     bool m_baked = false;
     glm::vec2 m_centre{ 0.0f };
     // The FarTreeParams copies (this one and BakeJob::settings) are boxed so this interface needs only Settings.fwd.

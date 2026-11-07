@@ -274,7 +274,7 @@ export struct FoliageParams
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
-    float shadowLength = 2.0f;  // the sun shadow fades in over this many metres between the receiver and its
+    float shadowLength = 3.0f;  // the sun shadow fades in over this many metres between the receiver and its
                                 // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
@@ -294,7 +294,7 @@ export struct FoliageParams
     // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
     // side-lit one darker. 0 = off.
     float selfShadow = 1.0f;
-    float transmissionSelfShadow = 0.12f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
+    float transmissionSelfShadow = 0.5f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
                                          // through the leaves: at 1 a crown seen toward the sun hid the transmission)
     float interiorTopCardScale = 2.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
@@ -309,10 +309,10 @@ export struct FoliageParams
     // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
-    float transmission = 1.0f;
+    float transmission = 2.0f;
     float transmissionFocus = 8.0f;
-    float transmissionGlow = 6.0f;
-    float transmissionShadow = 0.95f;
+    float transmissionGlow = 1.0f;
+    float transmissionShadow = 0.8f;
     // LEAVES (MATERIAL_FLAG_LEAF) seen nearly edge-on: their shading normal is bent toward the viewer until N.V reaches
     // this (0 = off). The cards' normals are bent (NormalBend), so N.V can approach 0 while N.L > 0: the sun's GGX at
     // grazing (Fresnel -> 1, the Smith term growing) lit a single leaf near the sun hundreds of times brighter than
@@ -531,7 +531,7 @@ export struct FarTreeParams
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 16;            // height slices
     float height = 30.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 0.4f;    // x the baked extinction
+    float densityScale = 0.5f;    // x the baked extinction
     float blobShrink = 0.75f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
     float stepScale = 0.8f;       // march step, x the cell size, at startDistance
     float layerSamples = 8.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
@@ -575,7 +575,7 @@ export struct FarTreeParams
     // THE HAND-OVER: a finished bake CROSS-FADES into the shown one (a dithered per-ray pick, averaged by the temporal
     // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
     // (0 = at once; the swap then still takes the copy's frames).
-    float swapTime = 0.5f;
+    float swapTime = 2.0f;
     // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
     // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
     float rockExtinction = 4.0f;

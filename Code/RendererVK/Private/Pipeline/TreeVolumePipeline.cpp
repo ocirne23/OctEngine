@@ -1536,7 +1536,19 @@ bool TreeVolumePipeline::updateBake(const RecordParams& params)
     }
     // BAKE AHEAD: the test and the new centre take where the camera will be when a bake started now swaps.
     const glm::vec2 ahead = camera + bakeLead(s);
-    const bool due = m_dirty || !m_baked || !sameBake(s, *m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
+    // A CHANGED TREE SET alone (record chunks streaming in / out) re-bakes only once the camera has (nearly) stopped, or
+    // after DIRTY_MAX_WAIT_SEC: while flying, the chunks of each ring step arrive over frames - the first started a bake,
+    // the rest re-baked again right after its swap, and every hand-over shimmers the whole volume. The next MOVED bake
+    // takes them in anyway (startBake snapshots the whole table and clears m_dirty).
+    constexpr float DIRTY_STILL_SPEED = 2.0f;      // m/s, the smoothed horizontal camera speed
+    constexpr double DIRTY_MAX_WAIT_SEC = 10.0;    // a slow drift still gets the streamed chunks
+    const double now = Globals::time.getElapsedSec();
+    if (!m_dirty)
+        m_dirtySinceSec = -1.0;
+    else if (m_dirtySinceSec < 0.0)
+        m_dirtySinceSec = now;
+    const bool dirtyDue = m_dirty && (glm::length(m_cameraVelocity) < DIRTY_STILL_SPEED || now - m_dirtySinceSec > DIRTY_MAX_WAIT_SEC);
+    const bool due = dirtyDue || !m_baked || !sameBake(s, *m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
     if (!m_job.active && due && params.frameNumber >= m_bakeStartFrame)
         startBake(params, params.frameNumber, ahead);
     return m_job.active;

@@ -456,7 +456,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     the sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly (each tap's NEAREST column's
     floor made the shading jump at every column edge).
 * **Storage:** the march's 3D extinction (1/m) `density` + an RGBA8 colour map (2D: one colour per column) + the floors;
-  the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB, colour 2 x 18 MB, the bake's 2D R32UI maps
+  the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB (a slice count whose layer count is 3 costs as much: the driver allocated
+  accum's 3 layers at 12 slices as 4), colour 2 x 18 MB, the bake's 2D R32UI maps
   54 MB (floorBake, floorCover, rockSum: image atomics are 32-bit only; the far type rides in the colour map, below), the
   shown floor 9 MB.
 * **THE FLOORS ARE NO FRONT / BACK PAIR:** the bake writes `m_floorBake` (R32UI, an atomic max: `tvFloorEncode`), which
@@ -468,8 +469,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   `TV_ACCUM_MAX` (4 / m), copied as it is through the image's R8_UNORM view; the march samples its R8_SRGB view
   (MUTABLE_FORMAT; `VkImageViewUsageCreateInfo` sampled only, `m_densitySrgbView`) x `TV_DENSITY_DECODE`. The hardware
   decodes sRGB BEFORE the trilinear filter, so the filtering stays exact and the decode is free; the 8 bits sit where
-  the relative steps are small (~2 % at the "Far blob shrink" cut, 0.75 / m); above the max it clamps (~1.3 / m after
-  the shrink and the 0.4 scale: opaque within a few metres). Needs R8_SRGB with linear filtering (`volumeDensityR8`, optional in Vulkan);
+  the relative steps are small (~2 % at the "Far blob shrink" cut, 0.75 / m); above the max it clamps (~1.6 / m after
+  the shrink and the 0.5 scale: opaque within a few metres). Needs R8_SRGB with linear filtering (`volumeDensityR8`, optional in Vulkan);
   without it the density is R16F, decoded by the copy (`tvAccumDecode`). The march stays at 64 registers.
 * **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
   (`RenderTreeSet::create` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types' float
@@ -517,7 +518,10 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
       tree floored gets the GROUND under its centre (its chunk's grid, `terrainHeightAt` where none); then mass x the
       type's profile (its mean over each slice) into the accumulation. A column without a type takes a neighbour's,
       else the first type with mass.
-  * Record table changes re-bake (at most every 30 frames). `farTreesActive` is true with record types alone.
+  * Record table changes re-bake (marked at most every 30 frames), but **only once the camera has nearly stopped** (smoothed
+    horizontal speed < 2 m/s) or after 10 s (`updateBake`): while flying, a ring step's chunks arrive over frames, and the
+    late ones re-baked right after the moved bake's swap - two hand-overs per move, the volume shimmering twice. The next
+    moved bake takes them in (it snapshots the whole table). `farTreesActive` is true with record types alone.
 * **ROCKS** (Procedural's world rocks): rock records are record types like trees' and go through the same passes. A
   rock type is a **SOLID** (`RenderTreeSet::Type::solid` -> the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w`
   = 0): its grid is OCCUPANCY (0..1), and its extinction is **"Far rock extinction (1/m)"** (a rebake setting - before
@@ -576,10 +580,13 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     its own, so a time and not frames): the march's `TREE_HANDOVER` variant binds BOTH bakes - the new one through
     `accum`'s RGBA8_SRGB views (MUTABLE_FORMAT, sampled only: `m_accumFloatView` + `m_accumChannelViews`, channels 1-3
     SWIZZLED into R - `accumChannel` reads ONE value; a vec4 fetch with a dynamic channel index cost the variant 64 -> 71
-    registers). The hardware decodes and filters across the columns AND, the slices being interleaved, between a slice
+    registers). **Channel 3 is the view's ALPHA, which an sRGB format never decodes:** `accumChannel` decodes it itself
+    (read raw, the top quarter of the slices was ~2x too dense, and every hand-over grew the crowns upward until the swap). The hardware decodes and filters across the columns AND, the slices being interleaved, between a slice
     and the next one of the same channel: one fetch (`densityTexelNew`); only the pair that crosses into the next
-    channel (layer L - 1 -> 0) takes two. Bindings 13-19 with the back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's FIXED noise (IGN) is under the UBO's fade
-    (`u_foliage_handoverFade`, `handoverUbo`): a STATIC DISSOLVE, each pixel switches once. Tried: the noise stepped by
+    channel (layer L - 1 -> 0) takes two. Bindings 13-19 with the back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the ray's FIXED, WORLD-ANCHORED threshold (`handoverPicksNew`: `tvDither` of the 6 m world cell of the scene point behind
+    the ray, or of the 0.004 rad direction cell against the sky; a per-pixel threshold swam over the trees with every camera
+    motion, and IGN's gradient swept the dissolve over the screen in horizontal lines) is under the UBO's fade
+    (`u_foliage_handoverFade`, `handoverUbo`): a STATIC DISSOLVE, each world cell switches once. Tried: the noise stepped by
     the golden ratio per frame for TAA to average into a blend - under the 1-of-2 checkerboard a pixel takes a new pick
     only every second frame and shows a copy in between, and the noise never settled within the fade. A per-ray pick, not
     a per-sample density mix (that keeps a dense crown opaque until late in the fade). The whole ray follows its pick -

@@ -304,7 +304,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
   map, so without it a crown seen toward the sun is lit everywhere but at its axis. The TRANSMITTED sun takes only
-  `Foliage transmission self shadow` (0.12, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
+  `Foliage transmission self shadow` (0.5, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
   forward through the leaves loses less): at the full share a crown seen toward the sun hides `Foliage transmission`
   entirely. On a whole tree's horizontal card the interior term is raised to `Foliage interior shadow top card scale`
   (`u_foliage_interiorTopCardScale`, default 2; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;

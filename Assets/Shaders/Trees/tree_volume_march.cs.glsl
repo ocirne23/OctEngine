@@ -61,14 +61,23 @@ layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
 #ifdef TREE_HANDOVER
 bool g_new = false; // this ray shows the new bake
 
-bool handoverPicksNew(ivec2 px)
+// A STATIC DISSOLVE, anchored to the WORLD: a random threshold per world cell (HANDOVER_CELL_M) of the scene point behind
+// the ray, or per direction cell (HANDOVER_CELL_RAD) against the sky (at infinity: a direction is a fixed place). Each
+// place switches to the new bake ONCE as the fade passes its threshold, and the pattern stays on the world while the camera
+// turns or flies. Tried: a per-PIXEL threshold - IGN rose along its gradient (the dissolve swept the screen in horizontal
+// lines), and any screen-space pattern swam over the trees with every camera motion; a per-frame pick (IGN stepped by the
+// golden ratio for TAA to average) never settled within the fade, and under the checkerboard a pixel showed a copy every
+// second frame.
+const float HANDOVER_CELL_M = 6.0;
+const float HANDOVER_CELL_RAD = 0.004;
+bool handoverPicksNew(vec3 dir, float sceneT)
 {
-    // A STATIC DISSOLVE: each pixel's fixed threshold (IGN, offset from the step jitter's: decorrelated), so it switches to
-    // the new bake ONCE as the fade passes it - nothing for TAA to average. (A per-frame pick, IGN stepped by the golden
-    // ratio, was noise that TAA averaged into the blend; under the checkerboard a pixel takes a new pick only every
-    // second frame and shows a copy in between, and the noise never settled within the fade.)
-    const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
-    return ign < u_foliage_handoverFade;
+    uvec3 key;
+    if (sceneT < pc_vol_rMax)
+        key = uvec3(ivec3(floor((u_viewPos + dir * sceneT) * (1.0 / HANDOVER_CELL_M))));
+    else
+        key = uvec3(ivec2(floor(vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0))) * (1.0 / HANDOVER_CELL_RAD))), 0x5C1E5u);
+    return tvDither(key) < u_foliage_handoverFade;
 }
 
 vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
@@ -88,6 +97,9 @@ bool floorAt(ivec2 c, out float y)
 
 // One channel of the accumulation, as a single value: the views at 13 and 17-19 are SWIZZLED so their R is channel 0-3 (a
 // vec4 fetch with a dynamic channel index cost the hand-over variant 64 -> 71 registers).
+// Channel 3 is the view's ALPHA, which an sRGB format never decodes: it arrives as the raw code (filtered in code space),
+// decoded here. Read as linear, the top quarter of the slices was ~2x too dense - every hand-over grew the crowns upward
+// until the swap (the density's R8_SRGB view decodes all slices) snapped them back.
 float accumChannel(vec3 uvw, int k)
 {
     if (k == 0)
@@ -96,7 +108,8 @@ float accumChannel(vec3 uvw, int k)
         return textureLod(u_densityNew1, uvw, 0.0).r;
     if (k == 2)
         return textureLod(u_densityNew2, uvw, 0.0).r;
-    return textureLod(u_densityNew3, uvw, 0.0).r;
+    const float code = textureLod(u_densityNew3, uvw, 0.0).r;
+    return code <= 0.04045 ? code * (1.0 / 12.92) : pow((code + 0.055) * (1.0 / 1.055), 2.4);
 }
 
 // The new bake's view holds FOUR SLICES per texel, INTERLEAVED (RGBA8_SRGB, tree_volume.inc.glsl: slice s in layer s % L,
@@ -279,9 +292,6 @@ float farStepScaleAt(float uvY)
 // The march of one (march-image) pixel.
 void marchAt(ivec2 px)
 {
-#ifdef TREE_HANDOVER
-    g_new = handoverPicksNew(px);
-#endif
     const int scale = MARCH_SCALE;
     const ivec2 full = px * scale;
     const vec2 uv = (vec2(full) + 0.5 * float(scale)) / vec2(pc_fullSize); // the block's centre (full-target UV)
@@ -312,6 +322,9 @@ void marchAt(ivec2 px)
     const vec3 dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
     // Reversed Z: 0 = sky. At the jittered position the depth was rasterized at.
     const float sceneT = depth > 0.0 ? length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)) : 1e30;
+#ifdef TREE_HANDOVER
+    g_new = handoverPicksNew(dir, sceneT);
+#endif
 
     // The volume is the ring rMin..rMax around the BAKE centre; rMin lies far enough inside "Far start" to cover the
     // hand-over wherever the camera moved since the bake. The march starts at "Far start" from the CAMERA and fades in
