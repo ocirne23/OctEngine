@@ -1333,16 +1333,39 @@ namespace Procedural
 		return oc::clamp(h, 0.0f, 1.0f);
 	}
 
-	float TerrainGenV3::fogThicknessOf(const Sample& s) const
+	float TerrainGenV3::fogThicknessOf(double worldX, double worldZ, const Sample& s) const
 	{
-		// Two contributions, both keyed off the model's real climate: wet regions carry broad haze, and
-		// flat land collects valley fog.
-		const float humidity = humidityOf(s);
-		const float humid = m_cfg.humidFogAmount * humidity * humidity;
-		const float flat = 1.0f - oc::min(1.0f, s.slope * 2.0f);
+		const auto step = [](float e0, float e1, float x)
+		{
+			const float t = oc::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+			return t * t * (3.0f - 2.0f * t);
+		};
+		// Fog needs air close to saturation: mid humidity (a temperate 1200 mm/yr) gets none, only wet climates do.
+		// Hot lowlands rarely cool to the dew point at night, so warm baselines get less of it.
+		const float wet = step(m_cfg.fogHumidityMin, 1.0f, humidityOf(s)) * (1.0f - 0.6f * step(22.0f, 30.0f, s.tempSea));
+		if (wet <= 0.0f)
+			return 0.0f;
+		const float haze = m_cfg.humidFogAmount * wet * wet;
+
+		// Pooled fog: cold air drains into HOLLOWS (below the macro surface, the ~8 km mean) with a flat floor, plus
+		// low coastal land. Flat ground alone is not enough. The coarse path has macro == elev, so it cannot see a
+		// hollow and takes a mean instead.
 		const float land = s.elev > 0.0f ? 1.0f : 0.0f;
-		const float valley = m_cfg.valleyFogAmount * flat * land * humidity;
-		return oc::clamp(oc::max(humid, valley), 0.0f, 1.0f);
+		const float depth = oc::max(1.0f, m_cfg.valleyFogDepth);
+		const float hollow = s.macro == s.elev ? 0.15f : step(0.25f * depth, depth, s.macro - s.elev);
+		const float flatFloor = 1.0f - step(0.04f, 0.2f, s.slope);
+		const float coast = 0.6f * (1.0f - step(0.0f, 0.4f * depth, s.elev));
+		const float pool = land * flatFloor * oc::max(hollow, coast);
+		if (pool <= 0.0f || m_cfg.fogCoverage <= 0.0f)
+			return oc::clamp(haze, 0.0f, 1.0f);
+
+		// Not every hollow is foggy: slow patches (a weather pattern frozen into the map) cover "Fog coverage" of them.
+		const float f = 1.0f / oc::max(1.0f, m_cfg.fogPatchWavelength * worldScale());
+		const float n = m_fogNoise.fbm((float)(worldX * f), (float)(worldZ * f), 2);
+		const float edge = 1.0f - 2.0f * oc::clamp(m_cfg.fogCoverage, 0.0f, 1.0f);
+		const float patch = step(edge - 0.2f, edge + 0.2f, n);
+		const float valley = m_cfg.valleyFogAmount * wet * pool * patch;
+		return oc::clamp(oc::max(haze, valley), 0.0f, 1.0f);
 	}
 
 	float TerrainGenV3::fogFalloffOf(float temperature) const
@@ -1384,7 +1407,7 @@ namespace Procedural
 		out.temperatureSeaLevel = temperatureSeaLevelFrom(worldX, worldZ, s);
 		out.temperature = out.temperatureSeaLevel + lapseOf() * oc::max(0.0f, s.elev + d / oc::max(0.01f, vs));
 		out.humidity = humidityOf(s);
-		out.fogThickness = fogThicknessOf(s);
+		out.fogThickness = fogThicknessOf(worldX, worldZ, s);
 		out.fogFalloffMul = fogFalloffOf(out.temperature);
 		out.flowAngle01 = -1.0f;
 		out.waterKind = out.height < m_cfg.seaLevel ? ETerrainWater::Sea : ETerrainWater::None;
@@ -1395,6 +1418,7 @@ namespace Procedural
 		, m_detailA(cfg.seed * 0x9E3779B9u + 0x51ED2701u)
 		, m_detailB(cfg.seed * 0x85EBCA6Bu + 0xC2B2AE35u)
 		, m_climateNoise(cfg.seed * 0x27220A95u + 0x165667B1u)
+		, m_fogNoise(cfg.seed * 0x2C1B3C6Du + 0x297A2D39u)
 	{
 		m_cfg.metersPerPixel = oc::max(0.5f, cfg.metersPerPixel);
 		m_invMpp = 1.0f / m_cfg.metersPerPixel;
@@ -1607,7 +1631,7 @@ namespace Procedural
 		const Sample s = sampleField(worldX, worldZ);
 		if (!s.valid)
 			return 0.0f;
-		return fogThicknessOf(s);
+		return fogThicknessOf(worldX, worldZ, s);
 	}
 
 	float TerrainGenV3::sampleFogHeightFalloff(double worldX, double worldZ) const

@@ -245,6 +245,9 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/V3", "Humidity offset", &s.v3HumidityOffset, -1.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/V3", "Humid fog", &s.v3HumidFog, 0.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/V3", "Valley fog", &s.v3ValleyFog, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/V3", "Fog min humidity", &s.v3FogHumidityMin, 0.0f, 0.99f, 0.01f);
+	Tweak::floatVar("Terrain/V3", "Valley fog depth (m)", &s.v3ValleyFogDepth, 10.0f, 1000.0f, 5.0f);
+	Tweak::floatVar("Terrain/V3", "Fog coverage", &s.v3FogCoverage, 0.0f, 1.0f, 0.01f);
 	Tweak::intVar("Terrain/V3", "Resident tiles", &s.v3MaxTiles, 4, 256, 1.0f); // ~1.1 MB each
 	Tweak::boolean("Terrain/V3", "Log tile stats", &s.v3LogTileStats);
 	// Half-precision inference. This does NOT generate terrain faster: measured at mpp=3, the near

@@ -205,6 +205,9 @@ export struct TerrainSettings
 	float v3HumidityOffset = 0.0f;        // slides the planet along arid <-> lush
 	float v3HumidFog = 0.25f;
 	float v3ValleyFog = 0.25f;
+	float v3FogHumidityMin = 0.55f;       // no regional fog below this humidity
+	float v3ValleyFogDepth = 150.0f;      // model metres below the ~8 km mean surface for a full valley pool
+	float v3FogCoverage = 0.4f;           // share of the foggy hollows the slow patches cover
 	int   v3MaxTiles = 64;                // resident tile budget (~1.1 MB each); the tree chunks follow the terrain nodes, so the working set is small
 	bool  v3LogTileStats = false;         // button (TerrainStreamer clears it): the RAM tile cache's hits / disk loads / generations
 	// Half-precision inference: buys VRAM and load time, NOT generation speed. Reloads the models and changes the

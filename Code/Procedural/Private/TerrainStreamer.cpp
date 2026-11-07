@@ -346,6 +346,9 @@ namespace Procedural
 		Tweak::onChange(s.v3HumidityOffset, this, dirty);
 		Tweak::onChange(s.v3HumidFog, this, dirty);
 		Tweak::onChange(s.v3ValleyFog, this, dirty);
+		Tweak::onChange(s.v3FogHumidityMin, this, dirty);
+		Tweak::onChange(s.v3ValleyFogDepth, this, dirty);
+		Tweak::onChange(s.v3FogCoverage, this, dirty);
 		Tweak::onChange(s.v3MaxTiles, this, dirty);
 		// The rivers are part of the sampler (RiverTerrain): every row that shapes them rebuilds. Not the preview /
 		// debug rows.
@@ -660,6 +663,9 @@ namespace Procedural
 		cfg.climateNoiseOctaves = (uint32)glm::max(1, m_settings.v3ClimateNoiseOctaves);
 		cfg.humidFogAmount = m_settings.v3HumidFog;
 		cfg.valleyFogAmount = m_settings.v3ValleyFog;
+		cfg.fogHumidityMin = m_settings.v3FogHumidityMin;
+		cfg.valleyFogDepth = m_settings.v3ValleyFogDepth;
+		cfg.fogCoverage = m_settings.v3FogCoverage;
 		cfg.maxResidentTiles = m_settings.v3MaxTiles;
 		cfg.useFp16 = m_settings.v3Fp16;
 

@@ -134,3 +134,18 @@ fbm), and `fill` evaluates the climate wander (an fbm) once per point for both t
 > terrain actually has anything in it** — that is the dial for "detailed at full world scale".
 
 This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
+
+### Regional fog
+
+`fogThicknessOf` gives `TerrainPoint::fogThickness`, the multiplier the fog shaders put on the global density (x "Fog/Region
+strength"). "Terrain/V3" tweaks; all rebuild the sampler.
+
+* **Air near saturation first**: `wet` ramps from "Fog min humidity" (0.55) to 1, and a warm sea-level baseline (22 → 30 °C)
+  takes 60 % off it. Below the threshold there is no regional fog, whatever the ground.
+* **Haze** = "Humid fog" x wet²: thin and broad, only in wet climates.
+* **Pooled fog** = "Valley fog" x wet x the pool x the patches:
+  * the pool is land with a FLAT FLOOR (slope 0.04 → 0.2 fades it) that is a HOLLOW - below the macro surface (the coarse
+    stage, ~8 km mean) by up to "Valley fog depth (m)" (model metres) - or LOW COAST (0.6, elevation under 0.4 x that depth).
+    Flat ground alone does not pool fog. The Coarse path has macro == elev, so it cannot see a hollow and takes 0.15.
+  * the patches: a slow 2-octave fbm (`fogPatchWavelength`, 6 km model) cut so "Fog coverage" (0.4) of the pools get fog.
+    Not every valley is foggy at once.

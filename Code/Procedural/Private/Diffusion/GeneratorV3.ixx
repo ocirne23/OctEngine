@@ -117,7 +117,11 @@ export namespace Procedural
 
 		// --- Regional fog character, derived from the model's real climate.
 		float humidFogAmount = 0.6f;  // broad fog in wet regions
-		float valleyFogAmount = 0.8f; // fog pooling below ridgelines
+		float valleyFogAmount = 0.8f; // fog pooling in hollows and on low coasts
+		float fogHumidityMin = 0.55f; // humidity below which there is no regional fog at all
+		float valleyFogDepth = 150.0f; // model metres below the macro surface for a full valley pool
+		float fogCoverage = 0.4f;     // share of the qualifying hollows the fog patches cover
+		float fogPatchWavelength = 6000.0f; // model metres
 
 		// --- Residency. One tile is 256x256 native px + halo, ~800 KB across elevation/temperature/precip.
 		int32 maxResidentTiles = 256;
@@ -307,7 +311,7 @@ export namespace Procedural
 		float temperatureSeaLevelFrom(double worldX, double worldZ, const Sample& s) const;
 		float temperatureFrom(double worldX, double worldZ, const Sample& s, float detailWorldM) const;
 		float humidityOf(const Sample& s) const;
-		float fogThicknessOf(const Sample& s) const;
+		float fogThicknessOf(double worldX, double worldZ, const Sample& s) const;
 		float fogFalloffOf(float temperature) const;
 		void fill(double worldX, double worldZ, const Sample& s, bool withDetail, TerrainPoint& out) const;
 
@@ -315,6 +319,7 @@ export namespace Procedural
 		NoiseField m_detailA;
 		NoiseField m_detailB;
 		NoiseField m_climateNoise; // the microclimate wander; see temperatureFrom
+		NoiseField m_fogNoise;     // the pooled-fog patches; see fogThicknessOf
 		float m_invMpp = 1.0f / 30.0f;
 	};
 }
