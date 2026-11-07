@@ -486,7 +486,7 @@ Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 
 ## `.clip` — animation clips (keyframes)
 
-One clip per file, named by the file STEM: `Clip 1` + `Duration` / `FrameRate` / `Loop` / `PreviewRig` / `Event <name> <normalizedTime>`,
+One clip per file, named by the file STEM: `Clip 1` + `Duration` / `Steps` (the editor's key grid: equal steps, no frame rate) / `Loop` / `PreviewRig` / `Event <name> <normalizedTime>`,
 then `Track "<bone>"` blocks with `Position` / `Rotation` / `Scale` key lines (`time x y z [w] [Step|Smooth]`). Keys by BONE NAME, no skeleton:
 retargeted when a clip set is built. Authored in the **Animation Editor** panel, which also imports FBX tracks and converts `.anm` entries into
 `.clip`s. **A `.clip` wins over an `.anm` entry of the same name.** Grammar and the import path in

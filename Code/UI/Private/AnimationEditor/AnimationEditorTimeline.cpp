@@ -403,15 +403,14 @@ void AnimationEditor::renderTrackList(float width, float height)
 					}
 					if (row.track >= 0 && row.kind == RowKind::Bone && ImGui::MenuItem("Delete track"))
 					{
-						m_clip.tracks.erase(m_clip.tracks.begin() + row.track);
-						clearKeySelection();
-						m_curveRows.clear();
-						markEdited();
+						deleteTrack(row.track);
 					}
 					if (row.track >= 0 && row.kind == RowKind::Channel && ImGui::MenuItem("Delete this channel's keys"))
 					{
+						const float latestBefore = latestContent();
 						aeKeysOfMut(m_clip.tracks[row.track], row.channel, [](auto& keys) { keys.clear(); });
 						clearKeySelection();
+						shrinkToContent(latestBefore);
 						markEdited();
 					}
 					ImGui::EndPopup();
@@ -495,27 +494,27 @@ void AnimationEditor::renderTimelineHeader(const ImVec2& origin, float width)
 	ImDrawList* list = ImGui::GetWindowDrawList();
 	const ImGuiIO& io = ImGui::GetIO();
 	const float rowHeight = ImGui::GetFrameHeight();
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
+	const float step = gridStep();
 	const float x1 = origin.x + width;
 	list->PushClipRect(origin, ImVec2(x1, origin.y + c_rulerHeight + rowHeight * 2.0f), true);
 
-	// ---- The ruler ----
+	// ---- The ruler: the key steps (labelled by index, or in seconds) ----
 	list->AddRectFilled(origin, ImVec2(x1, origin.y + c_rulerHeight), aeCol(38, 40, 46));
-	const float pixelsPerFrame = m_pixelsPerSecond / fps;
+	const float pixelsPerFrame = m_pixelsPerSecond * step;
 	const int majorStep = aeMajorStep(pixelsPerFrame);
-	const int firstFrame = (int)glm::floor(xToTime(origin.x) * fps);
-	const int lastFrame = (int)glm::ceil(xToTime(x1) * fps);
+	const int firstFrame = (int)glm::floor(xToTime(origin.x) / step);
+	const int lastFrame = (int)glm::ceil(xToTime(x1) / step);
 	for (int f = firstFrame; f <= lastFrame; ++f)
 	{
 		if (f < 0)
 			continue;
-		const float x = timeToX(float(f) / fps);
+		const float x = timeToX(float(f) * step);
 		if (f % majorStep == 0)
 		{
 			list->AddLine(ImVec2(x, origin.y + 6.0f), ImVec2(x, origin.y + c_rulerHeight), aeCol(150, 150, 160));
 			char label[32];
 			if (m_showSeconds)
-				snprintf(label, sizeof(label), "%.2fs", float(f) / fps);
+				snprintf(label, sizeof(label), "%.2fs", float(f) * step);
 			else
 				snprintf(label, sizeof(label), "%d", f);
 			list->AddText(ImVec2(x + 3.0f, origin.y + 2.0f), aeCol(190, 190, 200), label);
@@ -537,7 +536,7 @@ void AnimationEditor::renderTimelineHeader(const ImVec2& origin, float width)
 	if (ImGui::IsItemHovered() && io.MouseWheel != 0.0f)
 		zoomTime(io.MouseWheel, io.MousePos.x);
 	if (ImGui::IsItemHovered() && !ImGui::IsItemActive())
-		ImGui::SetTooltip("Drag: scrub   Wheel: zoom   F: frame all");
+		ImGui::SetTooltip("Drag: scrub (past the end: the clip grows)   Wheel: zoom   F: frame all");
 
 	// ---- The summary lane: every key time of the clip ----
 	const float summaryY = origin.y + c_rulerHeight;
@@ -637,18 +636,22 @@ void AnimationEditor::renderTimelineHeader(const ImVec2& origin, float width)
 		else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 		{
 			const float t = snapTime(xToTime(io.MousePos.x));
-			m_clip.events.push_back({ "event", glm::clamp(t / duration, 0.0f, 1.0f) });
+			extendTo(t);
+			m_clip.events.push_back({ "event", glm::clamp(t / glm::max(m_clip.duration, 1e-6f), 0.0f, 1.0f) });
 			m_selectedEvent = (int32)m_clip.events.size() - 1;
 			markEdited();
 		}
 	}
 	if (ImGui::IsItemActive() && m_drag == DragMode::MoveEvent && m_selectedEvent >= 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f))
 	{
-		const float t = glm::clamp(snapTime(xToTime(io.MousePos.x)), 0.0f, duration);
-		AnimationEventKey& ev = m_clip.events[m_selectedEvent];
-		if (glm::abs(ev.normalizedTime - t / duration) > 1e-7f)
+		// Like a key: past the end the clip grows, and leaving the end empty shrinks it.
+		const float t = snapTime(xToTime(io.MousePos.x));
+		const float latestBefore = latestContent();
+		if (glm::abs(m_clip.events[m_selectedEvent].normalizedTime * m_clip.duration - t) > 1e-6f)
 		{
-			ev.normalizedTime = t / duration;
+			extendTo(t);
+			m_clip.events[m_selectedEvent].normalizedTime = glm::clamp(t / glm::max(m_clip.duration, 1e-6f), 0.0f, 1.0f);
+			shrinkToContent(latestBefore);
 			markEdited();
 		}
 	}
@@ -808,16 +811,18 @@ void AnimationEditor::renderDopesheet(const ImVec2& origin, float width, float h
 	if (timeToX(0.0f) > origin.x)
 		list->AddRectFilled(origin, ImVec2(timeToX(0.0f), y1), aeCol(0, 0, 0, 70));
 
-	// Frame grid (the ruler's major steps).
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
-	const float pixelsPerFrame = m_pixelsPerSecond / fps;
+	// The key-step grid: every step faint when there is room, the ruler's labelled steps brighter.
+	const float step = gridStep();
+	const float pixelsPerFrame = m_pixelsPerSecond * step;
 	const int majorStep = aeMajorStep(pixelsPerFrame);
-	for (int f = glm::max((int)glm::floor(xToTime(origin.x) * fps), 0); f <= (int)glm::ceil(xToTime(x1) * fps); ++f)
+	for (int f = glm::max((int)glm::floor(xToTime(origin.x) / step), 0); f <= (int)glm::ceil(xToTime(x1) / step); ++f)
+	{
+		const float x = timeToX(float(f) * step);
 		if (f % majorStep == 0)
-		{
-			const float x = timeToX(float(f) / fps);
-			list->AddLine(ImVec2(x, origin.y), ImVec2(x, y1), aeCol(255, 255, 255, 18));
-		}
+			list->AddLine(ImVec2(x, origin.y), ImVec2(x, y1), aeCol(255, 255, 255, 22));
+		else if (pixelsPerFrame >= 8.0f)
+			list->AddLine(ImVec2(x, origin.y), ImVec2(x, y1), aeCol(255, 255, 255, 8));
+	}
 
 	// ---- The rows ----
 	const int32 firstRow = glm::max((int32)glm::floor(m_rowScroll / rowHeight), 0);
@@ -985,16 +990,14 @@ void AnimationEditor::renderTimelineContextMenu()
 	{
 		if (ImGui::MenuItem("Add event here"))
 		{
-			const float duration = glm::max(m_clip.duration, 1e-6f);
-			m_clip.events.push_back({ "event", glm::clamp(t / duration, 0.0f, 1.0f) });
+			extendTo(t);
+			m_clip.events.push_back({ "event", glm::clamp(t / glm::max(m_clip.duration, 1e-6f), 0.0f, 1.0f) });
 			m_selectedEvent = (int32)m_clip.events.size() - 1;
 			markEdited();
 		}
 		if (m_selectedEvent >= 0 && m_selectedEvent < (int32)m_clip.events.size() && ImGui::MenuItem("Delete event"))
 		{
-			m_clip.events.erase(m_clip.events.begin() + m_selectedEvent);
-			m_selectedEvent = -1;
-			markEdited();
+			deleteEvent(m_selectedEvent);
 		}
 		ImGui::EndPopup();
 		return;
@@ -1025,8 +1028,8 @@ void AnimationEditor::renderTimelineContextMenu()
 	}
 	if (ImGui::MenuItem("Add event here"))
 	{
-		const float duration = glm::max(m_clip.duration, 1e-6f);
-		m_clip.events.push_back({ "event", glm::clamp(t / duration, 0.0f, 1.0f) });
+		extendTo(t);
+		m_clip.events.push_back({ "event", glm::clamp(t / glm::max(m_clip.duration, 1e-6f), 0.0f, 1.0f) });
 		m_selectedEvent = (int32)m_clip.events.size() - 1;
 		markEdited();
 	}
@@ -1165,15 +1168,15 @@ void AnimationEditor::renderCurves(const ImVec2& origin, float width, float heig
 	const float range = m_curveMax - m_curveMin;
 	const float rawStep = range * 40.0f / glm::max(height, 1.0f);
 	const float magnitude = glm::pow(10.0f, glm::floor(glm::log(rawStep) / glm::log(10.0f)));
-	float gridStep = magnitude;
+	float valueStep = magnitude;
 	for (float m : { 1.0f, 2.0f, 5.0f, 10.0f })
-		if (magnitude * m >= rawStep) { gridStep = magnitude * m; break; }
-	for (float v = glm::ceil(m_curveMin / gridStep) * gridStep; v <= m_curveMax; v += gridStep)
+		if (magnitude * m >= rawStep) { valueStep = magnitude * m; break; }
+	for (float v = glm::ceil(m_curveMin / valueStep) * valueStep; v <= m_curveMax; v += valueStep)
 	{
 		const float y = valueToY(v);
-		list->AddLine(ImVec2(origin.x, y), ImVec2(x1, y), glm::abs(v) < gridStep * 0.01f ? aeCol(255, 255, 255, 45) : aeCol(255, 255, 255, 16));
+		list->AddLine(ImVec2(origin.x, y), ImVec2(x1, y), glm::abs(v) < valueStep * 0.01f ? aeCol(255, 255, 255, 45) : aeCol(255, 255, 255, 16));
 		char label[32];
-		snprintf(label, sizeof(label), "%g", glm::abs(v) < gridStep * 0.01f ? 0.0f : v);
+		snprintf(label, sizeof(label), "%g", glm::abs(v) < valueStep * 0.01f ? 0.0f : v);
 		list->AddText(ImVec2(origin.x + 4.0f, y - ImGui::GetTextLineHeight()), aeCol(140, 140, 150), label);
 	}
 
@@ -1270,10 +1273,11 @@ void AnimationEditor::renderCurves(const ImVec2& origin, float width, float heig
 	if (active && m_drag == DragMode::CurveKey && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && m_curveDragKey.track < m_clip.tracks.size())
 	{
 		ClipTrack& track = m_clip.tracks[m_curveDragKey.track];
+		const float latestBefore = latestContent();
 		const float newValue = yToValue(io.MousePos.y);
 		const float newTime = m_snap ? snapTime(xToTime(io.MousePos.x)) : glm::max(xToTime(io.MousePos.x), 0.0f);
 		const int c = m_curveDragComponent;
-		const float eps = frameDuration() * 0.25f;
+		const float eps = gridStep() * 0.25f;
 		aeKeysOfMut(track, m_curveDragKey.channel, [&](auto& keys)
 		{
 			using KeyT = typename std::remove_reference_t<decltype(keys)>::value_type;
@@ -1309,10 +1313,10 @@ void AnimationEditor::renderCurves(const ImVec2& origin, float width, float heig
 				m_curveDragKey.time = newTime;
 				selectKey(m_curveDragKey.track, m_curveDragKey.channel, newTime, true);
 				oc::stable_sort(keys.begin(), keys.end(), [](const KeyT& a, const KeyT& b) { return a.time < b.time; });
-				if (newTime > m_clip.duration)
-					m_clip.duration = newTime;
+				extendTo(newTime);
 			}
 		});
+		shrinkToContent(latestBefore);
 		markEdited();
 	}
 	if (deactivated)

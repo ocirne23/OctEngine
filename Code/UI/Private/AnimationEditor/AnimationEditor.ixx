@@ -84,6 +84,8 @@ private:
 	void setKeyVec3(uint32 track, ClipChannel channel, float time, const glm::vec3& value);
 	void setKeyQuat(uint32 track, float time, const glm::quat& value);
 	void deleteSelectedKeys();
+	void deleteEvent(int32 index);
+	void deleteTrack(int32 track);
 	void moveSelectedKeys(float deltaSeconds);
 	void setSelectedKeysInterp(KeyInterp interp);
 	void copySelectedKeys();
@@ -91,7 +93,14 @@ private:
 	void keyBone(int32 bone, bool position, bool rotation, bool scale); // keys the bone's current pose at the playhead
 	void keySelectedBones();
 	float snapTime(float t) const;
-	float frameDuration() const { return 1.0f / glm::max(m_clip.frameRate, 1.0f); }
+	float gridStep() const { return m_clip.step(); }             // seconds per key step
+	int32 stepIndex(float t) const { return (int32)glm::round(t / gridStep()); }
+	// A time past the end grows the clip by whole steps (the step stays, the step count grows); the events keep their seconds.
+	void extendTo(float t);
+	float latestContent() const; // the time of the last key or event
+	// After a drag or a delete: if the end held a key or an event before (latestBefore) and holds none now, the clip shrinks by whole steps to
+	// its new last key or event (one step when nothing is left). A clip whose end was empty keeps its length.
+	void shrinkToContent(float latestBefore);
 
 	// The bone's pose at the playhead as the preview shows it: an unkeyed edit (the override), else the sampled pose.
 	void currentLocalPose(int32 bone, glm::vec3& pos, glm::quat& rot, glm::vec3& scale) const;
@@ -101,7 +110,10 @@ private:
 
 	// ---- Clip operations ----
 
+	// scaleKeys: the keys and the step scale with the length (the step count stays). Otherwise the step stays: the clip is trimmed or extended by
+	// whole steps.
 	void setClipDuration(float seconds, bool scaleKeys);
+	void setSteps(uint32 steps); // the length stays, the step changes; the keys keep their times
 	void reduceKeys();
 	void matchLoopPose();
 	void removeUnboundTracks();
@@ -230,6 +242,7 @@ private:
 	bool m_recording = false;
 	bool m_snap = true;
 	bool m_showSeconds = false;
+	bool m_lengthScalesKeys = true; // the Length field scales the keys with it (else it trims / extends by whole steps)
 	KeyInterp m_newKeyInterp = KeyInterp::Smooth; // what a key made here blends with (imported keys stay Linear)
 
 	struct PoseOverride

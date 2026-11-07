@@ -35,11 +35,15 @@ export struct ClipTrack
 export struct ClipAsset
 {
     float duration = 1.0f;    // seconds
-    float frameRate = 30.0f;  // the editor's frame grid (keys snap to it); playback is continuous
+    // The editor's key grid: the duration cut into this many equal steps (keys snap to them). No frame rate: playback is continuous, and the grid only
+    // grows when the editor subdivides it or extends the clip by whole steps.
+    uint32 steps = 10;
     bool loop = true;
     oc::string previewRig;    // the ObjectContainer the editor previews the clip on (editor only)
     oc::vector<AnimationEventKey> events; // normalized time, like .anm
     oc::vector<ClipTrack> tracks;
+
+    float step() const { return duration > 1e-6f ? duration / float(steps > 0 ? steps : 1u) : 0.1f; } // seconds per grid step
 
     int32 findTrack(const oc::string& bone) const
     {

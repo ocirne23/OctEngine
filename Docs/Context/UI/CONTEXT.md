@@ -207,6 +207,14 @@ animators play the edit next tick. A clip opens on the widget pass (read + parse
 * **The rig** is an ObjectContainer picked in the toolbar and saved in the clip (`PreviewRig`, no undo step). Lookup only on the pass; a miss is
   imported in `flushMainThreadWork`. The editor builds its own runtime clip (`buildAnimationClip`, re-run when the document version or the
   skeleton changes) and its own `AnimationPlayer`, scrubbed with `setTime`.
+* **The key grid is steps, not frames**: the clip's length in `steps` equal steps (`gridStep`); keys and the playhead snap to them.
+  Subdivide doubles the step count, Merge halves it; the keys keep their times either way. **The length is dynamic**: `setTime` past the end
+  (a click on the ruler, the dopesheet or the curves, the step field, the next-step key), a key set or moved there, or an event added there
+  goes through `extendTo`, which adds whole steps (the step stays) and re-normalizes the events so they keep their seconds. The other way, `shrinkToContent`: a
+  key move, a curve key drag, an event drag, or a delete (keys, an event, a track, a channel's keys, the unbound tracks) that leaves the last
+  step empty (it held a key or event before) trims the clip by whole steps to its new last key or event, one step when nothing is left. A clip
+  whose end was already empty keeps its length. The typed Length
+  either scales the keys with it (default: the step count stays) or trims / extends by whole steps (`m_lengthScalesKeys`).
 * **Pose edits** (the gizmo, the inspector's fields) go through `editBonePose`. **Recording** (Rec, R): the edited channel is keyed at the
   playhead (snapped). **Not recording**: the pose is an OVERRIDE (`m_overrides`, applied as `setBoneTransform`), shown until the playhead moves;
   K keys it. New keys take the "New keys blend" mode (default Smooth); imported keys stay Linear.

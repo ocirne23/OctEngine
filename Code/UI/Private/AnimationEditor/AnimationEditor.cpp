@@ -264,7 +264,7 @@ void AnimationEditor::doNew()
 {
 	ClipAsset clip;
 	clip.duration = 1.0f;
-	clip.frameRate = 30.0f;
+	clip.steps = 10; // coarse: subdivide where the motion needs more keys
 	clip.previewRig = m_rigName;
 	setDocument(oc::move(clip), oc::string());
 	aeCopyString(m_saveAsName, sizeof(m_saveAsName), oc::string("NewClip"));
@@ -426,8 +426,63 @@ float AnimationEditor::snapTime(float t) const
 	t = glm::max(t, 0.0f);
 	if (!m_snap)
 		return t;
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
-	return glm::round(t * fps) / fps;
+	return float(stepIndex(t)) * gridStep();
+}
+
+void AnimationEditor::extendTo(float t)
+{
+	const float oldDuration = m_clip.duration;
+	if (t <= oldDuration + gridStep() * 0.01f)
+		return;
+	const float step = gridStep();
+	const uint32 extra = (uint32)glm::max(glm::ceil((t - oldDuration) / step - 0.01f), 1.0f);
+	m_clip.steps += extra;
+	m_clip.duration = float(m_clip.steps) * step;
+	// Events are stored normalized: they keep their seconds, not their fraction.
+	if (oldDuration > 1e-6f)
+		for (AnimationEventKey& ev : m_clip.events)
+			ev.normalizedTime *= oldDuration / m_clip.duration;
+	markEdited();
+}
+
+float AnimationEditor::latestContent() const
+{
+	float latest = 0.0f;
+	for (const ClipTrack& track : m_clip.tracks)
+		for (uint32 c = 0; c < c_numClipChannels; ++c)
+			aeWithKeys(track, ClipChannel(c), [&](const auto& keys) { if (!keys.empty()) latest = glm::max(latest, keys.back().time); });
+	for (const AnimationEventKey& ev : m_clip.events)
+		latest = glm::max(latest, ev.normalizedTime * m_clip.duration);
+	return latest;
+}
+
+void AnimationEditor::shrinkToContent(float latestBefore)
+{
+	const float step = gridStep();
+	const float end = m_clip.duration;
+	const float eps = step * 0.25f;
+	const float latest = latestContent();
+	if (latestBefore < end - eps || latest >= end - eps)
+		return;
+	const uint32 steps = (uint32)glm::max(glm::ceil(latest / step - 0.01f), 1.0f);
+	if (steps >= m_clip.steps)
+		return;
+	m_clip.steps = steps;
+	m_clip.duration = float(steps) * step;
+	// Events are stored normalized: they keep their seconds, not their fraction.
+	for (AnimationEventKey& ev : m_clip.events)
+		ev.normalizedTime = glm::clamp(ev.normalizedTime * end / m_clip.duration, 0.0f, 1.0f);
+	m_time = glm::min(m_time, m_clip.duration);
+	markEdited();
+}
+
+void AnimationEditor::setSteps(uint32 steps)
+{
+	steps = glm::clamp(steps, 1u, 100000u);
+	if (steps == m_clip.steps)
+		return;
+	m_clip.steps = steps;
+	markEdited();
 }
 
 int32 AnimationEditor::ensureTrack(const oc::string& bone)
@@ -441,7 +496,7 @@ int32 AnimationEditor::ensureTrack(const oc::string& bone)
 
 void AnimationEditor::setKeyVec3(uint32 track, ClipChannel channel, float time, const glm::vec3& value)
 {
-	const float eps = frameDuration() * 0.25f;
+	const float eps = gridStep() * 0.25f;
 	const KeyInterp interp = m_newKeyInterp;
 	auto apply = [&](auto& keys)
 	{
@@ -461,14 +516,13 @@ void AnimationEditor::setKeyVec3(uint32 track, ClipChannel channel, float time, 
 		}
 	};
 	aeWithKeys(m_clip.tracks[track], channel, apply);
-	if (time > m_clip.duration)
-		m_clip.duration = time;
+	extendTo(time);
 	markEdited();
 }
 
 void AnimationEditor::setKeyQuat(uint32 track, float time, const glm::quat& value)
 {
-	const float eps = frameDuration() * 0.25f;
+	const float eps = gridStep() * 0.25f;
 	oc::vector<RotationKey>& keys = m_clip.tracks[track].rotationKeys;
 	for (RotationKey& k : keys)
 		if (glm::abs(k.time - time) <= eps)
@@ -481,8 +535,7 @@ void AnimationEditor::setKeyQuat(uint32 track, float time, const glm::quat& valu
 	while (it != keys.end() && it->time < time)
 		++it;
 	keys.insert(it, RotationKey{ time, glm::normalize(value), m_newKeyInterp });
-	if (time > m_clip.duration)
-		m_clip.duration = time;
+	extendTo(time);
 	markEdited();
 }
 
@@ -490,6 +543,7 @@ void AnimationEditor::deleteSelectedKeys()
 {
 	if (m_keySelection.empty())
 		return;
+	const float latestBefore = latestContent();
 	for (uint32 t = 0; t < (uint32)m_clip.tracks.size(); ++t)
 		for (uint32 c = 0; c < c_numClipChannels; ++c)
 		{
@@ -500,6 +554,32 @@ void AnimationEditor::deleteSelectedKeys()
 			});
 		}
 	clearKeySelection();
+	shrinkToContent(latestBefore);
+	markEdited();
+}
+
+void AnimationEditor::deleteEvent(int32 index)
+{
+	if (index < 0 || index >= (int32)m_clip.events.size())
+		return;
+	const float latestBefore = latestContent();
+	m_clip.events.erase(m_clip.events.begin() + index);
+	m_selectedEvent = -1;
+	shrinkToContent(latestBefore);
+	markEdited();
+}
+
+void AnimationEditor::deleteTrack(int32 track)
+{
+	if (track < 0 || track >= (int32)m_clip.tracks.size())
+		return;
+	const float latestBefore = latestContent();
+	m_clip.tracks.erase(m_clip.tracks.begin() + track);
+	clearKeySelection();
+	m_curveRows.clear();
+	if (m_selectedTrack == track)
+		m_selectedTrack = -1;
+	shrinkToContent(latestBefore);
 	markEdited();
 }
 
@@ -507,7 +587,8 @@ void AnimationEditor::moveSelectedKeys(float delta)
 {
 	if (m_keySelection.empty() || delta == 0.0f)
 		return;
-	const float eps = frameDuration() * 0.25f;
+	const float eps = gridStep() * 0.25f;
+	const float latestBefore = latestContent();
 	oc::unordered_set<uint64> moved;
 	float latest = 0.0f;
 	for (uint32 t = 0; t < (uint32)m_clip.tracks.size(); ++t)
@@ -543,8 +624,8 @@ void AnimationEditor::moveSelectedKeys(float delta)
 			});
 		}
 	m_keySelection = oc::move(moved);
-	if (latest > m_clip.duration)
-		m_clip.duration = latest;
+	extendTo(latest);
+	shrinkToContent(latestBefore);
 	markEdited();
 }
 
@@ -616,7 +697,7 @@ void AnimationEditor::pasteKeys(float atTime)
 		aeWithKeys(m_clip.tracks[track], ck.channel, [&](const auto& keys)
 		{
 			for (const auto& k : keys)
-				if (glm::abs(k.time - t) <= frameDuration() * 0.25f)
+				if (glm::abs(k.time - t) <= gridStep() * 0.25f)
 					selectKey((uint32)track, ck.channel, k.time, true);
 		});
 	}
@@ -696,17 +777,30 @@ void AnimationEditor::editBonePose(int32 bone, ClipChannel channel, const glm::v
 
 void AnimationEditor::setClipDuration(float seconds, bool scaleKeys)
 {
-	seconds = glm::max(seconds, frameDuration());
-	if (scaleKeys && m_clip.duration > 1e-6f)
+	const float oldDuration = m_clip.duration;
+	if (scaleKeys && oldDuration > 1e-6f)
 	{
-		const float s = seconds / m_clip.duration;
+		// The keys stay on their steps: the step count holds, the step scales. Events are normalized, so they follow by themselves.
+		seconds = glm::max(seconds, 1e-3f);
+		const float s = seconds / oldDuration;
 		for (ClipTrack& track : m_clip.tracks)
 			for (uint32 c = 0; c < c_numClipChannels; ++c)
 				aeWithKeys(track, ClipChannel(c), [&](auto& keys) { for (auto& k : keys) k.time *= s; });
 		clearKeySelection();
+		m_clip.duration = seconds;
+		m_time *= s;
 	}
-	m_clip.duration = seconds;
-	m_time = glm::min(m_time, seconds);
+	else
+	{
+		// The step holds: the clip is trimmed or extended by whole steps, and the events keep their seconds.
+		const float step = gridStep();
+		m_clip.steps = (uint32)glm::max(glm::round(seconds / step), 1.0f);
+		m_clip.duration = float(m_clip.steps) * step;
+		if (oldDuration > 1e-6f)
+			for (AnimationEventKey& ev : m_clip.events)
+				ev.normalizedTime = glm::clamp(ev.normalizedTime * oldDuration / m_clip.duration, 0.0f, 1.0f);
+		m_time = glm::min(m_time, m_clip.duration);
+	}
 	markEdited();
 }
 
@@ -741,10 +835,12 @@ void AnimationEditor::removeUnboundTracks()
 	if (!m_skeleton)
 		return;
 	const size_t before = m_clip.tracks.size();
+	const float latestBefore = latestContent();
 	m_clip.tracks.erase(oc::remove_if(m_clip.tracks.begin(), m_clip.tracks.end(),
 		[&](const ClipTrack& t) { return m_skeleton->findBone(t.bone) < 0; }), m_clip.tracks.end());
 	clearKeySelection();
 	m_selectedTrack = -1;
+	shrinkToContent(latestBefore);
 	markEdited();
 	showMessage("Removed " + oc::to_string(uint32(before - m_clip.tracks.size())) + " tracks the rig has no bone for", false);
 }
@@ -753,24 +849,25 @@ void AnimationEditor::removeUnboundTracks()
 
 void AnimationEditor::setTime(float t)
 {
-	t = glm::clamp(t, 0.0f, glm::max(m_clip.duration, 0.0f));
+	// The playhead may go past the end: the clip grows to there (a click beyond the last step is how a clip gets longer).
+	t = glm::max(t, 0.0f);
+	if (m_hasDocument)
+		extendTo(t);
 	if (t != m_time && !m_recording)
-		clearOverrides(); // an unkeyed edit is gone once the playhead leaves its frame
+		clearOverrides(); // an unkeyed edit is gone once the playhead leaves its step
 	m_time = t;
 }
 
-void AnimationEditor::stepFrames(int32 frames)
+void AnimationEditor::stepFrames(int32 steps)
 {
 	m_playing = false;
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
-	const float frame = glm::round(m_time * fps) + float(frames);
-	setTime(frame / fps);
+	setTime(float(glm::max(stepIndex(m_time) + steps, 0)) * gridStep());
 }
 
 void AnimationEditor::jumpKey(int32 direction)
 {
 	m_playing = false;
-	const float eps = frameDuration() * 0.25f;
+	const float eps = gridStep() * 0.25f;
 	float best = direction > 0 ? FLT_MAX : -FLT_MAX;
 	auto consider = [&](float t)
 	{
@@ -912,12 +1009,8 @@ void AnimationEditor::handleShortcuts()
 	{
 		if (!m_keySelection.empty())
 			deleteSelectedKeys();
-		else if (m_selectedEvent >= 0 && m_selectedEvent < (int32)m_clip.events.size())
-		{
-			m_clip.events.erase(m_clip.events.begin() + m_selectedEvent);
-			m_selectedEvent = -1;
-			markEdited();
-		}
+		else
+			deleteEvent(m_selectedEvent);
 	}
 	if (ImGui::IsKeyPressed(ImGuiKey_Comma, true))
 		io.KeyAlt ? jumpKey(-1) : stepFrames(-1);
@@ -1111,11 +1204,11 @@ void AnimationEditor::renderToolbar()
 	ImGui::SameLine(0.0f, 16.0f);
 	if (ImGui::Button("|<"))
 		setTime(0.0f);
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("First frame (Home)");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Start (Home)");
 	ImGui::SameLine(0.0f, 2.0f);
 	if (ImGui::Button("<"))
 		stepFrames(-1);
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous frame (,)  Alt+, = previous key");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous key step (,)  Alt+, = previous key");
 	ImGui::SameLine(0.0f, 2.0f);
 	if (ImGui::Button(m_playing ? "Pause" : "Play", ImVec2(48.0f, 0.0f)))
 		m_playing = !m_playing;
@@ -1123,11 +1216,11 @@ void AnimationEditor::renderToolbar()
 	ImGui::SameLine(0.0f, 2.0f);
 	if (ImGui::Button(">"))
 		stepFrames(1);
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next frame (.)  Alt+. = next key");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next key step (.)  Alt+. = next key. Past the end, the clip grows by a step.");
 	ImGui::SameLine(0.0f, 2.0f);
 	if (ImGui::Button(">|"))
 		setTime(m_clip.duration);
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Last frame (End)");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("End (End)");
 
 	// Record
 	ImGui::SameLine(0.0f, 10.0f);
@@ -1151,17 +1244,31 @@ void AnimationEditor::renderToolbar()
 
 	// Frame field
 	ImGui::SameLine(0.0f, 10.0f);
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
-	int frame = (int)glm::round(m_time * fps);
-	const int lastFrame = (int)glm::round(m_clip.duration * fps);
+	int step = stepIndex(m_time);
 	ImGui::SetNextItemWidth(56.0f);
-	if (ImGui::DragInt("##ae_frame", &frame, 0.2f, 0, lastFrame))
+	if (ImGui::DragInt("##ae_step", &step, 0.2f, 0, 100000))
 	{
 		m_playing = false;
-		setTime(float(frame) / fps);
+		setTime(float(step) * gridStep());
 	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("The playhead's key step. Past the last step, the clip grows to there.");
 	ImGui::SameLine(0.0f, 4.0f);
-	ImGui::Text("/ %d   %.3f s", lastFrame, m_time);
+	ImGui::Text("/ %u   %.3f / %.3f s", m_clip.steps, m_time, m_clip.duration);
+
+	// The key grid: subdivide where the motion needs more keys.
+	ImGui::SameLine(0.0f, 10.0f);
+	if (ImGui::Button("Subdivide"))
+		setSteps(m_clip.steps * 2);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Twice as many key steps over the same length (%u -> %u). The keys keep their times.", m_clip.steps, m_clip.steps * 2);
+	ImGui::SameLine(0.0f, 2.0f);
+	ImGui::BeginDisabled(m_clip.steps < 2);
+	if (ImGui::Button("Merge"))
+		setSteps(glm::max(m_clip.steps / 2, 1u));
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("Half as many key steps. Keys between the new steps stay where they are.");
 
 	// View + clip menu
 	ImGui::SameLine(0.0f, 16.0f);
@@ -1178,7 +1285,7 @@ void AnimationEditor::renderToolbar()
 		ImGui::OpenPopup("##ae_clip");
 	if (ImGui::BeginPopup("##ae_clip"))
 	{
-		ImGui::Checkbox("Snap to frames", &m_snap);
+		ImGui::Checkbox("Snap to key steps", &m_snap);
 		ImGui::Checkbox("Times in seconds", &m_showSeconds);
 		ImGui::SetNextItemWidth(80.0f);
 		ImGui::DragFloat("Playback speed", &m_playSpeed, 0.01f, -4.0f, 4.0f, "%.2fx");
@@ -1192,7 +1299,7 @@ void AnimationEditor::renderToolbar()
 		ImGui::Separator();
 		if (ImGui::MenuItem("Reduce keys..."))
 			m_openReducePopup = true;
-		if (ImGui::MenuItem("Match last frame to first", nullptr, false, m_clip.duration > 0.0f))
+		if (ImGui::MenuItem("Match the end pose to the start", nullptr, false, m_clip.duration > 0.0f))
 			matchLoopPose();
 		if (ImGui::MenuItem("Remove tracks the rig has no bone for", nullptr, false, m_skeleton != nullptr))
 			removeUnboundTracks();
@@ -1268,7 +1375,7 @@ void AnimationEditor::renderBoneInspector(int32 bone)
 	if (overridden)
 		ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Unkeyed edit: K keys it, moving the playhead drops it");
 	else if (m_recording)
-		ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Recording: an edit keys frame %d", (int)glm::round(m_time * m_clip.frameRate));
+		ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Recording: an edit keys step %d", stepIndex(m_time));
 
 	glm::vec3 pos, scale;
 	glm::quat rot;
@@ -1280,7 +1387,7 @@ void AnimationEditor::renderBoneInspector(int32 bone)
 		if (track < 0)
 			return false;
 		bool hit = false;
-		const float eps = frameDuration() * 0.25f;
+		const float eps = gridStep() * 0.25f;
 		aeWithKeys(m_clip.tracks[track], channel, [&](const auto& keys) { for (const auto& k : keys) hit |= glm::abs(k.time - m_time) <= eps; });
 		return hit;
 	};
@@ -1351,11 +1458,7 @@ void AnimationEditor::renderBoneInspector(int32 bone)
 	{
 		ImGui::SameLine();
 		if (ImGui::Button("Delete track"))
-		{
-			m_clip.tracks.erase(m_clip.tracks.begin() + track);
-			clearKeySelection();
-			markEdited();
-		}
+			deleteTrack(track);
 	}
 	const int32 parent = m_skeleton->parentIndices[bone];
 	if (parent >= 0)
@@ -1403,11 +1506,14 @@ void AnimationEditor::renderKeyInspector()
 	float earliest = FLT_MAX;
 	for (const KeyRef& ref : keys)
 		earliest = glm::min(earliest, ref.time);
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
-	aeLabel(keys.size() == 1 ? "Frame" : "First frame");
-	int frame = (int)glm::round(earliest * fps);
-	if (ImGui::InputInt("##ae_keyframe", &frame, 1, 5) && frame >= 0)
-		moveSelectedKeys(float(frame) / fps - earliest);
+	aeLabel(keys.size() == 1 ? "Step" : "First step");
+	int step = stepIndex(earliest);
+	if (ImGui::InputInt("##ae_keystep", &step, 1, 5) && step >= 0)
+		moveSelectedKeys(float(step) * gridStep() - earliest);
+	aeLabel("Time");
+	float seconds = earliest;
+	if (ImGui::DragFloat("##ae_keytime", &seconds, 0.001f, 0.0f, 600.0f, "%.4f s") && seconds >= 0.0f)
+		moveSelectedKeys(seconds - earliest); // off the grid on purpose: a typed time is exact
 
 	if (keys.size() == 1 && keys[0].track < m_clip.tracks.size())
 	{
@@ -1465,22 +1571,17 @@ void AnimationEditor::renderEventInspector()
 		ev.name = m_eventNameBuf;
 		markEdited();
 	}
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
 	const float duration = glm::max(m_clip.duration, 1e-6f);
-	int frame = (int)glm::round(ev.normalizedTime * duration * fps);
-	aeLabel("Frame");
-	if (ImGui::InputInt("##ae_evframe", &frame, 1, 5))
+	int step = stepIndex(ev.normalizedTime * duration);
+	aeLabel("Step");
+	if (ImGui::InputInt("##ae_evstep", &step, 1, 5))
 	{
-		ev.normalizedTime = glm::clamp(float(frame) / fps / duration, 0.0f, 1.0f);
+		ev.normalizedTime = glm::clamp(float(step) * gridStep() / duration, 0.0f, 1.0f);
 		markEdited();
 	}
 	ImGui::TextDisabled("Fires into the entity's script / animator onEvent");
 	if (ImGui::Button("Delete event"))
-	{
-		m_clip.events.erase(m_clip.events.begin() + m_selectedEvent);
-		m_selectedEvent = -1;
-		markEdited();
-	}
+		deleteEvent(m_selectedEvent);
 }
 
 void AnimationEditor::renderClipSettings()
@@ -1488,30 +1589,32 @@ void AnimationEditor::renderClipSettings()
 	ImGui::Spacing();
 	if (!ImGui::CollapsingHeader("Clip", ImGuiTreeNodeFlags_DefaultOpen))
 		return;
-	const float fps = glm::max(m_clip.frameRate, 1.0f);
+	// Typed, not dragged: a whole-step trim rounds every small drag back to where it was.
 	aeLabel("Length");
 	float seconds = m_clip.duration;
-	if (ImGui::DragFloat("##ae_len", &seconds, 0.01f, 1.0f / fps, 600.0f, "%.3f s"))
-		setClipDuration(seconds, false);
+	if (ImGui::InputFloat("##ae_len", &seconds, 0.0f, 0.0f, "%.3f s", ImGuiInputTextFlags_EnterReturnsTrue) && seconds > 0.0f)
+		setClipDuration(seconds, m_lengthScalesKeys);
 	if (ImGui::BeginPopupContextItem("##ae_len_ctx"))
 	{
-		if (ImGui::MenuItem("Half speed (scale keys x2)"))
+		if (ImGui::MenuItem("Half speed (keys x2)"))
 			setClipDuration(m_clip.duration * 2.0f, true);
-		if (ImGui::MenuItem("Double speed (scale keys x0.5)"))
+		if (ImGui::MenuItem("Double speed (keys x0.5)"))
 			setClipDuration(m_clip.duration * 0.5f, true);
 		ImGui::EndPopup();
 	}
-	aeLabel("Frames");
-	int frames = (int)glm::round(m_clip.duration * fps);
-	if (ImGui::InputInt("##ae_frames", &frames, 1, 10) && frames >= 1)
-		setClipDuration(float(frames) / fps, false);
-	aeLabel("Frame rate");
-	float rate = m_clip.frameRate;
-	if (ImGui::DragFloat("##ae_fps", &rate, 0.1f, 1.0f, 240.0f, "%.0f fps") && rate >= 1.0f)
-	{
-		m_clip.frameRate = rate;
-		markEdited();
-	}
+	ImGui::Dummy(ImVec2(92.0f - ImGui::GetStyle().ItemSpacing.x, 0.0f));
+	ImGui::SameLine();
+	ImGui::Checkbox("Keys scale with the length", &m_lengthScalesKeys);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("On: the keys stay on their steps and the step gets longer or shorter.\n"
+			"Off: the step stays; the clip is trimmed or extended by whole steps.");
+	aeLabel("Key steps");
+	int steps = (int)m_clip.steps;
+	if (ImGui::InputInt("##ae_steps", &steps, 1, 10) && steps >= 1)
+		setSteps((uint32)steps);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("The length in this many equal steps; keys snap to them. A step is %.4f s.\n"
+			"The keys keep their times when this changes.", gridStep());
 	aeLabel("Loop");
 	if (ImGui::Checkbox("##ae_loop", &m_clip.loop))
 		markEdited();

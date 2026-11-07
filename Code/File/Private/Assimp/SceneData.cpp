@@ -75,11 +75,13 @@ namespace
             }
         }
 
-        // FBX gives its scene frame rate as the tick rate; glTF ticks in milliseconds. Otherwise the key spacing tells.
+        // The key grid = the file's frames. FBX gives its scene frame rate as the tick rate; glTF ticks in milliseconds. Otherwise the key spacing tells.
+        float frameRate = 30.0f;
         if (ticksPerSecond >= 1.0 && ticksPerSecond <= 240.0)
-            clip.frameRate = (float)glm::round(ticksPerSecond);
+            frameRate = (float)glm::round(ticksPerSecond);
         else if (minSpacing > 1e-4f && minSpacing < 1.0f)
-            clip.frameRate = glm::clamp(glm::round(1.0f / minSpacing), 1.0f, 240.0f);
+            frameRate = glm::clamp(glm::round(1.0f / minSpacing), 1.0f, 240.0f);
+        clip.steps =(uint32)glm::max(glm::round(clip.duration * frameRate), 1.0f);
         sortClipKeys(clip);
         return clip;
     }

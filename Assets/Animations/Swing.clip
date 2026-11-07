@@ -2,7 +2,7 @@
 # Step / Smooth after it sets how it blends to the next key (default Linear).
 Clip 1
 	Duration 2
-	FrameRate 15
+	Steps 30
 	Loop true
 	PreviewRig character
 	Track RightForeArm

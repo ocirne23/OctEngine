@@ -7,7 +7,7 @@ import Core.glm;
 //
 // Clip 1
 //     Duration 1.0333
-//     FrameRate 30
+//     Steps 31                the editor's key grid: the duration in this many equal steps
 //     Loop true
 //     PreviewRig character
 //     Event footstep 0.25
@@ -269,10 +269,12 @@ bool parseClipAsset(oc::string_view text, ClipAsset& out, oc::string& error)
             if (tokens.size() < 2 || !toFloat(tokens[1], out.duration))
                 return fail("Duration needs seconds");
         }
-        else if (keyIs(key, "FrameRate"))
+        else if (keyIs(key, "Steps"))
         {
-            if (tokens.size() < 2 || !toFloat(tokens[1], out.frameRate) || out.frameRate <= 0.0f)
-                return fail("FrameRate needs a positive number");
+            float n = 0.0f;
+            if (tokens.size() < 2 || !toFloat(tokens[1], n) || n < 1.0f)
+                return fail("Steps needs a step count of 1 or more");
+            out.steps = (uint32)n;
         }
         else if (keyIs(key, "Loop"))
             out.loop = tokens.size() < 2 || keyIs(tokens[1], "true") || tokens[1] == "1";
@@ -324,8 +326,8 @@ oc::string writeClipAsset(const ClipAsset& clip)
     out += "# Step / Smooth after it sets how it blends to the next key (default Linear).\n";
     out += "Clip 1\n\tDuration ";
     appendFloat(out, clip.duration);
-    out += "\n\tFrameRate ";
-    appendFloat(out, clip.frameRate);
+    out += "\n\tSteps ";
+    out += oc::to_string(clip.steps);
     out += clip.loop ? "\n\tLoop true\n" : "\n\tLoop false\n";
     if (!clip.previewRig.empty())
     {

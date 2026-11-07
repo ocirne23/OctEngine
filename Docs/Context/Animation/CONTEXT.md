@@ -22,7 +22,9 @@ uploads it.
 ## Clips: one path from keys to the player
 
 **Every clip the runtime plays is a `ClipAsset` first** ([ClipAsset.ixx](../../../Code/Animation/Private/ClipAsset.ixx)): keyframes by
-BONE NAME, a duration, a frame rate (the editor's grid only), a loop flag, events and the editor's preview rig. It knows no skeleton;
+BONE NAME, a duration, a step count (`steps`: the editor's key grid, the duration in that many equal steps - there is NO frame rate;
+keys are in seconds and playback is continuous), a loop flag, events and the editor's preview rig. The importer sets the step count to the
+file's frames (`duration * fps`). It knows no skeleton;
 `buildAnimationClip(asset, skeleton, name)` resolves the track names into an `AnimationClip` (a track the rig has no bone for is left out).
 
 | Source of a global clip name | How it becomes a `ClipAsset` |
@@ -38,7 +40,7 @@ no `.apl` change. `ISceneData::loadAnimations` (the old direct FBX-to-set call) 
 ```
 Clip 1
     Duration 1.0333
-    FrameRate 30
+    Steps 31                       the key grid: the duration in this many equal steps
     Loop true
     PreviewRig character
     Event footstep 0.25            name, normalized time (like .anm)
