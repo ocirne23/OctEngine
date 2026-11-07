@@ -287,7 +287,8 @@ sends it.
 
 ## Game HUD overlay (`UI:GameHudOverlay`)
 
-Draws the in-game HUD OVER the viewport, with `Core.GameHud` as the model.
+Draws the in-game HUD OVER the viewport, with `Core.GameHud` as the model (bars, counters, world labels, the popup,
+the hotbar and the center crosshair).
 
 **Pure `ImDrawList` painting into the viewport window's own draw list — no ImGui widgets, so it never
 takes focus or eats input.** The widget pass calls `render()` while the Viewport (or `##GameViewport`)

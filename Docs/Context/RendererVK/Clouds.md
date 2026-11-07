@@ -223,7 +223,8 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
   * **Fog OFF: the "Cloud apply" scene stage** (`cloud_apply.fs.glsl`, before the fog apply slot, gated on
     `cloudsEnabled() && !fog`). `colorWriteAlpha = false`.
 * **Known limitation:** particles and transparents draw before the apply, so one inside a cloud gets the
-  cloud of the opaque pixel behind it — the fog apply has the same limitation.
+  cloud of the opaque pixel behind it — the fog apply has the same limitation. The force fields are the
+  exception: they draw AFTER the applies (the last scene stages, see Force), so a cloud never covers a bubble.
 
 ### Clouds in the fog
 

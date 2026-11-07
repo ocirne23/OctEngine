@@ -90,7 +90,7 @@ export struct GameUnitComponent
     float heightLimit = 0.0f;
     float effectiveHeightLimit() const // also read by GamePlayer for the capsule's puppet
     {
-        if (heightLimit < 0.0f)
+        if (heightLimit < 0.0f || !params.flatGround) // the sandbox terrain world has no absolute ceiling
             return FLT_MAX;
         return heightLimit > 0.0f ? heightLimit : params.heightLimit;
     }

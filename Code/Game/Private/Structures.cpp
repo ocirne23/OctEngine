@@ -376,11 +376,11 @@ void StructureSystem::clear()
 
 // ---------------------------------------------------------------- nodes + world
 
-void StructureSystem::spawnNode(float x, float z, ENodeType type)
+void StructureSystem::spawnNode(float x, float z, ENodeType type, float groundY)
 {
     Node node;
     node.type = type;
-    node.pos = glm::vec3(x, 0.8f, z);
+    node.pos = glm::vec3(x, groundY + c_nodeHeight, z);
     node.entity = Globals::world.spawnAssetFile(
         type == ENodeType::Mineral ? "Entities/Game/mineralNode.pre" : "Entities/Game/fuelNode.pre",
         Transform(node.pos), true);

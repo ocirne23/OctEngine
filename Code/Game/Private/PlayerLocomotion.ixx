@@ -1,4 +1,4 @@
-export module App.PlayerLocomotion;
+export module Game:PlayerLocomotion;
 
 import Core;
 import Core.glm;
@@ -8,7 +8,8 @@ import Settings;
 import Animation;
 import Entity;
 
-// Camera-locked strafe for the local key C capsule (playerCapsule.pre, ThirdPersonAnimator) with only FORWARD clips:
+// Camera-locked strafe for a ThirdPersonAnimator body with only FORWARD clips - the testbed's key C capsule
+// (playerCapsule.pre, App's InputControls) and the co-op player in the sandbox world (playerCoop.pre, GamePlayer):
 //
 // * the entity yaw follows the camera yaw, so the upper body always faces where the camera looks;
 // * the HIPS turn (a model-space rotation, so the legs follow) toward the move direction, and Spine / Chest / Neck turn

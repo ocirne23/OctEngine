@@ -126,6 +126,8 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
     const bool directed = preferDirXZ && glm::dot(*preferDirXZ, *preferDirXZ) > 1e-6f;
     const float start = directed ? std::atan2(preferDirXZ->y, preferDirXZ->x)
                                  : glm::linearRand(0.0f, glm::two_pi<float>());
+    // 1 m over the ground: the y = 0 plane on the flat maps, the terrain under the point in the sandbox world.
+    const auto onGround = [&](float x, float z) { return glm::vec3(x, structures.groundHeightAt(x, z, center.y) + 1.0f, z); };
     for (int k = 0; k < 8; ++k)
     {
         // k -> 0, +1, -1, +2, -2, +3, -3, +4 steps of 45 degrees from the start angle
@@ -134,9 +136,9 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
         const glm::vec3 p(center.x + std::cos(a) * ringRadius, 1.0f, center.z + std::sin(a) * ringRadius);
         if (structures.cellsFree(EStructureType::Emitter, p,
             glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true)) // 1x1 probe; cables are walk-through
-            return p;
+            return onGround(p.x, p.z);
     }
-    return glm::vec3(center.x + std::cos(start) * ringRadius, 1.0f, center.z + std::sin(start) * ringRadius);
+    return onGround(center.x + std::cos(start) * ringRadius, center.z + std::sin(start) * ringRadius);
 }
 
 void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind)

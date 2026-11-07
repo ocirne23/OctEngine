@@ -143,6 +143,7 @@ int main(int argc, char* argv[])
     InputControls controls(gizmo, session.cameraController(), Globals::world);
     controls.setProfileDump(options.profileOutPath, options.profileOptions);
     session.attachControls(controls);
+    session.attachWindow(window); // the co-op mouse look's relative mouse mode
     session.installNetworkCallbacks();
     if (options.mainMenu())
         session.enterMainMenu();

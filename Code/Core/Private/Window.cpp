@@ -190,6 +190,11 @@ void Window::setTitle(oc::string_view title)
     runOnWindowThread([this, t = oc::string(title)] { SDL_SetWindowTitle((SDL_Window*)m_windowHandle, t.c_str()); });
 }
 
+void Window::setRelativeMouseMode(bool enabled)
+{
+    runOnWindowThread([this, enabled] { SDL_SetWindowRelativeMouseMode((SDL_Window*)m_windowHandle, enabled); });
+}
+
 void Window::getWindowSize(glm::ivec2& size) const
 {
     SDL_GetWindowSizeInPixels((SDL_Window*)m_windowHandle, &size.x, &size.y); // cached-state read, cross-thread tolerated

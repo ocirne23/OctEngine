@@ -327,6 +327,10 @@ it idles the device, re-sizes / creates or destroys the targets, and re-injects
   2×2 bilinear weights × relative depth similarity, where each half texel's representative depth is
   the full-res depth at its own march uv — the exact value it clamped against — with a nearest-depth
   fallback when all four sit across a silhouette.
+* **"Force shells" and "Force union blend" are the LAST scene stages**, after the far-tree, cloud and fog applies:
+  those volumes write no depth, so drawn before them a bubble was covered by every cloud and far tree in front of
+  the terrain behind it. Bubbles stand near the player, in front of both; the opaque depth test still hides them
+  behind terrain and buildings, and the fog no longer lies over them.
 * OFF: full-res interval target, the march draws directly into scene colour, and NO march
   framebuffer exists.
 * **VR is untouched** (its union indirect is 0). In half-res mode the march pass still runs as

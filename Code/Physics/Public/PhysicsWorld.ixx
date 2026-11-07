@@ -110,6 +110,9 @@ public:
     // claimant can legitimately push, never a wall to validate against).
     RayHit castRayClosest(const glm::vec3& origin, const glm::vec3& translation, uint64 maskBits = PhysicsLayers::All,
         const PhysicsBody* ignoreBody = nullptr, bool staticOnly = false) const;
+    // True when any shape in maskBits overlaps the axis-aligned box (the game's placement test against tree and rock
+    // colliders). Main thread, outside the step and the body create / destroy windows - like the ray.
+    bool overlapBoxAny(const glm::vec3& center, const glm::vec3& halfExtents, uint64 maskBits) const;
 
     // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
     // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or

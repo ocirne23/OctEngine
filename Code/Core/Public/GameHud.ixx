@@ -166,6 +166,13 @@ public:
 		m_hotbarVisible = visible;
 	}
 
+	// A small cross at the viewport center (the third-person game aims there).
+	void setCrosshair(bool visible)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_crosshair = visible;
+	}
+
 	void setBar(oc::string_view name, float value, float maxValue, const glm::vec3& color)
 	{
 		const std::lock_guard lock(m_mutex);
@@ -297,6 +304,7 @@ public:
 		int     columns = 0;
 		int     selectedSlot = 0;
 		bool    hotbarActive = false;
+		bool    crosshair = false;
 		oc::vector<HudBar> bars;
 		oc::vector<HudCounter> counters;
 		oc::vector<HudWorldLabel> worldLabels;
@@ -316,6 +324,7 @@ public:
 		out.columns = m_columns;
 		out.selectedSlot = m_selectedSlot;
 		out.hotbarActive = hotbarActiveLocked();
+		out.crosshair = m_crosshair;
 		out.bars = m_bars;
 		out.counters = m_counters;
 		out.worldLabels = m_worldLabels;
@@ -352,6 +361,7 @@ private:
 	int  m_columns = 0; // 0 = single row
 	int  m_selectedSlot = 0;
 	bool m_hotbarVisible = true; // an explicit off-switch; slots being assigned is what shows it
+	bool m_crosshair = false;
 	oc::vector<HudBar> m_bars;
 	oc::vector<HudCounter> m_counters;
 	oc::vector<HudWorldLabel> m_worldLabels;

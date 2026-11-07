@@ -422,7 +422,8 @@ void StructureSystem::drawDebug() const
     {
         const glm::vec3 base = node.type == ENodeType::Mineral
             ? glm::vec3(0.2f, 0.4f, 1.0f) : glm::vec3(1.0f, 0.6f, 0.15f);
-        drawCircle(glm::vec3(node.pos.x, 0.3f, node.pos.z), m_settings.extractorSnapRadius, packColor(base), 24);
+        drawCircle(glm::vec3(node.pos.x, node.pos.y - c_nodeHeight + 0.3f, node.pos.z), m_settings.extractorSnapRadius,
+            packColor(base), 24);
     }
 
     // Constructor build/repair reach (amber), medic heal reach (green) + red rings on unpowered
@@ -432,13 +433,14 @@ void StructureSystem::drawDebug() const
     const uint32 unpoweredColor = packColor(glm::vec3(1.0f, 0.25f, 0.2f));
     for (const Ref& s : m_frame)
     {
+        const glm::vec3 ground = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f);
         if (s.type == EStructureType::Constructor && !s.state->blueprint)
-            drawCircle(glm::vec3(s.entity->pos.x, 0.4f, s.entity->pos.z), m_settings.constructorRange, constructorRing, 40);
+            drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), m_settings.constructorRange, constructorRing, 40);
         if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered)
-            drawCircle(glm::vec3(s.entity->pos.x, 0.4f, s.entity->pos.z), medicHealRadius(), medicRing, 40);
+            drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), medicHealRadius(), medicRing, 40);
         if ((hasShieldEmitter(s.type) || s.type == EStructureType::Extractor
             || s.type == EStructureType::Constructor || s.type == EStructureType::MedicStation
             || s.type == EStructureType::Fabricator) && !s.state->powered && !s.state->blueprint)
-            drawCircle(glm::vec3(s.entity->pos.x, 0.3f, s.entity->pos.z), 1.0f, unpoweredColor, 16);
+            drawCircle(ground + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, unpoweredColor, 16);
     }
 }

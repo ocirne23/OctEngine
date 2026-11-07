@@ -1,0 +1,42 @@
+Prefab playerCoop
+	Global true
+	Name Player
+	Position 0 0 0
+	Rotation 0 -0 0
+	Scale 0.4
+	# The co-op player in the sandbox world: player.pre with the testbed key C capsule's animation
+	# (ThirdPersonAnimator, driven by Game:PlayerLocomotion from GamePlayer) instead of PlayerBody.dsl.
+	Component Render
+		ObjectContainer character
+		Node ROOT
+		Type SkinnedMesh
+			Rig Humanoid
+		Color 0.4 0.8 1
+		Position 0 -2 0
+		Scale 0.0125
+	Component Animator
+		Animator ThirdPersonAnimator
+	Component Physics
+		Body Dynamic
+		Layer Player
+		Shape Capsule
+		Radius 1
+		HalfHeight 1
+		LockRotation true
+		Density 120
+		Friction 0.3
+	Component Force
+		Output 1.5
+		Reach 3
+		Direction 0 1 0
+	Component Light
+		Light Point
+			Offset 0 3.5 0
+			Color 1 0.75 0.55
+			Intensity 17
+			Range 35
+	Component GameUnit
+		ShortName PLR
+		Puppet true
+		AlwaysDisplayHealth true
+	Component Network

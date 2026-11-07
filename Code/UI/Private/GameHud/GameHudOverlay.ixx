@@ -31,7 +31,7 @@ public:
 		if (!hud.popup.active)
 			Globals::gameHud.setPopupButtonRects({});
 		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty() && hud.worldLabels.empty()
-			&& !hud.popup.active)
+			&& !hud.popup.active && !hud.crosshair)
 			return;
 
 		ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -59,6 +59,22 @@ public:
 		const float fontSize = ImGui::GetFontSize() * s;
 		constexpr float noWrap = 1.0e30f; // CalcTextSizeA max width: never wrap
 		char buf[64];
+
+		// ---- the crosshair: the third-person game aims at the viewport center ----
+		if (hud.crosshair)
+		{
+			const ImVec2 c((vpMin.x + vpMax.x) * 0.5f, (vpMin.y + vpMax.y) * 0.5f);
+			const float arm = 7.0f * s, gap = 2.5f * s;
+			for (int pass = 0; pass < 2; ++pass) // dark outline, then the light cross
+			{
+				const ImU32 color = pass == 0 ? col(0.0f, 0.0f, 0.0f, 0.6f) : col(1.0f, 1.0f, 1.0f, 0.9f);
+				const float width = (pass == 0 ? 3.5f : 1.5f) * s;
+				dl->AddLine(ImVec2(c.x - arm, c.y), ImVec2(c.x - gap, c.y), color, width);
+				dl->AddLine(ImVec2(c.x + gap, c.y), ImVec2(c.x + arm, c.y), color, width);
+				dl->AddLine(ImVec2(c.x, c.y - arm), ImVec2(c.x, c.y - gap), color, width);
+				dl->AddLine(ImVec2(c.x, c.y + gap), ImVec2(c.x, c.y + arm), color, width);
+			}
+		}
 
 		// ---- top left: bars, then counters, each entry under the previous ----
 		{

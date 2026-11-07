@@ -773,7 +773,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   marched this frame — the fog apply is a cached secondary, so the flag rides the UBO), at the march's
   transmittance-weighted MEAN DISTANCE (`exp2` of the distances' y): fog laid over the finished trees fogged them at the
   scene depth — the terrain BEHIND them — and they read much hazier than the billboards beside them. Trees and clouds
-  are two layers composed front to back by distance (the cloud formula per layer).
+  are two layers composed front to back by distance (the cloud formula per layer). The force fields draw after
+  every one of these applies (the last scene stages), so a far tree never covers a bubble.
 * **Hand-over:** the tree cull gets `u_present_treeVolumeStart` = `farTreesStart()` + "Far overlap": a tree whose CENTRE
   lies past it drops its mesh AND its billboard from MAIN (the billboard stays the shadow caster). Over the overlap band
   both draw while the volume fades in — an overlap, not a seam; the billboards switch off at its end (a dithered

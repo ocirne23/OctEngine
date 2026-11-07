@@ -102,6 +102,22 @@ public:
     // camera owns LMB-look and WASD, which are the game's place/select and grid hotkeys).
     bool cameraDetached() const { return m_player.cameraDetached(); }
 
+    // CO-OP IN THE SANDBOX WORLD ("Game/Coop/Sandbox world", read at construction): the procedural terrain, trees and
+    // ocean instead of the generated rock map, the third-person player (WASD, mouse look, crosshair aim), the grid
+    // hotkeys on the number keys, and placement on the terrain (flat enough, dry, no tree or rock). The App switches
+    // the terrain and ocean on for it (Session::startWorldAndGame).
+    bool sandboxWorld() const { return m_sandboxWorld; }
+    // Where the player starts (the App passes the sandbox camera's start and direction, or (0, 0) for a lobby-seeded
+    // world): call before spawnWorld. The player spawns on the ground under it, the camera looks along `dir`, and the
+    // Base site search starts a little ahead along it. y = the camera height to wait at while the terrain streams in.
+    void setWorldAnchor(const glm::vec3& anchor, const glm::vec3& dir)
+    {
+        m_worldAnchor = anchor;
+        m_worldAnchorDir = dir;
+    }
+    // The App holds the window in RELATIVE mouse mode while this is true (the third-person mouse look).
+    bool wantsMouseCapture() const { return m_enabled && m_sandboxWorld && !m_player.cameraDetached(); }
+
     bool enabled() const { return m_enabled; }
 
     // PROFILING SCENARIO (`--scenario <save>`, main calls it once at `--scenario-frame`): loads the
@@ -151,9 +167,10 @@ private:
     {
         bool valid = false;
         bool affordable = false;
-        glm::vec3 pos{ 0.0f };
+        glm::vec3 pos{ 0.0f }; // the snapped GROUND point (y = the height the structure stands on)
         EStructureType type = EStructureType::Emitter;
         int nodeIndex = -1; // Extractor: the free node the ghost snapped to
+        StructureSystem::EGroundFit ground = StructureSystem::EGroundFit::Ok; // the sandbox world's ground test
     };
     // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W open
     // the build categories (Combat/Production), A/S/D arm a cable straight from the root page,
@@ -161,6 +178,10 @@ private:
     enum class EPlayerMode : uint8 { Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
+    // The sandbox world's ground test on a snapped position (always true on the flat maps): p.y = the stand height.
+    bool fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) const;
+    StructureSystem::EGroundFit m_frameGroundFit = StructureSystem::EGroundFit::Ok; // this frame's refused ghost
+    StructureSystem::EGroundFit m_shownGroundFit = StructureSystem::EGroundFit::Ok; // what the HUD line shows
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
     void refreshBuildHotbar(); // repopulates slot labels/counts/hover cards for the current grid level
     // The hotbar hover cards, one per structure type: rebuilt once a REAL second (the tweaks they
@@ -341,7 +362,8 @@ private:
     float laneSeedWidth() const { return m_npcs.laneWidth(); }
 
     MouseListenerHandle m_mouse; // caches window-space mouse pos, wheel + RMB drag accumulation
-    glm::vec2 m_mousePos{ 0.0f };
+    glm::vec2 m_mousePos{ 0.0f }; // the sandbox world: always the viewport center (crosshair aim)
+    glm::vec2 m_lookDelta{ 0.0f }; // the sandbox world: relative mouse motion since the last windowed frame
     float m_dragDeltaX = 0.0f; // MIDDLE-held horizontal pixels this frame (consumed by the camera)
     float m_wheelAccum = 0.0f;
     bool m_mmbDown = false;
@@ -509,6 +531,25 @@ private:
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.
     int aiAliveCount() const;
 
+    // ---- THE SANDBOX WORLD (see sandboxWorld()) ----
+    bool m_sandboxWorld = false;
+    glm::vec3 m_worldAnchor{ 0.0f, 20.0f, 0.0f };    // setWorldAnchor: the player's start
+    glm::vec3 m_worldAnchorDir{ 0.0f, 0.0f, -1.0f }; // ... and the start view direction
+    // The AUTHORITY places the Base once the terrain collider has streamed in under the anchor: the search waits
+    // until the ground has been there for a moment (the tree and rock colliders follow the terrain), then takes the
+    // nearest site ahead of the anchor where the Base passes the ground test, spawns the player on the anchor and
+    // scatters the nodes.
+    bool m_siteFound = false;
+    float m_siteGroundTimer = 0.0f;
+    float m_siteWaitTimer = 0.0f;
+    void tickBaseSite(float deltaSec);
+    void spawnLocalPlayer(); // the authority's own capsule at m_playerStart (+ the server-primary flag)
+    void spawnSandboxNodes(); // resource nodes on fitting ground around the Base (+ the GNd broadcast)
+    void sendNode(int index); // server: one node (GNd) - the clients' node list, in order
+    float groundY(float x, float z, float fallback) const { return m_structures.groundHeightAt(x, z, fallback); }
+    // The "can't build here" HUD line, kept to the frames with a refused ghost.
+    void showGroundReason(StructureSystem::EGroundFit fit);
+
     bool m_enabled = false;
     uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the
                              // team the SERVER assigned our capsule (read off its puppet
@@ -533,7 +574,7 @@ private:
 // ---- Shared by the Match*.cpp implementation units (module linkage, NOT exported) ----
 // GameMatch's bodies are split by topic:
 //   Match.cpp        construction, spawnWorld, the three frame entry points, the nav feed, the
-//                    player ticks (melee, healing), the HUD
+//                    player ticks (melee, healing), the HUD, the sandbox world's Base site + nodes
 //   MatchMap.cpp     the generated terrain: the co-op grid, the PvP arenas, rocks/nodes, the
 //                    per-team Base anchors
 //   MatchCoop.cpp    the co-op director: waves, the spawn trickle, the ambient wander, the trickle
@@ -554,6 +595,8 @@ inline constexpr float c_coopHalfSize = 270.0f;
 inline constexpr float c_coopGroundEdge = 296.0f;    // spawn clamp just inside the 600 m ground
 // The 12 hotbar slots' key captions: QWER / ASDF / ZXCV, row-major (see MatchInput.cpp).
 inline constexpr oc::string_view c_gridKeyLabels[12] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
+// The same slots on the number row (the sandbox world: WASD walk the third-person player).
+inline constexpr oc::string_view c_gridNumberKeyLabels[12] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
 // 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",

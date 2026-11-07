@@ -2,7 +2,8 @@
 
 > Documentation for `Code/App` — the testbed executable: `main.cpp` (ONLY `main()`: the init
 > sequence, the timers, the frame loop), `App.Session`, `App.InputControls`, `App.Tools`,
-> `App.UnattendedRun`. (The lobby and chat MODELS, `LobbySystem` / `ChatSystem`, are `Game:Lobby` /
+> `App.UnattendedRun`. (The key C capsule's strafe animation, `PlayerLocomotion`, is `Game:PlayerLocomotion`: the
+> co-op player shares it.) (The lobby and chat MODELS, `LobbySystem` / `ChatSystem`, are `Game:Lobby` /
 > `Game:Chat`, owned by the Session; the profile report writer is `Profiler::writeReport` with the
 > injected file writer.)
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency
@@ -31,7 +32,7 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 7 | `TweakRegistry::update(dt)` | Synced change detection. |
 | 8 | `input.update` → **`ui.prepare()`** → `controls.update` | The panel prepare jobs overlap everything down to `ui.update`. |
 | 9 | `session.serviceEscapeMenu()` | |
-| 10 | **`joinPostUpdateJobs(Sim)`**, then `session.updateCamera`: `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
+| 10 | **`joinPostUpdateJobs(Sim)`**, then `session.updateCamera` (first the RELATIVE mouse mode edge: on while a co-op sandbox-world game runs on screen with `wantsMouseCapture()`, no escape menu and the viewport focused - `Window::setRelativeMouseMode`, a queued window op): `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
 | 11 | Script reload requests and the UI `EntityChange` drain (windowed), then the script `EntityChange` drain | |
 | 12 | `simDeltaSec = time.getSimDeltaSec()`, `jobSystem.setFrameHasPhysicsStep(physics.willStep(simDt))` | **Read HERE, after the input dispatch and tweak poll, so a pause toggle applies to this very frame.** |
 | 13 | `networkManager.receive(dt)` | Snapshot targets and events land before the sim reads them. |
@@ -86,7 +87,7 @@ Parsed by `parseCommandLine` (Session.ixx); an unknown argument logs a warning.
 | Flag | Effect |
 |---|---|
 | `--game` | The whitebox game instead of the testbed scene. **Ignored with a headless server** — GPU field readbacks drive the authority sim. |
-| `--coop` | PvE. **Needs `--game`**; clients pass it too, since the layout is local. |
+| `--coop` | Co-op. **Needs `--game`**; clients pass it too, since the layout is local. The sandbox world by default; `--tweak "Game/Coop/Sandbox world=0"` for the generated map, `"Game/Coop/Spawn enemies=1"` for enemies. |
 | `--sandbox` | Skips the main menu and boots straight into the sandbox (`startWorldAndGame(false, ...)`). Ignored with `--game`. |
 | `--server` / `--connect <ip>` / `--port N` (default 27888) / `--tickrate N` (10..240, default 60; the headless tick) / `--headless` (only with `--server`) / `--no-encrypt` | |
 | `--scenario <save\|default>` / `--scenario-at <sec>` (default 1) | Runs `GameMatch::runScenario` once; needs `--game`. |
@@ -168,10 +169,11 @@ init-order documentation), the timers and the frame loop.
 `LobbySystem` is a Session member — **plain state, no entity handles.** The UI is the MainMenu's lobby
 page, with `LobbyView` / `LobbyAction` snapshots polled exactly like the menu action.
 
-**EVERY co-op or PvP pick enters the lobby instead of starting** — multiplayer to gather players,
-offline as a LOCAL lobby (see below). The sandbox starts immediately, and command-line runs never
-lobby — **a CLI game server calls `lobby.markStarted` so menu clients joining it still get the go
-signal.**
+**Every MULTIPLAYER co-op or PvP pick, and offline PvP, enters the lobby instead of starting** — multiplayer to
+gather players, offline PvP as a LOCAL lobby (see below). **Offline co-op starts immediately** at the default spawn (the
+sandbox's seed and camera start, see Game's Modes.md), like the sandbox, so the local lobby's world block is unused for
+now. Command-line runs never lobby — **a CLI game server calls `lobby.markStarted` so menu clients joining it still get
+the go signal.**
 
 ## The local lobby and the world block
 
@@ -198,16 +200,20 @@ adds a second column, **the WORLD block** (`LobbyView::local` + `LobbyWorldView`
   streams live over them (the streamer's pumps park on the same per-tile events). **The page's bar is
   the tile count and Start stays disabled until the seeder is done**; the map draws the generated
   tiles' footprint as a square and estimates the tile count for the chosen size. "Re-seed" moves the
-  origin or changes the size; "Unseed" (`UnseedWorld`) drops the overrides again.
+  origin or changes the size; "Unseed" (`UnseedWorld`) puts back the seed, origin and ring radius the first seeding
+  found (never a fixed (0, 0): the sandbox's origin is the "Terrain/Origin" tweaks, and co-op plays on that spot); an
+  unseeded world is left alone.
   The seeder's tile-aligned coverage also becomes the streamer's **generated bounds**
   (`setGeneratedBounds`): the ring never requests a chunk outside it and the generator answers every
   full-detail sample past it from the coarse stage, so nothing outside the playable area costs a
   cold tile.
 * **Start** first calls `TerrainGenV3::unloadModels()` for a seeded world (every tile it needs is on
   disk; the caches keep serving and nothing infers in game), then runs
-  `startWorldAndGame(true, coop)` unchanged: the game spawns over the streamed terrain (its flat ground
-  plane and grid still sit at y = 0 — the match does not read the terrain height), and `exitToMenu`
-  unseeds, resets the preview and switches the terrain off.
+  `startWorldAndGame(true, coop)` unchanged. Co-op in the sandbox world plays ON the seeded terrain (its player starts
+  at (0, 0), the pick) and keeps the WHOLE world: instead of unloading the models, Start restores the ring radius and
+  lifts the generated bounds, so the chunks past the area generate live. PvP and the generated co-op map keep their
+  flat ground at y = 0 over it. Until a preview runs, the seed field shows "Terrain/Seed" (the sandbox's world).
+  `exitToMenu` unseeds, resets the preview and switches the terrain off.
 
 The multiplayer lobby has no world block: a client would not get the seed or the origin (they would
 have to ride the game's GMp event), so the seeded world is single-player only.
@@ -216,6 +222,9 @@ have to ride the game's GMp event), so the seeded world is single-player only.
 is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are
 switched ON through tweak OVERRIDES (applied at once) and switched off again in `exitToMenu`, so every
 other mode keeps its own default of off. A sandbox SERVER also spawns `Entities/Debug/networkTest.pre`.
+**Co-op in the sandbox world** (`GameMatch::sandboxWorld()`, the default) throws the same two overrides right after the
+match is constructed and hands it the anchor (`setWorldAnchor(pos, dir)`: `--camera` or `START_POS` / `START_DIR`,
+(0, 0) when seeded) - the player starts where the sandbox camera starts.
 
 ## Events (server-authoritative, reliable)
 
@@ -406,7 +415,7 @@ All share ONE spawn template (a lone Light component); the values live on the co
   `InputControls`. The third-person distance starts at 3.5 m, and **the mouse wheel zooms it** (1..20 m, 10 % a notch);
   while possessed the fly camera ignores the wheel (its fly speed stays as it was); move speed, acceleration and jump speed are the
   `Network/Player` tweaks (`AppControlsSettings`).
-* **The local capsule is CAMERA-LOCKED STRAFE**, `App.PlayerLocomotion` (called at the end of `updateLocalPlayer`;
+* **The local capsule is CAMERA-LOCKED STRAFE**, `Game:PlayerLocomotion` (called at the end of `updateLocalPlayer`;
   the prefab carries `ThirdPersonAnimator` from `Animations/thirdPerson.apl` and no script). With only forward clips:
   * the entity yaw follows the camera yaw;
   * the `Hips` bone turns (a model-space rotation, so the legs follow) toward the velocity, and `Spine` / `Chest` / `Neck`
@@ -419,7 +428,8 @@ All share ONE spawn template (a lone Light component); the values live on the co
   * the upper body leans into the horizontal acceleration.
 
   The network client path (`updatePlayerControl`, `netPlayerCapsule.pre`) and the game's `player.pre` keep
-  `PlayerBody.dsl`: facing from the position change, `CharacterAnimator`.
+  `PlayerBody.dsl`: facing from the position change, `CharacterAnimator`. The co-op sandbox world's `playerCoop.pre`
+  runs the same strafe from `GamePlayer` (see Game's Modes.md).
 * **`InputControls::applyPlayerCamera` overrides the frame camera right after the fly camera** in
   `Session::updateCamera`.
 

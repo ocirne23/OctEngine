@@ -581,6 +581,25 @@ PhysicsWorld::RayHit PhysicsWorld::castRayClosest(const glm::vec3& origin, const
     return outHit;
 }
 
+bool PhysicsWorld::overlapBoxAny(const glm::vec3& center, const glm::vec3& halfExtents, uint64 maskBits) const
+{
+    if (!m_initialized)
+        return false;
+    b3QueryFilter filter = b3DefaultQueryFilter();
+    filter.categoryBits = PhysicsLayers::All; // as castRayClosest: maskBits alone decides what the query sees
+    filter.maskBits = maskBits;
+    // The box as a point cloud relative to the query origin (the proxy hull is the box itself).
+    b3Vec3 points[8];
+    for (int i = 0; i < 8; ++i)
+        points[i] = b3Vec3{ (i & 1) ? halfExtents.x : -halfExtents.x, (i & 2) ? halfExtents.y : -halfExtents.y,
+                            (i & 4) ? halfExtents.z : -halfExtents.z };
+    const b3ShapeProxy proxy{ points, 8, 0.0f };
+    bool found = false;
+    b3World_OverlapShape(oc::bitCast<b3WorldId>(m_worldHandle), toB3(center), &proxy, filter,
+        [](b3ShapeId, void* context) { *static_cast<bool*>(context) = true; return false; }, &found);
+    return found;
+}
+
 bool PhysicsWorld::getContactPoint(int64 contactId, glm::vec3& outPoint, glm::vec3& outNormal) const
 {
     if (!m_initialized || contactId == 0)

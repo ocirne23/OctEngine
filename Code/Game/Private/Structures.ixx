@@ -117,7 +117,7 @@ public:
 
     // CO-OP: GameMatch places nodes one by one from the generated map (seeded - every instance
     // derives the identical set from the same seed, the corridor-set contract).
-    void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
+    void spawnNode(float x, float z, ENodeType type, float groundY = 0.0f); // one resource node entity + roster entry
     void clearNodes(); // co-op map regeneration: drop the node entities + roster (nothing else)
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0);
     void clear(); // drops every structure entity + node (before world teardown)
@@ -233,6 +233,12 @@ public:
     int structureCount() const { return (int)m_frame.size(); }
     uint32 structureId(int index) const { return m_frame[index].state->structureId; }
     glm::vec3 structurePos(int index) const { return m_frame[index].entity->pos; }
+    // The ground point under the structure's center (the entity sits half its box height above it): rings, routes
+    // and other debug draws that hug the ground.
+    glm::vec3 structureGroundPos(int index) const
+    {
+        return m_frame[index].entity->pos - glm::vec3(0.0f, spawnHeightOf(m_frame[index].type), 0.0f);
+    }
     glm::vec3 structureLabelAnchor(int index) const;
     EStructureType structureType(int index) const { return m_frame[index].type; }
     float structureHealth(int index) const { return m_frame[index].state->health; }
@@ -268,7 +274,7 @@ public:
     glm::vec3 nodeGroundPos(int nodeIndex) const
     {
         const glm::vec3& p = m_nodes[nodeIndex].pos;
-        return glm::vec3(p.x, 0.0f, p.z);
+        return glm::vec3(p.x, p.y - c_nodeHeight, p.z);
     }
     float extractorSnapRadius() const { return m_settings.extractorSnapRadius; }
     int nodeCount() const { return (int)m_nodes.size(); }
@@ -414,6 +420,24 @@ public:
     // - checked by cellsFree exactly like the arena bounds (so ghosts turn red and the unit spawn
     // probe refuses rock cells too). GameMatch rebuilds the list with the map.
     void setTerrainBlocked(oc::vector<glm::vec4> rects) { m_terrainBlocked = oc::move(rects); }
+
+    // ---- THE SANDBOX WORLD'S GROUND (co-op on the procedural terrain) ----
+    // Off (the flat maps): the ground is the y = 0 plane and every test below passes. On: heights are rays down onto
+    // the terrain collider (layer "Terrain"), trees and rocks are their world colliders (layer "Vegetation"), water is
+    // the physics water surface. The colliders exist only near this instance's camera (Terrain/Collision "Radius",
+    // Trees/World colliders), which covers the place range around the player.
+    void setTerrainGround(bool enabled) { m_terrainGround = enabled; }
+    bool terrainGround() const { return m_terrainGround; }
+    // The terrain height under (x, z); `fallback` where no collider is (always 0 on the flat maps).
+    float groundHeightAt(float x, float z, float fallback = 0.0f) const;
+    enum class EGroundFit : uint8 { Ok, NoGround, Steep, Water, Blocked };
+    // Can `type` stand at the snapped position? Samples the footprint's corners, edge midpoints and center: every
+    // sample must hit the terrain, the highest minus the lowest may not pass "Max ground step (m)" (twice that for the
+    // flat cable pieces), the ground may not sit under water, and no tree or rock collider may cut the box from the
+    // ground to the structure's top. outY = the height the structure stands on: the LOWEST sample for a building (the
+    // box sinks into the high side - it never floats over the low one), the center for a cable piece.
+    EGroundFit groundFit(EStructureType type, const glm::vec3& snappedGroundPos, const glm::quat& rot, float& outY) const;
+    static const char* groundFitReason(EGroundFit fit);
 
     // ---- CONSTRUCTION (server) ----
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
@@ -633,6 +657,8 @@ private:
     glm::vec2 m_boundsMin{ 0.0f }, m_boundsMax{ 0.0f };
     bool m_hasBounds = false;
     oc::vector<glm::vec4> m_terrainBlocked; // co-op rock rects (minX, minZ, maxX, maxZ)
+    bool m_terrainGround = false;           // the sandbox world (setTerrainGround)
+    static constexpr float c_nodeHeight = 0.8f; // a resource node entity's center above its ground
 
     float m_minerals[GameMaxTeams] = {};
     float m_fuelTotal[GameMaxTeams] = {};

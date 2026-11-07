@@ -285,6 +285,10 @@ subtree's render bounds, so melee, turrets and shells still find the unit. See `
 > **BEFORE the puppet gate**, so the server's twins of client capsules are held too, and owner-side in
 > `GamePlayer::tickShieldAndHealth` — both land at the same height, so the owner's next claim
 > re-anchors instead of being rejected.
+>
+> **`GameUnitParams::flatGround`** (runtime, stamped by `GameMatch`: false in the co-op sandbox world, on the
+> procedural terrain) turns off every rule that assumes the y = 0 plane: the ceiling (`effectiveHeightLimit` returns
+> none), the `voidY` kill (full sim and far tick) and the bite height window.
 
 **`Component GameStructure`** — Team / HealthMax / Invulnerable / MeleeRadius / AlwaysDisplayHealth /
 **AlwaysShowResources** (its overhead STORE bars show even unselected — storage, emitters, barracks;

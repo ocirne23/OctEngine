@@ -24,13 +24,17 @@ void GameMatch::saveGame()
         return;
     }
     AssetNode root; // unnamed - writeAssetText writes only the children
-    if (m_coop && m_coopMap.built)
+    if (m_coop && (m_coopMap.built || m_sandboxWorld))
     {
         // The map's generation inputs: structure/unit positions and node indices only make sense
-        // on the exact map the save was played on - loadGame regenerates it from these.
-        root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
-        root.set("MapFill", m_coopMap.fill);
-        root.set("MapLanes", oc::to_string(m_coopMap.lanes));
+        // on the exact map the save was played on - loadGame regenerates it from these. (The
+        // sandbox world has none: its terrain is the session's, its nodes the session's Base site.)
+        if (m_coopMap.built)
+        {
+            root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
+            root.set("MapFill", m_coopMap.fill);
+            root.set("MapLanes", oc::to_string(m_coopMap.lanes));
+        }
         // The wave clock: how many waves launched (sizes the next one) and the seconds to it, so a
         // load resumes the escalation instead of restarting at wave 1.
         root.set("WaveIndex", oc::to_string(m_waveIndex));
@@ -74,7 +78,7 @@ void GameMatch::loadGame(oc::string_view path)
     // Connected clients rebuild from the GMp broadcast the same way.
     if (m_coop)
     {
-        if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0)
+        if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0 && !m_sandboxWorld)
         {
             m_structures.clearAllStructures(); // fires GRm hooks - clients prune ahead of the swap
             rebuildCoopMap((uint32)seedNode->asInt(),

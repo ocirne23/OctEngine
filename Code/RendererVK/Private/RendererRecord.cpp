@@ -1372,8 +1372,6 @@ oc::array<RendererState::SceneStage, RendererState::NUM_SCENE_STAGES> RendererSt
         SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &RendererState::recordGiProbeDebug, nullptr },
         SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &RendererState::recordDecals,       &RendererState::recordDecalsInto },
         SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &RendererState::recordDebugLines,   nullptr },
-        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &RendererState::recordForceShells,  &RendererState::recordForceFieldBothInto },
-        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &RendererState::recordForceUnion,   nullptr },
         SceneStage{ "Particles",         false, m_particles.isEnabled(),         false, &f.particleCommandBuffer,     &RendererState::recordParticles,    &RendererState::recordParticlesInto },
         // The far-tree volume (TreeVolumePipeline; desktop only). With the fog on, the fog apply composites it
         // itself at its own distance (like the clouds); this stage is the fog-off path.
@@ -1382,6 +1380,12 @@ oc::array<RendererState::SceneStage, RendererState::NUM_SCENE_STAGES> RendererSt
         // With the fog on, the fog apply composites the clouds itself (inside the fog); this stage is the fog-off path.
         SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &RendererState::recordCloudApply,   &RendererState::recordCloudApplyInto },
         SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &RendererState::recordFogApply,     &RendererState::recordFogApplyInto },
+        // The force fields LAST, over the composited clouds, far trees and fog: those volumes write no depth, so a
+        // bubble drawn before them was covered by every cloud and far tree that lies in front of the terrain behind it.
+        // The bubbles are near the player, so they always stand in front of both. The opaque depth test still hides
+        // them behind terrain and buildings; the cost is that the fog no longer lies over a bubble.
+        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &RendererState::recordForceShells,  &RendererState::recordForceFieldBothInto },
+        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &RendererState::recordForceUnion,   nullptr },
     };
 }
 

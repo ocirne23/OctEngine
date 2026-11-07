@@ -36,6 +36,11 @@ export struct GameMatchSettings
     // A non-AI unit farther than this from every SIM LOD focus seeds a new cluster focus.
     float focusClusterRadius = 40.0f;
     int spawnsPerFrame = 100;         // trickle budget - a huge wave enters over seconds, not one hitch
+    // Co-op in the SANDBOX WORLD (terrain, trees, ocean) with the third-person player; off = the generated rock map
+    // with the top-down camera. Read when the match is constructed.
+    bool coopSandboxWorld = true;
+    bool coopEnemies = false;         // waves + the ambient scatter (off: a peaceful building game)
+    float sandboxWaveDistance = 70.0f; // sandbox world: m from the Base a wave spawns (inside the collider ring)
     // Map generation inputs, read once at generation on the AUTHORITY (the lobby writes them too).
     int mapSeed = 0;                  // 0 = random each run
     float terrainFill = 0.3f;         // fraction of interior cells turned to rock (before carving)
@@ -64,6 +69,12 @@ export struct GameCameraSettings
     float yawSpeed = 120.0f;
     float dragSensitivity = 0.25f;
     float aimHeight = 1.0f;
+    // The THIRD-PERSON camera (co-op in the sandbox world): mouse look, the wheel zooms `thirdDistance`.
+    float thirdDistance = 4.0f;
+    float thirdMinDistance = 1.5f;
+    float thirdMaxDistance = 20.0f;
+    float thirdSensitivity = 0.0025f; // radians per mouse count
+    float thirdEyeHeight = 0.55f;     // m above the capsule center: the orbit pivot
 };
 
 // GamePlayer: movement, health and the shield battery.
@@ -187,6 +198,8 @@ export struct GameStructureSettings
     float waypointRadius = 3.0f;
     int wallBreachCost = 10;          // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
     bool cheatInstantBuild = false;
+    // The sandbox world's ground test: the highest minus the lowest terrain sample under a footprint may not pass this.
+    float maxGroundStep = 0.75f;
     // Per UNIT TYPE (ENpcType order): the ENERGY a barracks pays per spawned unit and the POPULATION the unit holds.
     float spawnEnergy[GameUnitTypeCount] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f };
     int unitPopulation[GameUnitTypeCount] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3 };
@@ -241,6 +254,8 @@ export struct GameUnitParams
     float orderBreakRadius = 15.0f;  // a MOVE ORDER drops at the first enemy structure this near
     float voidY = -3.0f;           // checked by the full sim AND the far tick
     float heightLimit = 5.0f;      // world Y ceiling for units AND player capsules (GamePlayer too)
+    bool flatGround = true;        // runtime (GameMatch): false = the sandbox terrain world - no height ceiling, no
+                                   // void floor and no bite height window, which all assume the y = 0 plane
     bool navEnabled = true;
     float hurtLightIntensity = 8.0f;
     float hurtLightDecay = 0.25f;  // seconds from full to dark

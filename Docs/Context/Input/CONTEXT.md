@@ -56,7 +56,8 @@ nap.** The thread claims a reserved scheduler context through
 
 > **`wait = true` is INIT-TIME ONLY** — the Vulkan surface creation, the ImGui SDL backend init, the
 > external-helper registration. A wait can stall behind a helped job, so never call it per frame.
-> `setTitle` is a queued async op.
+> `setTitle` is a queued async op, and so is `setRelativeMouseMode` (the co-op third-person mouse look; the App's
+> `Session::updateCamera` sends only the edges).
 
 **Clipboard writes go through here too** (the relay in `Renderer.cpp`, installed over the ImGui SDL backend's hooks, so
 every `ImGui::SetClipboardText` is covered). A write sends a message to the clipboard's previous owner; when that is our

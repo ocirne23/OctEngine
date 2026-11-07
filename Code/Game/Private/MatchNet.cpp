@@ -67,7 +67,7 @@ void GameMatch::onClientJoined(uint32 clientId)
     // capsule's puppet component carries it to the owner through the snapshot game blob.
     const uint8 team = allocateClientTeam(clientId);
     const glm::vec3 clientStart = teamStartPos(team);
-    EntityPtr player = Globals::world.spawnAssetFile("Entities/Game/player.pre",
+    EntityPtr player = Globals::world.spawnAssetFile(GamePlayer::prefabPath(m_sandboxWorld),
         Transform(clientStart + glm::vec3(2.0f * (float)(clientId % 5), 0.0f, 1.5f * (float)(clientId % 3))), true);
     if (player)
     {
@@ -89,6 +89,9 @@ void GameMatch::onClientJoined(uint32 clientId)
     // no replay - each client derives them locally from the mirrored cable segments.
     if (m_isServer && m_coopMap.built)
         sendMapSeed(); // co-op inputs or the PvP arena - the joiner's terrain + nodes
+    if (m_isServer && m_sandboxWorld)
+        for (int i = 0; i < m_structures.nodeCount(); ++i)
+            sendNode(i); // the sandbox world's nodes, in order
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -270,6 +273,7 @@ void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, int node
     writer.write<int16>((int16)nodeIndex);
     writer.write<float>(facing.x);
     writer.write<float>(facing.z);
+    writer.write<float>(pos.y);
     Globals::networkManager.fireNetworkEvent("GqP", writer.data());
 }
 
@@ -506,9 +510,19 @@ void GameMatch::handleNetEvent(oc::string_view name)
                 const uint32 seed = reader.read<uint32>();
                 const float fill = reader.read<float>();
                 const uint8 lanes = reader.read<uint8>();
-                if (!reader.overflowed() && m_coop && seed != 0 && fill >= 0.0f && fill <= 1.0f)
+                if (!reader.overflowed() && m_coop && !m_sandboxWorld && seed != 0 && fill >= 0.0f && fill <= 1.0f)
                     rebuildCoopMap(seed, fill, (int)lanes);
             }
+        }
+        else if (name == "GNd")
+        {
+            // The sandbox world's resource nodes, one per event in the server's order (join replays repeat them -
+            // only the next index appends, so extractor node indices agree with the server's).
+            const uint16 index = reader.read<uint16>();
+            const float x = reader.read<float>(), y = reader.read<float>(), z = reader.read<float>();
+            const uint8 type = reader.read<uint8>();
+            if (!reader.overflowed() && m_sandboxWorld && index == (uint16)m_structures.nodeCount() && type <= (uint8)ENodeType::Fuel)
+                m_structures.spawnNode(x, z, (ENodeType)type, y);
         }
         // (shield/materials state rides the entity snapshot's game blob now - no GSh event)
         return;
@@ -533,8 +547,9 @@ void GameMatch::handleNetEvent(oc::string_view name)
         const float x = reader.read<float>(), z = reader.read<float>();
         const int16 nodeIndex = reader.read<int16>();
         const float fx = reader.read<float>(), fz = reader.read<float>();
-        if (!reader.overflowed() && isPlaceableType((EStructureType)type))
-            m_structures.queuePlaceRequest((EStructureType)type, glm::vec3(x, 0.0f, z), nodeIndex,
+        const float y = reader.read<float>(); // the client's ground height (the sandbox world, see placeStructure)
+        if (!reader.overflowed() && isPlaceableType((EStructureType)type) && std::isfinite(y))
+            m_structures.queuePlaceRequest((EStructureType)type, glm::vec3(x, y, z), nodeIndex,
                 glm::vec3(fx, 0.0f, fz), requestTeam(sender));
     }
     else if (name == "GqD")

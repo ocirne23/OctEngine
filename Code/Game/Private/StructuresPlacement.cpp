@@ -6,6 +6,7 @@ import Core.Log;
 import Core.Transform;
 import Entity;
 import Force;
+import Physics; // the sandbox world's ground: terrain rays, tree / rock overlap, the water surface
 import Spatial;
 import :Structures;
 
@@ -120,6 +121,69 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
         free = false; // buildings refuse any occupied cell (cables included - no building on a cable)
     });
     return free;
+}
+
+// ---------------------------------------------------------------- the sandbox world's ground
+
+float StructureSystem::groundHeightAt(float x, float z, float fallback) const
+{
+    if (!m_terrainGround)
+        return 0.0f;
+    // From far above, through any height the generator makes: the terrain layer alone, so trees, structures and
+    // capsules never count as ground.
+    constexpr float c_rayTop = 6000.0f;
+    const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(glm::vec3(x, c_rayTop, z),
+        glm::vec3(0.0f, -2.0f * c_rayTop, 0.0f), PhysicsLayers::bit("Terrain"));
+    return hit.hit ? hit.point.y : fallback;
+}
+
+StructureSystem::EGroundFit StructureSystem::groundFit(EStructureType type, const glm::vec3& p, const glm::quat& rot,
+    float& outY) const
+{
+    outY = 0.0f;
+    if (!m_terrainGround)
+        return EGroundFit::Ok;
+    const glm::ivec2 ext = footprintExtent(type, rot);
+    const glm::vec2 half(ext.x * GridCellSize * 0.5f, ext.y * GridCellSize * 0.5f);
+    const glm::vec2 inset = glm::max(half - 0.05f, glm::vec2(0.0f)); // just inside the footprint edge
+    float low = FLT_MAX, high = -FLT_MAX, center = 0.0f;
+    for (int iz = -1; iz <= 1; ++iz)
+        for (int ix = -1; ix <= 1; ++ix)
+        {
+            const float h = groundHeightAt(p.x + (float)ix * inset.x, p.z + (float)iz * inset.y, -FLT_MAX);
+            if (h == -FLT_MAX)
+                return EGroundFit::NoGround; // no collider under part of it (outside the streamed ring)
+            low = glm::min(low, h);
+            high = glm::max(high, h);
+            if (ix == 0 && iz == 0)
+                center = h;
+        }
+    const bool flatPiece = isCableOrCrossing(type); // a slab on the ground, no box to sink
+    outY = flatPiece ? center : low; // set before the refusals too: a red ghost still stands on the ground
+    if (high - low > m_settings.maxGroundStep * (flatPiece ? 2.0f : 1.0f))
+        return EGroundFit::Steep;
+    if (Globals::physics.isWaterActive() && Globals::physics.sampleWaterHeight(p.x, p.z) > low + 0.05f)
+        return EGroundFit::Water;
+    // Trees and rocks (their world colliders): the box from the lowest ground up to the structure's top, a hair
+    // inside the footprint so a trunk just touching the edge of the next cell does not count.
+    const float top = high + glm::max(spawnHeightOf(type) * 2.0f, 0.5f);
+    const glm::vec3 boxCenter(p.x, (low + top) * 0.5f, p.z);
+    const glm::vec3 boxHalf(inset.x, (top - low) * 0.5f, inset.y);
+    if (Globals::physics.overlapBoxAny(boxCenter, boxHalf, PhysicsLayers::bit("Vegetation")))
+        return EGroundFit::Blocked;
+    return EGroundFit::Ok;
+}
+
+const char* StructureSystem::groundFitReason(EGroundFit fit)
+{
+    switch (fit)
+    {
+    case EGroundFit::NoGround: return "no ground";
+    case EGroundFit::Steep:    return "too steep";
+    case EGroundFit::Water:    return "under water";
+    case EGroundFit::Blocked:  return "tree or rock in the way";
+    default:                   return "";
+    }
 }
 
 bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
@@ -251,7 +315,7 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
     // Same grid snap every placement gets (3x3 = odd footprint -> centered on a CELL): an
     // unsnapped Base sat half a cell off, so nothing placed next to it could line up flush.
     const glm::vec3 pos = snapToGrid(EStructureType::Base, groundPos)
-        + glm::vec3(0.0f, spawnHeightOf(EStructureType::Base), 0.0f);
+        + glm::vec3(0.0f, groundPos.y + spawnHeightOf(EStructureType::Base), 0.0f);
     const int index = spawnStructure(m_nextStructureId++, EStructureType::Base, pos,
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true, -1);
     if (index >= 0) // the starting war chest + a FULL shield battery (it drains like any emitter)
@@ -296,7 +360,16 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         if (nodeIndex < 0 || nodeIndex >= (int)m_nodes.size() || m_nodes[nodeIndex].extracted)
             return; // two same-frame requests for one node race - validated at apply
     }
-    const glm::vec3 pos = snappedGround + glm::vec3(0.0f, spawnHeightOf(type), 0.0f);
+    // The ground (sandbox world): re-tested here like the cells. With NO collider under it on this instance - a
+    // client building far from the server's camera, outside the server's collider ring - the requester's own height
+    // stands (its aim ran the full test against its own colliders).
+    float groundY = 0.0f;
+    const EGroundFit fit = groundFit(type, snappedGround, rot, groundY);
+    if (fit == EGroundFit::NoGround)
+        groundY = groundPos.y;
+    else if (fit != EGroundFit::Ok)
+        return;
+    const glm::vec3 pos = snappedGround + glm::vec3(0.0f, groundY + spawnHeightOf(type), 0.0f);
     if (type == EStructureType::Lance)
     {
         glm::vec2 dir(0.0f);

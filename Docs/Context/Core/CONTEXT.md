@@ -275,6 +275,7 @@ draws it once per frame over the viewport.
 | **Counters** | `HudCounter{ name, value, decimals, text, color }`, stacked from the top left; a non-empty `text` shows instead of the number. |
 | **World labels** | `HudWorldLabel` — gameplay **PRE-PROJECTS** the world position into viewport pixels (`Camera::worldToScreen`) and **replaces the whole list every frame**: no keys, no persistence, and off-screen entities are simply not submitted. Title, info lines, up to THREE stacked bars, a `warning` badge, and an `emphasized` flag for the selected entity. |
 | **Popup** | `HudPopup` — a world-anchored BUTTON ROW (the barracks unit-type picker), rebuilt every frame like the labels. |
+| **Crosshair** | `setCrosshair(bool)` — a small cross at the viewport center (the co-op sandbox world aims there). |
 
 **Hit-testing works in both directions:** the overlay reports each drawn slot's and button's screen
 rect back (`setSlotScreenRects` / `setPopupButtonRects`), so gameplay resolves clicks through
@@ -486,7 +487,8 @@ Seconds are formatted InvariantCulture — a Dutch locale would print "10,5".
 
 Script side: `-Scenario` only applies with `-Game`; `""` = none, `"default"` = F10's `Local/gamesave.txt`.
 `-Scenario` defaults to `Scenarios/march-64-units.txt`, **which is no longer in `Assets/Scenarios/`** (the
-only checked-in save is `coop-base-38k.txt`) — pass `-Scenario` explicitly. `-Server` = `--server --port 27999`,
+only checked-in save is `coop-base-38k.txt`, a generated-map save: add
+`-Tweak "Game/Coop/Sandbox world=0","Game/Coop/Spawn enemies=1"`) — pass `-Scenario` explicitly. `-Server` = `--server --port 27999`,
 so the networking path is live without colliding with a manually running instance on 27888.
 
 It calls `GameMatch::runScenario` on the authority (single player or server):

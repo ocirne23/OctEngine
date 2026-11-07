@@ -39,6 +39,9 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Nav", "Nav unit source reach", &s.navUnitSourceReach, 8.0f, 400.0f, 4.0f);
     Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &s.focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);
+    Tweak::boolean("Game/Coop", "Sandbox world", &s.coopSandboxWorld);
+    Tweak::boolean("Game/Coop", "Spawn enemies", &s.coopEnemies);
+    Tweak::floatVar("Game/Coop", "Sandbox wave distance (m)", &s.sandboxWaveDistance, 20.0f, 90.0f, 1.0f);
     // Map generation inputs, read once at generation on the AUTHORITY. Clients never read them: the values actually
     // used ride the GMp event (and the save) with the seed - a joiner's tweak sync lands after the world replay.
     Tweak::intVar("Game/Coop", "Map seed", &s.mapSeed, 0, 0x7fffffff, 1);
@@ -66,6 +69,11 @@ static void registerCamera(GameCameraSettings& s)
     Tweak::floatVar("Game/Camera", "Yaw speed (deg/s)", &s.yawSpeed, 30.0f, 360.0f, 1.0f);
     Tweak::floatVar("Game/Camera", "Drag sensitivity", &s.dragSensitivity, 0.05f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Camera", "Aim height", &s.aimHeight, 0.0f, 4.0f, 0.05f);
+    Tweak::floatVar("Game/Camera", "Third person distance", &s.thirdDistance, 1.0f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Camera", "Third person min distance", &s.thirdMinDistance, 0.5f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Camera", "Third person max distance", &s.thirdMaxDistance, 2.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Camera", "Mouse sensitivity", &s.thirdSensitivity, 0.0002f, 0.02f, 0.0001f);
+    Tweak::floatVar("Game/Camera", "Third person eye height", &s.thirdEyeHeight, 0.0f, 2.0f, 0.05f);
 }
 
 static void registerPlayer(GamePlayerSettings& s)
@@ -102,6 +110,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
 {
     const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
     Tweak::boolean("Game/Construction", "Free instant build", &s.cheatInstantBuild);
+    Tweak::floatVar("Game/Construction", "Max ground step (m)", &s.maxGroundStep, 0.1f, 4.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Pressure draw tension", &s.pressureDrawTension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Start minerals", &s.startMinerals, 0.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Extractor snap radius", &s.extractorSnapRadius, 1.0f, 20.0f, 0.25f);

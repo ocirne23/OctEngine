@@ -58,7 +58,8 @@ LOBBY for multiplayer picks, and a text CHAT in the lobby and in-game. See
 [`Docs/Context/App/CONTEXT.md`](../Docs/Context/App/CONTEXT.md) for the menu/lobby/chat flow, **the frame loop** and
 the testbed keys.
 
-The actual game — top-down tactical PvP plus co-op PvE — is `Code/Game`; see
+The actual game — top-down tactical PvP plus co-op (by default third person in the sandbox world, no enemies) — is
+`Code/Game`; see
 [`Docs/Context/Game/CONTEXT.md`](../Docs/Context/Game/CONTEXT.md).
 
 ## Building
@@ -430,7 +431,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | [UI](../Docs/Context/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels (Entity Editor, **Animation Editor**), game layout, HUD overlay, gizmo split |
 | [Input](../Docs/Context/Input/CONTEXT.md) | The window thread (`Core.Window`), the ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
 | [Game](../Docs/Context/Game/CONTEXT.md) | The game: the architecture rule, partitions, the frame (the three ticks), the world, determinism, save / load. **Read it first; the topic files below hold the rest** |
-| ↳ [Modes](../Docs/Context/Game/Modes.md) | Co-op PvE (generated map, teams, waves, the spawn blob) and PvP (arenas, teams, structure damage) |
+| ↳ [Modes](../Docs/Context/Game/Modes.md) | Co-op (the sandbox world: Base site, nodes, third-person player, crosshair aim; the generated map, teams, waves, the spawn blob) and PvP (arenas, teams, structure damage) |
 | ↳ [Sync](../Docs/Context/Game/Sync.md) | Multiplayer sync: the sync layers, the game blob, player capsules, client intents |
 | ↳ [Economy](../Docs/Context/Game/Economy.md) | The cable transport, physical cables, construction, grid placement |
 | ↳ [Hotbar](../Docs/Context/Game/Hotbar.md) | The RTS grid hotbar pages, bases, structure health + labels, unit selection, interaction modes |
@@ -578,8 +579,10 @@ Checked-in inputs for repeatable runs:
 * `*.txt` game saves — the F9 format: structures (cable segments included), units, and the co-op wave / trickle
   state — for `--scenario <path>` and `Tools/profile.ps1`. The only save now is `coop-base-38k.txt`, a co-op match at
   wave 18 — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD). A co-op scenario loads as saved,
-  with NO march order (`runScenario` skips it when `--coop`):
-  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-base-38k.txt" -ScenarioAt 2 -After 30`.
+  with NO march order (`runScenario` skips it when `--coop`). It is a save of the GENERATED rock map, so it needs the
+  sandbox world off and the enemies on (co-op defaults to the sandbox world without enemies, see Game's Modes.md):
+  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-base-38k.txt" -ScenarioAt 2 -After 30
+  -Tweak "Game/Coop/Sandbox world=0","Game/Coop/Spawn enemies=1"`.
   **`profile.ps1`'s `-Scenario` default (`march-64-units.txt`) no longer exists**: pass `-Scenario` explicitly.
 * `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.
 * `script-editor-typing.txt` — `ScriptEditorSim --check`: key programs and the line each must produce.

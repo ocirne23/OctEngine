@@ -4,7 +4,64 @@
 
 ## Co-op PvE (`--coop`)
 
-### The map
+Co-op has two worlds, picked by "Game/Coop" "Sandbox world" (default on, read when `GameMatch` is constructed:
+`GameMatch::sandboxWorld()`), and **no enemies by default** — "Spawn enemies" (off) gates the waves AND the ambient
+scatter in both worlds (the wave HUD counters go with them).
+
+### The sandbox world (the default)
+
+The procedural terrain, trees, rocks and ocean of the sandbox, with the third-person player. `Session::startWorldAndGame`
+switches `Terrain/Enabled` and `Ocean/Enabled` on through overrides (exit-to-menu's `unseedWorld` switches them off) and
+hands the match its **anchor** (`setWorldAnchor(pos, dir)`): by default the sandbox camera's start and direction
+(`--camera` / `Session::START_POS` / `START_DIR`) on the sandbox's own seed ("Terrain/Seed", which the lobby's seed
+field shows until a preview runs) — the same world and spot as the sandbox; or (0, 0) for a world the local lobby
+seeded (its pick IS the origin). **The whole world streams**: the sandbox's "Terrain/Range (chunks)" ring, and a
+lobby-seeded co-op start gives the ring back its size, lifts the generated bounds and keeps the terrain models
+loaded (`Session::serviceLobby`), so chunks past the seeded area generate live. No ground box, no rock grid, no
+barrier, no placement bounds; the shadow preset and the cloud suppression of the top-down camera are NOT applied.
+
+**The Base site** (`tickBaseSite`, authority): the camera waits at the anchor while the terrain streams in (the
+collider ring follows the camera). Once the terrain collider answers under the anchor, it waits 2 s more (the tree and
+rock world colliders follow the terrain). The local player spawns ON the anchor (the ground under it + 1.5 m), the
+camera looking along the anchor direction. The Base takes the nearest point on 4 m rings out to 56 m around a point
+14 m ahead along that direction (so it stands in view) where it passes the ground test (see Grid placement in
+[Economy.md](Economy.md)) and its footprint stays 2 m off the player's spot. Then the nodes. No site → the Base goes on
+that point ahead anyway (warning); no ground at all after 60 s → the anchor's own height.
+
+**Nodes** (`spawnSandboxNodes`): a starter mineral + fuel pair on an 11 m ring, then up to 14 more on a golden-angle
+spiral from 24 to 80 m — only spots where an EXTRACTOR passes the ground test, 13 m apart. They need terrain heights,
+and the collider exists only near the camera, so there are none farther out. **Clients get them as `GNd` events**
+(index, ground point, type), in order, replayed on join; a client appends only its next index, so extractor node
+indices agree.
+
+**The player** (`GamePlayer::setDirectControl`): `playerCoop.pre` — `player.pre` with `ThirdPersonAnimator` and no
+script — driven by camera-relative WASD at the "Network/Player" speeds, Space jumps, LShift sprints (the shield battery
+rule stays), and `Game:PlayerLocomotion` (the testbed key C capsule's camera-locked strafe, shared with App) turns the
+body. Kill floor 1000 m down instead of y −20. The camera is `GameCamera::applyThirdPerson`: mouse look in RELATIVE
+mouse mode (the App holds it while `wantsMouseCapture()`, the viewport is focused and no menu is open), the wheel
+zooms ("Game/Camera" "Third person ..."), a ray pulls the eye in front of walls, and the clip planes are the fly
+camera's ("Editor/Camera Near / Far") so the view reaches the horizon. **Aim = the crosshair** (GameHud
+`setCrosshair`): `m_mousePos` is the viewport center, so placement, hover and picking all ray through it, and the aim
+ray hits the TERRAIN layer only. No box select (a click never drags); RMB orders only the selected units (the player
+walks with WASD). The grid hotkeys move to the number row (1..9, 0, −, =).
+
+**The unit height rules** assume the y = 0 plane: `GameUnitParams::flatGround` (runtime, stamped by the match) is
+false here, which drops the height ceiling, the void floor and the bite height window. Barracks units spawn 1 m over
+the terrain under their spawn point.
+
+**With "Spawn enemies" on:** waves only (the ambient scatter needs the generated map's depth). A wave enters on a ring
+"Sandbox wave distance (m)" (70) around the Base — inside the collider ring, a body with no terrain under it falls —
+in a disc of at most half that, 1 m over the terrain, and marches to the Base's near face.
+
+**Known gaps:** the scene focus, the colliders and the Base site all follow THIS instance's camera, so in multiplayer a
+client building far from the server's player has its height trusted (`placeStructure`'s fallback), and the server's
+units near a far client have no terrain under them. Client twins joined before the site exists spawn at the anchor.
+F9 saves carry no nodes: a load keeps the session's nodes. Remote players do not run the strafe animation.
+
+### The map (`Sandbox world` off)
+
+Everything from here to PvP describes the GENERATED map with the top-down player; the waves apply to both worlds.
+
 
 A big square — `c_coopHalfSize` 270 m on the 600 m ground plane — of RANDOM IMPASSABLE TERRAIN.
 `rebuildCoopMap(seed, fill, lanes)` ("Game/Coop" "Map seed" (0 = random each run), "Terrain fill"

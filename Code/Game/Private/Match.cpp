@@ -33,17 +33,29 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 {
     if (!m_enabled)
         return;
+    m_sandboxWorld = coop && m_settings.coopSandboxWorld;
     // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
     // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
     Globals::settings.game.unitParams.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
     Globals::settings.game.unitParams.localTeam = m_team; // own-team units tint green (re-stamped when the team changes)
+    // The sandbox world's terrain: no y = 0 plane for the unit height rules, ground tests for placement, the
+    // third-person player (falling through the world is far below any terrain, not under y = 0).
+    Globals::settings.game.unitParams.flatGround = !m_sandboxWorld;
+    m_structures.setTerrainGround(m_sandboxWorld);
+    m_player.setDirectControl(m_sandboxWorld);
+    if (m_sandboxWorld)
+        m_player.setKillFloor(-1000.0f);
+    Globals::gameHud.setCrosshair(m_sandboxWorld);
 
     // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
     // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
     // view with an even near/log split, the caster pad only needs the tallest structure, and the biases
     // go to zero because the ground plane is flat and the casters sit on it. Written into the live
     // "Shadows" tweaks (still editable in the panel); the sandbox values come back in ~GameMatch.
+    // The volumetric clouds are a sandbox feature: the top-down camera sits under them and never sees them.
+    // The SANDBOX WORLD keeps the sandbox's shadows and clouds: its camera is down at the player, over real terrain.
     m_sandboxShadowParams = Globals::rendererVK.shadowParams();
+    if (!m_sandboxWorld)
     {
         ShadowParams preset = m_sandboxShadowParams;
         preset.maxDistance = 250.0f;
@@ -52,9 +64,8 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         preset.depthBias = 0.0f;
         preset.normalBias = 0.0f;
         Globals::rendererVK.setShadowParams(preset);
+        Globals::rendererVK.setCloudsSuppressed(true);
     }
-    // The volumetric clouds are a sandbox feature: the top-down camera sits under them and never sees them.
-    Globals::rendererVK.setCloudsSuppressed(true);
 
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
     // Co-op: players share team 0, the AI is team 1 - the force shaders/bakes shrink to fit. PvP
@@ -90,6 +101,15 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // a held button cannot mean two things at once - Q/E remain the keyboard yaw.
     m_mouse->onMouseMoved = [this](const SDL_MouseMotionEvent& evt)
     {
+        if (m_sandboxWorld)
+        {
+            // Mouse look (the window is in relative mode): only the motion counts - the aim is the crosshair, so
+            // m_mousePos stays on the viewport center (updateWindowed). Not while a menu owns the mouse.
+            if (Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused() && !Globals::ui.isEscapeMenuOpen()
+                && !Globals::ui.isMainMenuActive())
+                m_lookDelta += glm::vec2(evt.xrel, evt.yrel);
+            return;
+        }
         const glm::vec2 pos(float(evt.x), float(evt.y));
         if (m_mmbDown)
             m_dragDeltaX += pos.x - m_mousePos.x;
@@ -111,7 +131,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         {
             m_placeClicked = true;
             m_lmbDown = true;
-            m_lmbDownPos = glm::vec2(float(evt.x), float(evt.y));
+            m_lmbDownPos = m_sandboxWorld ? m_mousePos : glm::vec2(float(evt.x), float(evt.y)); // crosshair: never a box drag
         }
     };
     m_mouse->onMouseReleased = [this](const SDL_MouseButtonEvent& evt)
@@ -140,10 +160,16 @@ GameMatch::~GameMatch()
     Globals::rendererVK.clearSceneFocus(); // back to camera-based cascades and RTAO falloff for the sandbox/menu
     // The ctor's top-down preset off again. The debug mode stays as it is NOW: it is a baked shader
     // define, and only its tweak callback reloads the pipeline - a silent write would desync the two.
-    ShadowParams restored = m_sandboxShadowParams;
-    restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
-    Globals::rendererVK.setShadowParams(restored);
-    Globals::rendererVK.setCloudsSuppressed(false);
+    // (The sandbox world never set the preset: whatever the panel holds now stays.)
+    if (!m_sandboxWorld)
+    {
+        ShadowParams restored = m_sandboxShadowParams;
+        restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
+        Globals::rendererVK.setShadowParams(restored);
+        Globals::rendererVK.setCloudsSuppressed(false);
+    }
+    Globals::gameHud.setCrosshair(false);
+    Globals::gameHud.removeCounter("Can't build");
     // The tweaks are global settings (registered once at startup): nothing registered on this
     // object. StructureSystem drops its own listeners in its dtor.
     applyPause(false); // a shared pause must not outlive the match (exit-to-menu mid-pause)
@@ -173,13 +199,16 @@ void GameMatch::spawnWorld()
     {
         // CO-OP: its own OPEN world - one shared Base at the center of a big wall-less map (the
         // corridor and its border ring are PvP-only). Waves come from any compass direction.
-        m_basePos = glm::vec3(0.0f);
-        m_playerStart = glm::vec3(0.0f, 1.0f, -6.0f);
+        // The SANDBOX WORLD's Base goes wherever tickBaseSite finds ground near the anchor.
+        m_basePos = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f);
+        m_playerStart = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f, 1.0f, -6.0f);
         m_waveTimer = m_settings.waveFirstDelay;
     }
 
-    m_ground = Globals::world.spawnAssetFile("Entities/Game/ground.pre",
-        Transform(glm::vec3(0.0f, -0.5f, 0.0f)), true); // box top = walkable y 0
+    // The flat maps stand on a 600 m ground box; the sandbox world stands on the terrain.
+    if (!m_sandboxWorld)
+        m_ground = Globals::world.spawnAssetFile("Entities/Game/ground.pre",
+            Transform(glm::vec3(0.0f, -0.5f, 0.0f)), true); // box top = walkable y 0
     if (m_ground)
     {
         m_ground->setName("Ground");
@@ -226,7 +255,12 @@ void GameMatch::spawnWorld()
 
     if (!m_isServer && !m_isClient) // single player: the server binding above did not run
         m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
-    if (m_coop)
+    if (m_sandboxWorld)
+    {
+        // The procedural terrain IS the map: no rock grid, no barrier, no bounds. Nodes come with the Base site
+        // (spawnSandboxNodes; clients get them as GNd events).
+    }
+    else if (m_coop)
     {
         // The generated co-op map (terrain + barrier + nodes): the AUTHORITY rolls the seed and
         // builds now; a CLIENT builds the identical set locally when the server's GMp event
@@ -267,10 +301,11 @@ void GameMatch::spawnWorld()
             m_player.setTeam(m_team);
             m_playerStart = teamStartPos((uint8)m_team);
         }
-        else
+        else if (!m_sandboxWorld) // the sandbox world's Base waits for the terrain (tickBaseSite)
         {
             m_structures.spawnBase(m_basePos);
-            m_ambientPendingBudget = (float)m_settings.ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
+            if (m_settings.coopEnemies) // the scatter's points, trickled in (tickCoopSpawns)
+                m_ambientPendingBudget = (float)m_settings.ambientBudget;
         }
         // Respawns land on a FREE cell near the anchor: buildings placed on the spawn spot after
         // the fact (a wall ring around the Base, a house) must not swallow the capsule. Rings of
@@ -289,38 +324,177 @@ void GameMatch::spawnWorld()
                         anchor + glm::vec3(std::cos(a), 0.0f, std::sin(a)) * (c_step * (float)ring));
                     if (m_structures.cellsFree(EStructureType::Emitter, p,
                         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true))
-                        return glm::vec3(p.x, anchor.y, p.z);
+                        return glm::vec3(p.x, m_sandboxWorld ? groundY(p.x, p.z, anchor.y - 1.5f) + 1.5f : anchor.y, p.z);
                 }
             }
             return anchor;
         });
-        m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
-        // The server's own capsule is a PRIMARY: never handed to a client by the proximity
-        // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
-        if (m_isServer && m_player.entity())
-            Globals::networkManager.setServerPrimary(*m_player.entity(), true);
+        if (m_sandboxWorld)
+            m_player.setRespawnPos(m_worldAnchor); // the camera waits here while the terrain streams in
+        else
+            spawnLocalPlayer();
     }
+    else if (m_sandboxWorld)
+        m_player.setRespawnPos(m_worldAnchor); // until the adopted capsule exists
 
     // Spawn view faces the MAP CENTER from wherever this instance's player starts (each end of
     // the corridor looks inward at the other team; co-op starts everyone at the central Base).
+    // (The sandbox world keeps the default heading: there is no map center.)
     const glm::vec3 cameraAnchor = m_isClient && !m_coop
         ? m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart;
-    m_camera.setYawToward(glm::vec3(0.0f) - cameraAnchor);
+    if (m_sandboxWorld)
+        m_camera.setLookDir(m_worldAnchorDir); // the sandbox camera's start view
+    else
+        m_camera.setYawToward(glm::vec3(0.0f) - cameraAnchor);
 
     // The grid hotbar is always up in game mode: the ROOT page in Select/Delete, a category page in
     // Build. refreshBuildHotbar rebuilds it every windowed frame.
-    Globals::gameHud.setHotbarLayout(4, c_gridKeyLabels);
+    Globals::gameHud.setHotbarLayout(4, m_sandboxWorld ? c_gridNumberKeyLabels : c_gridKeyLabels);
     Globals::gameHud.setHotbarVisible(true);
     m_buildCategory = -1;
     refreshBuildHotbar();
 
-    Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
-              "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
-              "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
-              "(press + drag) a run between buildings to connect them");
-    if (m_coop)
+    if (m_sandboxWorld)
+        Log::info("Game mode (sandbox world): WASD walk, Space jumps, LShift sprints, the mouse looks, LMB at the "
+                  "crosshair places / inspects. Grid hotkeys on the number row: 1/2 = build categories "
+                  "(Combat/Production), 5/6/7 = cables, 0 = delete, - = cancel. Buildings need flat, dry ground "
+                  "without trees or rocks");
+    else
+        Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
+                  "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
+                  "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
+                  "(press + drag) a run between buildings to connect them");
+    if (m_coop && m_settings.coopEnemies)
         Log::info("CO-OP: defend the central Base - swarm waves attack periodically, and the map "
                   "is crawling with scattered enemies to clear as you expand");
+    else if (m_coop)
+        Log::info("CO-OP: no enemies (\"Game/Coop/Spawn enemies\" is off) - build in peace");
+}
+
+void GameMatch::spawnLocalPlayer()
+{
+    m_player.spawn(m_playerStart); // clients ADOPT the capsule the server spawns for them
+    // The server's own capsule is a PRIMARY: never handed to a client by the proximity
+    // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
+    if (m_isServer && m_player.entity())
+        Globals::networkManager.setServerPrimary(*m_player.entity(), true);
+}
+
+// ---- the sandbox world's Base site ----
+
+void GameMatch::tickBaseSite(float deltaSec)
+{
+    // Wait for the terrain collider under the anchor (the camera sits there, so the ring streams in around it), and
+    // then a moment more: the tree and rock world colliders follow the terrain, and a site judged before they exist
+    // could land on a trunk.
+    constexpr float c_settleSec = 2.0f;
+    constexpr float c_giveUpSec = 60.0f; // no ground at all (terrain off?): put the Base at the anchor anyway
+    m_siteWaitTimer += deltaSec;
+    const float anchorGround = groundY(m_worldAnchor.x, m_worldAnchor.z, -FLT_MAX);
+    if (anchorGround == -FLT_MAX && m_siteWaitTimer < c_giveUpSec)
+        return;
+    m_siteGroundTimer += deltaSec;
+    if (anchorGround != -FLT_MAX && m_siteGroundTimer < c_settleSec)
+        return;
+
+    // The player starts ON the anchor (the sandbox camera's start). The Base: the nearest site on rings around a point
+    // ahead of it along the start view, so it stands in sight, where the Base passes the full ground test and its
+    // footprint (plus a margin) stays off the player's spot.
+    const glm::quat identity(1.0f, 0.0f, 0.0f, 0.0f);
+    const float startY = anchorGround == -FLT_MAX ? m_worldAnchor.y : anchorGround;
+    m_playerStart = glm::vec3(m_worldAnchor.x, startY + 1.5f, m_worldAnchor.z);
+    glm::vec2 ahead(m_worldAnchorDir.x, m_worldAnchorDir.z);
+    ahead = glm::dot(ahead, ahead) > 1e-6f ? glm::normalize(ahead) : glm::vec2(0.0f, -1.0f);
+    constexpr float c_baseAhead = 14.0f;
+    const glm::vec3 searchCenter = m_worldAnchor + glm::vec3(ahead.x, 0.0f, ahead.y) * c_baseAhead;
+    const float keepClear = StructureSystem::footprintCellsOf(EStructureType::Base) * StructureSystem::GridCellSize * 0.5f + 2.0f;
+    bool found = false;
+    glm::vec3 site = StructureSystem::snapToGrid(EStructureType::Base, searchCenter);
+    float siteY = groundY(site.x, site.z, startY);
+    constexpr float c_ringStep = 4.0f;
+    constexpr int c_rings = 14; // 56 m: inside the collider ring around the waiting camera
+    for (int ring = 0; ring <= c_rings && !found; ++ring)
+    {
+        const int probes = ring == 0 ? 1 : 6 * ring;
+        for (int k = 0; k < probes && !found; ++k)
+        {
+            const float a = (float)k / (float)probes * glm::two_pi<float>();
+            const glm::vec3 p = StructureSystem::snapToGrid(EStructureType::Base, searchCenter
+                + glm::vec3(std::cos(a), 0.0f, std::sin(a)) * (c_ringStep * (float)ring));
+            if (glm::max(glm::abs(p.x - m_playerStart.x), glm::abs(p.z - m_playerStart.z)) < keepClear)
+                continue;
+            float y = 0.0f;
+            if (m_structures.groundFit(EStructureType::Base, p, identity, y) != StructureSystem::EGroundFit::Ok)
+                continue;
+            site = p;
+            siteY = y;
+            found = true;
+        }
+    }
+    if (!found)
+        Log::warning("Sandbox world: no flat, dry, tree-free Base site near the start - the Base goes ahead of it anyway");
+    m_siteFound = true;
+    m_basePos = glm::vec3(site.x, siteY, site.z);
+    m_structures.spawnBase(m_basePos);
+    m_player.setRespawnPos(m_playerStart);
+    spawnLocalPlayer();
+    spawnSandboxNodes();
+    Log::info(oc::format("Sandbox world: the Base stands at ({:.0f}, {:.1f}, {:.0f})", m_basePos.x, m_basePos.y, m_basePos.z));
+}
+
+// Resource nodes around the Base, on ground an EXTRACTOR fits on: the starter pair close in, then a golden-angle
+// spiral out to the collider ring (nodes need a height, and the terrain collider exists only near the camera). The
+// set is the AUTHORITY's: clients get it node by node (GNd, in order - extractor node indices must agree).
+void GameMatch::spawnSandboxNodes()
+{
+    const glm::quat identity(1.0f, 0.0f, 0.0f, 0.0f);
+    oc::vector<glm::vec2> placed;
+    const auto tryNode = [&](const glm::vec2& want, ENodeType type)
+    {
+        for (const glm::vec2& q : placed)
+            if (glm::dot(want - q, want - q) < 13.0f * 13.0f)
+                return false;
+        const glm::vec3 snapped = StructureSystem::snapToGrid(EStructureType::Extractor, glm::vec3(want.x, 0.0f, want.y));
+        float y = 0.0f;
+        if (m_structures.groundFit(EStructureType::Extractor, snapped, identity, y) != StructureSystem::EGroundFit::Ok
+            || !m_structures.cellsFree(EStructureType::Extractor, snapped))
+            return false;
+        m_structures.spawnNode(want.x, want.y, type, y);
+        placed.push_back(want);
+        if (m_isServer)
+            sendNode(m_structures.nodeCount() - 1);
+        return true;
+    };
+    const glm::vec2 base(m_basePos.x, m_basePos.z);
+    // The starter pair: the first fitting spot on a small ring each, mineral east-ish, fuel north-ish.
+    for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(0.4f + i * 0.52f), std::sin(0.4f + i * 0.52f)) * 11.0f, ENodeType::Mineral); ++i) {}
+    for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(1.9f + i * 0.52f), std::sin(1.9f + i * 0.52f)) * 11.0f, ENodeType::Fuel); ++i) {}
+    constexpr int c_nodeTarget = 14;
+    int count = 0;
+    for (int i = 0; i < 80 && count < c_nodeTarget; ++i)
+    {
+        const float t = ((float)i + 0.5f) / 80.0f;
+        const float r = glm::mix(24.0f, 80.0f, std::sqrt(t)); // sqrt = uniform area
+        const float a = (float)i * 2.3999632f;                 // the golden angle
+        if (tryNode(base + glm::vec2(std::cos(a), std::sin(a)) * r, (count % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral))
+            ++count;
+    }
+}
+
+void GameMatch::sendNode(int index)
+{
+    // [u16 index][f32 x, y, z of the GROUND][u8 type]: a client appends it when the index is its next one.
+    if (index < 0 || index >= m_structures.nodeCount())
+        return;
+    uint8 buffer[24];
+    NetWriter writer(buffer);
+    const glm::vec3 p = m_structures.nodeGroundPos(index);
+    writer.write<uint16>((uint16)index);
+    writer.write<float>(p.x);
+    writer.write<float>(p.y);
+    writer.write<float>(p.z);
+    writer.write<uint8>((uint8)m_structures.nodeType(index));
+    Globals::networkManager.fireNetworkEvent("GNd", writer.data());
 }
 
 // ---- the frame ----
@@ -426,6 +600,8 @@ void GameMatch::update(float deltaSec)
         return;
     }
 
+    if (m_sandboxWorld && !m_siteFound)
+        tickBaseSite(deltaSec); // the Base, the player and the nodes wait for the terrain under the anchor
     const glm::vec3 playerPos = m_player.bodyPos();
     m_matchTime += deltaSec; // the HUD clock: authority sim time (a pause stops the sim delta)
     m_structures.tickAuthority(playerPos, deltaSec);
@@ -492,7 +668,7 @@ void GameMatch::update(float deltaSec)
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
         }
     }
-    if (m_coop)
+    if (m_coop && m_settings.coopEnemies && (!m_sandboxWorld || m_siteFound))
     {
         ProfileScope coopScope("Coop waves", EProfileCategory::Game);
         tickWaves(deltaSec);
@@ -795,7 +971,7 @@ void GameMatch::updateHud()
         glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
-    if (m_coop && !m_isClient) // the wave clock is authority state (clients get the GWv log)
+    if (m_coop && !m_isClient && m_settings.coopEnemies) // the wave clock is authority state (clients get the GWv log)
     {
         // The match clock as h:mm:ss (sim time since the world spawned; saved and restored).
         const int total = (int)m_matchTime;
@@ -817,6 +993,7 @@ void GameMatch::updateGameInput(const Camera& camera)
     // path as its key), and neither button reaches the world through the hotbar.
     ProfileScope modeScope("Game mode input", EProfileCategory::Game);
     updateModeSwitching();
+    m_frameGroundFit = StructureSystem::EGroundFit::Ok; // a refused ghost below sets it (the HUD line)
     m_rmbConsumed = false;
     bool lmbEdge = m_placeClicked;
     bool rmbEdge = m_rmbClicked;
@@ -851,6 +1028,7 @@ void GameMatch::updateGameInput(const Camera& camera)
     }
     m_lmbReleased = false; // a release the active mode did not consume (box select runs in Select
                            // and in Build with nothing armed)
+    showGroundReason(m_frameGroundFit);
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
     // same press - disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
@@ -862,8 +1040,8 @@ void GameMatch::updateGameInput(const Camera& camera)
     // put (latched for the whole hold, so a held re-aim keeps excluding the capsule).
     if (!m_rmbDown)
         m_rmbMoveDrag = false;
-    if (rmbEdge)
-        m_rmbUnitsOnly = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+    if (rmbEdge) // the sandbox world's player walks with WASD: RMB orders only the selected units
+        m_rmbUnitsOnly = m_sandboxWorld || (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
     if (rmbEdge && !m_rmbConsumed)
     {
         // Cables/crossings/solars are WALK-THROUGH - an RMB near one is a plain ground order,
@@ -908,7 +1086,20 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // follow camera and every game input stand down (LMB/WASD are the fly controls now). The
     // listener-fed edges are still drained so no click lands the moment the tweak flips back.
     const bool detached = m_player.cameraDetached();
-    if (!detached)
+    if (m_sandboxWorld)
+    {
+        // Crosshair aim: every cursor ray (placement, hover, picking) leaves through the viewport center.
+        const Rect viewport = Globals::ui.getViewportRect();
+        m_mousePos = glm::vec2((float)(viewport.min.x + viewport.max.x), (float)(viewport.min.y + viewport.max.y)) * 0.5f;
+        if (!detached)
+        {
+            const PhysicsComponent* pc = m_player.entity() ? getComponent<PhysicsComponent>(m_player.entity()) : nullptr;
+            m_camera.applyThirdPerson(camera, m_player.interpolatedPos(), m_lookDelta, m_wheelAccum,
+                pc && pc->body.isValid() ? &pc->body : nullptr);
+        }
+        m_lookDelta = glm::vec2(0.0f);
+    }
+    else if (!detached)
     {
         Input& input = Globals::input;
         // Camera yaw on the ARROW keys (Q/E belong to the grid hotkeys) + middle-drag.
@@ -926,10 +1117,11 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         Globals::rendererVK.clearSceneFocus();
     else
     {
-        // Player X/Z only, Y pinned at 1 m (the walkable plane is y = 0): a jump must not slide the
-        // shadow cascades, the RTAO falloff and the GI clipmap window up and down with the capsule.
+        // Player X/Z only, Y pinned at 1 m over the ground (the y = 0 plane, or the terrain under the player): a
+        // jump must not slide the shadow cascades, the RTAO falloff and the GI clipmap window up and down with the
+        // capsule.
         const glm::vec3 playerPos = m_player.interpolatedPos();
-        Globals::rendererVK.setSceneFocus(glm::vec3(playerPos.x, 1.0f, playerPos.z));
+        Globals::rendererVK.setSceneFocus(glm::vec3(playerPos.x, groundY(playerPos.x, playerPos.z, playerPos.y - 0.8f) + 1.0f, playerPos.z));
     }
     if (detached)
     {
@@ -944,7 +1136,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
 
     m_structures.drawDebug();
     m_npcs.drawBeams(deltaSec); // turret lightning strikes
-    if (m_coop)
+    if (m_coop && !m_sandboxWorld)
         drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)
     {
@@ -963,10 +1155,10 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             continue;
         const bool bright = m_structures.structureId(i) == m_selectedId;
         const uint32 routeColor = packColor(glm::vec3(0.3f, 0.95f, 0.6f) * (bright ? 1.0f : 0.4f));
-        glm::vec3 prev = m_structures.structurePos(i) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f);
+        glm::vec3 prev = m_structures.structureGroundPos(i) + glm::vec3(0.0f, 0.4f, 0.0f);
         for (const glm::vec3& wp : route)
         {
-            const glm::vec3 p(wp.x, 0.4f, wp.z);
+            const glm::vec3 p(wp.x, groundY(wp.x, wp.z, prev.y - 0.4f) + 0.4f, wp.z);
             Globals::rendererVK.addDebugLine(prev, p, routeColor);
             drawCircle(p, m_structures.waypointRadius(), routeColor, 24);
             prev = p;
@@ -977,7 +1169,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // build/repair reach.
     if (const int sel = m_structures.structureIndexById(m_selectedId);
         sel >= 0 && m_structures.structureType(sel) == EStructureType::Constructor)
-        drawCircle(m_structures.structurePos(sel) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f),
+        drawCircle(m_structures.structureGroundPos(sel) + glm::vec3(0.0f, 0.4f, 0.0f),
             m_structures.constructorRange(), packColor(glm::vec3(0.9f, 0.7f, 0.3f)), 40);
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
@@ -985,7 +1177,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             || m_structures.structureTeam(i) != (uint8)m_team)
             continue;
         const bool houseSelected = m_structures.structureId(i) == m_selectedId;
-        const glm::vec3 housePos = m_structures.structurePos(i) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f);
+        const glm::vec3 housePos = m_structures.structureGroundPos(i) + glm::vec3(0.0f, 0.4f, 0.0f);
         if (houseSelected)
             drawCircle(housePos, m_structures.houseLinkRadius(), packColor(glm::vec3(0.9f, 0.7f, 0.3f)), 48);
         const uint32 linked = m_structures.structureLinkedId(i);
@@ -994,7 +1186,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             continue;
         const bool bright = houseSelected || linked == m_selectedId;
         Globals::rendererVK.addDebugLine(housePos,
-            m_structures.structurePos(barracks) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f),
+            m_structures.structureGroundPos(barracks) + glm::vec3(0.0f, 0.4f, 0.0f),
             packColor(glm::vec3(0.9f, 0.7f, 0.3f) * (bright ? 1.0f : 0.4f)));
     }
 

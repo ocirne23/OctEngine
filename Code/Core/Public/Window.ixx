@@ -62,6 +62,9 @@ public:
 
     void* getWindowHandle() const { return m_windowHandle; }
     void setTitle(oc::string_view title); // queued op
+    // Relative mouse mode (queued op): the cursor hides and stays in the window, motion events keep their xrel/yrel -
+    // the third-person game's mouse look. The caller sends only the edges.
+    void setRelativeMouseMode(bool enabled);
     void getWindowSize(glm::ivec2& size) const;
     // The display's current refresh rate (Hz), queried on the window thread at creation and on
     // display/mode-change events; 0 = unknown. Time's stable-dt snap uses it as the exact vsync

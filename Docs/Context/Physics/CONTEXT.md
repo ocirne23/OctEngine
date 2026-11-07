@@ -75,6 +75,7 @@ can wait a frame keeps off the step's worker load — see Threading's "The frame
 | `staticBody()` | A shapeless static body owned by the world, for anchoring joints to the world itself. |
 | `createDistance/Revolute/Spherical/WeldJoint` | Anchors and axes are WORLD space; local frames derive from the bodies' current poses, **so create joints after the bodies are at their intended placement**. |
 | `castRayClosest(origin, translation, mask, ignoreBody, staticOnly)` | See below. |
+| `overlapBoxAny(center, halfExtents, mask)` | True when any shape in `mask` overlaps the axis-aligned box (`b3World_OverlapShape`, the box as an 8-point proxy). The co-op placement's tree / rock test (layer "Vegetation"). Same thread rule as the ray. |
 | `getContactPoint(contactId, ...)` | Resolves a `ContactEvent::contactId` to its first manifold point. Valid only before the next `update()`. False if the contact is stale or has no manifold point (a purely speculative contact). |
 | `getStepCount()` / `getInterpolationAlpha()` / `getStepHz()` | `getStepHz` exists for code that must pace itself in **whole steps** — the network claim stream does. |
 

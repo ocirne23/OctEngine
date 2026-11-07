@@ -9,7 +9,8 @@
 > fields is in [`Docs/Context/Nav/CONTEXT.md`](../Nav/CONTEXT.md).
 
 A static lib linked by App; links Entity, Force, Physics and Input. Two modes on one codebase: a
-top-down tactical **PvP** whitebox, and a **co-op PvE** survival mode.
+top-down tactical **PvP** whitebox, and a **co-op** mode — by default a third-person building game in the SANDBOX
+WORLD (terrain, trees, ocean) with no enemies, or (tweaks) the generated rock map with waves; see [Modes.md](Modes.md).
 
 ```
 App.exe --game                     single player sandbox
@@ -27,7 +28,7 @@ documentation lives in topic files in this folder — read the ones for the area
 
 | File | Covers |
 |---|---|
-| [Modes.md](Modes.md) | Game modes: co-op PvE (the map, teams, shield-less bodies, ambient scatter, waves, the spawn blob, unit types and archetypes, targeting range gates) and PvP (the arenas, teams, structure damage) |
+| [Modes.md](Modes.md) | Game modes: co-op (the sandbox world: Base site, nodes, the third-person player, crosshair aim; the generated map, teams, shield-less bodies, ambient scatter, waves, the spawn blob, unit types and archetypes, targeting range gates) and PvP (the arenas, teams, structure damage) |
 | [Sync.md](Sync.md) | Multiplayer sync: the three layers (structure mirror, network entities, capsule adoption), the game blob, puppets, client intents, settings, shadow preset, scene focus, detach camera |
 | [Economy.md](Economy.md) | Economy: the cable transport, physical cables and crossings, derived networks, the cell hash, construction, grid placement |
 | [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, routes), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
@@ -65,7 +66,8 @@ documentation lives in topic files in this folder — read the ones for the area
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
 (`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
-`Game:Npc`, `Game:GameCamera`, `Game:Lobby` (the pre-game LOBBY model, `LobbySystem` — multiplayer,
+`Game:Npc`, `Game:GameCamera` (top-down + the third-person orbit), `Game:PlayerLocomotion` (the camera-locked strafe
+of a `ThirdPersonAnimator` body — the co-op player's and App's key C capsule's), `Game:Lobby` (the pre-game LOBBY model, `LobbySystem` — multiplayer,
 or LOCAL: offline, one player, Start launches at once — ready checks, the start countdown, the
 host's team/map picks; the `Lb*` events) and `Game:Chat` (the TEXT CHAT model, `ChatSystem` — the
 "ChM" event's log). Barrel `Public/Game.ixx`.
@@ -163,6 +165,9 @@ are selected individually by their own position.
 ---
 
 # The world
+
+(The co-op SANDBOX WORLD stands on the procedural terrain instead — see [Modes.md](Modes.md). This section is the
+flat maps: PvP and the generated co-op map.)
 
 A flat 600 m plane (`Assets/Entities/Game/*.pre`, baseshapes solid meshes with per-prefab `Color`
 tints), plus generated rock terrain and per-mode resource nodes. **Every enemy unit's body is the

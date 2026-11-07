@@ -5,6 +5,8 @@ import Core.Log;
 import Core.glm;
 import Core.Camera;
 import Core.Time;
+import Core.Window;
+import Settings;
 import Settings.Tweaks;
 
 import App.InputControls;
@@ -160,6 +162,7 @@ public:
     // The controls take the camera by reference, so they are constructed AFTER the session and
     // linked back here.
     void attachControls(InputControls& controls) { m_controls = &controls; }
+    void attachWindow(Window& window) { m_window = &window; }
     FreeFlyCameraController& cameraController() { return m_cameraController; }
 
     GameMatch* game() { return m_game ? &*m_game : nullptr; }
@@ -245,6 +248,18 @@ public:
         if (!startGame)
             return;
         m_game.emplace(true, startCoop);
+        if (m_game->sandboxWorld())
+        {
+            // Co-op in the sandbox world: the same terrain + ocean switch as the sandbox (exitToMenu's unseedWorld
+            // turns them off again), on the sandbox's seed ("Terrain/Seed") - and the player starts where the sandbox
+            // camera starts, looking the same way. A world the lobby seeded starts at its pick, which seeding moved
+            // to the origin.
+            TweakRegistry::get().setOverride("Terrain/Enabled=1");
+            TweakRegistry::get().setOverride("Ocean/Enabled=1");
+            const glm::vec3 start = m_options.cameraStart ? m_options.cameraStart->first : START_POS;
+            const glm::vec3 dir = m_options.cameraStart ? m_options.cameraStart->second : START_DIR;
+            m_game->setWorldAnchor(m_worldSeeded ? glm::vec3(0.0f, 30.0f, 0.0f) : start, dir);
+        }
         uint32 mapSeed;
         float mapFill;
         int mapLanes;
@@ -265,7 +280,7 @@ public:
         m_controls->resetForMenu();
         m_game.reset();
         Globals::world.clearRootEntities();
-        unseedWorld(); // Terrain/Ocean off, the origin back at (0, 0)
+        unseedWorld(); // Terrain/Ocean off; a seeded world's seed, origin and ring back to the sandbox's
         m_terrainPreview.reset();
         m_previewUiImage = nullptr;
         m_previewUiGeneration = 0;
@@ -383,6 +398,15 @@ public:
 
     void updateCamera(Camera& camera, double deltaSec)
     {
+        // The third-person game's mouse look holds the window in RELATIVE mouse mode - released for every menu, a
+        // focused panel or the chat line (the viewport loses focus), and given back when the viewport is focused again.
+        const bool capture = gameRunningOnScreen() && !Globals::ui.isEscapeMenuOpen() && m_game->wantsMouseCapture()
+            && Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused();
+        if (capture != m_mouseCaptured && m_window)
+        {
+            m_mouseCaptured = capture;
+            m_window->setRelativeMouseMode(capture);
+        }
         if (gameRunningOnScreen() && !Globals::ui.isEscapeMenuOpen())
         {
             const bool detached = m_game->cameraDetached();
@@ -486,7 +510,14 @@ private:
         const bool startCoop = action.type == MainMenuAction::EType::StartCoop;
         if (!startNetworkFor(mode, startGame, action.connectAddress))
             return;
-        if (startGame)
+        if (startCoop && mode == ELaunchMode::Single)
+        {
+            // Offline co-op goes STRAIGHT into the world at the default spawn (the sandbox's seed and camera start):
+            // the local lobby's world block (preview, "Seed world") is not used on this path.
+            startWorldAndGame(true, true);
+            Globals::ui.setMainMenuActive(false);
+        }
+        else if (startGame)
         {
             // Every game pick goes through the lobby: multiplayer to gather players, offline
             // (local) for the world block - terrain seed, preview map, "Seed world".
@@ -523,7 +554,16 @@ private:
             // A seeded world has every tile it may need on disk (Start waited for the seeder), so the
             // 2.28 GB of diffusion weights go before the match: the streamer keeps serving the caches
             // and nothing infers in game. The next preview or the sandbox reloads them.
-            if (m_worldSeeded)
+            // Co-op in the sandbox world plays third person - the view reaches the horizon - so it keeps the WHOLE
+            // world: the seeded area only came first. The ring goes back to its size, the generated bounds come off
+            // and the models stay, so the chunks past the area generate live like the sandbox's.
+            const bool fullWorld = m_lobby.coop() && Globals::settings.game.match.coopSandboxWorld;
+            if (m_worldSeeded && fullWorld)
+            {
+                TweakRegistry::get().setOverride(oc::format("Terrain/Range (chunks)={}", m_ringRadiusBeforeSeed));
+                Globals::terrain.setGeneratedBounds(false, glm::vec2(0.0f), glm::vec2(0.0f));
+            }
+            else if (m_worldSeeded)
                 Procedural::TerrainGenV3::unloadModels();
             startWorldAndGame(true, m_lobby.coop());
             if (m_game)
@@ -555,8 +595,12 @@ private:
                 return;
             const glm::vec2 origin = m_terrainPreview.worldOffsetAt(action.pickU, action.pickV);
             const float halfSize = glm::clamp(action.areaSizeM, 256.0f, 65536.0f) * 0.5f;
-            if (!m_worldSeeded)
-                m_ringRadiusBeforeSeed = Globals::terrain.ringRadius(); // restored by unseedWorld
+            if (!m_worldSeeded) // the sandbox's own values, restored by unseedWorld
+            {
+                m_ringRadiusBeforeSeed = Globals::terrain.ringRadius();
+                m_originBeforeSeed = glm::vec2(Globals::settings.terrain.originX, Globals::settings.terrain.originZ);
+                m_seedBeforeSeed = Globals::settings.terrain.seed;
+            }
             // The ring covers the playable area and no more: the streamer builds meshes live over
             // the seeded tiles, and chunks past the area would pull cold tiles on the fly.
             const int ringRadius = glm::clamp((int)glm::ceil(halfSize / (float)glm::max(Globals::terrain.chunkSize(), 1)), 1, 64);
@@ -587,10 +631,13 @@ private:
         TweakRegistry& tweaks = TweakRegistry::get();
         tweaks.setOverride("Terrain/Enabled=0");
         tweaks.setOverride("Ocean/Enabled=0");
-        tweaks.setOverride("Terrain/Origin X (m)=0");
-        tweaks.setOverride("Terrain/Origin Z (m)=0");
+        // Back to the sandbox's world: the origin, ring and bounds it had before seeding (never a fixed (0, 0) -
+        // the sandbox's origin is the "Terrain/Origin" tweaks, and co-op plays on the same spot).
         if (m_worldSeeded)
         {
+            tweaks.setOverride(oc::format("Terrain/Seed={}", m_seedBeforeSeed));
+            tweaks.setOverride(oc::format("Terrain/Origin X (m)={}", m_originBeforeSeed.x));
+            tweaks.setOverride(oc::format("Terrain/Origin Z (m)={}", m_originBeforeSeed.y));
             tweaks.setOverride(oc::format("Terrain/Range (chunks)={}", m_ringRadiusBeforeSeed));
             Globals::terrain.setGeneratedBounds(false, glm::vec2(0.0f), glm::vec2(0.0f));
         }
@@ -602,7 +649,10 @@ private:
     {
         using EState = Procedural::TerrainPreview::EState;
         m_terrainPreview.update();
-        world.terrainSeed = m_terrainPreview.seed();
+        // Before any preview the seed field shows the sandbox's own seed ("Terrain/Seed"): not seeding at all plays
+        // on exactly that world.
+        world.terrainSeed = m_terrainPreview.state() == Procedural::TerrainPreview::EState::Idle && !m_terrainPreview.image()
+            ? (uint32)Globals::settings.terrain.seed : m_terrainPreview.seed();
         switch (m_terrainPreview.state())
         {
         case EState::LoadingModels: world.preview = LobbyWorldView::EPreview::LoadingModels; break;
@@ -666,6 +716,8 @@ private:
 
     const LaunchOptions& m_options;
     InputControls* m_controls = nullptr; // attachControls
+    Window* m_window = nullptr;          // attachWindow
+    bool m_mouseCaptured = false;        // the window is in relative mouse mode (see updateCamera)
     FreeFlyCameraController m_cameraController;
     VRFreeFlyCameraController m_vrCameraController;
 
@@ -684,4 +736,6 @@ private:
     bool m_worldSeeded = false;
     glm::vec2 m_worldSeededPick = glm::vec2(0.5f);
     int m_ringRadiusBeforeSeed = 32; // "Terrain/Range (chunks)" before seeding sized the ring
+    glm::vec2 m_originBeforeSeed{ 0.0f }; // "Terrain/Origin X / Z (m)" before seeding moved the origin to the pick
+    int m_seedBeforeSeed = 0;             // "Terrain/Seed" before seeding
 };

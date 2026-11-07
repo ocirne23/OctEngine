@@ -26,7 +26,8 @@ void GamePlayer::spawn(const glm::vec3& pos)
     m_graceTimer = s.spawnGraceSec;
     for (float& h : m_outputHistory)
         h = s.shieldMaxOutput;
-    m_entity = Globals::world.spawnAssetFile("Entities/Game/player.pre", Transform(pos), true);
+    m_entity = Globals::world.spawnAssetFile(prefabPath(m_directControl), Transform(pos), true);
+    m_locomotion.reset(0.0f);
     if (m_entity)
     {
         m_entity->setName("Player");
@@ -66,6 +67,7 @@ void GamePlayer::clientAdopt(const glm::vec3& respawnPos)
         for (float& h : m_outputHistory)
             h = s.shieldMaxOutput;
         setTeam(m_team); // the replicated prefab authors team 0 - re-team the local twin's field
+        m_locomotion.reset(0.0f);
         Log::info("Adopted our player capsule from the server");
         return;
     }
@@ -106,10 +108,22 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
         return;
 
-    (void)cameraForwardPlanar; // no keyboard steering: WASD belong to the grid hotkeys - the
-                               // capsule moves ONLY by RMB move orders (see setMoveTarget)
     glm::vec3 move(0.0f);
-    if (m_hasMoveTarget)
+    if (m_directControl)
+    {
+        // Third person: camera-relative WASD (the grid hotkeys sit on the number keys in this mode).
+        const glm::vec3 forward = glm::dot(cameraForwardPlanar, cameraForwardPlanar) > 1e-6f
+            ? glm::normalize(cameraForwardPlanar) : glm::vec3(0.0f, 0.0f, -1.0f);
+        const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+        if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_W)) move += forward;
+        if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_S)) move -= forward;
+        if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_D)) move += right;
+        if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_A)) move -= right;
+        if (glm::dot(move, move) > 1e-8f)
+            move = glm::normalize(move);
+        m_hasMoveTarget = false;
+    }
+    else if (m_hasMoveTarget)
     {
         // RMB move order: steer planar toward the target and STOP inside the arrive radius (the
         // capsule coasts the last bit - braking is the same accel clamp below, with move = 0).
@@ -160,11 +174,13 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
         if (m_energy <= 0.0f)
             m_shieldCollapsed = true; // the same latch applyDamage trips
     }
-    const float speed = s.moveSpeed * (sprinting ? s.sprintMult : 1.0f);
+    // Direct control runs at the testbed capsule's speeds (the locomotion clips are tuned against them).
+    const AppControlsSettings& direct = Globals::settings.appControls;
+    const float speed = (m_directControl ? direct.playerMoveSpeed : s.moveSpeed) * (sprinting ? s.sprintMult : 1.0f);
 
     glm::vec3 vel = pc->body.getLinearVelocity();
     glm::vec3 dv = glm::vec3(move.x * speed - vel.x, 0.0f, move.z * speed - vel.z);
-    const float maxDv = s.accel * deltaSec;
+    const float maxDv = (m_directControl ? direct.playerAccel : s.accel) * deltaSec;
     const float dvLen = glm::length(dv);
     if (dvLen > maxDv && dvLen > 1e-6f)
         dv *= maxDv / dvLen;
@@ -177,10 +193,12 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
         const float bottom = shapeBottomDistance(m_entity.get());
         const glm::vec3 pos = pc->body.getPosition();
         if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
-            vel.y = s.jumpSpeed;
+            vel.y = m_directControl ? direct.playerJumpSpeed : s.jumpSpeed;
     }
     m_jumpWasDown = jumpDown;
     pc->body.setLinearVelocity(vel);
+    if (m_directControl) // the body faces the camera, the legs run along the velocity
+        m_locomotion.update(*m_entity, vel, std::atan2(cameraForwardPlanar.x, cameraForwardPlanar.z), deltaSec);
 }
 
 void GamePlayer::applyDamage(float amount)
@@ -262,7 +280,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     const float exposure = glm::clamp(1.0f - shieldRadius() / glm::max(s.damageRadius, 1e-3f), 0.0f, 1.0f);
     if (!inGrace && coverSurplus <= 0.0f && exposure > 0.0f && pressure > iso)
         m_health -= s.healthDrainRate * exposure * deltaSec;
-    if (bodyPos.y < -20.0f)
+    if (bodyPos.y < m_killFloor)
         m_health = 0.0f; // fell out of the world - respawn below
 
     // HEIGHT LIMIT: the same ceiling the units obey (the capsule's puppet GameUnitComponent

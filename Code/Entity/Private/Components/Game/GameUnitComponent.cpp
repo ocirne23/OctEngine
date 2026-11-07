@@ -330,7 +330,7 @@ bool GameUnitComponent::applyDamageAndHeal(Tick& t)
     }
     // Death before the heal: a heal landing the same tick must not revive the unit (a medic
     // station's radius was making units immortal).
-    if (health <= 0.0f || t.pos.y < params.voidY)
+    if (health <= 0.0f || (params.flatGround && t.pos.y < params.voidY))
     {
         kill(t.entity);
         return false;
@@ -552,7 +552,8 @@ void GameUnitComponent::tickCombat(Tick& t)
         }
     });
     m_attackTimer = glm::max(m_attackTimer - t.deltaSec, 0.0f);
-    const bool canBite = bite && biteDist <= attackRange && t.pos.y > -2.0f && t.pos.y < 8.0f;
+    const bool canBite = bite && biteDist <= attackRange
+        && (!params.flatGround || (t.pos.y > -2.0f && t.pos.y < 8.0f));
     if (meleeVictim)
         t.stopRange = glm::max(t.stopRange, meleeVictimReach);
     const float swing = meleeVictim ? (meleeVictim->puppet ? playerDamage : attackDamage) : attackDamage;
@@ -1002,7 +1003,7 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client || puppet || !alive() || deltaSec <= 0.0f)
         return false;
-    if (entity.pos.y < params.voidY) // the full sim never visits an unselected unit: kill it here
+    if (params.flatGround && entity.pos.y < params.voidY) // the full sim never visits an unselected unit: kill it here
     {
         kill(entity);
         return false;

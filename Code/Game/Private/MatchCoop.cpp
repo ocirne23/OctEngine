@@ -180,9 +180,19 @@ void GameMatch::queueWave()
     // takes over there. The carved lanes guarantee a route in from any side.
     const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
     const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
-    const float k = (c_coopHalfSize + 8.0f) / glm::max(glm::abs(dir.x), glm::abs(dir.z));
-    m_waveOrigin = dir * k;
-    m_waveDest = dir * 6.0f;
+    if (m_sandboxWorld)
+    {
+        // No barrier and no map edge: a ring around the Base, inside the collider ring the player stands in (a body
+        // with no terrain under it would fall).
+        m_waveOrigin = m_basePos + dir * m_settings.sandboxWaveDistance;
+        m_waveDest = m_basePos + dir * 6.0f;
+    }
+    else
+    {
+        const float k = (c_coopHalfSize + 8.0f) / glm::max(glm::abs(dir.x), glm::abs(dir.z));
+        m_waveOrigin = dir * k;
+        m_waveDest = dir * 6.0f;
+    }
     m_wavePendingBudget += budget;
     // Roll this wave's COMPOSITION among the archetypes the index has unlocked - never the same
     // recipe twice in a row when a choice exists - then jitter its weights so repeats still vary.
@@ -262,16 +272,26 @@ void GameMatch::tickCoopSpawns()
         for (int attempt = 0; attempt < 6; ++attempt)
         {
             const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-            const float r = m_waveRadius * std::sqrt(glm::linearRand(0.0f, 1.0f)); // uniform by area
-            pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
-            pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
-            pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
-            if (glm::abs(pos.x) < c_coopHalfSize + 1.5f && glm::abs(pos.z) < c_coopHalfSize + 1.5f)
+            if (m_sandboxWorld)
             {
-                if (glm::abs(m_waveOrigin.x) >= glm::abs(m_waveOrigin.z))
-                    pos.x = glm::sign(m_waveOrigin.x) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
-                else
-                    pos.z = glm::sign(m_waveOrigin.z) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+                // A disc kept clear of the Base (the blob would otherwise reach it), 1 m over the terrain.
+                const float r = glm::min(m_waveRadius, m_settings.sandboxWaveDistance * 0.5f) * std::sqrt(glm::linearRand(0.0f, 1.0f));
+                pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 0.0f, std::sin(a) * r);
+                pos.y = groundY(pos.x, pos.z, m_basePos.y) + 1.0f;
+            }
+            else
+            {
+                const float r = m_waveRadius * std::sqrt(glm::linearRand(0.0f, 1.0f)); // uniform by area
+                pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
+                pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
+                pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
+                if (glm::abs(pos.x) < c_coopHalfSize + 1.5f && glm::abs(pos.z) < c_coopHalfSize + 1.5f)
+                {
+                    if (glm::abs(m_waveOrigin.x) >= glm::abs(m_waveOrigin.z))
+                        pos.x = glm::sign(m_waveOrigin.x) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+                    else
+                        pos.z = glm::sign(m_waveOrigin.z) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+                }
             }
             bool clear = true;
             for (int i = 0; i < m_waveRecentCount && clear; ++i)

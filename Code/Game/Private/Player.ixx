@@ -5,6 +5,7 @@ import Core.glm;
 import Entity;
 import Force;
 import Settings;
+import :PlayerLocomotion;
 
 // The player character: upright physics capsule (Entities/Game/player.pre) carrying a personal
 // shield ForceEmitter (via its ForceComponent) and a health pool. BATTERY MODEL: while the Energy
@@ -34,10 +35,22 @@ public:
     // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
     // code paths (the owner simulates; the claim stream carries the body state to the server).
     void clientAdopt(const glm::vec3& respawnPos);
+    // The SANDBOX WORLD (co-op): the third-person body (playerCoop.pre, ThirdPersonAnimator) driven by camera-relative
+    // WASD with the camera-locked strafe (PlayerLocomotion), at the testbed capsule's "Network/Player" speeds. Off =
+    // the top-down player.pre, moved by RMB orders only. Set before spawn; clients adopt whatever the server spawned.
+    void setDirectControl(bool enabled) { m_directControl = enabled; }
+    bool directControl() const { return m_directControl; }
+    static const char* prefabPath(bool directControl)
+    {
+        return directControl ? "Entities/Game/playerCoop.pre" : "Entities/Game/player.pre";
+    }
+    // Below this world Y the capsule counts as fallen out of the world (respawn). The flat maps keep -20; the
+    // sandbox world sets it under the spawn.
+    void setKillFloor(float y) { m_killFloor = y; }
 
-    // Velocity steering toward the standing RMB move order + LShift sprint + Space jump off a
-    // ground raycast. NO WASD: those keys are grid hotkeys - the player moves by mouse only.
-    // Windowed input only - no-ops without window focus.
+    // Velocity steering + LShift sprint + Space jump off a ground raycast. Top-down: toward the standing RMB move
+    // order only (WASD are grid hotkeys there). Direct control: camera-relative WASD. Windowed input only - no-ops
+    // without window focus.
     void tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec);
 
     // RTS move order (right-click ground, or hold RMB to steer at the cursor): a planar
@@ -106,6 +119,9 @@ private:
     glm::vec3 m_moveTarget{ 0.0f };
     bool m_hasMoveTarget = false;
     bool m_jumpWasDown = false;
+    bool m_directControl = false;
+    float m_killFloor = -20.0f;
+    PlayerLocomotion m_locomotion; // direct control: the body yaw + strafe animation
 
     uint32 m_team = 0;
     float m_health = 100.0f;

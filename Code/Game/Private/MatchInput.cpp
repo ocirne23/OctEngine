@@ -13,6 +13,7 @@ import UI;
 import Entity;
 import RendererVK;
 import Nav;
+import Physics; // the sandbox world's terrain aim ray
 import :Match;
 import :Player;
 import :Structures;
@@ -33,6 +34,13 @@ static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
     SDL_Scancode::SDL_SCANCODE_Z, SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_C, SDL_Scancode::SDL_SCANCODE_V,
 };
 static_assert(oc::size(c_gridKeyLabels) == c_gridSlots);
+// The sandbox world: the same slots on the number row (WASD walk the player there).
+static constexpr SDL_Scancode c_gridNumberKeys[c_gridSlots] = {
+    SDL_Scancode::SDL_SCANCODE_1, SDL_Scancode::SDL_SCANCODE_2, SDL_Scancode::SDL_SCANCODE_3, SDL_Scancode::SDL_SCANCODE_4,
+    SDL_Scancode::SDL_SCANCODE_5, SDL_Scancode::SDL_SCANCODE_6, SDL_Scancode::SDL_SCANCODE_7, SDL_Scancode::SDL_SCANCODE_8,
+    SDL_Scancode::SDL_SCANCODE_9, SDL_Scancode::SDL_SCANCODE_0, SDL_Scancode::SDL_SCANCODE_MINUS, SDL_Scancode::SDL_SCANCODE_EQUALS,
+};
+static_assert(oc::size(c_gridNumberKeyLabels) == c_gridSlots);
 // Root page slots: the three category pages (Q/W/E) and Delete.
 static constexpr int c_rootDeleteSlot = 9;     // X
 static constexpr int c_cancelSlot = 10;        // C: straight back to Select (Esc/Tab step back one level instead)
@@ -99,7 +107,7 @@ static void drawStructureGhostExtent(EStructureType type, const glm::vec3& groun
     const glm::vec2 half(ext.x * StructureSystem::GridCellSize * 0.5f,
                          ext.y * StructureSystem::GridCellSize * 0.5f);
     const float height = StructureSystem::spawnHeightOf(type) * 2.0f;
-    const glm::vec3 c(groundPos.x, 0.0f, groundPos.z);
+    const glm::vec3 c = groundPos; // y = the height it will stand on (0 on the flat maps)
     const glm::vec3 corner[4] = {
         c + glm::vec3(-half.x, 0.0f, -half.y), c + glm::vec3(half.x, 0.0f, -half.y),
         c + glm::vec3(half.x, 0.0f, half.y),   c + glm::vec3(-half.x, 0.0f, half.y) };
@@ -160,20 +168,46 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
     aim.pos = StructureSystem::snapToGrid(aim.type, aim.pos); // grid-aligned (extractors too)
 
     aim.valid = true;
+    // The sandbox world's ground (flat enough, dry, no tree or rock) - and the height to stand on.
+    aim.ground = m_structures.groundFit(aim.type, aim.pos, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), aim.pos.y);
+    if (aim.ground == StructureSystem::EGroundFit::NoGround)
+    {
+        aim.valid = false; // past the streamed collider ring: nothing to show a ghost on
+        return aim;
+    }
     // Placing a blueprint is free - "affordable" now means the footprint is CLEAR: no structure
     // (or reserved node) on those cells, and nobody standing in them (drives the red ghost AND
     // gates the confirm click; placeStructure re-checks both, the MP seam).
-    aim.affordable = m_structures.cellsFree(aim.type, aim.pos)
+    aim.affordable = aim.ground == StructureSystem::EGroundFit::Ok && m_structures.cellsFree(aim.type, aim.pos)
         && !StructureSystem::actorInFootprint(aim.type, aim.pos);
     return aim;
 }
 
+bool GameMatch::fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot) const
+{
+    float y = 0.0f;
+    const bool ok = m_structures.groundFit(type, p, rot, y) == StructureSystem::EGroundFit::Ok;
+    p.y = y;
+    return ok;
+}
+
 bool GameMatch::aimGroundPoint(const Camera& camera, glm::vec3& outPos) const
 {
+    const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
+    if (m_sandboxWorld)
+    {
+        // The terrain collider alone (trees, structures and the player's own capsule never stop the aim).
+        constexpr float c_aimReach = 250.0f;
+        const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(ray.origin, ray.dir * c_aimReach,
+            PhysicsLayers::bit("Terrain"));
+        if (!hit.hit)
+            return false;
+        outPos = hit.point;
+        return true;
+    }
     // Analytic ray vs the y=0 ground plane - the world floor IS flat, and a physics raycast kept
     // hitting the tall border-wall colliders (and other bodies) instead of the ground behind them,
     // which made near-wall placement jumpy.
-    const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
     if (ray.dir.y > -1e-4f)
         return false; // looking at/above the horizon - no ground under the cursor
     outPos = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
@@ -356,9 +390,10 @@ void GameMatch::updateModeSwitching()
     Input& input = Globals::input;
     const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
     // Grid hotkeys: polled edges on the 12 keys, each mapping straight onto its slot.
+    const SDL_Scancode* gridKeys = m_sandboxWorld ? c_gridNumberKeys : c_gridKeys;
     for (int k = 0; k < c_gridSlots; ++k)
     {
-        const bool down = focused && input.isKeyDown(c_gridKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+        const bool down = focused && input.isKeyDown(gridKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
         if (down && !m_gridKeyWasDown[k])
             activateSlot(k);
         m_gridKeyWasDown[k] = down;
@@ -378,6 +413,17 @@ void GameMatch::updateModeSwitching()
     if (loadDown && !m_loadKeyWasDown)
         loadGame();
     m_loadKeyWasDown = loadDown;
+}
+
+void GameMatch::showGroundReason(StructureSystem::EGroundFit fit)
+{
+    if (fit == m_shownGroundFit)
+        return; // the HUD only hears the edges
+    m_shownGroundFit = fit;
+    if (fit == StructureSystem::EGroundFit::Ok)
+        Globals::gameHud.removeCounter("Can't build");
+    else
+        Globals::gameHud.setCounterText("Can't build", StructureSystem::groundFitReason(fit), glm::vec3(1.0f, 0.4f, 0.3f));
 }
 
 void GameMatch::disarmBuild()
@@ -448,18 +494,20 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
             const EStructureType crossing = crossingForMedium(cableMediumOf(armed));
             // planCrossing, not cellsFree: an END cell holding our OWN medium is replaced, so a
             // stroke crosses a foreign line even where its own run already stands.
+            glm::vec3 at = next;
             if (m_structures.planCrossing(crossing, next, crossingRotation(dir), (uint8)m_team).valid
-                && !StructureSystem::actorInFootprint(crossing, next))
+                && !StructureSystem::actorInFootprint(crossing, next) && fitGround(crossing, at, crossingRotation(dir)))
             {
-                requestPlace(crossing, next, -1, glm::vec3(dir.x, 0.0f, dir.y));
+                requestPlace(crossing, at, -1, glm::vec3(dir.x, 0.0f, dir.y));
                 // points[i] and the cell beyond `next` are the crossing's END cells: never cables.
                 const glm::vec3 farEnd = next + glm::vec3(dir.x, 0.0f, dir.y) * step;
                 i += i + 2 < count && sameCell(points[i + 2], farEnd) ? 2 : 1;
                 continue;
             }
         }
-        if (m_structures.cellsFree(armed, points[i]))
-            requestPlace(armed, points[i], -1, glm::vec3(0.0f));
+        glm::vec3 at = points[i];
+        if (m_structures.cellsFree(armed, at) && fitGround(armed, at))
+            requestPlace(armed, at, -1, glm::vec3(0.0f));
     }
     m_cablePendingValid = false;
     m_cablePaintLast = points[count - 1];
@@ -467,8 +515,9 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
 
 void GameMatch::finishCableStroke(EStructureType armed)
 {
-    if (m_cablePendingValid && m_structures.cellsFree(armed, m_cablePending))
-        requestPlace(armed, m_cablePending, -1, glm::vec3(0.0f));
+    glm::vec3 at = m_cablePending;
+    if (m_cablePendingValid && m_structures.cellsFree(armed, at) && fitGround(armed, at))
+        requestPlace(armed, at, -1, glm::vec3(0.0f));
     m_cablePendingValid = false;
     m_cablePainting = false;
 }
@@ -495,6 +544,7 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
+    m_frameGroundFit = aim.ground;
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawStructureGhost(armed, aim.pos, color);
     if (confirmEdge && aim.affordable)
@@ -614,7 +664,8 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             }
             for (int s = 0; s < count; ++s)
             {
-                const bool free = m_structures.cellsFree(EStructureType::Wall, points[s])
+                const bool fits = fitGround(EStructureType::Wall, points[s]); // + its stand height
+                const bool free = fits && m_structures.cellsFree(EStructureType::Wall, points[s])
                     && !StructureSystem::actorInFootprint(EStructureType::Wall, points[s]);
                 drawStructureGhost(EStructureType::Wall, points[s],
                     packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
@@ -642,6 +693,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
+    m_frameGroundFit = aim.ground; // the HUD names a refused ground
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
                                                   // (crossings are auto-placed by the paint stroke)
@@ -679,7 +731,7 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
     if (hover < 0)
         return;
     const bool deletable = m_structures.structureType(hover) != EStructureType::Base;
-    drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
+    drawCircle(m_structures.structureGroundPos(hover) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
         packColor(deletable ? glm::vec3(1.0f, 0.25f, 0.2f) : glm::vec3(0.5f, 0.5f, 0.5f)), 20);
     if (confirmEdge && deletable)
     {
@@ -760,7 +812,7 @@ void GameMatch::updateUnitSelection(const Camera& camera)
     }
     pruneSelectedUnits();
     for (const EntityPtr& p : m_selectedUnits)
-        drawCircle(p->pos * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.15f, 0.0f), 0.9f,
+        drawCircle(glm::vec3(p->pos.x, groundY(p->pos.x, p->pos.z, p->pos.y - 0.85f) + 0.15f, p->pos.z), 0.9f,
             packColor(glm::vec3(0.4f, 1.0f, 0.5f)), 16);
 }
 
@@ -943,7 +995,7 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
 {
     const int hover = hoveredStructure(camera);
     if (hover >= 0 && allowPick)
-        drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
+        drawCircle(m_structures.structureGroundPos(hover) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
             packColor(glm::vec3(0.9f, 0.9f, 0.9f)), 20);
     if (confirmEdge && allowPick)
         m_selectedId = hover >= 0 ? m_structures.structureId(hover) : 0;
@@ -956,6 +1008,6 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
             m_selectedId = 0; // it died
     }
     if (selected >= 0) // highlight ring; the info block rides the world label (buildWorldLabels)
-        drawCircle(m_structures.structurePos(selected) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 2.0f,
+        drawCircle(m_structures.structureGroundPos(selected) + glm::vec3(0.0f, 0.3f, 0.0f), 2.0f,
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 24);
 }

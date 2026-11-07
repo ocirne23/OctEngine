@@ -212,6 +212,24 @@ everything sits flush.**
 seam**). FREE resource nodes reserve their extractor's future footprint, so buildings cannot block
 extractor placement.
 
+**THE GROUND (the co-op sandbox world, `StructureSystem::setTerrainGround`).** `groundFit(type, pos, rot, outY)` runs
+next to `cellsFree` at aim (the ghost, plus a "Can't build" HUD line naming the reason) AND in `placeStructure`. It
+casts 9 rays down onto the terrain collider (layer "Terrain") over the footprint — corners, edge midpoints, center —
+and refuses:
+
+| Result | When |
+|---|---|
+| `NoGround` | a ray misses (outside the streamed collider ring) — at aim no ghost at all |
+| `Steep` | highest − lowest sample > "Max ground step (m)" (0.75; twice that for cable pieces) |
+| `Water` | the physics water surface (ocean, rivers, lakes) above the lowest sample |
+| `Blocked` | a tree or rock world collider (layer "Vegetation", `PhysicsWorld::overlapBoxAny`) cuts the box from the lowest ground to the structure's top |
+
+`outY` — set on refusals too, so a red ghost stands on the ground — is the LOWEST sample for a building (the box sinks
+into the high side, it never floats over the low one) and the center for a cable piece. The structure spawns at
+`outY + spawnHeightOf`. **The MP seam:** `GqP` carries the client's ground height; when the SERVER has no collider
+there (`NoGround` — the client builds far from the server's camera), that height stands. On the flat maps the ground
+is the y = 0 plane and every test passes. Debug rings and routes draw at `structureGroundPos` / the terrain height.
+
 `actorInFootprint` (a spatial query for GameUnitComponents — units AND player capsules) refuses a
 placement someone is STANDING in, at both seams. **It is deliberately NOT folded into `cellsFree`**,
 which doubles as the unit-spawn-point probe and must not refuse a cell just because units stand near

@@ -6,8 +6,10 @@
 
 ### The RTS grid hotbar
 
-12 slots on the GRID HOTKEYS **QWER / ASDF / ZXCV**, row-major, always visible in game mode. **Every
-slot is also CLICKABLE**: `slotAtScreenPos` → `activateSlot`, the ONE entry point for key and click.
+12 slots on the GRID HOTKEYS **QWER / ASDF / ZXCV**, row-major, always visible in game mode — **on the number row
+(1..9, 0, −, =) in the co-op sandbox world**, where WASD walk the third-person player (`c_gridNumberKeys`, the captions
+`c_gridNumberKeyLabels`). **Every slot is also CLICKABLE**: `slotAtScreenPos` → `activateSlot`, the ONE entry point for
+key and click (the sandbox world's crosshair aim never reaches the hotbar, so there it is keys only).
 Clicks over the hotbar never reach the world.
 
 Every caption is a 3–5 char SHORTHAND from `c_structureShortNames`, indexed by `EStructureType` —
@@ -281,6 +283,7 @@ Cancelling rides along on the SAME press:
 **Cancels deliberately do NOT consume** — a cancel that also ate the movement reads as a dropped
 input.
 
-A respawn drops a standing order. There is no WASD movement (the letter keys are grid hotkeys), and
+A respawn drops a standing order. There is no WASD movement (the letter keys are grid hotkeys; the co-op sandbox
+world is the exception: WASD walk, RMB orders the selected units only - see [Modes.md](Modes.md)), and
 **because RMB-hold steers, the camera yaw drag is on MIDDLE-mouse**; LEFT/RIGHT arrows also yaw, and
 the wheel zooms.

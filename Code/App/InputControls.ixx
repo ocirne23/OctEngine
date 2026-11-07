@@ -22,7 +22,7 @@ import Script;
 import Physics;
 import Audio;
 import Force;
-import App.PlayerLocomotion;
+import Game; // PlayerLocomotion (shared with the co-op player)
 
 export class InputControls
 {
