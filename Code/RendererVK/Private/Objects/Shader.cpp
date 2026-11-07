@@ -732,8 +732,9 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     std::vector<unsigned int> spirvStd; // GlslangToSpv/OutputSpvBin take std::vector by reference
     glslang::GlslangToSpv(*program.getIntermediate(stage), spirvStd, &spvOptions);
 
-    glslang::OutputSpvBin(spirvStd, spvBinPath.c_str());
     spirv = oc::fromStd(spirvStd);
+    // Through FileSystem, not glslang::OutputSpvBin: that opens the Assets-relative path against the working directory.
+    FileSystem::writeFileBytes(spvBinPath, oc::span<const uint8>(reinterpret_cast<const uint8*>(spirv.data()), spirv.size() * sizeof(uint32)), true);
 
     oc::vector<oc::string> uboRefs;
     collectUboRefs(source, uboRefs);
