@@ -200,7 +200,14 @@ export struct EntityChange
         EntityPtr entity;
         bool enabled;
     };
-    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, SavePrefabText, SetEnabled> type;
+    // The Animation Editor's save (and its imports): writes the .clip text, registers the clip under the file stem, and swaps the new keys into every
+    // clip set built from that name, in place - live animators play the edit at once.
+    struct SaveAnimationClip
+    {
+        oc::string path;
+        oc::string text;
+    };
+    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, SavePrefabText, SetEnabled, SaveAnimationClip> type;
 };
 
 // ---- Inline bodies ----

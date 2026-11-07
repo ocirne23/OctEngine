@@ -1,0 +1,21 @@
+# Animation clip, written by the Animation Editor. A key is its time in seconds, then the value (a rotation is x y z w);
+# Step / Smooth after it sets how it blends to the next key (default Linear).
+Clip 1
+	Duration 2
+	FrameRate 15
+	Loop true
+	PreviewRig character
+	Track RightForeArm
+		Position
+			0 0 0.514359 -3.441237e-07 Smooth
+		Rotation
+			0 -0.015052588 -0.11004485 0.061132483 0.99193066 Smooth
+			1 -0.08998247 -0.11435062 0.05264012 0.9879555 Smooth
+			2 -0.21843478 -0.120253526 0.03723073 0.96769786 Smooth
+	Track RightArm
+		Position
+			0 5.401671e-08 0.17930956 0 Smooth
+		Rotation
+			0 0.0014107738 0.95556337 -0.17733209 -0.2354783 Smooth
+			1 0.39983556 0.59007686 0.08894024 -0.69572306 Smooth
+			2 0.67825496 0.4804142 0.35398206 -0.42879972 Smooth

@@ -11,11 +11,63 @@ uploads it.
 
 | Step | Owner | Code |
 |---|---|---|
-| Import a rig into a `Skeleton`, and clips into an `AnimationSet` | **File** (Assimp) | `ISceneData::loadAnimations` — [ISceneData.ixx:80](../../../Code/File/Private/ISceneData.ixx#L80) |
+| Import a rig into a `Skeleton` | **File** (Assimp) | `SceneData::buildSkeleton` |
+| Import an FBX's tracks as `ClipAsset`s (by node name) | **File** (Assimp) | `ISceneData::importClipAssets` — [ISceneData.ixx](../../../Code/File/Private/ISceneData.ixx) |
+| Author / save `.clip` files | **UI** | The Animation Editor (see the [UI CONTEXT](../UI/CONTEXT.md)) |
 | Keep the rig's own skeleton copy | **RendererVK** | `ObjectContainer::m_skeleton` — [ObjectContainer.ixx:149](../../../Code/RendererVK/Private/ObjectContainer.ixx#L149) |
-| Cache clip libraries per skeleton + animator | **Entity** | `WorldState::getOrBuildClipSet` — [WorldState.ixx](../../../Code/Entity/Private/WorldState.ixx) |
+| Cache clip assets by name, build clip libraries per skeleton + animator | **Entity** | `WorldState::getOrLoadClipAsset` / `getOrBuildClipSet` — [WorldState.ixx](../../../Code/Entity/Private/WorldState.ixx) |
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
+
+## Clips: one path from keys to the player
+
+**Every clip the runtime plays is a `ClipAsset` first** ([ClipAsset.ixx](../../../Code/Animation/Private/ClipAsset.ixx)): keyframes by
+BONE NAME, a duration, a frame rate (the editor's grid only), a loop flag, events and the editor's preview rig. It knows no skeleton;
+`buildAnimationClip(asset, skeleton, name)` resolves the track names into an `AnimationClip` (a track the rig has no bone for is left out).
+
+| Source of a global clip name | How it becomes a `ClipAsset` |
+|---|---|
+| `<name>.clip` (the file stem is the name) | `parseClipAsset` of the file text |
+| an `.anm` `Animation <name>` entry | `importClipAssets` of its FBX (the first track that passes `Skip` / `Track`), then the entry's `Loop` and `Event`s |
+
+**A `.clip` wins over an `.anm` entry of the same name**, so converting an `.anm` clip in the Animation Editor replaces it at runtime with
+no `.apl` change. `ISceneData::loadAnimations` (the old direct FBX-to-set call) is built on `importClipAssets` + `buildAnimationClip` too.
+
+### The `.clip` text
+
+```
+Clip 1
+    Duration 1.0333
+    FrameRate 30
+    Loop true
+    PreviewRig character
+    Event footstep 0.25            name, normalized time (like .anm)
+    Track "mixamorig:Hips"
+        Position
+            0 0 1.02 0             time (s), x y z
+            0.5 0 1.04 0 Smooth    an optional Step / Smooth: how the key blends to the NEXT key (default Linear)
+        Rotation
+            0 0 0 0 1              time, quaternion x y z w
+        Scale
+            0 1 1 1
+```
+
+Indentation is for the reader: a key line belongs to the last channel keyword, a channel to the last `Track`. Floats are written in their
+shortest exact form (`std::to_chars`), so a load + save round-trips bit for bit. `sortClipKeys` runs after the parse (keys closer than 1e-5 s
+merge, the later one wins).
+
+### Key interpolation (`KeyInterp`)
+
+A key's mode sets the segment from it to the next key: **Linear** (lerp / slerp), **Step** (hold), **Smooth** (a cubic Hermite, Catmull-Rom
+tangents over the neighbour key times, flat at the first and last key; rotations do it on the sign-aligned 4D components, then normalize).
+The samplers are `AnimKeys::sampleVec3` / `sampleQuat` in `:Clip` — **inline, shared by `AnimationPlayer` and the editor's curve view**, so
+what the editor draws is what plays. The segment search is a binary search (`AnimKeys::findSegment`).
+
+### Key reduction
+
+`reduceClipKeys(clip, tolerance)` drops each Linear key the line between its kept neighbours reproduces within the tolerance — checked at
+EVERY key dropped since the last kept one, so the error cannot creep along a run of drops — and a channel that never moves keeps one key.
+Step and Smooth keys stay. The importer runs it by default (FBX bakes a key per frame).
 
 **Rigid-part models (no skin) are NOT in this library** — the box-limb character's bones and walk
 are Entity's `HumanoidAnimatorComponent` (and the parked `SceneAnimatorComponent`). The one thing they take from
@@ -28,9 +80,9 @@ phase folded onto the nearest quadrant axis, no CRT call), `phaseSin` (the sine 
 adds no call. The `Transform` layout it relies on (32 bytes, two registers) is static_asserted
 there.
 
-**Retargeting is by BONE NAME**, done at import: `loadAnimations` resolves every channel against a
-target skeleton, so a rig in one file and its animations in others (Mixamo exports) work. A channel
-that names a node the skeleton does not have gets `boneIndex = -1` and is ignored.
+**Retargeting is by BONE NAME**, done when a clip set is built: `buildAnimationClip` resolves every
+track against the target skeleton, so a rig in one file and its animations in others (Mixamo exports)
+work. A track that names a node the skeleton does not have is left out of the runtime clip.
 
 ## `AnimationPlayer` — the runtime workhorse
 
@@ -53,6 +105,9 @@ getFiredEvents()     -> notifies crossed during the last tick()
   footfalls stay roughly aligned as the blend shifts.
 * `setClipLibrary(set)` is what makes `play("name")` work.
 * Bones a clip does not animate fall back to the bind pose.
+* `setTime(seconds)` scrubs the single-clip source and evaluates at once (no events, no crossfade) —
+  the Animation Editor's preview. `getGlobalTransforms()` (model space, modifiers applied) and
+  `getSampledLocalPose(bone)` (the sampled local TRS before the modifiers) expose the last evaluate.
 
 ### Programmatic bone posing
 
@@ -97,7 +152,8 @@ source plays plus the blend axis — and then ticks the player.
 | Type | Notes |
 |---|---|
 | `Skeleton` | Flattened hierarchy, **parent-before-child**, so one forward pass composes global transforms. EVERY source node becomes a bone, intermediate non-skinning nodes included, to keep the transform chain intact; non-skin bones keep an identity `inverseBind`. |
-| `AnimationChannel` | Per-bone position / rotation / scale key tracks, sorted by time in seconds. |
+| `AnimationChannel` | Per-bone position / rotation / scale key tracks, sorted by time in seconds. Each key carries its `KeyInterp`. |
+| `ClipAsset` / `ClipTrack` | The skeleton-free clip (see Clips above): tracks by bone name, the `.clip` text form. |
 | `AnimationClip` | `duration`, channels, `loop` (false = one-shot: clamps and holds the last frame), and `events`. |
 | `AnimationEventKey` | A notify at a normalized time 0..1. Authored in `.anm` as `Event <name> <normalizedTime>`; surfaces through `getFiredEvents()`, which the entity's script or animator `onEvent` consumes. |
 | `AnimationSet` | Named clip collection sharing one skeleton, with a name → index map. Owns its clips. |

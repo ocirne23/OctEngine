@@ -1002,54 +1002,38 @@ const AnimationSet* WorldState::getOrBuildClipSet(const Skeleton* skel, const An
 {
     const oc::string key = oc::to_string(reinterpret_cast<uintptr_t>(skel)) + "/" + desc.name;
     if (auto it = m_clipSets.find(key); it != m_clipSets.end())
-        return it->second.get();
+        return it->second.set.get();
 
-    auto set = oc::make_unique<AnimationSet>();
-    AnimationSet& clips = *set;
+    ClipSetEntry entry;
+    entry.set = oc::make_unique<AnimationSet>();
+    entry.skeleton = skel;
+    AnimationSet& clips = *entry.set;
 
-    // Apply the .anm's loop flag + event notifies onto the clip just loaded under `localName`.
-    auto applyClipMeta = [&](const AnimationClipDesc& anm, const oc::string& localName)
+    // Builds the global clip `globalName` (a .clip, or an .anm's FBX) into the set under `localName`, retargeted by bone name to `skel`.
+    auto loadClip = [&](const oc::string& globalName, const oc::string& localName)
     {
-        const auto idxIt = clips.nameToIndex.find(localName);
-        if (idxIt == clips.nameToIndex.end())
-            return;
-        AnimationClip& clip = clips.clips[idxIt->second];
-        clip.loop = anm.loop;
-        clip.events.clear();
-        for (const auto& [name, t] : anm.events)
-            clip.events.push_back({ name, t });
-    };
-
-    // Loads one .anm into the set under `localName` (retargeted by bone name to `skel`).
-    auto loadClipDesc = [&](const AnimationClipDesc& anm, const oc::string& localName)
-    {
-        oc::string sourcePath = anm.source;
-        if (const ObjectContainerDesc* oc = Globals::assetRegistry.findObjectContainer(anm.source))
-            sourcePath = oc->path; // source named a registered container; use its file
-        const char* skip = anm.skip.empty() ? nullptr : anm.skip.c_str();
-        const char* track = anm.track.empty() ? nullptr : anm.track.c_str();
-        ISceneData::loadAnimations(sourcePath.c_str(), *skel, clips, skip, localName.c_str(), track);
-        applyClipMeta(anm, localName);
+        if (clips.find(localName))
+            return true;
+        const ClipAsset* asset = getOrLoadClipAsset(globalName);
+        if (!asset)
+            return false;
+        const uint32 idx = clips.numClips();
+        clips.nameToIndex[localName] = idx;
+        clips.clips.push_back(buildAnimationClip(*asset, *skel, localName));
+        entry.sources.emplace_back(idx, globalName);
+        return true;
     };
 
     // Explicit `Clip <local> Anim <anm>` declarations are optional: they alias a clip to a local name (or
     // force-load one nothing references). Anything not declared is lazy-loaded by name below.
     for (const AnimatorDesc::ClipRef& ref : desc.clips)
-    {
-        if (const AnimationClipDesc* anm = Globals::assetRegistry.findClip(ref.anmName))
-            loadClipDesc(*anm, ref.localName);
-        else
+        if (!loadClip(ref.anmName, ref.localName))
             Log::warning("Animator '" + desc.name + "': unknown Animation clip '" + ref.anmName + "'");
-    }
 
-    // Resolve a clip by name, lazily loading it from the .anm registry when it wasn't declared with `Clip`.
+    // Resolve a clip by name, lazily loading it when it wasn't declared with `Clip`.
     auto ensureClip = [&](const oc::string& name)
     {
-        if (name.empty() || clips.find(name))
-            return;
-        if (const AnimationClipDesc* anm = Globals::assetRegistry.findClip(name))
-            loadClipDesc(*anm, name);
-        else
+        if (!name.empty() && !loadClip(name, name))
             Log::warning("Animator '" + desc.name + "': unknown clip '" + name + "'");
     };
 
@@ -1065,9 +1049,70 @@ const AnimationSet* WorldState::getOrBuildClipSet(const Skeleton* skel, const An
 
     Log::info("Animator '" + desc.name + "': built clip set (" + oc::to_string(clips.numClips()) + " clips)");
 
-    const AnimationSet* ptr = set.get();
-    m_clipSets.emplace(key, oc::move(set));
+    const AnimationSet* ptr = entry.set.get();
+    m_clipSets.emplace(key, oc::move(entry));
     return ptr;
+}
+
+const ClipAsset* WorldState::getOrLoadClipAsset(const oc::string& name)
+{
+    if (auto it = m_clipAssets.find(name); it != m_clipAssets.end())
+        return it->second.get();
+
+    oc::shared_ptr<ClipAsset> asset;
+    if (const oc::string* path = Globals::assetRegistry.findClipFile(name))
+    {
+        // Template builds are main-thread by design (like the .pre / .anm text they come from).
+        const FileSystem::AllowMainThreadIO allowIo;
+        const oc::string text = FileSystem::readFileStr(*path);
+        auto parsed = oc::make_shared<ClipAsset>();
+        oc::string error;
+        if (parseClipAsset(text, *parsed, error))
+            asset = oc::move(parsed);
+        else
+            Log::warning("Animation: clip '" + *path + "': " + error);
+    }
+    else if (const AnimationClipDesc* anm = Globals::assetRegistry.findClip(name))
+    {
+        // An .anm entry: the FBX through the same importer the Animation Editor uses, then the entry's loop flag and events on top.
+        oc::string sourcePath = anm->source;
+        if (const ObjectContainerDesc* oc = Globals::assetRegistry.findObjectContainer(anm->source))
+            sourcePath = oc->path; // source named a registered container; use its file
+        oc::vector<ImportedClip> imported;
+        oc::string error;
+        const FileSystem::AllowMainThreadIO allowIo;
+        if (ISceneData::importClipAssets(sourcePath.c_str(), imported, anm->skip.empty() ? nullptr : anm->skip.c_str(),
+            anm->track.empty() ? nullptr : anm->track.c_str(), &error))
+        {
+            asset = oc::make_shared<ClipAsset>(oc::move(imported.front().clip));
+            asset->loop = anm->loop;
+            asset->events.clear();
+            for (const auto& [eventName, t] : anm->events)
+                asset->events.push_back({ eventName, t });
+        }
+        else
+            Log::warning("Animation '" + name + "': " + error);
+    }
+    const ClipAsset* ptr = asset.get();
+    m_clipAssets.insert_or_assign(name, oc::move(asset));
+    return ptr;
+}
+
+void WorldState::reloadClipAsset(const oc::string& name, ClipAsset&& asset)
+{
+    auto shared = oc::make_shared<ClipAsset>(oc::move(asset));
+    uint32 rebuilt = 0;
+    for (auto& [key, entry] : m_clipSets)
+        for (const auto& [idx, source] : entry.sources)
+            if (source == name && idx < entry.set->clips.size())
+            {
+                AnimationClip& clip = entry.set->clips[idx];
+                clip = buildAnimationClip(*shared, *entry.skeleton, clip.name);
+                ++rebuilt;
+            }
+    m_clipAssets.insert_or_assign(name, oc::move(shared));
+    if (rebuilt > 0)
+        Log::info("Animation: clip '" + name + "' reloaded into " + oc::to_string(rebuilt) + " clip set(s)");
 }
 
 oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName)
@@ -1831,6 +1876,26 @@ void WorldState::handleEntityChange(EntityChange& change, const Camera& camera, 
             if (st->updateInstances)
                 respawnPrefabInstances(name);
         }
+    }
+    else if (auto* sc = oc::get_if<EntityChange::SaveAnimationClip>(&change.type))
+    {
+        ClipAsset asset;
+        oc::string error;
+        const oc::string name = FileSystem::stem(sc->path);
+        if (!parseClipAsset(sc->text, asset, error))
+        {
+            Log::warning("Animation: refusing to save clip '" + name + "': " + error);
+            return;
+        }
+        const FileSystem::AllowMainThreadIO allowIo; // an explicit editor save
+        if (!FileSystem::writeFileStr(sc->path, sc->text))
+        {
+            Log::warning("Animation: could not write '" + sc->path + "'");
+            return;
+        }
+        Globals::assetRegistry.addClipFile(name, sc->path);
+        reloadClipAsset(name, oc::move(asset));
+        Log::info("Animation: saved clip '" + sc->path + "'");
     }
 }
 

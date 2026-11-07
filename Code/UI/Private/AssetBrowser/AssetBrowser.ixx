@@ -38,6 +38,10 @@ public:
 	// .pre files: the UI drains this and drives the Entity Editor panel.
 	oc::string takeEntityEditRequest() { return oc::move(m_entityEditRequest); }
 
+	// .clip files to edit, and model files / .anm to import animations from: the UI drains these into the Animation Editor.
+	oc::string takeAnimationEditRequest() { return oc::move(m_animationEditRequest); }
+	oc::string takeAnimationImportRequest() { return oc::move(m_animationImportRequest); }
+
 private:
 
 	// CACHED DIRECTORY LISTING. The browser used to enumerate the filesystem every frame - the
@@ -99,6 +103,8 @@ private:
 	oc::string           m_scriptOpenRequest;     // script the user asked to open/create (drained by UI)
 	oc::string           m_textOpenRequest;       // .txt the user asked to open (drained by UI)
 	oc::string           m_entityEditRequest;       // .pre the user asked to edit (drained by UI)
+	oc::string           m_animationEditRequest;    // .clip the user asked to edit (drained by UI)
+	oc::string           m_animationImportRequest;  // model file / .anm to import animations from (drained by UI)
 	EntityPtr             m_pendingSaveRoot;       // entity awaiting overwrite confirmation (kept alive)
 	oc::string m_pendingSavePath;       // target .pre for the pending save
 	bool                  m_openOverwritePopup = false;

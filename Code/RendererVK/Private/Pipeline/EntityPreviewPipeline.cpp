@@ -14,6 +14,13 @@ using namespace RendererVKLayout;
 
 static constexpr vk::Format c_colorFormat = vk::Format::eR8G8B8A8Unorm; // the fragment shader tone maps and encodes: ImGui shows it as it is
 static constexpr vk::Format c_depthFormat = vk::Format::eD32Sfloat;
+static constexpr uint32 c_initialFrameVec4s = 1 + 4 * 256; // the camera + a 256-bone palette
+
+// The descriptor bindings, mirrored in Shaders/Editor/entity_preview.*.glsl. The texture array is the highest binding: its count is variable.
+static constexpr uint32 c_bindingMaterials = 0;
+static constexpr uint32 c_bindingSkinning = 1;
+static constexpr uint32 c_bindingFrame = 2;
+static constexpr uint32 c_bindingTextures = 3;
 
 namespace
 {
@@ -24,7 +31,7 @@ struct MeshPush
     glm::vec4 posScale;
     glm::vec4 quat;
     glm::vec4 tintMaterial;
-    glm::vec4 cameraFlags;
+    glm::ivec4 flags; // x = highlighted, y = skinning index delta (influence index = gl_VertexIndex + y), z = palette base in vec4s (-1: bind pose)
 };
 static_assert(sizeof(MeshPush) == 128);
 
@@ -40,13 +47,24 @@ EntityPreviewPipeline::~EntityPreviewPipeline()
 {
     if (!isInitialized())
         return;
+    for (Target& target : m_targets)
+        destroyTarget(target);
+    Globals::device.getDevice().destroyRenderPass(m_renderPass);
+}
+
+void EntityPreviewPipeline::destroyTarget(Target& target)
+{
+    if (target.framebuffer == vk::Framebuffer(nullptr))
+        return;
     vk::Device device = Globals::device.getDevice();
-    device.destroyFramebuffer(m_framebuffer);
-    device.destroyImageView(m_colorView);
-    device.destroyImageView(m_depthView);
-    Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
-    Globals::gpuAllocator.destroyImage(m_depthImage, m_depthMemory);
-    device.destroyRenderPass(m_renderPass);
+    device.destroyFramebuffer(target.framebuffer);
+    device.destroyImageView(target.colorView);
+    device.destroyImageView(target.depthView);
+    Globals::gpuAllocator.destroyImage(target.colorImage, target.colorMemory);
+    Globals::gpuAllocator.destroyImage(target.depthImage, target.depthMemory);
+    for (Buffer& buffer : target.frameData)
+        buffer.destroy();
+    target.framebuffer = vk::Framebuffer(nullptr);
 }
 
 void EntityPreviewPipeline::createRenderPass()
@@ -109,10 +127,16 @@ void EntityPreviewPipeline::createRenderPass()
     Globals::device.setDebugName(m_renderPass, "EntityPreview");
 }
 
-void EntityPreviewPipeline::createTargets()
+void EntityPreviewPipeline::createTarget(uint32 targetIdx)
 {
+    if (!isInitialized() || targetIdx >= PREVIEW_TARGET_COUNT || hasTarget(targetIdx))
+        return;
+    Target& target = m_targets[targetIdx];
+    const char* colorName = targetIdx == 0 ? "EntityPreviewColor" : "AnimationPreviewColor";
+    const char* depthName = targetIdx == 0 ? "EntityPreviewDepth" : "AnimationPreviewDepth";
+
     vk::Device device = Globals::device.getDevice();
-    auto createTarget = [&](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, const char* name, vk::Image& image, VmaAllocation& memory, vk::ImageView& view)
+    auto createImage = [&](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, const char* name, vk::Image& image, VmaAllocation& memory, vk::ImageView& view)
     {
         const vk::ImageCreateInfo imageInfo{
             .imageType = vk::ImageType::e2D,
@@ -142,12 +166,12 @@ void EntityPreviewPipeline::createTargets()
         view = viewResult.value;
         Globals::device.setDebugName(view, name);
     };
-    createTarget(c_colorFormat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor,
-        "EntityPreviewColor", m_colorImage, m_colorMemory, m_colorView);
-    createTarget(c_depthFormat, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::ImageAspectFlagBits::eDepth,
-        "EntityPreviewDepth", m_depthImage, m_depthMemory, m_depthView);
+    createImage(c_colorFormat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor,
+        colorName, target.colorImage, target.colorMemory, target.colorView);
+    createImage(c_depthFormat, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::ImageAspectFlagBits::eDepth,
+        depthName, target.depthImage, target.depthMemory, target.depthView);
 
-    const oc::array<vk::ImageView, 2> views{ m_colorView, m_depthView };
+    const oc::array<vk::ImageView, 2> views{ target.colorView, target.depthView };
     const vk::FramebufferCreateInfo framebufferInfo{
         .renderPass = m_renderPass,
         .attachmentCount = (uint32)views.size(),
@@ -158,8 +182,14 @@ void EntityPreviewPipeline::createTargets()
     };
     auto framebufferResult = device.createFramebuffer(framebufferInfo);
     if (framebufferResult.result != vk::Result::eSuccess) { assert(false && "entity preview framebuffer"); return; }
-    m_framebuffer = framebufferResult.value;
-    Globals::device.setDebugName(m_framebuffer, "EntityPreview");
+    target.framebuffer = framebufferResult.value;
+    Globals::device.setDebugName(target.framebuffer, targetIdx == 0 ? "EntityPreview" : "AnimationPreview");
+
+    for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
+    {
+        target.sets[i].initialize(m_meshPipeline.getDescriptorSetLayout(), "EntityPreview", m_numTextureDescriptors);
+        target.writtenTextures[i] = UINT32_MAX;
+    }
 }
 
 void EntityPreviewPipeline::buildMeshLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
@@ -180,8 +210,11 @@ void EntityPreviewPipeline::buildMeshLayout(GraphicsPipelineLayout& layout, uint
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 2, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(MeshVertex, tangent) });
 
     auto& b = layout.descriptorSetLayoutBindings;
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = c_bindingMaterials, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = c_bindingSkinning, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = c_bindingFrame, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = c_bindingTextures, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound
         | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
@@ -214,9 +247,9 @@ void EntityPreviewPipeline::buildGridLayout(GraphicsPipelineLayout& layout)
 void EntityPreviewPipeline::initialize(uint32 maxTextures, uint32 numTextureDescriptors)
 {
     createRenderPass();
-    createTargets();
     m_textureSampler.initialize();
     m_colorSampler.initialize(vk::SamplerAddressMode::eClampToEdge, 1.0f);
+    m_numTextureDescriptors = numTextureDescriptors;
 
     GraphicsPipelineLayout meshLayout;
     buildMeshLayout(meshLayout, maxTextures);
@@ -225,8 +258,6 @@ void EntityPreviewPipeline::initialize(uint32 maxTextures, uint32 numTextureDesc
     GraphicsPipelineLayout gridLayout;
     buildGridLayout(gridLayout);
     m_gridPipeline.initialize(m_renderPass, gridLayout);
-
-    resizeTextureDescriptors(numTextureDescriptors);
 }
 
 void EntityPreviewPipeline::reloadShaders(uint32 maxTextures)
@@ -247,11 +278,23 @@ void EntityPreviewPipeline::resizeTextureDescriptors(uint32 numTextureDescriptor
 {
     if (!isInitialized())
         return;
-    for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
+    m_numTextureDescriptors = numTextureDescriptors;
+    for (Target& target : m_targets)
     {
-        m_sets[i].initialize(m_meshPipeline.getDescriptorSetLayout(), "EntityPreview", numTextureDescriptors);
-        m_writtenTextures[i] = UINT32_MAX;
+        if (target.framebuffer == vk::Framebuffer(nullptr))
+            continue;
+        for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
+        {
+            target.sets[i].initialize(m_meshPipeline.getDescriptorSetLayout(), "EntityPreview", numTextureDescriptors);
+            target.writtenTextures[i] = UINT32_MAX;
+        }
     }
+}
+
+void EntityPreviewPipeline::invalidateTextures(uint32 frameIdx)
+{
+    for (Target& target : m_targets)
+        target.writtenTextures[frameIdx] = UINT32_MAX;
 }
 
 void EntityPreviewPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view)
@@ -261,39 +304,77 @@ void EntityPreviewPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slot
     const vk::DescriptorImageInfo imageInfo{
         .sampler = m_textureSampler.getSampler(),
         .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    const vk::WriteDescriptorSet write{ .dstSet = m_sets[frameIdx].getDescriptorSet(),
-        .dstBinding = 1, .dstArrayElement = slotIdx, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
-    Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+    for (Target& target : m_targets)
+    {
+        if (target.framebuffer == vk::Framebuffer(nullptr) || target.writtenTextures[frameIdx] == UINT32_MAX)
+            continue; // a full rewrite is pending anyway
+        const vk::WriteDescriptorSet write{ .dstSet = target.sets[frameIdx].getDescriptorSet(),
+            .dstBinding = c_bindingTextures, .dstArrayElement = slotIdx, .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+        Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+    }
+}
+
+uint32 EntityPreviewPipeline::writeFrameData(Target& target, uint32 frameIdx, const EntityPreviewFrame& frame)
+{
+    const uint32 needed = 1 + 4 * (uint32)frame.palette.size();
+    Buffer& buffer = target.frameData[frameIdx];
+    if (target.frameDataVec4s[frameIdx] < needed)
+    {
+        // This slot's fence was waited: nothing reads the old buffer any more.
+        const uint32 capacity = glm::max(needed + needed / 2, c_initialFrameVec4s);
+        buffer.initialize(capacity * sizeof(glm::vec4), vk::BufferUsageFlagBits2::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible, false,
+            "PreviewFrameData", BufferHostAccess::eSequentialWrite);
+        target.frameDataVec4s[frameIdx] = capacity;
+    }
+    oc::span<glm::vec4> mapped = buffer.mapMemory<glm::vec4>();
+    mapped[0] = glm::vec4(frame.cameraPos, 0.0f);
+    if (!frame.palette.empty())
+        memcpy(&mapped[1], frame.palette.data(), frame.palette.size() * sizeof(glm::mat4));
+    buffer.flushMappedMemory(needed * sizeof(glm::vec4));
+    return needed;
 }
 
 void EntityPreviewPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const EntityPreviewFrame& frame, oc::span<const MeshInfo> meshInfos,
-    Buffer& vertexBuffer, Buffer& indexBuffer, Buffer& materialBuffer)
+    Buffer& vertexBuffer, Buffer& indexBuffer, Buffer& materialBuffer, Buffer& skinningBuffer)
 {
+    const uint32 targetIdx = (uint32)frame.target;
+    if (targetIdx >= PREVIEW_TARGET_COUNT || !hasTarget(targetIdx))
+        return;
+    Target& target = m_targets[targetIdx];
+
     const uint32 width = glm::clamp(frame.size.x, 1u, TARGET_SIZE);
     const uint32 height = glm::clamp(frame.size.y, 1u, TARGET_SIZE);
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    vk::DescriptorSet vkSet = m_sets[frameIdx].getDescriptorSet();
+    vk::DescriptorSet vkSet = target.sets[frameIdx].getDescriptorSet();
 
-    // The material table's handle can change when it grows, and textures join the array without a capacity change.
+    const uint32 frameVec4s = writeFrameData(target, frameIdx, frame);
+    const uint32 paletteBones = (uint32)frame.palette.size();
+
+    // The material table's and the skinning buffer's handles can change when they grow, and textures join the array without a capacity change.
     const uint32 numTextures = (uint32)Globals::textureManager.getNumTextures();
-    const bool writeTextures = m_writtenTextures[frameIdx] != numTextures;
-    oc::array<DescriptorSetUpdateInfo, 2> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = materialBuffer.getBuffer(), .range = materialBuffer.getSize() } } },
-        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler },
+    const bool writeTextures = target.writtenTextures[frameIdx] != numTextures;
+    oc::array<DescriptorSetUpdateInfo, 4> updates{
+        DescriptorSetUpdateInfo{ .binding = c_bindingMaterials, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = materialBuffer.getBuffer(), .range = materialBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = c_bindingSkinning, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = skinningBuffer.getBuffer(), .range = skinningBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = c_bindingFrame, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = target.frameData[frameIdx].getBuffer(), .range = frameVec4s * sizeof(glm::vec4) } } },
+        DescriptorSetUpdateInfo{ .binding = c_bindingTextures, .type = vk::DescriptorType::eCombinedImageSampler },
     };
     if (writeTextures)
     {
-        updates[1].imageInfos.reserve(numTextures);
+        updates[3].imageInfos.reserve(numTextures);
         for (uint32 texIdx = 0; texIdx < numTextures; ++texIdx)
-            updates[1].imageInfos.push_back(vk::DescriptorImageInfo{
+            updates[3].imageInfos.push_back(vk::DescriptorImageInfo{
                 .sampler = m_textureSampler.getSampler(),
                 .imageView = Globals::textureManager.getViewForDescriptor((uint16)texIdx), // freed slots -> fallback
                 .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
-        m_writtenTextures[frameIdx] = numTextures;
+        target.writtenTextures[frameIdx] = numTextures;
     }
     commandBuffer.cmdUpdateDescriptorSets(m_meshPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
-        oc::span<DescriptorSetUpdateInfo>(updates.data(), writeTextures ? 2 : 1));
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), writeTextures ? 4 : 3));
 
     const oc::array<vk::ClearValue, 2> clears{
         vk::ClearValue{ vk::ClearColorValue{ std::array<float, 4>{ 0.085f, 0.09f, 0.1f, 1.0f } } },
@@ -301,7 +382,7 @@ void EntityPreviewPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     };
     const vk::RenderPassBeginInfo begin{
         .renderPass = m_renderPass,
-        .framebuffer = m_framebuffer,
+        .framebuffer = target.framebuffer,
         .renderArea = { vk::Offset2D{ 0, 0 }, vk::Extent2D{ width, height } },
         .clearValueCount = (uint32)clears.size(),
         .pClearValues = clears.data(),
@@ -338,12 +419,16 @@ void EntityPreviewPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
             }
             if (indexCount == 0)
                 continue;
+            // Skinned only with influences and a palette in range: otherwise the bind pose, like before skinning existed here.
+            const bool skinned = mesh.skinVertexOffset != UINT32_MAX && mesh.paletteOffset != UINT32_MAX && mesh.paletteOffset < paletteBones;
             const MeshPush push{
                 .viewProj = frame.viewProj,
                 .posScale = glm::vec4(mesh.world.pos, mesh.world.scale),
                 .quat = glm::vec4(mesh.world.quat.x, mesh.world.quat.y, mesh.world.quat.z, mesh.world.quat.w),
                 .tintMaterial = glm::vec4(mesh.tint, float(mesh.materialIdx)),
-                .cameraFlags = glm::vec4(frame.cameraPos, mesh.highlighted ? 1.0f : 0.0f),
+                .flags = glm::ivec4(mesh.highlighted ? 1 : 0,
+                    skinned ? int32(mesh.skinVertexOffset) - meshVertexOffset : 0,
+                    skinned ? int32(1 + 4 * mesh.paletteOffset) : -1, 0),
             };
             cmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(push), &push);
             cmd.drawIndexed(indexCount, 1, firstIndex, meshVertexOffset, 0);

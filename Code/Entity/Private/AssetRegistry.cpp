@@ -47,6 +47,7 @@ void AssetRegistryState::clear()
 {
     m_objectContainers.clear();
     m_clips.clear();
+    m_clipFiles.clear();
     m_animators.clear();
     m_prefabs.clear();
     m_fileRoot.clear();
@@ -68,7 +69,18 @@ void AssetRegistryState::scanDirectory(const oc::string& rootDir)
 
     for (const FileSystem::DirEntry& entry : entries)
     {
-        if (entry.isDirectory || !isAssetFile(entry.extension))
+        if (entry.isDirectory)
+            continue;
+        if (iequals(entry.extension, ".clip"))
+        {
+            // Named by the file, read only when a clip set needs it: a clip of keys is too big to parse at startup for its name.
+            const oc::string relativePath = FileSystem::relativePath(entry.path);
+            const oc::string path = relativePath.empty() ? entry.path : relativePath;
+            if (!m_clipFiles.try_emplace(FileSystem::stem(path), path).second)
+                Log::warning("AssetRegistry: duplicate clip '" + FileSystem::stem(path) + "' (keeping first), in " + path);
+            continue;
+        }
+        if (!isAssetFile(entry.extension))
             continue;
         const oc::string relativePath = FileSystem::relativePath(entry.path);
         registerFile(relativePath.empty() ? entry.path : relativePath);
@@ -181,6 +193,17 @@ const oc::string* AssetRegistry::findPrefab(const oc::string& name) const
 void AssetRegistry::addPrefab(const oc::string& name, const oc::string& path)
 {
     m_prefabs.insert_or_assign(name, path);
+}
+
+const oc::string* AssetRegistry::findClipFile(const oc::string& name) const
+{
+    const auto it = m_clipFiles.find(name);
+    return it != m_clipFiles.end() ? &it->second : nullptr;
+}
+
+void AssetRegistry::addClipFile(const oc::string& name, const oc::string& path)
+{
+    m_clipFiles.insert_or_assign(name, path);
 }
 
 const oc::string* AssetRegistryState::findRootForFile(const oc::string& fileName) const

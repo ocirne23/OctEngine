@@ -4,9 +4,111 @@ import Core;
 import Core.glm;
 import :Skeleton;
 
-export struct PositionKey { float time; glm::vec3 value; };
-export struct RotationKey { float time; glm::quat value; };
-export struct ScaleKey    { float time; glm::vec3 value; };
+// How a key blends to the NEXT key of its track. Linear = lerp (slerp for rotations); Step = hold this value until the next key; Smooth = a cubic through the
+// neighbouring keys (Catmull-Rom tangents over the key times, flat at the first and last key).
+export enum class KeyInterp : uint8 { Linear, Step, Smooth };
+
+export struct PositionKey { float time; glm::vec3 value; KeyInterp interp = KeyInterp::Linear; };
+export struct RotationKey { float time; glm::quat value; KeyInterp interp = KeyInterp::Linear; };
+export struct ScaleKey    { float time; glm::vec3 value; KeyInterp interp = KeyInterp::Linear; };
+
+// ---- Key sampling (the runtime player and the Animation Editor's curves use the same code) ----
+
+namespace AnimKeys
+{
+// The segment [i, i+1] that holds t: the last key with time <= t (0 before the first key). Binary search.
+export template <typename KeyT>
+inline uint32 findSegment(oc::span<const KeyT> keys, float t)
+{
+    uint32 lo = 0, hi = (uint32)keys.size();
+    while (lo < hi)
+    {
+        const uint32 mid = (lo + hi) >> 1;
+        if (keys[mid].time <= t)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo == 0 ? 0 : lo - 1;
+}
+
+export inline float hermite(float p0, float m0, float p1, float m1, float h, float f)
+{
+    const float f2 = f * f, f3 = f2 * f;
+    return (2.0f * f3 - 3.0f * f2 + 1.0f) * p0 + (f3 - 2.0f * f2 + f) * h * m0 + (-2.0f * f3 + 3.0f * f2) * p1 + (f3 - f2) * h * m1;
+}
+
+// The Smooth tangent (value per second) at key k of a channel of n keys: Catmull-Rom over the neighbour times, 0 at either end.
+export template <typename V>
+inline V smoothTangent(const V& prev, const V& next, float prevTime, float nextTime)
+{
+    const float span = nextTime - prevTime;
+    return span > 1e-8f ? (next - prev) / span : V(0.0f);
+}
+
+export template <typename KeyT>
+inline glm::vec3 sampleVec3(oc::span<const KeyT> keys, float t, const glm::vec3& fallback)
+{
+    const uint32 n = (uint32)keys.size();
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].time) return keys[0].value;
+    const uint32 i = findSegment(keys, t);
+    if (i + 1 >= n) return keys[n - 1].value;
+    const KeyT& a = keys[i];
+    const KeyT& b = keys[i + 1];
+    const float span = b.time - a.time;
+    const float f = span > 1e-8f ? (t - a.time) / span : 0.0f;
+    switch (a.interp)
+    {
+    case KeyInterp::Step: return a.value;
+    case KeyInterp::Smooth:
+    {
+        const glm::vec3 m0 = i > 0 ? smoothTangent(keys[i - 1].value, b.value, keys[i - 1].time, b.time) : glm::vec3(0.0f);
+        const glm::vec3 m1 = i + 2 < n ? smoothTangent(a.value, keys[i + 2].value, a.time, keys[i + 2].time) : glm::vec3(0.0f);
+        return glm::vec3(hermite(a.value.x, m0.x, b.value.x, m1.x, span, f), hermite(a.value.y, m0.y, b.value.y, m1.y, span, f),
+            hermite(a.value.z, m0.z, b.value.z, m1.z, span, f));
+    }
+    default: return glm::mix(a.value, b.value, f);
+    }
+}
+
+// Flips q onto the hemisphere of ref, so a component-wise blend takes the short way.
+export inline glm::vec4 alignQuat(const glm::quat& q, const glm::vec4& ref)
+{
+    const glm::vec4 v(q.x, q.y, q.z, q.w);
+    return glm::dot(v, ref) < 0.0f ? -v : v;
+}
+
+export inline glm::quat sampleQuat(oc::span<const RotationKey> keys, float t, const glm::quat& fallback)
+{
+    const uint32 n = (uint32)keys.size();
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].time) return keys[0].value;
+    const uint32 i = findSegment(keys, t);
+    if (i + 1 >= n) return keys[n - 1].value;
+    const RotationKey& a = keys[i];
+    const RotationKey& b = keys[i + 1];
+    const float span = b.time - a.time;
+    const float f = span > 1e-8f ? (t - a.time) / span : 0.0f;
+    switch (a.interp)
+    {
+    case KeyInterp::Step: return a.value;
+    case KeyInterp::Smooth:
+    {
+        // A cubic on the 4D components, every neighbour on a's hemisphere, then normalized: close to squad for the key spacing authored by hand.
+        const glm::vec4 qa(a.value.x, a.value.y, a.value.z, a.value.w);
+        const glm::vec4 qb = alignQuat(b.value, qa);
+        const glm::vec4 m0 = i > 0 ? smoothTangent(alignQuat(keys[i - 1].value, qa), qb, keys[i - 1].time, b.time) : glm::vec4(0.0f);
+        const glm::vec4 m1 = i + 2 < n ? smoothTangent(qa, alignQuat(keys[i + 2].value, qb), a.time, keys[i + 2].time) : glm::vec4(0.0f);
+        const glm::vec4 q(hermite(qa.x, m0.x, qb.x, m1.x, span, f), hermite(qa.y, m0.y, qb.y, m1.y, span, f),
+            hermite(qa.z, m0.z, qb.z, m1.z, span, f), hermite(qa.w, m0.w, qb.w, m1.w, span, f));
+        const float len = glm::length(q);
+        return len > 1e-8f ? glm::quat(q.w / len, q.x / len, q.y / len, q.z / len) : a.value;
+    }
+    default: return glm::normalize(glm::slerp(a.value, b.value, f));
+    }
+}
+}
 
 // One animated bone track. Keys are sorted by time (in seconds). boneIndex is resolved against the
 // Skeleton the clip was built for (-1 = the channel targets a node not present in the skeleton).
@@ -108,6 +210,20 @@ public:
     // 0..1 progress of the active source (single-clip time/duration, or blend-space phase). Used by the
     // state machine for exit-time transitions.
     float getNormalizedTime() const;
+
+    // Scrub: puts the single-clip source at `seconds` (clamped into the clip) and evaluates at once. No events fire and no crossfade runs. The Animation
+    // Editor drives its preview through this.
+    void setTime(float seconds);
+    float getTime() const { return m_time; }
+
+    // The last evaluate()'s per-bone transforms: the composed model-space ones (modifiers applied), and the sampled LOCAL pose before the modifiers.
+    oc::span<const glm::mat4> getGlobalTransforms() const { return m_globalTransforms; }
+    void getSampledLocalPose(uint32 boneIndex, glm::vec3& pos, glm::quat& rot, glm::vec3& scale) const
+    {
+        pos = m_poseA.pos[boneIndex];
+        rot = m_poseA.rot[boneIndex];
+        scale = m_poseA.scale[boneIndex];
+    }
 
     // ---- Programmatic bone posing ----
     // Bones are addressed by name (resolved against the Skeleton) or index. Modifiers are sticky: they

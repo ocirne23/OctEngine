@@ -156,6 +156,7 @@ spot.
 | **Text Editor** | `UI:TextEditor` (plain `.txt` editing) compiles but is **NOT wired in**: `UI` holds no instance, and nothing drains the AssetBrowser's `takeTextOpenRequest`. |
 | **Log** (`OutputLog`) | `Core.Log` view with filters and search. |
 | **Entity Editor** | Authors a `.pre` as plain data beside a preview image, with nothing in the world. See below. |
+| **Animation Editor** | Authors a `.clip` (keyframes by bone name) on a preview rig: timeline, dopesheet, curves, record mode, bone gizmo, events, FBX / `.anm` import. See below. |
 | **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Settings.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Settings. A fold that is a **lock**'s category (Settings `TweakLock`) carries a right-aligned **Lock / Partly locked / Locked** toggle (`ImGuiTreeNodeFlags_AllowOverlap`) that sets every row under it; each covered row has its own **`L` / `U`** button in front (`drawTweakVar` with `deferredLocks`; the Settings page passes none). A locked row draws read-only (`BeginDisabled`, so the Settings page greys it too). Clicks are COLLECTED (`TweakLockToggle`) like an `onChange` and applied by `flushDeferredCallbacks` on main (`TweakRegistry::setLocked` / `setVarLocked`). **Search bar** on top (Ctrl+F focuses, Escape / `X` clears): space-separated terms, case-insensitive, ALL must hit the name, category path or group name. While it has terms the tree is replaced by a flat result list — one group-tinted `SeparatorText` per category path, matches highlighted in the row names (`drawTweakVar`'s `highlight`), `matches / total` inside the box — so the tree's fold state stays untouched. The list below the bar is a child window, so the bar stays put while scrolling. |
 | **Profiler**, **Memory** | |
 
@@ -183,7 +184,7 @@ Opening a prefab spawns nothing, runs no script, creates no body and adds no ren
   is one step, and the dirty flag (the text against the baseline) is recomputed only there, never per frame.
 * **Structural tree edits** run after the tree walk (`m_deferredTreeAction`): the walk iterates the vectors they change.
 
-**The preview** walks the document every frame (`buildPreviewScene`) into an `EntityPreviewFrame` and submits it to the renderer: see "The Entity Editor's preview"
+**The preview** walks the document every frame (`buildPreviewScene`) into an `EntityPreviewFrame` and submits it to the renderer: see "The editor previews"
 in the [RendererVK CONTEXT](../RendererVK/CONTEXT.md). So every edit shows at once, with no respawn. A container not loaded yet is queued for
 `flushMainThreadWork` and shows a frame later. It draws the bind pose of skinned meshes and the rest pose of a HumanoidAnimator. The renderer's target is 2048 px
 and the view draws at 2:1 (`pixelScale`), so ImGui's bilinear sample antialiases it. Physics shapes, lights and force bubbles have no pixels of their own: they are
@@ -191,6 +192,46 @@ and the view draws at 2:1 (`pixelScale`), so ImGui's bilinear sample antialiases
 smallest bounds sphere under the cursor, and everything inside a prefab reference picks as the reference.
 
 `collectDocProblems` lists what would not work at spawn; a row with a problem is amber in the tree, and the lines show above its properties.
+
+## Animation Editor
+
+Authors a `.clip` (the format: "Clips" in the [Animation CONTEXT](../Animation/CONTEXT.md)). Source: `Private/AnimationEditor/` -
+`AnimationEditor.cpp` (the document, undo, keys, clip operations, playback, toolbar, inspector, dialogs, imports), `AnimationEditorTimeline.cpp`
+(the track list, ruler, summary and events lanes, dopesheet, curve view), `AnimationEditorPreview.cpp` (the posed preview, skeleton overlay, bone
+picking, gizmo).
+
+**THE DOCUMENT IS DATA**, a `ClipAsset`, like the Entity Editor's. The world sees only a save: `EntityChange::SaveAnimationClip` writes the text on
+main, registers the clip under the file stem, and `WorldState::reloadClipAsset` rebuilds that clip IN PLACE in every built clip set, so live
+animators play the edit next tick. A clip opens on the widget pass (read + parse need no main-thread step).
+
+* **The rig** is an ObjectContainer picked in the toolbar and saved in the clip (`PreviewRig`, no undo step). Lookup only on the pass; a miss is
+  imported in `flushMainThreadWork`. The editor builds its own runtime clip (`buildAnimationClip`, re-run when the document version or the
+  skeleton changes) and its own `AnimationPlayer`, scrubbed with `setTime`.
+* **Pose edits** (the gizmo, the inspector's fields) go through `editBonePose`. **Recording** (Rec, R): the edited channel is keyed at the
+  playhead (snapped). **Not recording**: the pose is an OVERRIDE (`m_overrides`, applied as `setBoneTransform`), shown until the playhead moves;
+  K keys it. New keys take the "New keys blend" mode (default Smooth); imported keys stay Linear.
+* **Key identity** is `keyId`: track, channel and the exact time bits in one `uint64`, decodable back (`keyFromId`). The selection is a hash
+  set of them, so it survives every edit that does not move a key; a move rewrites the ids. Deleting a track clears it.
+* **Undo** is whole-`ClipAsset` snapshots, committed when no widget is active and no timeline drag runs (one drag = one step); the dirty flag
+  compares the text with the baseline at commit time only.
+* **The timeline**: the track list is a real scrolling child; the dopesheet draws its rows at the list's scroll (`m_rowScroll`) and sends its
+  own wheel back as `m_pendingListScroll` (a `SetNextWindowScroll` on a child would override the list's own wheel). A lane's diamonds come
+  from ONE sorted pass over its keys (`gatherDiamonds`). The summary lane stands for every key, the events lane for the clip's events
+  (normalized time, like `.anm`). Drags (move keys with frame snapping, box select, pan) are applied on release; the curve view drags one key
+  in value and frame live. Rotation curves are Euler degrees, unwrapped to a continuous branch from t = 0; a dragged component converts back
+  through that branch.
+* **The preview** draws into the renderer's `EPreviewTarget::AnimationEditor` target with the player's palette (skinned in the preview's vertex
+  shader; see "The editor previews" in the [RendererVK CONTEXT](../RendererVK/CONTEXT.md)). Bones and joints are `ImDrawList` lines over the
+  image; a rotate gizmo turns about a WORLD axis through the bone (`local' = parent^-1 * q * parent * local`), the move gizmo slides the origin
+  along an axis (closest point between the mouse ray and the axis). Ctrl snaps (15 deg / 5 cm).
+* **Import** (main thread, `flushMainThreadWork`): a model file through `ISceneData::importClipAssets` - one `.clip` per kept track, key
+  reduction on by default - or picked `.anm` entries, each converted under its own name with its loop flag and events (the `.clip` then
+  replaces it at runtime). Each result is a `SaveAnimationClip`; the first opens.
+* **Content routes**: double-click a `.clip` opens it; a model file's "Import Animations..." and an `.anm` (double-click or menu) open the
+  import dialog; a `.clip`, model or `.anm` dropped on the panel does the same (they drag as `TEXT_FILE`).
+
+Keys: Space play, `,` / `.` frame step (Alt: key step), Home / End, K key the selected bone, R record, W / E move / rotate gizmo, Delete, Ctrl+C /
+V / A / Z / Y / S / O, F frame (preview: the camera; timeline: the clip).
 
 ## Chat (`UI:ChatPanel`)
 

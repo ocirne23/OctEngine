@@ -24,6 +24,7 @@ protected:
 
     oc::unordered_map<oc::string, ObjectContainerDesc> m_objectContainers;
     oc::unordered_map<oc::string, AnimationClipDesc> m_clips;  // .anm Animation entries, global by name
+    oc::unordered_map<oc::string, oc::string> m_clipFiles;     // .clip files: name (the file stem) -> path. A .clip wins over an .anm entry of its name
     oc::unordered_map<oc::string, AnimatorDesc> m_animators;   // .apl Animator entries, global by name
     oc::unordered_map<oc::string, oc::string> m_prefabs;  // name -> .pre file path
     oc::unordered_map<oc::string, oc::string> m_fileRoot; // lowercased file name -> root entity/prefab name

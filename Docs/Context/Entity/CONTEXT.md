@@ -392,8 +392,10 @@ dispatch: destroys are deferred requests, and `syncScriptDataLive`'s re-registra
 ## Caches
 
 Templates (`EntitySpawnTemplate` = archetype plus per-component `SpawnInfo` recipes), ObjectContainers,
-`CollisionCache`, retargeted clip sets keyed by skeleton + animator name, and audio buffers keyed by
-path — **each source file imported once.** A failed audio load is cached as an invalid buffer so a bad
+`CollisionCache`, clip assets keyed by global clip name (`m_clipAssets`: a `.clip` parse or an `.anm`'s FBX
+import), the retargeted clip sets built from them keyed by skeleton + animator name (each remembers which
+global clip every set entry came from, for `reloadClipAsset`), and audio buffers keyed by path — **each
+source file imported once.** A failed audio load is cached as an invalid buffer so a bad
 path does not retry and re-log every spawn.
 
 `reloadPrefabs` / `invalidatePrefab` for editing; retired templates stay alive for live entities
@@ -408,7 +410,7 @@ off-main UI pass — an import creates renderer resources.
 A variant queue applied by `handleEntityChange(change, camera, viewportRect)`:
 
 `CreateHierarchy` · `CreateViewport` · `AddSceneEntity` · `SpawnAtPosition` · `Delete` · `Reparent` ·
-`SavePrefab` · `SavePrefabText` · `SetEnabled`
+`SavePrefab` · `SavePrefabText` · `SetEnabled` · `SaveAnimationClip`
 
 * **`SpawnAtPosition`** is the script spawn (`ctx->spawnEntity`), deferred rather than spawned in the
   thunk: spawning touches the World caches, box3d and the renderer, **none of which tolerate the
@@ -419,6 +421,9 @@ A variant queue applied by `handleEntityChange(change, camera, viewportRect)`:
 
 * **`SavePrefabText`** is the Entity Editor's save: its document is data, not an entity (`savePrefabText`, cycle-checked on the text). With `updateInstances`,
   `respawnPrefabInstances` replaces every live instance from the rebuilt template, in place: same pose, parent and sibling slot, the new one before the old one dies.
+* **`SaveAnimationClip`** is the Animation Editor's save and import: the text is parsed first (a broken clip is refused, not written), written, registered
+  under the file stem (`addClipFile`), and `reloadClipAsset` rebuilds that clip in every built clip set IN PLACE — the `AnimationClip` objects keep their
+  addresses, so players and blend spaces pointing at them play the new keys next tick.
 
 ## Headless
 
@@ -446,7 +451,9 @@ renderer state.** It fires, for each side:
 # Assets, prefabs and tint
 
 * **`AssetRegistry`** (`Globals::assetRegistry`) — `scanDirectory()` (paths relative to `Assets/`) registers
-  ObjectContainers (`.oc`), clips (`.anm`), animator graphs (`.apl`) and prefabs (`.pre`) by name.
+  ObjectContainers (`.oc`), clips (`.anm` entries, and `.clip` files by their stem — NOT parsed at the
+  scan, a `.clip` is too big to read for its name; it wins over an `.anm` entry of its name), animator
+  graphs (`.apl`) and prefabs (`.pre`) by name.
 * **`savePrefab(root, path)`** serializes through the per-component `write*SpawnInfo`s — **the spawn
   recipe IS the serialization.** Spawned prefabs are locked instances, unpackable in the Scene panel;
   `prefabWouldCycle` guards recursion.

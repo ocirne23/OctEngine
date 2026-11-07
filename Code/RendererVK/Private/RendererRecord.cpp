@@ -1944,13 +1944,15 @@ void RendererState::recordCommandBuffers()
             recordPrimaryDesktop(frameIdx, vkCommandBuffer);
     }
     // Outside the instance gate above: the preview draws nothing of the scene, so it works in an empty world too.
-    if (m_entityPreviewActive)
+    for (PreviewSlot& slot : m_previews)
     {
-        m_gpuProfiler.beginScope(vkCommandBuffer, "Entity preview");
-        m_entityPreviewPipeline.record(commandBuffer, frameIdx, m_entityPreviewFrame, m_meshInfos.items(),
-            Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(), m_materials.getBuffer());
+        if (!slot.active)
+            continue;
+        m_gpuProfiler.beginScope(vkCommandBuffer, slot.frame.target == EPreviewTarget::EntityEditor ? "Entity preview" : "Animation preview");
+        m_entityPreviewPipeline.record(commandBuffer, frameIdx, slot.frame, m_meshInfos.items(), Globals::meshDataManager.getVertexBuffer(),
+            Globals::meshDataManager.getIndexBuffer(), m_materials.getBuffer(), Globals::meshDataManager.getSkinningBuffer());
         m_gpuProfiler.endScope(vkCommandBuffer);
-        m_entityPreviewTextureId.store(m_entityPreviewImGuiId, oc::memory_order_release);
+        slot.textureId.store(slot.imguiId, oc::memory_order_release);
     }
     commandBuffer.end(); // "GPU Frame" stays open: recordPresentCommandBuffer closes it
 }

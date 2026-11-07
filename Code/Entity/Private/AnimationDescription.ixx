@@ -3,9 +3,10 @@ export module Entity:AnimationDescription;
 import Core;
 import File;
 
-// .anm - one named animation clip descriptor: a source file + which track inside it. Clips are retargeted
-// by bone name at load (see ISceneData::loadAnimations), so a rig and its animations can live in separate
-// files (Mixamo-style). The clip library that uses these lives in a .apl animator.
+// .anm - one named animation clip descriptor: a source file + which track inside it. The FBX goes through
+// ISceneData::importClipAssets into a ClipAsset (keys by bone name), retargeted when a clip set is built, so a
+// rig and its animations can live in separate files (Mixamo-style). A .clip of the same name wins over it.
+// The clip library that uses these lives in a .apl animator.
 export struct AnimationClipDesc
 {
     oc::string name;     // global clip name (referenced from a .apl's `Clip ... Anim <name>`)

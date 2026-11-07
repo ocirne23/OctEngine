@@ -886,25 +886,30 @@ void Renderer::updateImGuiTextures()
             ImGui_ImplVulkan_UpdateTexture(texture);
         }
 
-    // The Entity Editor's preview, on the same terms as the snapshot above: pass N's submit is what frame N+1 draws. No submit = the panel is hidden.
-    m_entityPreviewActive = m_entityPreviewHasPending.load(oc::memory_order_acquire);
-    if (m_entityPreviewActive)
+    // The editor previews, on the same terms as the snapshot above: pass N's submit is what frame N+1 draws. No submit = the panel is hidden.
+    for (uint32 targetIdx = 0; targetIdx < PREVIEW_TARGET_COUNT; ++targetIdx)
     {
+        PreviewSlot& slot = m_previews[targetIdx];
+        slot.active = slot.hasPending.load(oc::memory_order_acquire);
+        if (!slot.active)
+            continue;
         {
             const std::lock_guard lock(m_entityPreviewMutex);
-            oc::swap(m_entityPreviewFrame, m_entityPreviewPending);
-            m_entityPreviewHasPending.store(false, oc::memory_order_release);
+            oc::swap(slot.frame, slot.pending);
+            slot.hasPending.store(false, oc::memory_order_release);
         }
         if (!m_entityPreviewPipeline.isInitialized())
-        {
             m_entityPreviewPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
-            m_entityPreviewImGuiId = (uint64)(VkDescriptorSet)ImGui_ImplVulkan_AddTexture(m_entityPreviewPipeline.getSampler(), m_entityPreviewPipeline.getView(),
+        if (!m_entityPreviewPipeline.hasTarget(targetIdx))
+        {
+            m_entityPreviewPipeline.createTarget(targetIdx);
+            slot.imguiId = (uint64)(VkDescriptorSet)ImGui_ImplVulkan_AddTexture(m_entityPreviewPipeline.getSampler(), m_entityPreviewPipeline.getView(targetIdx),
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         // A previewed mesh or texture must not go cold just because no instance of it is in the world.
         const bool streamTextures = Globals::textureStreamer.isStreamingEnabled();
         const oc::span<const RendererVKLayout::MaterialInfo> materials = m_materials.getBuffer().getBackingStoreAs<RendererVKLayout::MaterialInfo>();
-        for (const EntityPreviewMesh& mesh : m_entityPreviewFrame.meshes)
+        for (const EntityPreviewMesh& mesh : slot.frame.meshes)
         {
             if (mesh.meshIdx != UINT16_MAX)
                 Globals::meshStreamer.noteUse(mesh.meshIdx);
@@ -922,9 +927,13 @@ void Renderer::updateImGuiTextures()
 
 void Renderer::submitEntityPreview(EntityPreviewFrame& frame)
 {
+    const uint32 targetIdx = (uint32)frame.target;
+    if (targetIdx >= PREVIEW_TARGET_COUNT)
+        return;
+    PreviewSlot& slot = m_previews[targetIdx];
     const std::lock_guard lock(m_entityPreviewMutex);
-    oc::swap(frame, m_entityPreviewPending);
-    m_entityPreviewHasPending.store(true, oc::memory_order_release);
+    oc::swap(frame, slot.pending);
+    slot.hasPending.store(true, oc::memory_order_release);
 }
 
 void Renderer::present()

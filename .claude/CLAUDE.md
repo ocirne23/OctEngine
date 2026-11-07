@@ -51,7 +51,7 @@ Guidance for Claude Code when working in this repository.
 **OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows / VS2026 only.
 
 The `App` executable is the testbed: an ImGui editor — scene hierarchy, properties, asset browser,
-DSL script editor, entity editor, tweaks, profiler, memory panel — around a viewport.
+DSL script editor, entity editor, animation editor, tweaks, profiler, memory panel — around a viewport.
 
 App.exe with NO mode flags boots into a fullscreen MAIN MENU: co-op / PvP / sandbox plus host/join, a
 LOBBY for multiplayer picks, and a text CHAT in the lobby and in-game. See
@@ -425,9 +425,9 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | [Network](../Docs/Context/Network/CONTEXT.md) | Winsock transport: `NetHost`, deliveries/channels, handshake + encryption, abuse limits, serialization, sockets |
 | [NetFuzz](../Docs/Context/NetFuzz/CONTEXT.md) | The protocol fuzzer — **the regression gate for wire changes** |
 | [Audio](../Docs/Context/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources, AudioComponent |
-| [Animation](../Docs/Context/Animation/CONTEXT.md) | Skeletons, clips, AnimationPlayer, the state machine, retargeting |
+| [Animation](../Docs/Context/Animation/CONTEXT.md) | Skeletons, clips, **the `.clip` format (`ClipAsset`) and key interpolation**, key reduction, AnimationPlayer, the state machine, retargeting |
 | [File](../Docs/Context/File/CONTEXT.md) | `FileSystem` (**THE disk seam**, main-thread IO assert), `FileReader`, **`.dat` packs** (layout, mount priority / disk fallback, build + in-place update), AssetParser, the cooked scene cache + GC, TextureConvert |
-| [UI](../Docs/Context/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels, game layout, HUD overlay, gizmo split |
+| [UI](../Docs/Context/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels (Entity Editor, **Animation Editor**), game layout, HUD overlay, gizmo split |
 | [Input](../Docs/Context/Input/CONTEXT.md) | The window thread (`Core.Window`), the ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
 | [Game](../Docs/Context/Game/CONTEXT.md) | The game: the architecture rule, partitions, the frame (the three ticks), the world, determinism, save / load. **Read it first; the topic files below hold the rest** |
 | ↳ [Modes](../Docs/Context/Game/Modes.md) | Co-op PvE (generated map, teams, waves, the spawn blob) and PvP (arenas, teams, structure damage) |
@@ -484,17 +484,26 @@ CullMode in [`Docs/Context/Entity/CONTEXT.md`](../Docs/Context/Entity/CONTEXT.md
 
 Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 
-## `.anm` — animation clips
+## `.clip` — animation clips (keyframes)
+
+One clip per file, named by the file STEM: `Clip 1` + `Duration` / `FrameRate` / `Loop` / `PreviewRig` / `Event <name> <normalizedTime>`,
+then `Track "<bone>"` blocks with `Position` / `Rotation` / `Scale` key lines (`time x y z [w] [Step|Smooth]`). Keys by BONE NAME, no skeleton:
+retargeted when a clip set is built. Authored in the **Animation Editor** panel, which also imports FBX tracks and converts `.anm` entries into
+`.clip`s. **A `.clip` wins over an `.anm` entry of the same name.** Grammar and the import path in
+[`Docs/Context/Animation/CONTEXT.md`](../Docs/Context/Animation/CONTEXT.md) (Clips).
+
+## `.anm` — animation clips from FBX
 
 `Animation <name>` clips: source `ObjectContainer`, `Loop`, `Skip` (channels), and
-`Event <name> <normalizedTime>` notifies, fired into the entity's script or animator `onEvent`.
+`Event <name> <normalizedTime>` notifies, fired into the entity's script or animator `onEvent`. At load the FBX goes through the same importer
+as the `.clip` path (`ISceneData::importClipAssets`).
 
 ## `.apl` — animator graph
 
 `Animator <name>` graph:
 
 * `Parameter`s — Float / Bool / Trigger
-* `Clip <name>` plus `Anim <clipName>` bindings
+* `Clip <name>` plus `Anim <clipName>` bindings (a `.clip` stem or an `.anm` entry name)
 * `BlendSpace1D` with `Sample`s
 * `StateMachine` — `Entry <state>`; states with `Play` / `SpeedParam` / `SpeedScale`;
   `Transition` / `AnyTransition` with `Condition` / `ExitTime` / `Fade`

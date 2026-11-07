@@ -51,6 +51,13 @@ export struct MeshStreamSource
 	uint32 numIndices = 0;
 };
 
+// One animation track of a source file, as a skeleton-independent clip asset (see importClipAssets).
+export struct ImportedClip
+{
+	oc::string trackName; // the track's name in the file ("mixamo.com", "Take 001", ...)
+	ClipAsset clip;
+};
+
 export class ISceneData
 {
 public:
@@ -78,6 +85,11 @@ public:
 	// clipNameOverride names the kept clip(s) (suffixed _N if several are kept); when null the file-name
 	// stem is used. Returns false if the file has no kept animations.
 	static bool loadAnimations(const char* filePath, const Skeleton& targetSkeleton, AnimationSet& outSet, const char* skipName = nullptr, const char* clipNameOverride = nullptr, const char* trackName = nullptr);
+
+	// THE ANIMATION IMPORTER: every kept track of a file (FBX, glTF, ...) as a ClipAsset keyed by node name, with no skeleton. The .clip import of the
+	// Animation Editor and the .anm path (through loadAnimations above) both run on it. skipName / trackName filter like loadAnimations. The frame rate
+	// is the file's when it gives a plausible one, else read from the key spacing. Returns false (and a reason) when nothing was kept.
+	static bool importClipAssets(const char* filePath, oc::vector<ImportedClip>& out, const char* skipName = nullptr, const char* trackName = nullptr, oc::string* error = nullptr);
 
 	virtual ~ISceneData() = default;
 

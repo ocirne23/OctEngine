@@ -1013,6 +1013,7 @@ Sphere ObjectContainer::appendPreviewMeshes(NodeSpawnIdx idx, bool skinned, cons
             mesh.indexCount = src.indexCount;
             mesh.firstIndex = src.firstIndex;
             mesh.vertexOffset = int32(src.baseVertexOffset);
+            mesh.skinVertexOffset = src.skinVertexOffset;
             Sphere meshBounds = src.bounds;
             bounds.combineSphere(meshBounds);
         }

@@ -363,6 +363,10 @@ See [UI](Context/UI/CONTEXT.md), [Input](Context/Input/CONTEXT.md), [App](Contex
 * Entity Editor: no component copy / paste, no layer list for Physics (`PhysicsLayers` keeps its names private), the
   HumanoidAnimator bones are text only, no play button for an Audio clip.
 * `EEntityFlag_Frozen` has no setter left now that the Entity Editor's document is data: remove it with its checks, or use it.
+* Animation Editor: no free tangent handles (Smooth is automatic Catmull-Rom), no root motion, no preview of a whole `.apl` (one clip at a
+  time), no IK / mirror pose, no box select in the curve view, no scale gizmo (scale is the inspector's). Rigid bone models
+  (HumanoidAnimator) cannot be animated by a `.clip` yet. The unsaved guard's "Save" on a never-saved clip drops the pending switch.
+* Animation Editor: a rig must be picked by hand (the registry cannot tell a skinned container before it is loaded).
 * ImGui has no viewports.
 * Input follow-up: check that drags leaving the window still work after the cross-thread
   cursor/capture change.

@@ -56,6 +56,11 @@ protected:
     // Builds (or returns a cached) clip library for an animator, retargeted against `skel`. Cached by skeleton + animator name so a source FBX is imported
     // once, not per spawned entity.
     const AnimationSet* getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc);
+    // The keys of a global clip name: its .clip file, else its .anm entry imported from the FBX (loop and events applied). Cached; null = no such clip.
+    const ClipAsset* getOrLoadClipAsset(const oc::string& name);
+    // A saved clip: replaces the cache entry and rebuilds that clip in every built set IN PLACE (the AnimationClip objects keep their addresses, so the
+    // players and blend spaces that point at them play the new keys next tick).
+    void reloadClipAsset(const oc::string& name, ClipAsset&& asset);
     oc::shared_ptr<const EntitySpawnTemplate> getOrBuildPrefabTemplate(const oc::string& name);
     oc::shared_ptr<const EntitySpawnTemplate> cacheTemplate(const oc::string& name, const oc::string& sourceFile, const AssetNode& node);
     oc::shared_ptr<const EntitySpawnTemplate> buildInlineTemplate(const AssetNode& node);
@@ -76,7 +81,14 @@ protected:
 
     oc::unordered_map<oc::string, oc::unique_ptr<ObjectContainer>> m_containers;
     CollisionCache m_collision; // collision snapshots + BVHs + occluders derived from loaded containers
-    oc::unordered_map<oc::string, oc::unique_ptr<AnimationSet>> m_clipSets; // key: skeleton ptr + animator name
+    struct ClipSetEntry
+    {
+        oc::unique_ptr<AnimationSet> set;
+        const Skeleton* skeleton = nullptr;
+        oc::vector<oc::pair<uint32, oc::string>> sources; // clip index in the set -> the global clip name it was built from
+    };
+    oc::unordered_map<oc::string, ClipSetEntry> m_clipSets; // key: skeleton ptr + animator name
+    oc::unordered_map<oc::string, oc::shared_ptr<const ClipAsset>> m_clipAssets; // global clip name -> its keys (null: tried, not found)
     oc::unordered_map<oc::string, oc::shared_ptr<AudioBuffer>> m_audioBuffers; // key: sound file path
     oc::unordered_map<oc::string, oc::shared_ptr<EntitySpawnTemplate>> m_templates; // prefab templates, keyed by name
     oc::vector<oc::shared_ptr<EntitySpawnTemplate>> m_retiredTemplates; // superseded by reloadPrefabs, kept alive for live entities

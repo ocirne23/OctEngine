@@ -73,6 +73,7 @@ void UI::flushMainThreadWork()
     // main-thread work (renderer/physics onChange effects, container imports creating GPU meshes).
     m_tweakPanel.flushDeferredCallbacks();
     m_entityEditor.flushMainThreadWork();
+    m_animationEditor.flushMainThreadWork();
 }
 
 void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
@@ -241,6 +242,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
 
             ImGui::DockBuilderDockWindow("Script Editor", dock_id_right_bottom);
             ImGui::DockBuilderDockWindow("Entity Editor", dock_id_right_bottom);
+            ImGui::DockBuilderDockWindow("Animation Editor", dock_id_right_bottom);
             ImGui::DockBuilderDockWindow("Memory",        dock_id_right_bottom);
             ImGui::DockBuilderDockWindow("Scene",         dock_id_right_bottom);
             ImGui::DockBuilderDockWindow("Tweaks",        dock_id_right_bottom);
@@ -346,6 +348,18 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         // Route the asset browser's "Edit Entity" action into the Entity Editor.
         if (oc::string editPath = m_assetBrowser.takeEntityEditRequest(); !editPath.empty())
             m_entityEditor.requestOpen(editPath);
+
+        // ...and its .clip opens / animation imports into the Animation Editor, with its tab in front.
+        if (oc::string clipPath = m_assetBrowser.takeAnimationEditRequest(); !clipPath.empty())
+        {
+            m_animationEditor.requestOpen(clipPath);
+            ImGui::SetWindowFocus("Animation Editor");
+        }
+        if (oc::string importPath = m_assetBrowser.takeAnimationImportRequest(); !importPath.empty())
+        {
+            m_animationEditor.requestImport(importPath);
+            ImGui::SetWindowFocus("Animation Editor");
+        }
     }
 
     // The three data-heavy panels remember whether they were open: only open ones get a prepare
@@ -413,6 +427,30 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             m_scriptEditor.requestOpen(scriptPath);
             ImGui::SetWindowFocus("Script Editor");
         }
+    }
+
+    {
+        ProfileScope scope("Panel: Animation Editor", EProfileCategory::UI);
+        if (ImGui::Begin("Animation Editor", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+        {
+            m_animationEditor.render(deltaSec);
+
+            // A .clip, a model file or an .anm dropped anywhere on the panel (the browser drags them as TEXT_FILE).
+            if (ImGui::BeginDragDropTargetCustom(
+                ImRect(ImGui::GetWindowPos(),
+                    ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x,
+                           ImGui::GetWindowPos().y + ImGui::GetWindowSize().y)),
+                ImGui::GetID("##ae_drop")))
+            {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("TEXT_FILE"))
+                    m_animationEditor.requestOpen(static_cast<const char*>(payload->Data));
+                ImGui::EndDragDropTarget();
+            }
+        }
+        ImGui::End();
+
+        if (oc::string revealPath = m_animationEditor.takeRevealRequest(); !revealPath.empty())
+            m_assetBrowser.selectFile(revealPath);
     }
 
     {

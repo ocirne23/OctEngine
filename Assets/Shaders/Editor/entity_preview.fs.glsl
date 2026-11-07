@@ -11,8 +11,10 @@ layout (push_constant) uniform PreviewPC
     vec4 u_posScale;
     vec4 u_quat;
     vec4 u_tintMaterial;  // xyz = flat colour (x < 0: none), w = material index
-    vec4 u_cameraFlags;   // xyz = camera position, w = 1: highlighted
+    ivec4 u_flags;        // x = highlighted, y = skinning index delta, z = palette base in vec4s (-1: bind pose)
 };
+
+layout (binding = 2, std430) readonly buffer PreviewFrame { vec4 f_data[]; }; // [0] = the camera
 
 struct MaterialInfo
 {
@@ -26,7 +28,7 @@ layout (binding = 0, std430) readonly buffer InMaterialInfos
 {
     MaterialInfo in_materialInfos[];
 };
-layout (binding = 1) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 3) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 
 layout (location = 0) in vec3 in_worldPos;
 layout (location = 1) in vec3 in_normal;
@@ -73,7 +75,7 @@ void main()
     if (flat_)
         diffuse.xyz = u_tintMaterial.xyz;
 
-    const vec3 V = normalize(u_cameraFlags.xyz - in_worldPos);
+    const vec3 V = normalize(f_data[0].xyz - in_worldPos);
     vec3 N = normalize(in_normal);
     if (dot(N, V) < 0.0)
         N = -N; // the pass draws both faces
@@ -116,7 +118,7 @@ void main()
     const vec3 ambient = mix(vec3(0.16, 0.15, 0.14), vec3(0.42, 0.46, 0.52), N.y * 0.5 + 0.5);
     color += ambient * (albedo + F0 * (1.0 - roughness * 0.7));
 
-    if (u_cameraFlags.w > 0.5)
+    if (u_flags.x != 0)
     {
         const float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
         color += vec3(1.0, 0.55, 0.12) * rim * 1.5;

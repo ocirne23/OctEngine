@@ -5,52 +5,6 @@ import Core.glm;
 
 namespace
 {
-    template <typename KeyT>
-    uint32 findKey(const oc::vector<KeyT>& keys, float t, float& outFactor)
-    {
-        for (uint32 i = 0; i + 1 < (uint32)keys.size(); ++i)
-        {
-            if (t < keys[i + 1].time)
-            {
-                const float span = keys[i + 1].time - keys[i].time;
-                outFactor = span > 1e-8f ? (t - keys[i].time) / span : 0.0f;
-                return i;
-            }
-        }
-        outFactor = 0.0f;
-        return (uint32)keys.size() - 1;
-    }
-
-    glm::vec3 sampleVec(const oc::vector<PositionKey>& keys, float t, const glm::vec3& fallback)
-    {
-        if (keys.empty()) return fallback;
-        if (keys.size() == 1) return keys[0].value;
-        float f;
-        const uint32 i = findKey(keys, t, f);
-        if (i + 1 >= (uint32)keys.size()) return keys.back().value;
-        return glm::mix(keys[i].value, keys[i + 1].value, f);
-    }
-
-    glm::vec3 sampleScale(const oc::vector<ScaleKey>& keys, float t, const glm::vec3& fallback)
-    {
-        if (keys.empty()) return fallback;
-        if (keys.size() == 1) return keys[0].value;
-        float f;
-        const uint32 i = findKey(keys, t, f);
-        if (i + 1 >= (uint32)keys.size()) return keys.back().value;
-        return glm::mix(keys[i].value, keys[i + 1].value, f);
-    }
-
-    glm::quat sampleQuat(const oc::vector<RotationKey>& keys, float t, const glm::quat& fallback)
-    {
-        if (keys.empty()) return fallback;
-        if (keys.size() == 1) return keys[0].value;
-        float f;
-        const uint32 i = findKey(keys, t, f);
-        if (i + 1 >= (uint32)keys.size()) return keys.back().value;
-        return glm::normalize(glm::slerp(keys[i].value, keys[i + 1].value, f));
-    }
-
     // Decomposes a TRS-composed local matrix (translate * rotate * scale) into its components. Bind-pose
     // node transforms are well-formed TRS, so this avoids glm's experimental matrix_decompose.
     void decomposeTRS(const glm::mat4& m, glm::vec3& pos, glm::quat& rot, glm::vec3& scale)
@@ -171,9 +125,9 @@ void AnimationPlayer::sampleClip(const AnimationClip* pClip, float time, Pose& o
     {
         if (ch.boneIndex < 0 || (uint32)ch.boneIndex >= numBones)
             continue;
-        outPose.pos[ch.boneIndex]   = sampleVec(ch.positionKeys, time, m_bind.pos[ch.boneIndex]);
-        outPose.rot[ch.boneIndex]   = sampleQuat(ch.rotationKeys, time, m_bind.rot[ch.boneIndex]);
-        outPose.scale[ch.boneIndex] = sampleScale(ch.scaleKeys, time, m_bind.scale[ch.boneIndex]);
+        outPose.pos[ch.boneIndex]   = AnimKeys::sampleVec3(oc::span<const PositionKey>(ch.positionKeys), time, m_bind.pos[ch.boneIndex]);
+        outPose.rot[ch.boneIndex]   = AnimKeys::sampleQuat(oc::span<const RotationKey>(ch.rotationKeys), time, m_bind.rot[ch.boneIndex]);
+        outPose.scale[ch.boneIndex] = AnimKeys::sampleVec3(oc::span<const ScaleKey>(ch.scaleKeys), time, m_bind.scale[ch.boneIndex]);
     }
 }
 
@@ -306,6 +260,16 @@ void AnimationPlayer::evaluate()
         }
         m_palette[i] = global * skel.inverseBind[i];
     }
+}
+
+void AnimationPlayer::setTime(float seconds)
+{
+    m_firedEvents.clear();
+    m_blendSpaceActive = false;
+    m_fade = 1.0f;
+    const float dur = m_pClip ? m_pClip->duration : 0.0f;
+    m_time = glm::clamp(seconds, 0.0f, glm::max(dur, 0.0f));
+    evaluate();
 }
 
 float AnimationPlayer::getNormalizedTime() const

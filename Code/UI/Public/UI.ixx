@@ -16,6 +16,7 @@ import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
 import :EntityEditor;
+import :AnimationEditor;
 import :OutputLog;
 import :TweakPanel;
 import :ProfilerPanel;
@@ -58,7 +59,8 @@ public:
     // flushMainThreadWork.
     void updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
     // Main thread, after the widget pass joined: work panels collected but must not run on a
-    // worker - tweak onChange callbacks and the Entity Editor's container imports.
+    // worker - tweak onChange callbacks, the Entity Editor's container imports, the Animation
+    // Editor's rig loads and FBX imports.
     void flushMainThreadWork();
 
     Entity* getSelectedEntity() const { return m_sceneView.getSelected(); }
@@ -92,6 +94,7 @@ public:
         }
         m_assetBrowser.takeChanges(changes);
         m_entityEditor.takeChanges(changes);
+        m_animationEditor.takeChanges(changes);
         m_propertiesPanel.takeChanges(changes);
         return changes;
     }
@@ -178,6 +181,7 @@ private:
 	SceneView       m_sceneView;
 	PropertiesPanel m_propertiesPanel;
 	EntityEditor    m_entityEditor;
+	AnimationEditor m_animationEditor;
 	OutputLog       m_outputLog;
 	TweakPanel      m_tweakPanel;
 	ProfilerPanel   m_profilerPanel;

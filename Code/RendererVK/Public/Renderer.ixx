@@ -209,10 +209,13 @@ public:
     void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
     // MAIN THREAD, between the widget pass's join and the next UI::update. Uploads the queued font-atlas changes
     void updateImGuiTextures();
-    // The Entity Editor's preview. From the widget pass: `frame` is swapped with the parked one, so its vector keeps a capacity. A frame without a submit draws
-    // nothing, so a hidden panel costs nothing. 0 until the target has been drawn once; the id never changes after that.
+    // The editor previews (frame.target picks the panel's own target). From the widget pass: `frame` is swapped with the parked one, so its vectors keep a
+    // capacity. A frame without a submit draws nothing, so a hidden panel costs nothing. 0 until the target has been drawn once; the id never changes after.
     void submitEntityPreview(EntityPreviewFrame& frame);
-    uint64 getEntityPreviewTexture() const { return m_entityPreviewTextureId.load(oc::memory_order_acquire); }
+    uint64 getEntityPreviewTexture(EPreviewTarget target = EPreviewTarget::EntityEditor) const
+    {
+        return m_previews[(uint32)target].textureId.load(oc::memory_order_acquire);
+    }
     static constexpr uint32 ENTITY_PREVIEW_TARGET_SIZE = EntityPreviewPipeline::TARGET_SIZE;
 
     // ---- VR ----

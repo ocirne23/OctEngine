@@ -66,6 +66,11 @@ static bool isScriptFile(const oc::string& ext)
 	return ext == ".dsl"; // the one authorable script format -- .scr (the removed node editor's) reads as plain text now
 }
 
+static bool isAnimationFile(const oc::string& ext)
+{
+	return ext == ".clip" || ext == ".anm" || ext == ".apl";
+}
+
 static bool isTextFile(const oc::string& ext)
 {
 	// .scr: the removed node editor's format -- kept viewable as the generated C++ it is, no longer a script.
@@ -83,6 +88,7 @@ static const char* fileIcon(bool isDirectory, const oc::string& ext)
 	if (isPrefabFile(ext))                 return "[Pre]";
 	if (isObjectContainer(ext))            return "[OC]";
 	if (isScriptFile(ext))                 return "[Scr]";
+	if (isAnimationFile(ext))              return "[Anm]";
 	if (isTextFile(ext))                   return "[Txt]";
 	return "[Fil]";
 }
@@ -96,6 +102,7 @@ static ImVec4 fileColor(bool isDirectory, const oc::string& ext)
 	if (isPrefabFile(ext))                  return ImVec4(0.9f, 0.5f,  1.0f, 1.0f);   // purple
 	if (isObjectContainer(ext))             return ImVec4(0.5f, 1.0f,  0.9f, 1.0f);   // light teal
 	if (isScriptFile(ext))                  return ImVec4(0.5f, 1.0f,  0.6f, 1.0f);   // script green
+	if (isAnimationFile(ext))               return ImVec4(1.0f, 0.7f,  0.45f, 1.0f);  // animation salmon
 	if (isTextFile(ext))                    return ImVec4(0.75f, 0.75f, 0.75f, 1.0f); // light grey
 	return ImVec4(0.85f, 0.85f, 0.85f, 1.0f);                                         // grey
 }
@@ -518,6 +525,10 @@ void AssetBrowser::renderContentGrid()
 			{
 				if (entry.isDirectory)
 					navigateTo(p);
+				else if (entry.extension == ".clip")
+					m_animationEditRequest = p;
+				else if (entry.extension == ".anm")
+					m_animationImportRequest = p;
 				else if (isScriptFile(entry.extension))
 					m_scriptOpenRequest = p;
 				else if (isTextFile(entry.extension))
@@ -591,6 +602,10 @@ void AssetBrowser::renderContentList()
 			{
 				if (entry.isDirectory)
 					navigateTo(p);
+				else if (entry.extension == ".clip")
+					m_animationEditRequest = p;
+				else if (entry.extension == ".anm")
+					m_animationImportRequest = p;
 				else if (isScriptFile(entry.extension))
 					m_scriptOpenRequest = p;
 				else if (isTextFile(entry.extension))
@@ -682,6 +697,20 @@ void AssetBrowser::renderContextMenu(const oc::string& p)
 		ImGui::Separator();
 		if (ImGui::MenuItem("Edit Entity"))
 			m_entityEditRequest = p;
+	}
+
+	if (FileSystem::extension(p) == ".clip")
+	{
+		ImGui::Separator();
+		if (ImGui::MenuItem("Edit Animation"))
+			m_animationEditRequest = p;
+	}
+
+	if (isMeshFile(FileSystem::extension(p)) || FileSystem::extension(p) == ".anm")
+	{
+		ImGui::Separator();
+		if (ImGui::MenuItem(FileSystem::extension(p) == ".anm" ? "Convert to .clip (Animation Editor)..." : "Import Animations..."))
+			m_animationImportRequest = p;
 	}
 
 	if (FileSystem::isDirectory(p, /*allowMainThread*/ true))
