@@ -63,6 +63,7 @@ LOCAL (parent-relative) space. They apply every tick until cleared.
 |---|---|
 | `setBoneTransform(...)` | **Override** — replaces the bone's local transform entirely. |
 | `setBoneOffset(...)` | **Additive** — post-multiplied onto the animated pose. The `quat` overload just rotates a bone relative to where the clip put it. |
+| `setBoneModelRotation(index, q)` | **Model rotate** — turns the bone and its subtree about the bone's own origin by `q` in MODEL space (the skeleton root's frame), applied to the composed global transform. The caller needs no knowledge of the bone's local axes ("yaw the hips about up"). |
 | `clearBoneModifier` / `clearBoneModifiers` | Remove them. |
 
 `m_anyBoneModifier` short-circuits the whole path when nothing is posed.
@@ -104,3 +105,5 @@ source plays plus the blend axis — and then ticks the player.
 
 Event detection handles wrap-around: `detectEvents` splits the interval across 1.0/0.0 when playback
 looped during the tick ([AnimationClip.ixx:155](../../../Code/Animation/Private/AnimationClip.ixx#L155)).
+A negative playback speed plays backward (the phase / time wraps the other way), and its events are tested over
+`[cur, prev)` with the wrap reversed, so a reversed walk fires each footstep once.

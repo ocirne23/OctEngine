@@ -93,6 +93,8 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
         };
     m_mouseListener->onMouseWheelMoved = [this](const SDL_MouseWheelEvent& evt)
         {
+            if (!m_movementEnabled)
+                return; // the wheel belongs to whoever borrowed the fly keys (the player's third-person zoom)
             m_settings.speed = oc::clamp(m_settings.speed * (evt.y > 0.0f ? 1.1f : 0.9f), 0.1f, 400.0f);
         };
 }

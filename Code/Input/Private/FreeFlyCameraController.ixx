@@ -20,8 +20,8 @@ public:
     void setSpeed(float speed) { m_settings.speed = speed; }
     void setSensitivity(float sensitivity) { m_settings.sensitivity = sensitivity; }
     void setLockToWorldUp(bool lock) { m_settings.lockToWorldUp = lock; }
-    // Off = mouse-look only: the WASD/Space/Ctrl fly keys are released to whoever borrowed them
-    // (player control routes them to the owned entity while active - see InputControls key C)
+    // Off = mouse-look only: the WASD/Space/Ctrl fly keys and the wheel (fly speed) are released to whoever
+    // borrowed them (player control routes them to the owned entity while active - see InputControls key C)
     void setMovementEnabled(bool enabled) { m_movementEnabled = enabled; }
     // Hard reposition (view matrix refreshes on the next update): player control hands the camera
     // back where the possessed capsule left it instead of popping to the pre-possession spot

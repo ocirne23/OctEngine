@@ -310,7 +310,7 @@ export struct FoliageParams
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
     float transmission = 2.0f;
-    float transmissionFocus = 8.0f;
+    float transmissionFocus = 40.0f;
     float transmissionGlow = 1.0f;
     float transmissionShadow = 0.8f;
     // LEAVES (MATERIAL_FLAG_LEAF) seen nearly edge-on: their shading normal is bent toward the viewer until N.V reaches
@@ -548,7 +548,7 @@ export struct FarTreeParams
     float forwardScatter = -0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
     // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
     // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 0.75f;
+    float transmission = 0.6f;
     float transmissionFocus = 0.6f;
     float albedoScale = 0.75f;   // x the leaf colour
     float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid

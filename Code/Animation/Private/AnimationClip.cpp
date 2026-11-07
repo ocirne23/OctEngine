@@ -208,16 +208,17 @@ void AnimationPlayer::sampleForeground(Pose& outPose)
     }
 }
 
-void AnimationPlayer::detectEvents(const AnimationClip* pClip, float prevNorm, float curNorm)
+void AnimationPlayer::detectEvents(const AnimationClip* pClip, float prevNorm, float curNorm, bool backward)
 {
-    if (!pClip || pClip->events.empty())
+    if (!pClip || pClip->events.empty() || prevNorm == curNorm)
         return;
-    const bool wrapped = curNorm < prevNorm; // playback looped past 1.0 this tick
+    const bool wrapped = backward ? curNorm > prevNorm : curNorm < prevNorm; // playback looped past an end this tick
     for (const AnimationEventKey& e : pClip->events)
     {
         const float t = e.normalizedTime;
-        const bool fired = wrapped ? (t > prevNorm || t <= curNorm)  // (prev,1] ∪ [0,cur]
-                                   : (t > prevNorm && t <= curNorm);
+        const bool fired = backward
+            ? (wrapped ? (t < prevNorm || t >= curNorm) : (t < prevNorm && t >= curNorm)) // [0,prev) ∪ [cur,1]
+            : (wrapped ? (t > prevNorm || t <= curNorm) : (t > prevNorm && t <= curNorm)); // (prev,1] ∪ [0,cur]
         if (fired)
             m_firedEvents.push_back(e.name);
     }
@@ -237,7 +238,7 @@ void AnimationPlayer::tick(float deltaSeconds)
             if (duration > 1e-6f)
                 m_phase = wrap(m_phase + dt / duration, 1.0f); // phase-normalized so blended clips stay synced
             // Events come from the dominant bracketing clip (the blend clips share the 0..1 phase).
-            detectEvents((br.b && br.w >= 0.5f) ? br.b : br.a, prevNorm, m_phase);
+            detectEvents((br.b && br.w >= 0.5f) ? br.b : br.a, prevNorm, m_phase, dt < 0.0f);
         }
         else if (m_pClip && m_pClip->duration > 0.0f)
         {
@@ -247,7 +248,7 @@ void AnimationPlayer::tick(float deltaSeconds)
                 m_time = wrap(m_time + dt, dur);
             else
                 m_time = glm::clamp(m_time + dt, 0.0f, dur); // one-shot: hold the final frame
-            detectEvents(m_pClip, prevNorm, m_time / dur);
+            detectEvents(m_pClip, prevNorm, m_time / dur, dt < 0.0f);
         }
 
         if (m_fade < 1.0f)
@@ -290,12 +291,20 @@ void AnimationPlayer::evaluate()
     }
 
     // Compose global transforms (parent-before-child order guarantees the parent is already done), then
-    // build the skinning palette.
+    // build the skinning palette. A model rotation turns the composed axes and keeps the origin, so the bone
+    // pivots about itself and its children follow.
     for (uint32 i = 0; i < numBones; ++i)
     {
         const int32 parent = skel.parentIndices[i];
-        m_globalTransforms[i] = parent < 0 ? local[i] : m_globalTransforms[parent] * local[i];
-        m_palette[i] = m_globalTransforms[i] * skel.inverseBind[i];
+        glm::mat4& global = m_globalTransforms[i];
+        global = parent < 0 ? local[i] : m_globalTransforms[parent] * local[i];
+        if (m_anyBoneModifier && m_boneModifiers[i].mode == BoneModifierMode::ModelRotate)
+        {
+            const glm::vec4 origin = global[3];
+            global = m_boneModifiers[i].transform * global;
+            global[3] = origin;
+        }
+        m_palette[i] = global * skel.inverseBind[i];
     }
 }
 
@@ -352,6 +361,14 @@ void AnimationPlayer::setBoneOffset(const oc::string& name, const glm::mat4& loc
 void AnimationPlayer::setBoneOffset(const oc::string& name, const glm::quat& deltaRotation)
 {
     setBoneOffset(name, glm::mat4_cast(deltaRotation));
+}
+
+void AnimationPlayer::setBoneModelRotation(uint32 boneIndex, const glm::quat& modelRotation)
+{
+    if (boneIndex >= m_boneModifiers.size())
+        return;
+    m_boneModifiers[boneIndex] = BoneModifier{ glm::mat4_cast(modelRotation), BoneModifierMode::ModelRotate };
+    m_anyBoneModifier = true;
 }
 
 void AnimationPlayer::clearBoneModifier(uint32 boneIndex)

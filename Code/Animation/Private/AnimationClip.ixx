@@ -127,6 +127,11 @@ public:
     void setBoneOffset(uint32 boneIndex, const glm::mat4& localOffset);
     void setBoneOffset(const oc::string& name, const glm::quat& deltaRotation);
 
+    // Model rotation: turns the bone and its subtree about the bone's own origin by a rotation in MODEL space (the
+    // skeleton root's frame, the mesh's own axes), after the clip pose. Lets a caller say "yaw the hips about up"
+    // without knowing the bone's local axes.
+    void setBoneModelRotation(uint32 boneIndex, const glm::quat& modelRotation);
+
     void clearBoneModifier(const oc::string& name);
     void clearBoneModifier(uint32 boneIndex);
     void clearBoneModifiers();
@@ -152,9 +157,10 @@ private:
     void evaluate();
     // Appends to m_firedEvents any event of pClip whose normalized time lies in (prevNorm, curNorm],
     // splitting the interval across 1.0/0.0 when playback wrapped this tick (curNorm < prevNorm).
-    void detectEvents(const AnimationClip* pClip, float prevNorm, float curNorm);
+    // Backward playback (negative speed) tests [curNorm, prevNorm) instead, wrapping when curNorm > prevNorm.
+    void detectEvents(const AnimationClip* pClip, float prevNorm, float curNorm, bool backward);
 
-    enum class BoneModifierMode : uint8 { None, Override, Additive };
+    enum class BoneModifierMode : uint8 { None, Override, Additive, ModelRotate };
     struct BoneModifier { glm::mat4 transform = glm::mat4(1.0f); BoneModifierMode mode = BoneModifierMode::None; };
 
     const Skeleton* m_pSkeleton = nullptr;

@@ -402,9 +402,24 @@ All share ONE spawn template (a lone Light component); the values live on the co
 * **Single player or server** it spawns and possesses a local upright `Entities/Debug/playerCapsule.pre`
   (`LockRotation`): camera-relative WASD velocity steering, Space jump off a ground raycast, LShift
   sprint (×2).
-* The camera follows the shown body pose. Eye height (0.55 m), third-person distance (3.5 m) and the
-  sprint factor are constants in `InputControls`; move speed, acceleration and jump speed are the
+* The camera follows the shown body pose. Eye height (0.55 m) and the sprint factor are constants in
+  `InputControls`. The third-person distance starts at 3.5 m, and **the mouse wheel zooms it** (1..20 m, 10 % a notch);
+  while possessed the fly camera ignores the wheel (its fly speed stays as it was); move speed, acceleration and jump speed are the
   `Network/Player` tweaks (`AppControlsSettings`).
+* **The local capsule is CAMERA-LOCKED STRAFE**, `App.PlayerLocomotion` (called at the end of `updateLocalPlayer`;
+  the prefab carries `ThirdPersonAnimator` from `Animations/thirdPerson.apl` and no script). With only forward clips:
+  * the entity yaw follows the camera yaw;
+  * the `Hips` bone turns (a model-space rotation, so the legs follow) toward the velocity, and `Spine` / `Chest` / `Neck`
+    turn back by the same total, so the chest stays on the camera;
+  * past ~110 deg from the facing (back to forward below ~70 deg) the hips aim at the opposite direction and the
+    locomotion plays in REVERSE;
+  * the `gait` parameter (0 idle, 1 walk, 2 run) and the stride-matched playback `rate` (ground speed over the blended
+    stride, from the `Player/Locomotion` clip speeds) stop the feet sliding;
+  * standing still, the feet stay planted while the camera turns, until the twist passes "Idle turn angle";
+  * the upper body leans into the horizontal acceleration.
+
+  The network client path (`updatePlayerControl`, `netPlayerCapsule.pre`) and the game's `player.pre` keep
+  `PlayerBody.dsl`: facing from the position change, `CharacterAnimator`.
 * **`InputControls::applyPlayerCamera` overrides the frame camera right after the fly camera** in
   `Session::updateCamera`.
 

@@ -22,6 +22,7 @@ import Script;
 import Physics;
 import Audio;
 import Force;
+import App.PlayerLocomotion;
 
 export class InputControls
 {
@@ -42,7 +43,8 @@ private:
     };
     oc::vector<ForceBall> forceBalls;
     KeyboardListenerHandle pKeyboardListener; // unregisters itself on destruction
-    
+    MouseListenerHandle pMouseListener;       // the wheel: third-person camera distance
+
     const AppControlsSettings& controls = Globals::settings.appControls; // test emitter (N/M) + player (C)
 
     bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys - the
@@ -55,9 +57,12 @@ private:
     // (playerCapsule.pre, LockRotation), key V switches first/third person. On a network client key C
     // keeps its meaning of driving the locally-owned entity instead (see updatePlayerControl).
     EntityPtr playerEntity;
+    PlayerLocomotion playerLocomotion; // its facing + strafe animation (camera-locked)
     bool playerThirdPerson = true;   // start visible; V toggles
     static constexpr float playerEyeHeight = 0.55f;   // metres above the capsule center
-    static constexpr float playerThirdDistance = 3.5f;
+    float playerThirdDistance = 3.5f; // the mouse wheel zooms it while possessed in third person
+    static constexpr float playerThirdMinDistance = 1.0f;
+    static constexpr float playerThirdMaxDistance = 20.0f;
     static constexpr float playerSprintMult = 2.0f;   // LShift multiplier on Move speed
 
     oc::shared_ptr<EntitySpawnTemplate> lightTmpl; // built once, see lightTemplate()
@@ -108,6 +113,14 @@ public:
         pKeyboardListener = input.addKeyboardListener();
         pKeyboardListener->onKeyPressed = [this](const SDL_KeyboardEvent& evt) { handleKeyEvent(evt); };
         pKeyboardListener->onKeyReleased = [this](const SDL_KeyboardEvent& evt) { handleKeyEvent(evt); };
+        pMouseListener = input.addMouseListener();
+        pMouseListener->onMouseWheelMoved = [this](const SDL_MouseWheelEvent& evt)
+        {
+            if (!playerControl || !playerThirdPerson || gameMode || evt.y == 0.0f)
+                return;
+            playerThirdDistance = oc::clamp(playerThirdDistance * (evt.y > 0.0f ? 0.9f : 1.1f), // wheel up = closer
+                playerThirdMinDistance, playerThirdMaxDistance);
+        };
     }
 
     // Per-frame maintenance of the test force-balls: the emitter follows the simulated body and the
@@ -314,6 +327,7 @@ public:
         }
         playerJumpWasDown = jumpDown;
         pc->body.setLinearVelocity(vel);
+        playerLocomotion.update(*playerEntity, vel, glm::atan(forward.x, forward.z), deltaSec);
     }
 
     // Key C outside a client session: spawn + possess the capsule, or hand the camera back.
@@ -326,6 +340,7 @@ public:
                 Transform(cameraController.getPosition() + dir * 2.0f), true);
             if (playerEntity)
                 world.addRootEntity(playerEntity);
+            playerLocomotion.reset(glm::atan(dir.x, dir.z));
             playerJumpWasDown = true; // swallow a Space held through the toggle
         }
         else if (playerEntity)

@@ -18,6 +18,15 @@ export struct AppControlsSettings
     float playerMoveSpeed = 8.0f; // m/s horizontal target (keep under Network/Validation "Max speed")
     float playerAccel = 60.0f;    // m/s^2 velocity steering
     float playerJumpSpeed = 6.0f;
+    // "Player/Locomotion" (the local key C capsule: camera-locked strafe, see App.PlayerLocomotion)
+    float walkClipSpeed = 1.6f;   // m/s the walk clip covers at playback rate 1 (stride matching)
+    float runClipSpeed = 4.5f;    // m/s the run clip covers at playback rate 1
+    float bodyTurnRate = 20.0f;   // 1/s: how fast the body yaw follows the camera yaw
+    float legTurnSpeed = 450.0f;  // deg/s: how fast the hips turn toward the move direction
+    float maxHipTwist = 110.0f;   // deg: the hips never turn further from the body yaw than this
+    float idleTurnAngle = 60.0f;  // deg: standing still, the feet stay planted until the camera turns this far
+    float leanPerAccel = 1.2f;    // deg of upper-body lean per m/s^2 of horizontal acceleration
+    float maxLean = 12.0f;        // deg
 };
 
 export namespace Settings

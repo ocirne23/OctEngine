@@ -10,7 +10,7 @@ Prefab playerCapsule
 		Position 0 -2 0
 		Scale 0.0125
 	Component Animator
-		Animator CharacterAnimator
+		Animator ThirdPersonAnimator
 	Component Physics
 		Body Dynamic
 		Shape Capsule
@@ -27,6 +27,3 @@ Prefab playerCapsule
 			Offset 0 1.61 1
 			Direction 0 0 1
 			ConeAngle 25
-	Component Script
-		Path Scripts/PlayerBody.dsl
-		Enabled true
