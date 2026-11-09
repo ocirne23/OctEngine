@@ -437,7 +437,7 @@ export struct FoliageParams
     // GPU and drawn as voxel boxes - out to the far volume's hand-over ("Far start" + "Far overlap"), or with the far volume
     // off, to voxelFarEnd. Shadows / GI / RT: none (the near set's trees cast; the cascades end before the far ring).
     bool voxelFarTrees = true;
-    float voxelFarEnd = 20000.0f; // m
+    float voxelFarEnd = 4000.0f; // m
 };
 
 // PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but

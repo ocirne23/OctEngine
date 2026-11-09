@@ -311,7 +311,7 @@ billboard card paths. **`LitTreeVoxel`** (variant 16, `instanced_indirect_tree_v
     chunks was kicked before the update, so a chunk excluded the frame it joined left its trees undrawn for a frame (a dark
     flash at the near radius); now it draws twice for that frame; `present` (`updateTreeVoxelFar`) lists this slot's record table minus those, within
     the END distance horizontally - the far volume's hand-over (`farTreesStart` + "Far overlap", as the near set's trees
-    leave the main pass; 4300 m at the defaults) or, with the far volume off, "Voxel far end (m)" (20000). Procedural TreeWorld's
+    leave the main pass; 4300 m at the defaults) or, with the far volume off, "Voxel far end (m)" (4000). Procedural TreeWorld's
     record ring reaches the farther of the two that is on. Three passes, inline in the primary after the clutter cull (the chunk count
     changes per frame; off: `recordClear` empties the draws):
     * CULL, a workgroup per chunk: per record its tree exactly as `splatRecordPlant` / Procedural `expandChunk` place it
