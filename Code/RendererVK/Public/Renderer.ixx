@@ -120,6 +120,9 @@ public:
     // Once per frame: the deferred frees, and the current frame slot's chunk table.
     void updateTreeRecords() { m_treeRecords.update(m_swapChain.getCurrentFrameIndex(), m_frameCounter, m_treeVolume.bakeHoldSince()); }
     TreeRecordStats treeRecordStats() const { return m_treeRecords.stats(); }
+    // The record chunks the world set draws itself (Procedural TreeSystem, every frame; main thread, before present): the far voxel
+    // trees ("Trees/Voxel far trees") expand every OTHER resident record chunk.
+    void setTreeNearChunks(oc::span<const glm::ivec2> coords);
 
     // ---- Terrain ----
 
@@ -280,6 +283,13 @@ inline void Renderer::setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types
     m_treeRecordChunkSize = chunkSize;
     m_treeRecordSeed = worldSeed;
     m_treeRecordSet = volumeSet.m_setId;
+}
+
+inline void Renderer::setTreeNearChunks(oc::span<const glm::ivec2> coords)
+{
+    m_treeNearChunks.clear();
+    for (const glm::ivec2& c : coords)
+        m_treeNearChunks.emplace((uint64)(uint32)c.x | ((uint64)(uint32)c.y << 32), (uint8)1);
 }
 
 inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod, uint32 lod0Res, float lod0Quad)

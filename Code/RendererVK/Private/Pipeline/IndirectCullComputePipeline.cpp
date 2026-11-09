@@ -19,7 +19,7 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
             vk::BufferUsageFlagBits2::eIndirectBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "IndirectCullCmd", BufferHostAccess::eSequentialWrite);
         perFrame.mappedIndirectCommands = perFrame.inIndirectCommandBuffer.mapMemory<vk::DispatchIndirectCommand>();
-        perFrame.drawCountBuffer.initialize(4 * sizeof(uint32),
+        perFrame.drawCountBuffer.initialize(NUM_DRAW_LISTS * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullDrawCounts");
     }
@@ -29,7 +29,7 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
     m_computePipeline.initialize(computePipelineLayout);
-    m_compact.initialize(4);
+    m_compact.initialize(NUM_DRAW_LISTS);
 }
 
 void IndirectCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
@@ -64,6 +64,10 @@ void IndirectCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
         // so the ocean always blends over it (in the transparent sequence their order was undefined).
         perFrame.outTerrainFilmCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 17
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainFilm");
+        // The trees' VOXEL tier (LitTreeVoxel): its fragment shader writes FragDepth, and every pipeline of a DGC execution
+        // set must match the set's first one in that - so its own list, drawn with plain indexed indirect draws.
+        perFrame.outTreeVoxelCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 23
+            usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTreeVoxel");
     }
 }
 
@@ -150,8 +154,9 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
     });
     // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
     // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors);
-    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl).
-    for (uint32 binding = 11; binding <= 22; ++binding)
+    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl);
+    // 23 the trees' voxel-tier sequences.
+    for (uint32 binding = 11; binding <= 23; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -177,7 +182,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 23> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 24> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -395,6 +400,11 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeListBuffer.getBuffer(), .range = recordParams.treeListBuffer.getSize() } }
         },
+        DescriptorSetUpdateInfo { // OutTreeVoxelCommandBuffer
+            .binding = 23,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = frameData.outTreeVoxelCommandBuffer.getBuffer(), .range = frameData.outTreeVoxelCommandBuffer.getSize() } }
+        },
     };
 
     // Compute shader frustum cull and indirect command buffer generation
@@ -410,6 +420,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
         vkCommandBuffer.fillBuffer(frameData.outTerrainTessCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         vkCommandBuffer.fillBuffer(frameData.outTerrainFilmCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
+        vkCommandBuffer.fillBuffer(frameData.outTreeVoxelCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         {
             vk::MemoryBarrier2 memoryBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -423,7 +434,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.dispatchIndirect(frameData.inIndirectCommandBuffer.getBuffer(), 0);
 
         Buffer* const lists[] = { &frameData.outIndirectCommandBuffer, &frameData.outTransparentIndirectCommandBuffer,
-            &frameData.outTerrainTessCommandBuffer, &frameData.outTerrainFilmCommandBuffer };
+            &frameData.outTerrainTessCommandBuffer, &frameData.outTerrainFilmCommandBuffer, &frameData.outTreeVoxelCommandBuffer };
         m_compact.record(vkCommandBuffer, recordParams.meshCountBuffer, lists, frameData.drawCountBuffer);
 
         {

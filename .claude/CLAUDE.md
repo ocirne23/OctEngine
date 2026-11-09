@@ -420,7 +420,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Rivers](../Docs/Context/Procedural/Rivers.md) | Rivers: the coarse network, the units, the sampler |
 | ↳ [TerrainStreamer](../Docs/Context/Procedural/TerrainStreamer.md) | `TerrainStreamer` (quadtree, node memory, edge stitching, the world datum, the terrain-data map), `HeightMapBaker` (water reach / flow) |
 | ↳ [Ocean](../Docs/Context/Procedural/Ocean.md) | `OceanGenerator`: the clipmap, sectors, buoyancy field, wind, near-field shading |
-| ↳ [Trees](../Docs/Context/Procedural/Trees.md) | Trees: the `.tree` grammar, LODs, the species load (jobs), far representations, textures, world records, world mode |
+| ↳ [Trees](../Docs/Context/Procedural/Trees.md) | Trees: the `.tree` grammar, LODs, the species load (jobs), far representations, the voxel tier, textures, world records, world mode |
 | ↳ [Rocks](../Docs/Context/Procedural/Rocks.md) | Rocks: the `.rock` grammar, DEAD WOOD, ground placement |
 | ↳ [Clutter](../Docs/Context/Procedural/Clutter.md) | **Ground clutter**: the `.clutter` grammar, the meshes |
 | [Network](../Docs/Context/Network/CONTEXT.md) | Winsock transport: `NetHost`, deliveries/channels, handshake + encryption, abuse limits, serialization, sockets |

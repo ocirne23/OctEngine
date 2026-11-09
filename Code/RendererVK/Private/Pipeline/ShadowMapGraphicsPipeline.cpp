@@ -51,6 +51,32 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
     // The cascade is selected per multiview view via gl_ViewIndex, so no push constant is needed.
 }
 
+void ShadowMapGraphicsPipeline::buildVoxelLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& voxel)
+{
+    voxel = main;
+    voxel.vertexShader.defines.push_back({ "TREE_VOXEL", "1" });
+    voxel.fragmentShader.defines.push_back({ "TREE_VOXEL", "1" });
+    // FRONT faces culled, as the main shadow pipeline: the march must start where the light ENTERS the box, and the cascade
+    // matrices (lookAtRH x orthoRH_ZO, no y flip) mirror the winding - a back-face cull kept only the faces where the light
+    // leaves, every march ended at once and nothing cast; no cull ran the fragment shader on both. Its FS writes the hit's
+    // depth, so the rasterizer's depth bias does not reach it (the FS adds its own).
+    voxel.cullMode = vk::CullModeFlagBits::eFront;
+    voxel.indirectBindable = false; // plain indexed indirect draws, never DGC
+}
+
+void ShadowMapGraphicsPipeline::buildFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far)
+{
+    far = main;
+    far.vertexShader.defines.push_back({ "TREE_FAR_SHADOW", "1" });
+    far.indirectBindable = false; // plain indexed indirect draws, never DGC
+    // The record (TreeVoxelFarPipeline::InstanceGpu, 32 B) instance-rate at binding 1; the vertices stay storage reads.
+    far.vertexLayoutInfo.bindingDescriptions.clear();
+    far.vertexLayoutInfo.attributeDescriptions.clear();
+    far.vertexLayoutInfo.bindingDescriptions.push_back(vk::VertexInputBindingDescription{ .binding = 1, .stride = 32, .inputRate = vk::VertexInputRate::eInstance });
+    far.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ .location = 5, .binding = 1, .format = vk::Format::eR32G32B32A32Sfloat, .offset = 0 });
+    far.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ .location = 6, .binding = 1, .format = vk::Format::eR32G32B32A32Uint, .offset = 16 });
+}
+
 void ShadowMapGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
 {
     // Streamed texture slot rewrite in the cached shadow-draw CB's set (binding 7 is UPDATE_AFTER_BIND).
@@ -104,6 +130,12 @@ void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqu
     GraphicsPipelineLayout layout;
     buildPipelineLayout(layout, maxTextures);
     m_graphicsPipeline.initialize(m_renderPass, layout);
+    GraphicsPipelineLayout voxelLayout;
+    buildVoxelLayout(layout, voxelLayout);
+    m_voxelBuilt = m_voxelPipeline.initialize(m_renderPass, voxelLayout);
+    GraphicsPipelineLayout farLayout;
+    buildFarLayout(layout, farLayout);
+    m_farBuilt = m_farPipeline.initialize(m_renderPass, farLayout);
     buildIndirectState(maxUniqueMeshes);
 }
 
@@ -113,6 +145,18 @@ void ShadowMapGraphicsPipeline::reloadShaders(uint32 maxTextures)
         return;
     GraphicsPipelineLayout layout;
     buildPipelineLayout(layout, maxTextures);
+    GraphicsPipelineLayout voxelLayout;
+    buildVoxelLayout(layout, voxelLayout);
+    if (!m_voxelBuilt)
+        m_voxelBuilt = m_voxelPipeline.initialize(m_renderPass, voxelLayout);
+    else if (!m_voxelPipeline.reloadShaders(m_renderPass, voxelLayout))
+        printf("ShadowMapGraphicsPipeline: voxel shader reload failed, keeping previous pipeline\n");
+    GraphicsPipelineLayout farLayout;
+    buildFarLayout(layout, farLayout);
+    if (!m_farBuilt)
+        m_farBuilt = m_farPipeline.initialize(m_renderPass, farLayout);
+    else if (!m_farPipeline.reloadShaders(m_renderPass, farLayout))
+        printf("ShadowMapGraphicsPipeline: far billboard shader reload failed, keeping previous pipeline\n");
     if (!m_graphicsPipeline.reloadShaders(m_renderPass, layout))
     {
         printf("ShadowMapGraphicsPipeline: shader reload failed, keeping previous pipeline\n");
@@ -169,4 +213,28 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParam
         .maxDrawCount = maxSequences,
     };
     vkCommandBuffer.executeGeneratedCommandsEXT(vk::False, generatedCommandsInfo);
+
+    // The trees' VOXEL casters ("Trees/Voxel shadows"; count [1]): they write FragDepth, so plain indexed indirect draws
+    // over the cull's compacted list (offset 4 skips the pipelineIndex word). The execute left the state undefined.
+    if (m_voxelBuilt)
+    {
+        constexpr vk::DeviceSize stride = sizeof(RendererVKLayout::IndirectDrawSequence);
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_voxelPipeline.getPipeline());
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_voxelPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
+        vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+        vkCommandBuffer.drawIndexedIndirectCount(params.voxelCommandBuffer.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
+            params.drawCountBuffer.getBuffer(), sizeof(uint32), (uint32)(params.voxelCommandBuffer.getSize() / stride), (uint32)stride);
+    }
+
+    // THE FAR SHADOW CASTERS: one indexed indirect draw per billboard mesh over its sorted records (the unused buckets draw
+    // 0 instances).
+    if (m_farBuilt && params.farInstances && params.farCommands && params.farMaxDraws > 0)
+    {
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_farPipeline.getPipeline());
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_farPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        vkCommandBuffer.bindVertexBuffers(1, { params.farInstances->getBuffer() }, { 0 });
+        vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+        vkCommandBuffer.drawIndexedIndirect(params.farCommands->getBuffer(), 0, params.farMaxDraws, 5 * sizeof(uint32));
+    }
 }

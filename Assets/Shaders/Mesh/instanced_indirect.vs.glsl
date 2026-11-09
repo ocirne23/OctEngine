@@ -47,9 +47,19 @@ layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#ifdef FOLIAGE
-// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS).
+#if defined(FOLIAGE) || defined(TREE_ORIGIN)
+// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS). LitTree
+// (TREE_ORIGIN) and LitFoliage: the tree's origin, which its distance fade measures from (tree_fade.inc.glsl).
 layout (location = 5) out flat vec3 out_instanceOrigin;
+#endif
+#ifdef TREE_VOXEL
+// The LitTreeVoxel variant (the trees' voxel tier, Procedural treeVoxelBoxMesh): the box vertex carries its GRID
+// coordinate (0 / 1 per axis) in its normal and the box size in its tangent. The FS marches in grid space [0, 1]^3.
+layout (location = 5) out flat vec3 out_voxelCam;       // the camera in grid space (unbent by the wind)
+layout (location = 6) out vec3 out_voxelGrid;           // this point of the box in grid space
+layout (location = 7) out flat vec4 out_voxelQuat;      // the instance rotation (grid axes -> world)
+layout (location = 8) out flat vec3 out_voxelWorldSize; // the box size in world metres (x the instance scale)
+layout (location = 9) out flat vec3 out_instanceOrigin; // the tree's origin: its distance fade (tree_fade.inc.glsl)
 #endif
 
 // Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before they meet
@@ -96,8 +106,20 @@ void main()
     out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
     out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
-#ifdef FOLIAGE
+#if defined(FOLIAGE) || defined(TREE_ORIGIN) || defined(TREE_VOXEL)
     out_instanceOrigin = inst_pos;
+#endif
+#ifdef TREE_VOXEL
+    {
+        const vec3 grid = in_normalV.xyz;
+        const vec3 boxSize = max(in_tangent.xyz, vec3(1e-4));
+        const vec3 boxMin = in_posU.xyz - grid * boxSize;
+        const vec3 camLocal = quat_transform(u_viewPos - inst_pos, vec4(-inst_quat.xyz, inst_quat.w)) / max(inst_scale, 1e-6);
+        out_voxelCam = (camLocal - boxMin) / boxSize;
+        out_voxelGrid = grid;
+        out_voxelQuat = inst_quat;
+        out_voxelWorldSize = boxSize * inst_scale;
+    }
 #endif
 
     // Per-eye projection in VR / centre view on desktop, with the same TAA sub-pixel jitter for both eyes.

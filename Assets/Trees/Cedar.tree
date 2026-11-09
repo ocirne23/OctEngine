@@ -76,7 +76,7 @@ TreeSpecies Cedar
 		Style Mat
 		Size 2.2
 		Aspect 1.0
-		Pad 22 0.6 0.1 0.3 0.05
+		Pad 29 0.6 0.1 0.3 0.05
 		Cross true
 		ClusterLeaves 90
 		ClusterLeafSize 0.035

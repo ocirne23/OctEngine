@@ -78,7 +78,8 @@ TreeSpecies Willow
 		Type Cluster
 		Size 0.5
 		Aspect 0.28
-		PerBranch 12
+		PerBranch 16
+		Keep 0.83 0.6
 		Levels 2
 		Align 0.8
 		ClusterLeaves 12

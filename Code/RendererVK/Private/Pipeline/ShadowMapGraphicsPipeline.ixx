@@ -35,8 +35,14 @@ public:
         Buffer& indexBuffer;
         Buffer& instanceIdxBuffer;     // vertex binding 2 - the instance indices per draw
         Buffer& indirectCommandBuffer; // the IndirectDrawSequence list (the opaque one)
-        Buffer& drawCountBuffer;       // uint32 compacted sequence count (DGC sequenceCountAddress), GPU-written by the cull
+        Buffer& drawCountBuffer;       // the cull's compacted counts: [0] the DGC list (sequenceCountAddress), [1] the voxel casters
         Buffer& preprocessBuffer;      // the DGC scratch: the static mesh pass's opaque one, borrowed (sized for both)
+        Buffer& voxelCommandBuffer;    // the trees' VOXEL casters (plain indexed indirect draws: they write FragDepth)
+        // THE FAR SHADOW CASTERS (TreeVoxelFarPipeline::getShadowDraw): the far ring's trees as billboards, the records
+        // instance-rate, one indexed indirect draw per billboard mesh. Null: none.
+        Buffer* farInstances = nullptr;
+        Buffer* farCommands = nullptr;
+        uint32 farMaxDraws = 0;
     };
 
     void initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures);
@@ -54,10 +60,18 @@ public:
 private:
 
     void buildPipelineLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
+    // The trees' VOXEL casters: the same layout, shadow_depth.vs/.fs with TREE_VOXEL, the faces toward the sun.
+    void buildVoxelLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& voxel);
+    // The far shadow casters: the same shaders with TREE_FAR_SHADOW, the instance from vertex binding 1.
+    void buildFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far);
     void buildIndirectState(uint32 maxUniqueMeshes);
     void queryPreprocessSize(uint32 maxUniqueMeshes);
 
     GraphicsPipeline m_graphicsPipeline;
+    GraphicsPipeline m_voxelPipeline;
+    bool m_voxelBuilt = false;
+    GraphicsPipeline m_farPipeline;
+    bool m_farBuilt = false;
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler; // for the diffuse texture array used by the alpha-mask discard
     vk::RenderPass m_renderPass;

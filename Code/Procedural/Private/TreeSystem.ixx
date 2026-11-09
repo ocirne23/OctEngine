@@ -58,6 +58,10 @@ export namespace Procedural
 			RenderMesh trunkBark[TREE_PIECE_LODS];
 			RenderMesh branchBark[TREE_PIECE_LODS];
 			RenderMesh cards;
+			// Baked TREE variants with "Voxel impostors" (GPU path): the voxel tier - the box the march starts from and its
+			// material (the grid's albedo / normal atlases, owned; LitTreeVoxel). Main pass only, in the billboard's place.
+			RenderMesh voxelBox;
+			RenderMaterial voxelMaterial;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
 			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
 			// Baked variants only: the far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
@@ -127,6 +131,7 @@ export namespace Procedural
 			bool billboards = true;   // Far mode Billboards
 			bool showLibrary = false;
 			uint32 billboardViews = 2;
+			uint32 voxelRes = 0;      // "Voxel impostors": the voxel tier's grid resolution; 0 = off
 		};
 		struct PieceBillboard
 		{
@@ -152,6 +157,8 @@ export namespace Procedural
 			oc::vector<PieceBillboard> pieceBillboards[3]; // modules, trunks, baked variants
 			CachedTexture atlas;                           // the mid tier's card atlas (empty: none)
 			oc::vector<TreeMesh> variantCards;             // per baked variant: its branch-card mesh
+			oc::vector<CachedTexture> voxelTextures;       // per baked variant: the voxel tier's atlases (empty: none)
+			oc::vector<TreeMesh> voxelBoxes;               // ... and its box
 		};
 		struct LoadSlot
 		{
@@ -276,6 +283,7 @@ export namespace Procedural
 		// set chunk, at the chunk size they were sorted with. The sink reads the band settings through the atomics (it
 		// runs on the terrain's walk job). m_vegFallback: every chunk, when no walk lists them.
 		oc::unordered_map<uint64, int32> m_vegChunkOf;
+		oc::vector<uint64> m_prevSetKeys; // last frame's set chunks, sorted (updateWorld: the far voxel trees' exclusion)
 		int m_vegChunkSize = 0;
 		uint32 m_vegNumChunks = 0;
 		bool m_vegHooked = false;

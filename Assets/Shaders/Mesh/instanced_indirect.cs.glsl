@@ -52,6 +52,11 @@ layout (binding = 17, std430) buffer OutTerrainFilmCommandBuffer
 {
     OutIndirectCommand out_terrainFilmCommands[];
 };
+// The trees' VOXEL tier (LitTreeVoxel) writes FragDepth, which no other pipeline of the DGC set does: plain indirect draws.
+layout (binding = 23, std430) buffer OutTreeVoxelCommandBuffer
+{
+    OutIndirectCommand out_treeVoxelCommands[];
+};
 layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
 {
     RenderNodeTransform in_prevRenderNodeTransforms[];
@@ -158,7 +163,20 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         const bool terrainFilm     = isTerrain && terrainOverlayCovers(centerPos, radius);
 
         uint idx;
-        if (isTransparent)
+        if (pipelineIdx == uint16_t(PIPELINE_IDX_LIT_TREE_VOXEL))
+        {
+            // Its own list and its own bucket counter: no other list draws a voxel box mesh.
+            idx = atomicAdd(out_treeVoxelCommands[meshIdx].instanceCount, 1);
+            if (idx == 0)
+            {
+                out_treeVoxelCommands[meshIdx].pipelineIndex = pipelineIdx;
+                out_treeVoxelCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_treeVoxelCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                out_treeVoxelCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                out_treeVoxelCommands[meshIdx].firstInstance = firstInstance;
+            }
+        }
+        else if (isTransparent)
         {
             idx = atomicAdd(out_transparentIndirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)

@@ -38,6 +38,10 @@ export struct TreeSettings
 	int billboardViews = 0;           // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
 	float farDistanceScale = 3.0f;    // x every species' billboard distance; 0 = off
 	float branchCardDistance = 0.3f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
+	// THE VOXEL TIER (GPU path, trees only - not bushes): in the MAIN pass a baked variant's whole-tree billboard is replaced
+	// by its prefiltered voxel grid, marched per pixel (LitTreeVoxel). Shadows, GI and RT keep the billboard. Reloads.
+	bool voxelImpostors = true;
+	int voxelResolution = 2;          // 0 = 32^3, 1 = 64^3, 2 = 128^3 voxels at level 0 (reloads)
 	bool forceFar = false;            // debug: every module as its far representation
 	bool gpuExpansion = true;         // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 };

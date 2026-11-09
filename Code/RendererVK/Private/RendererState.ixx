@@ -50,6 +50,7 @@ import :TreeVolumePipeline;
 import :TreeRecordPool;
 import :GrassPipeline;
 import :ClutterPipeline;
+import :TreeVoxelFarPipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
@@ -526,6 +527,11 @@ protected:
         Buffer volumePieces; // TreeVolumePieceGpu per piece slot (the far-tree volume's bake; host-visible)
         Buffer volumeTypes;  // TreeVolumeTypeGpu per type, + the sentinel
         Buffer volumeData;   // the types' extinction mip chains (floats)
+        // The FAR VOXEL TREES' view of the types (initTreeSetTypes): per type its voxel bucket, material and box; the
+        // buckets (one per distinct voxel mesh) with their draw ranges.
+        oc::vector<TreeVoxelFarPipeline::FarTypeGpu> farTypes;
+        oc::vector<TreeVoxelFarPipeline::BucketGpu> farBuckets;
+        oc::vector<TreeVoxelFarPipeline::BucketGpu> farShadowBuckets; // the far shadow casters' (billboard meshes)
         bool hasVolume = false;
         bool alive = false;
     };
@@ -572,6 +578,15 @@ protected:
     float m_treeRecordChunkSize = 256.0f;
     uint32 m_treeRecordSeed = 1;
     uint32 m_treeRecordSet = UINT32_MAX; // the set whose volume types the record types' variants name
+    // THE FAR VOXEL TREES ("Trees/Voxel far trees"; RendererTrees.cpp): every resident record chunk but the near set's,
+    // expanded on the GPU and drawn as voxel boxes, out to treeVoxelFarEnd.
+    TreeVoxelFarPipeline m_treeVoxelFar;
+    oc::unordered_map<uint64, uint8> m_treeNearChunks; // the world set's own chunks (setTreeNearChunks): never far
+    bool m_treeVoxelFarListed = false;                 // this frame listed chunks (present): the passes run
+    bool m_treeVoxelFarShadowListed = false;           // ... and chunks within the last cascade: the far shadow casters run
+    bool treeVoxelFarActive() const;                   // on, desktop, the record types set, the world set alive
+    float treeVoxelFarEnd() const;                     // m: the far volume's hand-over, or "Voxel far end" without it
+    void updateTreeVoxelFar(uint32 frameIdx);          // present: this slot's chunk list and tables
     FarTreeParams& m_farTreeParams;
     bool farTreesActive() const; // enabled, desktop, and a tree set with volume data
     float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)

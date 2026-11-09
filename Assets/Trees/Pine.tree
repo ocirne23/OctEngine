@@ -68,7 +68,8 @@ TreeSpecies Pine
 		Style Needles
 		Size 1.0
 		Aspect 0.75
-		PerBranch 2
+		PerBranch 3
+		Keep 0.74 0.6
 		Levels 3
 		Cross false
 		Shoots 3

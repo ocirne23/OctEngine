@@ -190,7 +190,7 @@ void main()
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
-	if (treeDistanceFaded(material.flags, pos)) // the crossfades (tree_fade.inc.glsl)
+	if (treeDistanceFaded(material.flags, in_instanceOrigin)) // the crossfades, per tree (tree_fade.inc.glsl)
 		discard;
 
 	// The cards fade out as they turn EDGE-ON: a near-grazing card smears its texture into bright streaks, and the

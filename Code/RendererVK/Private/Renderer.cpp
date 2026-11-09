@@ -181,6 +181,7 @@ void RendererState::initPipelines()
     m_terrainWetnessPipeline.initialize();
     m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch);
     m_clutterPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
+    m_treeVoxelFar.initialize();
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
     m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
@@ -432,6 +433,7 @@ void Renderer::reloadShaders()
     m_terrainWetnessPipeline.reloadShaders();
     m_grassPipeline.reloadShaders();
     m_clutterPipeline.reloadShaders();
+    m_treeVoxelFar.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_cloudPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_treeVolume.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -993,6 +995,7 @@ void Renderer::present()
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadTerrainRayFrame(frameIdx); // this frame's terrain ray table (likewise)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
+    updateTreeVoxelFar(frameIdx); // the far voxel trees' chunk list (this slot's record table, the near set's chunks)
     uploadRiverWaterMap(frameIdx); // the inland water map, when it changed
     uploadRiverMist(frameIdx);     // the river mist sources, when they changed
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);

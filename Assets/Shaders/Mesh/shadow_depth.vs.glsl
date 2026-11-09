@@ -29,14 +29,42 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 layout (binding = 2, std430) readonly buffer InVertices { MeshVertex in_vertices[]; };
 layout (binding = 2, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 
+#ifdef TREE_FAR_SHADOW
+// THE FAR SHADOW CASTERS (ShadowMapGraphicsPipeline's far pipeline): a far ring tree's record (TreeVoxelFarPipeline
+// FAR_SHADOW, tree_voxel_far.cs.glsl) instance-rate - its BILLBOARD, the packed word built here as the shadow cull would.
+layout (location = 5) in vec4 inst_posScale;
+layout (location = 6) in uvec4 inst_data; // the yaw (float bits), the alpha-mask texture | the cascade mask << 16, the trunk-bend scale (float bits), bucket | index
+#else
 layout (location = 4) in uint inst_idx;
+#endif
 
 layout (location = 0) out vec2 out_uv;
 layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragment skips the mask test)
+#ifdef TREE_VOXEL
+// The trees' VOXEL casters (ShadowMapGraphicsPipeline's voxel pipeline, "Trees/Voxel shadows"): the box mesh of the main
+// pass's voxel tier (its normal = the corner's grid coordinate, its tangent = the box size); the alpha index is the grid's
+// albedo atlas. The FS marches along the light from the face the sun sees.
+layout (location = 2) out vec3 out_voxelGrid;
+layout (location = 3) out flat vec3 out_voxelDirG;    // grid units per metre along the light's travel
+layout (location = 4) out flat vec4 out_voxelSizeLod; // xyz = the box in world metres, w = log2(the cascade's texel / the box volume's cube root) + "Voxel shadow LOD bias"
+layout (location = 5) out flat vec2 out_voxelDepth;   // x = depth per metre along the light, y = the coverage that casts
+#endif
 
 void main()
 {
+#ifdef TREE_FAR_SHADOW
+    InMeshInstancesData inst;
+    {
+        const float yaw = uintBitsToFloat(inst_data.x);
+        const float windTrunk = uintBitsToFloat(inst_data.z);
+        inst.posScale = inst_posScale;
+        inst.quat = vec4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)); // about up
+        inst.alphaTexIdxCascadeMask = ((inst_data.y & 0xFFFFu) << 16) | ((inst_data.y >> 16) & 0x7Fu) | 0x00000080u
+                                    | (uint(clamp(round(windTrunk * 32.0), 0.0, 127.0)) << 8) | 0x00008000u;
+    }
+#else
     const InMeshInstancesData inst = in_instances[inst_idx];
+#endif
     const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000007Fu;
     out_uv = vec2(0.0);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
@@ -79,4 +107,18 @@ void main()
     mat4 m = u_cascadeViewProj[gl_ViewIndex];
     m[0][3] = 0.0; m[1][3] = 0.0; m[2][3] = 0.0; m[3][3] = 1.0;
     gl_Position = m * vec4(worldPos, 1.0);
+
+#ifdef TREE_VOXEL
+    {
+        const vec3 boxSize = max(in_vertices[vertexIdx].tangent.xyz, vec3(1e-4));
+        const vec3 worldSize = boxSize * inst.posScale.w;
+        const vec3 travel = -u_sunDirection.xyz; // from the sun into the scene
+        out_voxelGrid = in_vertices[vertexIdx].normalV.xyz;
+        out_voxelDirG = quat_transform(travel, vec4(-inst.quat.xyz, inst.quat.w)) / worldSize;
+        // The cascade's texel in metres: its ortho x row maps world to clip -1..1 over the map's resolution.
+        const float texel = 2.0 * u_shadow_invResolution / max(length(vec3(m[0][0], m[1][0], m[2][0])), 1e-9);
+        out_voxelSizeLod = vec4(worldSize, log2(texel / pow(worldSize.x * worldSize.y * worldSize.z, 1.0 / 3.0)) + u_foliage_voxelShadowLodBias);
+        out_voxelDepth = vec2((m * vec4(travel, 0.0)).z, u_foliage_voxelShadowCoverage);
+    }
+#endif
 }

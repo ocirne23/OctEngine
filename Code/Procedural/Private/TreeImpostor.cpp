@@ -414,6 +414,323 @@ namespace Procedural
 			splat(piece.bark[0], 0.25f * leafCoverage);
 	}
 
+	uint32 treeVoxelLevels(uint32 res)
+	{
+		uint32 levels = 1;
+		while ((res >> levels) >= TREE_VOXEL_MIN_RES)
+			++levels;
+		return levels;
+	}
+
+	TreeBillboardBox treeVoxelBox(const TreePiece& piece, uint32 res)
+	{
+		TreeBillboardBox box = billboardBox(piece);
+		const glm::vec3 pad = (box.max - box.min) / (float)glm::max(res, 3u) * 1.5f;
+		box.min -= pad;
+		box.max += pad;
+		return box;
+	}
+
+	void bakeTreeVoxels(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 res, float albedoScale,
+		TreeVoxelBake& out)
+	{
+		const auto toLinear = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+		const auto toSrgb = [](float c) { c = glm::clamp(c, 0.0f, 1.0f); return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; };
+
+		const TreeBillboardBox box = treeVoxelBox(piece, res);
+		const glm::vec3 voxel = (box.max - box.min) / (float)res;
+		const float crossing = std::cbrt(voxel.x * voxel.y * voxel.z); // the length the stored opacity is for
+		const float minVoxel = glm::min(glm::min(voxel.x, voxel.y), voxel.z);
+		const size_t count = (size_t)res * res * res;
+		const auto index = [res](uint32 x, uint32 y, uint32 z) { return (size_t)x + res * ((size_t)y + res * (size_t)z); };
+
+		// ---- Level 0: the surfaces splatted by PROJECTED area (a two-sided leaf blocks half its area on average, an opaque
+		// bark surface - closed, but far below a voxel thick - also counts half: a quarter, a convex body's mean, left the
+		// trunks see-through) ----
+		// The leaves and the bark apart: both block the ray (the opacity), but in a voxel with leaves the bark is mostly
+		// hidden behind them (colour below).
+		struct Surface
+		{
+			oc::vector<float> area;
+			oc::vector<glm::vec3> colour;
+			oc::vector<glm::vec3> normal;
+		};
+		Surface leafSurface{ oc::vector<float>(count, 0.0f), oc::vector<glm::vec3>(count, glm::vec3(0.0f)), oc::vector<glm::vec3>(count, glm::vec3(0.0f)) };
+		Surface barkSurface{ oc::vector<float>(count, 0.0f), oc::vector<glm::vec3>(count, glm::vec3(0.0f)), oc::vector<glm::vec3>(count, glm::vec3(0.0f)) };
+		// The leaf normals are turned OUT of the crown (a card's two faces are one surface): from the leaves' centre.
+		glm::vec3 leafMin(FLT_MAX), leafMax(-FLT_MAX);
+		for (const glm::vec3& p : piece.leaves[0].positions)
+		{
+			leafMin = glm::min(leafMin, p);
+			leafMax = glm::max(leafMax, p);
+		}
+		const glm::vec3 crownCentre = leafMin.x <= leafMax.x ? (leafMin + leafMax) * 0.5f : (box.min + box.max) * 0.5f;
+		const auto splat = [&](const TreeMesh& mesh, const TreeBakeImage& image, float projected, bool outward, Surface& into)
+		{
+			if (image.size == 0 || mesh.texCoords.size() != mesh.positions.size() || mesh.normals.size() != mesh.positions.size())
+				return;
+			for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+			{
+				const uint32 i0 = mesh.indices[t], i1 = mesh.indices[t + 1], i2 = mesh.indices[t + 2];
+				const glm::vec3 a = mesh.positions[i0], b = mesh.positions[i1], c = mesh.positions[i2];
+				const float triArea = 0.5f * glm::length(glm::cross(b - a, c - a));
+				if (triArea <= 0.0f)
+					continue;
+				// A barycentric grid fine enough that every voxel the triangle crosses gets points (bakeTreeDensity's).
+				const float longest = glm::max(glm::max(glm::length(b - a), glm::length(c - b)), glm::length(a - c));
+				const uint32 n = glm::clamp((uint32)std::ceil(longest / (0.5f * minVoxel)), 1u, 64u);
+				const float share = triArea * projected / (float)(n * (n + 1) / 2);
+				const glm::vec2 ta = glm::vec2(mesh.texCoords[i0]), tb = glm::vec2(mesh.texCoords[i1]), tc = glm::vec2(mesh.texCoords[i2]);
+				const glm::vec3 na = mesh.normals[i0], nb = mesh.normals[i1], nc = mesh.normals[i2];
+				for (uint32 i = 0; i < n; ++i)
+					for (uint32 j = 0; i + j < n; ++j)
+					{
+						const float u = ((float)i + 1.0f / 3.0f) / (float)n, v = ((float)j + 1.0f / 3.0f) / (float)n;
+						float alpha = 1.0f;
+						const glm::vec3 rgb = sampleWrap(image, ta + (tb - ta) * u + (tc - ta) * v, alpha);
+						if (alpha <= 0.0f)
+							continue;
+						const glm::vec3 p = a + (b - a) * u + (c - a) * v;
+						glm::vec3 nrm = na + (nb - na) * u + (nc - na) * v;
+						const float nLen = glm::length(nrm);
+						nrm = nLen > 1e-6f ? nrm / nLen : glm::vec3(0.0f, 1.0f, 0.0f);
+						if (outward && glm::dot(nrm, p - crownCentre) < 0.0f)
+							nrm = -nrm;
+						const glm::ivec3 cell = glm::clamp(glm::ivec3(glm::floor((p - box.min) / voxel)), glm::ivec3(0), glm::ivec3((int)res - 1));
+						const size_t idx = index((uint32)cell.x, (uint32)cell.y, (uint32)cell.z);
+						const float w = share * alpha;
+						into.area[idx] += w;
+						into.colour[idx] += glm::vec3(toLinear(rgb.x), toLinear(rgb.y), toLinear(rgb.z)) * w;
+						into.normal[idx] += nrm * w;
+					}
+			}
+		};
+		splat(piece.leaves[0], leaves, 0.5f, true, leafSurface);
+		splat(piece.bark[0], bark, 0.5f, false, barkSurface);
+
+		// Opacity over one crossing: tau = sigma x crossing = (projected area / volume) x crossing - leaves and bark alike.
+		// The COLOUR and the NORMAL weight the bark by how much of it the voxel's own leaves leave visible, exp(-their tau):
+		// the branches inside a crown add cover but little colour (by area alone they greyed the crown, where the billboard
+		// bake's depth test hides them). A voxel of bark only (the trunk under the crown) keeps the bark. Then x `Billboard
+		// AlbedoScale`, as the whole-tree billboards.
+		oc::vector<glm::vec3> colour(count, glm::vec3(0.0f)), normal(count, glm::vec3(0.0f));
+		oc::vector<float> opacity(count, 0.0f), tau(count, 0.0f), interior(count, 0.0f);
+		glm::vec3 meanColour(0.0f);
+		float meanWeight = 0.0f;
+		oc::vector<uint8> filled(count, 0);
+		const float invCross2 = 1.0f / (crossing * crossing);
+		for (size_t i = 0; i < count; ++i)
+		{
+			const float leafArea = leafSurface.area[i], barkArea = barkSurface.area[i];
+			if (leafArea + barkArea <= 0.0f)
+				continue;
+			tau[i] = (leafArea + barkArea) * invCross2;
+			opacity[i] = 1.0f - std::exp(-tau[i]);
+			const float barkSeen = std::exp(-leafArea * invCross2);
+			const float weight = leafArea + barkArea * barkSeen;
+			const glm::vec3 c = leafSurface.colour[i] + barkSurface.colour[i] * barkSeen;
+			meanColour += c;
+			meanWeight += weight;
+			colour[i] = c / weight * albedoScale;
+			normal[i] = (leafSurface.normal[i] + barkSurface.normal[i] * barkSeen) / weight; // the MEAN normal: shorter where the leaves face every way
+			filled[i] = 1;
+		}
+		meanColour = meanWeight > 0.0f ? meanColour / meanWeight * albedoScale : glm::vec3(0.05f, 0.1f, 0.03f);
+		leafSurface = {};
+		barkSurface = {};
+
+		// The colour and the normal DILATED into the empty voxels next to the crown: the filter blends a surface voxel with
+		// its empty neighbours, which would pull its colour toward black. Two rings, then the mean colour.
+		for (uint32 pass = 0; pass < 2; ++pass)
+		{
+			oc::vector<uint8> next = filled;
+			for (uint32 z = 0; z < res; ++z)
+				for (uint32 y = 0; y < res; ++y)
+					for (uint32 x = 0; x < res; ++x)
+					{
+						const size_t idx = index(x, y, z);
+						if (filled[idx])
+							continue;
+						glm::vec3 c(0.0f), nrm(0.0f);
+						uint32 k = 0;
+						const int dx[6] = { 1, -1, 0, 0, 0, 0 }, dy[6] = { 0, 0, 1, -1, 0, 0 }, dz[6] = { 0, 0, 0, 0, 1, -1 };
+						for (int d = 0; d < 6; ++d)
+						{
+							const int nx = (int)x + dx[d], ny = (int)y + dy[d], nz = (int)z + dz[d];
+							if (nx < 0 || ny < 0 || nz < 0 || nx >= (int)res || ny >= (int)res || nz >= (int)res)
+								continue;
+							const size_t nIdx = index((uint32)nx, (uint32)ny, (uint32)nz);
+							if (!filled[nIdx])
+								continue;
+							c += colour[nIdx];
+							nrm += normal[nIdx];
+							++k;
+						}
+						if (k == 0)
+							continue;
+						colour[idx] = c / (float)k;
+						normal[idx] = nrm / (float)k;
+						next[idx] = 1;
+					}
+			filled = oc::move(next);
+		}
+		for (size_t i = 0; i < count; ++i)
+			if (!filled[i])
+				colour[i] = meanColour;
+
+		// THE INTERIOR: the smallest optical depth from the voxel out of the box along the six axis directions (half its
+		// own), normalized by the largest over the tree's visible voxels - 0 on the crown's surface, 1 at its core.
+		{
+			oc::vector<float> best(count, FLT_MAX);
+			for (uint32 axis = 0; axis < 3; ++axis)
+			{
+				const float scale = voxel[(int)axis] / crossing; // tau per crossing -> per voxel length along this axis
+				for (uint32 b = 0; b < res; ++b)
+					for (uint32 a = 0; a < res; ++a)
+					{
+						const auto at = [&](uint32 s)
+						{
+							return axis == 0 ? index(s, a, b) : axis == 1 ? index(a, s, b) : index(a, b, s);
+						};
+						float sum = 0.0f;
+						for (uint32 s = 0; s < res; ++s) // from the low side
+						{
+							const size_t idx = at(s);
+							const float own = tau[idx] * scale;
+							best[idx] = glm::min(best[idx], sum + 0.5f * own);
+							sum += own;
+						}
+						sum = 0.0f;
+						for (uint32 s = res; s-- > 0; ) // from the high side
+						{
+							const size_t idx = at(s);
+							const float own = tau[idx] * scale;
+							best[idx] = glm::min(best[idx], sum + 0.5f * own);
+							sum += own;
+						}
+					}
+			}
+			float core = 0.0f;
+			for (size_t i = 0; i < count; ++i)
+				if (opacity[i] > 0.02f)
+					core = glm::max(core, best[i]);
+			const float invCore = core > 0.0f ? 1.0f / core : 0.0f;
+			for (size_t i = 0; i < count; ++i)
+				interior[i] = glm::clamp(best[i] * invCore, 0.0f, 1.0f);
+		}
+
+		// ---- The levels and their atlases ----
+		const uint32 levels = treeVoxelLevels(res);
+		const uint32 tilesX = res / TREE_VOXEL_TILES_Y;
+		out.width = tilesX * res;
+		out.height = TREE_VOXEL_TILES_Y * res;
+		out.albedo.assign(levels, {});
+		out.normal.assign(levels, {});
+		uint32 n = res;
+		for (uint32 level = 0; level < levels; ++level)
+		{
+			if (level > 0)
+			{
+				// Halve: the coverage from the transmission through the children along each axis, the rest weighted by opacity.
+				const uint32 m = n / 2;
+				const auto childIdx = [n](uint32 x, uint32 y, uint32 z) { return (size_t)x + n * ((size_t)y + n * (size_t)z); };
+				const size_t coarse = (size_t)m * m * m;
+				oc::vector<float> cOpacity(coarse), cInterior(coarse);
+				oc::vector<glm::vec3> cColour(coarse), cNormal(coarse);
+				for (uint32 z = 0; z < m; ++z)
+					for (uint32 y = 0; y < m; ++y)
+						for (uint32 x = 0; x < m; ++x)
+						{
+							float t[2][2][2];
+							float weight = 0.0f, inter = 0.0f;
+							glm::vec3 c(0.0f), nrm(0.0f);
+							for (uint32 k = 0; k < 8; ++k)
+							{
+								const uint32 ox = k & 1u, oy = (k >> 1) & 1u, oz = k >> 2;
+								const size_t idx = childIdx(2 * x + ox, 2 * y + oy, 2 * z + oz);
+								t[ox][oy][oz] = 1.0f - opacity[idx];
+								const float w = opacity[idx] + 1e-3f;
+								weight += w;
+								c += colour[idx] * w;
+								nrm += normal[idx] * w;
+								inter += interior[idx] * w;
+							}
+							float transmit = 0.0f;
+							for (uint32 i = 0; i < 2; ++i)
+								for (uint32 j = 0; j < 2; ++j)
+									transmit += t[0][i][j] * t[1][i][j] + t[i][0][j] * t[i][1][j] + t[i][j][0] * t[i][j][1];
+							const size_t cIdx = (size_t)x + m * ((size_t)y + m * (size_t)z);
+							cOpacity[cIdx] = 1.0f - transmit / 12.0f;
+							cColour[cIdx] = c / weight;
+							cNormal[cIdx] = nrm / weight;
+							cInterior[cIdx] = inter / weight;
+						}
+				opacity = oc::move(cOpacity);
+				colour = oc::move(cColour);
+				normal = oc::move(cNormal);
+				interior = oc::move(cInterior);
+				n = m;
+			}
+			const uint32 w = out.width >> level, h = out.height >> level;
+			oc::vector<uint8>& albedoImage = out.albedo[level];
+			oc::vector<uint8>& normalImage = out.normal[level];
+			albedoImage.assign((size_t)w * h * 4, 0);
+			normalImage.assign((size_t)w * h * 4, 0);
+			for (size_t p = 0; p < (size_t)w * h; ++p)
+			{
+				normalImage[p * 4 + 0] = normalImage[p * 4 + 1] = normalImage[p * 4 + 2] = 128;
+			}
+			for (uint32 z = 0; z < n; ++z)
+			{
+				const uint32 tx = z % tilesX, ty = z / tilesX;
+				for (uint32 y = 0; y < n; ++y)
+					for (uint32 x = 0; x < n; ++x)
+					{
+						const size_t idx = (size_t)x + n * ((size_t)y + n * (size_t)z);
+						const size_t p = ((size_t)(ty * n + y) * w + (tx * n + x)) * 4;
+						albedoImage[p + 0] = toByte(toSrgb(colour[idx].x));
+						albedoImage[p + 1] = toByte(toSrgb(colour[idx].y));
+						albedoImage[p + 2] = toByte(toSrgb(colour[idx].z));
+						albedoImage[p + 3] = toByte(opacity[idx]);
+						const glm::vec3 nrm = glm::clamp(normal[idx], glm::vec3(-1.0f), glm::vec3(1.0f));
+						normalImage[p + 0] = toByte(nrm.x * 0.5f + 0.5f);
+						normalImage[p + 1] = toByte(nrm.y * 0.5f + 0.5f);
+						normalImage[p + 2] = toByte(nrm.z * 0.5f + 0.5f);
+						normalImage[p + 3] = toByte(interior[idx]);
+					}
+			}
+		}
+	}
+
+	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out)
+	{
+		out = {};
+		const glm::vec3 size = box.max - box.min;
+		for (uint32 k = 0; k < 8; ++k)
+		{
+			const glm::vec3 grid((float)(k & 1u), (float)((k >> 1) & 1u), (float)(k >> 2));
+			out.positions.push_back(box.min + grid * size);
+			out.normals.push_back(grid);
+			out.tangents.push_back(size);
+			out.bitangents.push_back(glm::vec3(0.0f, 0.0f, 1.0f));
+			out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_CARD_STRIP_CODE + 0.5f));
+			out.bones.push_back(0);
+		}
+		// Corner k = x | y << 1 | z << 2. Counter-clockwise seen from outside (the engine's front faces).
+		const uint32 faces[6][4] = {
+			{ 0, 4, 6, 2 }, // -X
+			{ 1, 3, 7, 5 }, // +X
+			{ 0, 1, 5, 4 }, // -Y
+			{ 2, 6, 7, 3 }, // +Y
+			{ 0, 2, 3, 1 }, // -Z
+			{ 4, 5, 7, 6 }, // +Z
+		};
+		for (const auto& f : faces)
+		{
+			out.indices.insert(out.indices.end(), { f[0], f[1], f[2], f[0], f[2], f[3] });
+		}
+	}
+
 	TreeBillboardBox billboardBox(const TreePiece& piece)
 	{
 		glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);

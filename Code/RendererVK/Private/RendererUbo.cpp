@@ -1711,6 +1711,23 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
         list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
         list.add("foliage_billboardShadowShift", f.billboardShadowShift);
+        list.add("foliage_voxelLodBias", f.voxelLodBias);
+        list.add("foliage_voxelSelfShadow", [&] { return glm::max(f.voxelSelfShadow, 0.0f); }, f.voxelSelfShadow);
+        list.add("foliage_voxelNormalHull", [&] { return glm::clamp(f.voxelNormalHull, 0.0f, 1.0f); }, f.voxelNormalHull);
+        list.add("foliage_voxelSaturation", [&] { return glm::max(f.voxelSaturation, 0.0f); }, f.voxelSaturation);
+        list.add("foliage_voxelBrightness", [&] { return glm::max(f.voxelBrightness, 0.0f); }, f.voxelBrightness);
+        list.add("foliage_voxelTransmission", [&] { return glm::max(f.voxelTransmission, 0.0f); }, f.voxelTransmission);
+        list.add("foliage_voxelTransmissionGlow", [&] { return glm::max(f.voxelTransmissionGlow, 0.0f); }, f.voxelTransmissionGlow);
+        list.add("foliage_voxelTransmissionFocus", [&] { return glm::max(f.voxelTransmissionFocus, 0.05f); }, f.voxelTransmissionFocus);
+        list.add("foliage_voxelTransmissionSelfShadow", [&] { return glm::clamp(f.voxelTransmissionSelfShadow, 0.0f, 1.0f); }, f.voxelTransmissionSelfShadow);
+        list.add("foliage_voxelTransmissionSpread", [&] { return glm::clamp(f.voxelTransmissionSpread, 0.0f, 1.0f); }, f.voxelTransmissionSpread);
+        // The scene sampler's mip bias (DLSS): Vulkan adds it to textureLod's level, and the voxel atlases' levels must
+        // be read whole (each level has its own slice layout) - the voxel FS takes it back off.
+        list.add("foliage_voxelSamplerBias", [this] { return m_staticMeshGraphicsPipeline.getMipLodBias(); }, UboLive);
+        // The trees' shadow casters: the voxel grids (the shadow cull's routing, tree_cull.inc.glsl) - live, a cull branch.
+        list.add("foliage_voxelShadows", [&] { return f.voxelShadows ? 1.0f : 0.0f; }, UboLive);
+        list.add("foliage_voxelShadowCoverage", [&] { return glm::clamp(f.voxelShadowCoverage, 0.05f, 0.99f); }, f.voxelShadowCoverage);
+        list.add("foliage_voxelShadowLodBias", f.voxelShadowLodBias);
         list.add("foliage_windBend", [&] { return glm::max(f.windBend, 0.0f); }, f.windBend);
         list.add("foliage_windInvRefHeight", [&] { return 1.0f / glm::max(f.windRefHeight, 0.1f); }, f.windRefHeight);
         list.add("foliage_windSway", [&] { return glm::max(f.windSway, 0.0f); }, f.windSway);

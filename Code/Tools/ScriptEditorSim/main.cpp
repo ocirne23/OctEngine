@@ -108,7 +108,8 @@ namespace
 		const int maxX = oc::min(static_cast<int>(std::ceil(oc::max(oc::max(a.pos.x, b.pos.x), c.pos.x))), oc::min(width, static_cast<int>(clip.z)));
 		const int maxY = oc::min(static_cast<int>(std::ceil(oc::max(oc::max(a.pos.y, b.pos.y), c.pos.y))), oc::min(height, static_cast<int>(clip.w)));
 		// ImGui gives every primitive this editor draws one colour on all of its vertices.
-		const float colR = ((a.col >> 0) & 0xFF), colG = ((a.col >> 8) & 0xFF), colB = ((a.col >> 16) & 0xFF), colA = ((a.col >> 24) & 0xFF) / 255.0f;
+		const float colR = static_cast<float>((a.col >> 0) & 0xFF), colG = static_cast<float>((a.col >> 8) & 0xFF),
+			colB = static_cast<float>((a.col >> 16) & 0xFF), colA = static_cast<float>((a.col >> 24) & 0xFF) / 255.0f;
 		for (int y = minY; y < maxY; ++y)
 			for (int x = minX; x < maxX; ++x)
 			{

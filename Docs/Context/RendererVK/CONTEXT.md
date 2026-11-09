@@ -176,11 +176,13 @@ Desktop, as recorded by `recordCommandBuffers` (`recordPrimaryPreScene` + `recor
 ```
 GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests)
-    → Shadow cull → Shadow draw            (both skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see Scene.md)
+    → Far tree shadows                     (the far ring's trees as billboard casters - cull, prefix, scatter; off: emptied; Scene.md)
+    → Shadow cull → Shadow draw            (all three skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see Scene.md)
     → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Terrain wetness                      (tick frames only)
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
+    → Far voxel trees                      (desktop: the far record chunks' trees as voxel boxes - cull, prefix, scatter; off: emptied; Scene.md)
     → Grass near shadow                    (desktop, its own 2048 map; after the grass and clutter culls)
     → Cloud shadow                         (the cloud shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
@@ -373,7 +375,7 @@ Each feature's details are in its topic file (see [The documentation files](#the
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, `Allocator.ixx` (`GpuAllocator`), **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, Taa, Dlss (its motion vectors), MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, Grass, Clutter, TreeVolume (the far-tree volume), RainOcclusion, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, Taa, Dlss (its motion vectors), MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, Grass, Clutter, TreeVolume (the far-tree volume), TreeVoxelFar (the far voxel trees), RainOcclusion, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional), TreeRecordPool (see [Scene.md](Scene.md)). Plus the registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
 | | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed drops their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |

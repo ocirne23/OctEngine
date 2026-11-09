@@ -11,14 +11,14 @@ ShadowCullComputePipeline::~ShadowCullComputePipeline() {}
 void ShadowCullComputePipeline::initialize()
 {
     for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.drawCountBuffer.initialize(sizeof(uint32),
+        perFrame.drawCountBuffer.initialize(2 * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullDrawCount");
 
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
     m_computePipeline.initialize(computePipelineLayout);
-    m_compact.initialize(1);
+    m_compact.initialize(2);
 }
 
 void ShadowCullComputePipeline::reloadShaders()
@@ -36,7 +36,7 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
-    for (uint32 i = 0; i <= 15; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14/15 the baked tree pieces / types / list
+    for (uint32 i = 0; i <= 16; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14/15 the baked tree pieces / types / list; 16 the voxel casters
     {
         b.push_back(vk::DescriptorSetLayoutBinding{
             .binding = i,
@@ -51,7 +51,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 16> updates{
+    oc::array<DescriptorSetUpdateInfo, 17> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
@@ -84,6 +84,8 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treeTypesBuffer.getBuffer(), .range = params.treeTypesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 15, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treeListBuffer.getBuffer(), .range = params.treeListBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 16, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outVoxelCommandBuffer.getBuffer(), .range = params.outVoxelCommandBuffer.getSize() } } },
     };
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
@@ -94,6 +96,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 
     // Full-capacity clear so the recorded size never depends on the live mesh count (see IndirectCull).
     vkCommandBuffer.fillBuffer(params.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // clear per-mesh instance counts
+    vkCommandBuffer.fillBuffer(params.outVoxelCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
     {
         vk::MemoryBarrier2 memoryBarrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -106,7 +109,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 
     vkCommandBuffer.dispatchIndirect(params.dispatchIndirectBuffer.getBuffer(), 0);
 
-    Buffer* const lists[] = { &params.outIndirectCommandBuffer };
+    Buffer* const lists[] = { &params.outIndirectCommandBuffer, &params.outVoxelCommandBuffer };
     m_compact.record(vkCommandBuffer, params.meshCountBuffer, lists, frameData.drawCountBuffer);
 
     {

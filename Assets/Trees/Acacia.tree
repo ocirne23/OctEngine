@@ -74,7 +74,8 @@ TreeSpecies Acacia
 		Style Pinnate
 		Size 0.9
 		Aspect 0.85
-		PerBranch 3
+		PerBranch 4
+		Keep 0.83 0.6
 		Levels 2
 		Shoots 1
 		ClusterLeaves 4

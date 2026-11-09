@@ -11,7 +11,7 @@ import :ComputePipeline;
 export class DrawCompactPipeline final
 {
 public:
-    static constexpr uint32 MAX_LISTS = 4;
+    static constexpr uint32 MAX_LISTS = 5;
 
     void initialize(uint32 numLists);
     void reloadShaders();

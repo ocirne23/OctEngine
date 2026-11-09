@@ -85,4 +85,39 @@ export namespace Procedural
 	// blades), its bark: a quarter of its surface (a convex body's mean projected area). Each spread over its voxels per
 	// unit volume.
 	void bakeTreeDensity(const TreePiece& piece, uint32 res, float leafCoverage, oc::vector<float>& out, TreeBillboardBox& outBox);
+
+	// ---- The VOXEL tier (RendererVK LitTreeVoxel, instanced_indirect_tree_voxel.fs.glsl) ----
+	// A baked variant as a PREFILTERED voxel grid of res^3 voxels at level 0 over treeVoxelBox, with levels halving down to
+	// TREE_VOXEL_MIN_RES. Every level is a 2D ATLAS of its z slices: slice z is tile (z % tilesX, z / tilesX) of a grid of
+	// tilesX = res / TREE_VOXEL_TILES_Y by TREE_VOXEL_TILES_Y tiles, each n x n texels at a level of n voxels (x along u,
+	// y along v); a level's image is level 0's halved, so a tile keeps its uv rect at every level. The FS reads the grid's
+	// res from the texture's width (res^2 / TREE_VOXEL_TILES_Y) - keep the layout in step with it.
+	//   albedo: RGB = the voxel's mean surface colour (sRGB), A = its OPACITY: the share of a ray it stops over one voxel
+	//           crossing (the cube root of its volume) at that level
+	//   normal: RGB = the mean leaf normal (outward from the crown) x 0.5 + 0.5 - its length is how much the leaves agree,
+	//           A = the INTERIOR (0 = the crown's surface .. 1 = its core), as the billboards' normal map's A
+	// Coarser levels keep the coverage: a coarse voxel's opacity is 1 - the mean transmission through its children along
+	// the three axes, not the mean opacity (which made dense clumps too thin far away).
+	constexpr uint32 TREE_VOXEL_TILES_Y = 8;
+	constexpr uint32 TREE_VOXEL_MIN_RES = 4;      // the last level: a slice is then one BC block
+	constexpr uint32 TREE_VOXEL_BAKE_VERSION = 2; // bump when the voxel bake changes (its .tex re-bakes)
+	struct TreeVoxelBake
+	{
+		uint32 width = 0;  // level 0's atlas
+		uint32 height = 0;
+		oc::vector<oc::vector<uint8>> albedo; // RGBA8 per level
+		oc::vector<oc::vector<uint8>> normal; // RGBA8 per level
+	};
+	uint32 treeVoxelLevels(uint32 res); // res down to TREE_VOXEL_MIN_RES
+	// The grid's box: the billboard box with a voxel of margin on every side (the trilinear filter never cuts the crown).
+	TreeBillboardBox treeVoxelBox(const TreePiece& piece, uint32 res);
+	// From the LOD-0 leaves (their texture's alpha and colour) and bark (its texture's colour), both sampled per point. The
+	// bark's COLOUR is weighted by how much the voxel's own leaves leave of it (exp(-their optical depth)); its cover
+	// counts in full. `albedoScale` x the linear colour (`Billboard AlbedoScale`, as the whole-tree billboards).
+	void bakeTreeVoxels(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 res, float albedoScale,
+		TreeVoxelBake& out);
+	// The box the FS marches from (its front faces): per corner the position, normal = its GRID coordinate (0 / 1 per
+	// axis), tangent = the box size (the VS rebuilds the box from both), texCoords.z = TREE_CARD_STRIP_CODE + 0.5 (the
+	// trunk bend of tree_wind.inc.glsl, as the billboards).
+	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out);
 }

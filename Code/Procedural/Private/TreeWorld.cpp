@@ -413,9 +413,13 @@ namespace Procedural
 			m_configDirty = true;
 		}
 		const float chunkSize = (float)Globals::terrain.chunkSize();
-		// THE RING: the terrain's, but no farther than the far-tree volume draws ("Trees/Far end", + a chunk: the ring is
-		// counted from the camera's chunk) - a record past it serves nothing - and at least one past the keep radius.
-		const int drawnR = (int)std::ceil(glm::max(Globals::settings.farTree.endDistance, 0.0f) / chunkSize) + 1;
+		// THE RING: the terrain's, but no farther than the records are drawn - the far-tree volume ("Trees/Far end") while it
+		// is on, the far voxel trees ("Trees/Voxel far end (m)") while they are on (+ a chunk: the ring is counted from the
+		// camera's chunk) - a record past it serves nothing - and at least one past the keep radius.
+		const FarTreeParams& farTree = Globals::settings.farTree;
+		const FoliageParams& foliage = Globals::settings.foliage;
+		const float drawnEnd = glm::max(farTree.enabled ? farTree.endDistance : 0.0f, foliage.voxelFarTrees ? foliage.voxelFarEnd : 0.0f);
+		const int drawnR = (int)std::ceil(glm::max(drawnEnd, 0.0f) / chunkSize) + 1;
 		const int ringR = glm::min(Globals::terrain.ringRadius(), glm::max(drawnR, glm::max(m_settings.keepRadius, m_minKeepRadius) + 1));
 		glm::vec2 boundsMin, boundsMax;
 		const bool bounded = Globals::terrain.generatedBounds(boundsMin, boundsMax);

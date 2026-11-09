@@ -37,6 +37,9 @@ public:
         // only and gives way with the leaves to the CARD mesh (cardsIn: fades in over the mid band; cardsOut: out over the far band); `trunk` stands through
         // both, fading out only in the far band (trunkFade). Needs a billboard, the card mesh and the trunk.
         Rep trunk, trunkFade, cardsIn, cardsOut;
+        // The VOXEL tier (LitTreeVoxel; none = mesh nullptr): in the MAIN pass it draws wherever the billboard would, on a
+        // material with the billboard's fade-in band. Shadows, GI and RT keep the billboard. Needs a billboard.
+        Rep voxel;
         float midDistance = 0.0f;
         float midFadeWidth = 1.0f;
         // Beyond this distance (m) from the shadow cascades' centre it casts no sun shadow (small plants: a texel or less in the far cascades). 0 = no limit.

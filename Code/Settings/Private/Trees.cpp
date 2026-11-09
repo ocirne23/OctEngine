@@ -39,6 +39,10 @@ void Settings::registerTrees(TreeSettings& s)
 	// The MID tier: from this fraction of each species' billboard distance the leaves mesh gives way to one billboard
 	// card per branch module (the bark mesh stays). 0 = off.
 	Tweak::floatVar("Trees", "Branch card distance", &s.branchCardDistance, 0.0f, 1.0f, 0.01f, respawn);
+	// The VOXEL tier: the whole-tree billboard's place in the main pass taken by the variant's marched voxel grid.
+	Tweak::boolean("Trees", "Voxel impostors", &s.voxelImpostors, reload);
+	static constexpr oc::string_view VOXEL_RESOLUTIONS[] = { "32", "64", "128" };
+	Tweak::enumVar("Trees", "Voxel resolution", &s.voxelResolution, VOXEL_RESOLUTIONS, reload);
 	Tweak::boolean("Trees", "Force far", &s.forceFar);
 	Tweak::boolean("Trees", "GPU expansion", &s.gpuExpansion, respawn);
 }

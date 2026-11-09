@@ -73,12 +73,12 @@ TreeSpecies Oak
 		Type Cluster
 		Size 0.8
 		Aspect 0.8
-		PerBranch 6
+		PerBranch 8
 		Levels 2
 		ClusterLeaves 10
 		ClusterLeafSize 0.27
 		NormalBend 0.0
-		Keep 0.95 0.75
+		Keep 0.93 0.75
 	Bark
 		Plates 22 5
 		Crack 0.06

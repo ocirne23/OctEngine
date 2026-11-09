@@ -81,9 +81,10 @@ calls `reloadShaders()`.
 * **Terrain register savers:** `ClimatePick` (terrain_splat.inc.glsl) packs its three indices into one uint (8 bits
   each), and `pickClimate` keeps its running weights in HALF. **`terrainFbm` is `[[dont_unroll]]`** (its includers
   enable GL_EXT_control_flow_attributes): unrolled, the 12 corner hashes overlapped and cost the TES ~20 registers.
-* **Only `EPipelineIndex::LitMasked` / `LitTree` / `LitFoliage` discard** among the static-mesh variants that write
-  depth (the lit fragment compiled with `ALPHA_MASK`, instanced_indirect_tree.fs.glsl and
-  instanced_indirect_foliage.fs.glsl; the clutter's textured flowers have their own pipeline for the same reason). A
+* **Only `EPipelineIndex::LitMasked` / `LitTree` / `LitFoliage` / `LitTreeVoxel` discard** among the static-mesh variants
+  that write depth (the lit fragment compiled with `ALPHA_MASK`, instanced_indirect_tree.fs.glsl,
+  instanced_indirect_foliage.fs.glsl and instanced_indirect_tree_voxel.fs.glsl - the last also writes `gl_FragDepth`; the
+  clutter's textured flowers have their own pipeline for the same reason). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is every opaque
   pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque` (after the `.oc` overrides) to
   `LitMasked`. Keep `discard` out of `LitOpaque`.

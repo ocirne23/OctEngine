@@ -3,6 +3,7 @@ module RendererVK;
 import Core;
 import Core.glm;
 import Core.Transform;
+import Core.Sphere;
 
 import :Renderer;
 import :Device;
@@ -44,6 +45,7 @@ namespace
         TreeCullRecordGpu trunkFade;
         TreeCullRecordGpu cardsIn;    // ... and the merged branch-card mesh
         TreeCullRecordGpu cardsOut;
+        TreeCullRecordGpu voxel;      // the voxel tier: the billboard's place in the main pass (absent = the billboard)
         float farDistance = 0.0f; // billboard switch distance (m); x the frame's distance scale
         float fadeWidth = 1.0f;   // crossfade band (m), centred on it
         float midDistance = 0.0f; // the mid tier from here (m; x the scale); 0 = none
@@ -51,7 +53,7 @@ namespace
         float shadowDistance = 0.0f; // no sun shadow beyond this from the cascades' centre (m); 0 = no limit
         uint32 wind = 0;             // x the trunk bend | x the branch sway << 16, each 4.12 fixed point (tree_wind.inc.glsl)
     };
-    static_assert(sizeof(TreeCullTypeGpu) == 96);
+    static_assert(sizeof(TreeCullTypeGpu) == 104);
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -299,7 +301,10 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         TreeCullTypeGpu& gpu = gpuTypes[t];
         gpu = TreeCullTypeGpu{ record(type.bark), record(type.barkFade), record(type.leaves), record(type.leavesFade),
             record(type.billboard), record(type.trunk), record(type.trunkFade), record(type.cardsIn), record(type.cardsOut),
-            type.farDistance, type.fadeWidth };
+            record(type.voxel), type.farDistance, type.fadeWidth };
+        // The voxel tier stands in for a billboard only.
+        if (gpu.billboard.meshMaterial == TREE_RECORD_ABSENT)
+            gpu.voxel = TreeCullRecordGpu{};
         // The mid tier only with its card mesh, its trunk and a billboard to hand over to (tree_cull.inc.glsl).
         const bool mid = type.midDistance > 0.0f && gpu.cardsIn.meshMaterial != TREE_RECORD_ABSENT
             && gpu.trunk.meshMaterial != TREE_RECORD_ABSENT && gpu.billboard.meshMaterial != TREE_RECORD_ABSENT;
@@ -332,11 +337,67 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         mesh(type.bark, type.barkFade);
         mesh(type.leaves, type.leavesFade);
         mesh(type.billboard, type.billboard);
+        if (gpuTypes[t].voxel.meshMaterial != TREE_RECORD_ABSENT)
+            mesh(type.voxel, type.voxel);
         if (gpuTypes[t].midDistance > 0.0f)
         {
             mesh(type.trunk, type.trunkFade);
             mesh(type.cardsIn, type.cardsOut);
         }
+    }
+
+    // THE FAR VOXEL TREES' view: per type its voxel bucket (one per distinct voxel mesh), material, trunk-bend scale and
+    // box (centre height, half diagonal at scale 1); the buckets' draw ranges from the meshes' level 0.
+    // resize, not assign(n, {}): that left `bucket` 0 (not the member default, "none") on every type without a voxel tier,
+    // and the bushes and rocks drew as bucket 0's box with material 0.
+    set.farTypes.clear();
+    set.farTypes.resize(types.size());
+    set.farBuckets.clear();
+    set.farShadowBuckets.clear();
+    for (size_t t = 0; t < types.size(); ++t)
+    {
+        const TreeInstanceRep& voxel = types[t].voxel;
+        if (gpuTypes[t].voxel.meshMaterial == TREE_RECORD_ABSENT || !voxel.mesh)
+            continue;
+        const uint16 meshIdx = voxel.mesh->m_meshIdx;
+        uint32 bucket = UINT32_MAX;
+        for (uint32 b = 0; b < (uint32)set.farBuckets.size(); ++b)
+            if (set.farBuckets[b].pad == meshIdx)
+                bucket = b;
+        if (bucket == UINT32_MAX)
+        {
+            if (set.farBuckets.size() >= TreeVoxelFarPipeline::MAX_BUCKETS)
+                continue;
+            const RendererVKLayout::MeshInfo& info = m_meshInfos.items()[meshIdx];
+            bucket = (uint32)set.farBuckets.size();
+            set.farBuckets.push_back({ info.indexCount, info.firstIndex, info.vertexOffset, meshIdx }); // pad: the mesh (the dedupe)
+        }
+        TreeVoxelFarPipeline::FarTypeGpu& far = set.farTypes[t];
+        far.bucket = bucket;
+        far.materialMesh = gpuTypes[t].voxel.meshMaterial;
+        far.wind = types[t].windTrunk;
+        far.centreY = voxel.mesh->getBounds().pos.y;
+        far.radius = voxel.mesh->getBounds().radius;
+
+        // THE FAR SHADOW CASTERS: the same trees as their BILLBOARD (its own buckets) with its alpha mask.
+        const TreeInstanceRep& billboard = types[t].billboard;
+        if (!billboard.mesh || !billboard.mesh->isValid())
+            continue;
+        const uint16 billboardIdx = billboard.mesh->m_meshIdx;
+        uint32 shadowBucket = UINT32_MAX;
+        for (uint32 b = 0; b < (uint32)set.farShadowBuckets.size(); ++b)
+            if (set.farShadowBuckets[b].pad == billboardIdx)
+                shadowBucket = b;
+        if (shadowBucket == UINT32_MAX)
+        {
+            if (set.farShadowBuckets.size() >= TreeVoxelFarPipeline::MAX_BUCKETS)
+                continue;
+            const RendererVKLayout::MeshInfo& info = m_meshInfos.items()[billboardIdx];
+            shadowBucket = (uint32)set.farShadowBuckets.size();
+            set.farShadowBuckets.push_back({ info.indexCount, info.firstIndex, info.vertexOffset, billboardIdx });
+        }
+        far.shadowBucket = shadowBucket;
+        far.shadowTex = m_materials.items()[billboard.material].diffuseTexIdx;
     }
 
     set.types.initialize(oc::max<size_t>(gpuTypes.size() * sizeof(TreeCullTypeGpu), 16),
@@ -485,6 +546,67 @@ float RendererState::farTreesStart() const
     const float ground = std::isnan(m_cameraGround) ? m_terrain.getHeightMap().getUserParam() : m_cameraGround;
     const float h = oc::max(m_cameraPos.y - ground, 0.0f);
     return std::sqrt(m_farTreeParams.startDistance * m_farTreeParams.startDistance + h * h);
+}
+
+bool RendererState::treeVoxelFarActive() const
+{
+    return Globals::settings.foliage.voxelFarTrees && m_sceneViewCount == 1 && m_treeRecords.numTypes() > 0
+        && m_treeRecordSet < (uint32)m_treeSets.size() && m_treeSets[m_treeRecordSet].alive && !m_treeSets[m_treeRecordSet].farBuckets.empty();
+}
+
+// The far volume's hand-over (where the near set's trees leave the main pass too: treeCullVolumeStart), or without the
+// volume "Trees/Voxel far end".
+float RendererState::treeVoxelFarEnd() const
+{
+    return farTreesActive() ? farTreesStart() + m_farTreeParams.overlap : Globals::settings.foliage.voxelFarEnd;
+}
+
+// present: the slot's chunk list - every resident record chunk that is not the near set's and reaches within the end
+// distance (horizontally, from the camera) - and the world set's far tables.
+void RendererState::updateTreeVoxelFar(uint32 frameIdx)
+{
+    m_treeVoxelFarListed = false;
+    m_treeVoxelFarShadowListed = false;
+    if (!treeVoxelFarActive())
+        return;
+    const TreeInstanceSet& set = m_treeSets[m_treeRecordSet];
+    const float end = treeVoxelFarEnd();
+    const float chunkSize = m_treeRecordChunkSize;
+    const glm::vec2 eye(m_cameraPos.x, m_cameraPos.z);
+    // THE FAR SHADOW CASTERS: the same chunks within the cascades' reach (the shadow distance + "Foliage shadow cascade
+    // margin", from the scene focus; the GPU keeps a tree per cascade split), with the sun cascades on.
+    const bool shadows = !m_rtParams.effectiveSunShadow() && !set.farShadowBuckets.empty();
+    const glm::vec3 focus3 = self().sceneFocusOrCamera();
+    const glm::vec2 focus(focus3.x, focus3.z);
+    const float shadowEnd = m_shadowParams.maxDistance + oc::max(Globals::settings.foliage.shadowCascadeMargin, 0.0f)
+        + Globals::settings.farTree.height;
+    oc::vector<TreeVoxelFarPipeline::ChunkGpu> shadowChunks;
+    // NEAREST FIRST: the workgroups append in about their order, so when the trees outnumber MAX_INSTANCES it is the
+    // farthest that are dropped (in the table's order the overflow fell anywhere past ~9 km, different trees every frame).
+    oc::vector<oc::pair<float, TreeVoxelFarPipeline::ChunkGpu>> listed;
+    for (const TreeRecordChunkGpu& chunk : m_treeRecords.tableCpu(frameIdx))
+    {
+        if (chunk.count == 0)
+            continue;
+        if (m_treeNearChunks.find((uint64)(uint32)chunk.coord.x | ((uint64)(uint32)chunk.coord.y << 32)) != m_treeNearChunks.end())
+            continue;
+        const glm::vec2 lo = glm::vec2(chunk.coord) * chunkSize;
+        if (shadows && shadowChunks.size() < TreeVoxelFarPipeline::MAX_CHUNKS
+            && glm::length(glm::clamp(focus, lo, lo + chunkSize) - focus) <= shadowEnd)
+            shadowChunks.push_back({ chunk.coord, chunk.first, chunk.count });
+        const float d = glm::length(glm::clamp(eye, lo, lo + chunkSize) - eye);
+        if (d > end)
+            continue;
+        listed.push_back({ d, TreeVoxelFarPipeline::ChunkGpu{ chunk.coord, chunk.first, chunk.count } });
+    }
+    oc::sort(listed.begin(), listed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    oc::vector<TreeVoxelFarPipeline::ChunkGpu> chunks;
+    chunks.reserve(oc::min<size_t>(listed.size(), TreeVoxelFarPipeline::MAX_CHUNKS));
+    for (size_t i = 0; i < listed.size() && i < TreeVoxelFarPipeline::MAX_CHUNKS; ++i)
+        chunks.push_back(listed[i].second);
+    m_treeVoxelFar.setFrame(frameIdx, chunks, set.farTypes, set.farBuckets, shadowChunks, set.farShadowBuckets);
+    m_treeVoxelFarListed = true;
+    m_treeVoxelFarShadowListed = !shadowChunks.empty();
 }
 
 bool RendererState::farTreesActive() const

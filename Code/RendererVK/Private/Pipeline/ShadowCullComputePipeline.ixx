@@ -39,13 +39,15 @@ public:
         Buffer& treePiecesBuffer;             // 13 - the baked tree records' pieces (static; tree_cull.inc.glsl)
         Buffer& treeTypesBuffer;              // 14 - ... and their types
         Buffer& treeListBuffer;               // 15 - ... and this frame's visible trees (piece | pass bits << 28)
+        Buffer& outVoxelCommandBuffer;        // 16 - the trees' voxel casters (the main cull's voxel list, borrowed)
     };
 
     void initialize();
     void reloadShaders();
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
 
-    Buffer& getDrawCountBuffer(uint32 frameIdx) { return m_perFrameData[frameIdx].drawCountBuffer; } // the compacted list's count
+    // The compacted lists' counts: [0] the casters (DGC), [1] the trees' voxel casters (plain indirect draws).
+    Buffer& getDrawCountBuffer(uint32 frameIdx) { return m_perFrameData[frameIdx].drawCountBuffer; }
 
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_computePipeline.getDescriptorSetLayout(); }
 

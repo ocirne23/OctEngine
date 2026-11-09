@@ -10,7 +10,7 @@
 // EPipelineIndex::LitTree: the procedural tree MESHES (Procedural TreeSystem) - instanced_indirect.fs.glsl's LitMasked
 // path plus the tree-only terms: the DISTANCE FADE (tree_fade.inc.glsl) and the LEAF terms (MATERIAL_FLAG_LEAF: the
 // sun-side shadow, the edge-on N.V bend, the transmission). Its own shader so the tree code never sets the register
-// count of the other lit meshes. The VS is instanced_indirect.vs.glsl (ALPHA_MASK).
+// count of the other lit meshes. The VS is instanced_indirect.vs.glsl (ALPHA_MASK, TREE_ORIGIN).
 
 #include "shared.inc.glsl"
 
@@ -19,6 +19,7 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
+layout (location = 5) in flat vec3 in_instanceOrigin; // the tree's origin: the distance fade (the VS's TREE_ORIGIN)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -74,7 +75,7 @@ void main()
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
-	if (treeDistanceFaded(material.flags, pos)) // the crossfades (tree_fade.inc.glsl)
+	if (treeDistanceFaded(material.flags, in_instanceOrigin)) // the crossfades, per tree (tree_fade.inc.glsl)
 		discard;
 
 	// After the discards: a cut-out pixel pays no shadow.

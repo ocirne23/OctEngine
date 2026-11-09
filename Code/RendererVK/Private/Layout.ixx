@@ -722,6 +722,8 @@ export namespace RendererVKLayout
                              // the ocean's shading without its waves, dual-source composited like the ocean
         LitTree        = 15, // LitMasked + the tree terms (instanced_indirect_tree.fs.glsl): the distance fade and
                              // the leaf terms - the procedural tree MESHES (TreeSystem), kept out of LitMasked
+        LitTreeVoxel   = 16, // the VOXEL tier of the procedural trees (instanced_indirect_tree_voxel.fs.glsl): a box
+                             // whose FS marches the tree's prefiltered voxel grid and writes the hit's depth
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs

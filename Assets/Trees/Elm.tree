@@ -84,7 +84,8 @@ TreeSpecies Elm
 		Type Cluster
 		Size 1.1
 		Aspect 0.9
-		PerBranch 5
+		PerBranch 7
+		Keep 0.79 0.6
 		Levels 2
 		ClusterLeaves 11
 		ClusterLeafSize 0.17

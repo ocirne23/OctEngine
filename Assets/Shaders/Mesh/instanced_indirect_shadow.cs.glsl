@@ -21,6 +21,9 @@ layout (binding = 9, std430) readonly buffer InMaterialInfos               { Mat
 #define TREE_CULL_TYPES_BINDING 14
 #define TREE_CULL_LIST_BINDING 15
 #include "tree_cull.inc.glsl"
+// The trees' VOXEL casters ("Trees/Voxel shadows"): their own list, drawn with plain indirect draws by the voxel shadow
+// pipeline (it writes FragDepth; ShadowMapGraphicsPipeline). The main cull's voxel list, borrowed (it runs later).
+layout (binding = 16, std430) buffer OutVoxelCommandBuffer { OutIndirectCommand out_voxelCommands[]; };
 
 // Bit c set if the sphere overlaps cascade c. The planes are normalized on the CPU (buildUboSunShadow).
 uint cascadeOverlapMask(vec3 center, float radius)
@@ -74,8 +77,10 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     if (cascadeMask == 0u)
         return;
 
+    const bool voxel = sways && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_TREE_VOXEL;
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
-    const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
+    // A voxel caster: its grid's albedo atlas (A = the opacity) in the same field.
+    const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK || voxel) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
     // Bits 0..6 the cascade mask (NUM_SHADOW_CASCADES = 4), 7 = a tree BILLBOARD (shifted toward the sun in the VS),
     // 8..14 the trunk-bend scale x 32 (0..~4), 15 = sways. Not swaying: bit 8 = a terrain node (TerrainVertex).
     const bool billboard = sways && (material.flags & MATERIAL_FLAG_BILLBOARD) != 0u;
@@ -117,14 +122,31 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     }
 
     const uint firstInstance = in_firstInstances[meshIdx];
-    const uint idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
-    if (idx == 0)
+    uint idx;
+    if (voxel)
     {
-        out_indirectCommands[meshIdx].pipelineIndex = 0u; // one depth pipeline
-        out_indirectCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
-        out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
-        out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
-        out_indirectCommands[meshIdx].firstInstance = firstInstance;
+        // Its own bucket counter: no other list draws a voxel box mesh.
+        idx = atomicAdd(out_voxelCommands[meshIdx].instanceCount, 1);
+        if (idx == 0)
+        {
+            out_voxelCommands[meshIdx].pipelineIndex = 0u;
+            out_voxelCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+            out_voxelCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+            out_voxelCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+            out_voxelCommands[meshIdx].firstInstance = firstInstance;
+        }
+    }
+    else
+    {
+        idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
+        if (idx == 0)
+        {
+            out_indirectCommands[meshIdx].pipelineIndex = 0u; // one depth pipeline
+            out_indirectCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+            out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+            out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+            out_indirectCommands[meshIdx].firstInstance = firstInstance;
+        }
     }
 
     out_meshInstanceIndexes[firstInstance + idx]          = instanceIdx;

@@ -406,6 +406,38 @@ export struct FoliageParams
     float windLeafFadeEnd = 40.0f;
     float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (>= 100); a 100 m band fades it out
     float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (>= 0.0005)
+    // THE VOXEL TIER (instanced_indirect_tree_voxel.fs.glsl, "Trees/Voxel impostors"):
+    float voxelLodBias = 0.0f;      // + the grid level the march picks (log2: +1 = voxels twice as large, half the steps)
+    float voxelSelfShadow = 1.0f;   // the sun through the tree's own voxels toward the sun ^ this. 0 = no march: the tree
+                                    // reads the cascades at its hit instead and takes its own caster's shadow from them
+    // The voxel colour's saturation (linear, about its luminance): 1 = as baked, > 1 more vivid. The bake averages every
+    // surface in a voxel - the twigs drawn in the leaf texture, the branches of a sparse voxel - so it reads greyer than the
+    // mesh leaves, which keep each texel's own colour.
+    float voxelSaturation = 1.1f;
+    float voxelBrightness = 1.0f;   // x the voxel colour (linear), after the saturation
+    // The voxel tier's LEAF TRANSMISSION: x the "Foliage transmission" strength / glow / focus, and the share of the voxel
+    // self-shadow the transmitted sun takes (its own: the cards' crown chord is another measure).
+    float voxelTransmission = 1.0f;
+    float voxelTransmissionGlow = 1.0f;
+    float voxelTransmissionFocus = 1.0f;
+    float voxelTransmissionSelfShadow = 0.5f;
+    // The transmission's back term toward leaves facing EVERY way (0.25 x (1 - V.L)) and away from the voxel's mean normal
+    // (-N.L): 0 = by how much the voxel's leaves agree (x its cover), 1 = every voxel as leaves facing every way.
+    float voxelTransmissionSpread = 0.0f;
+    float voxelNormalHull = 0.5f;   // the shading normal toward the crown's outward direction where the leaves face every
+                                    // way (a short mean normal): x (1 - its length) x this (0 = the mean normal only)
+    // The trees' SUN SHADOW CASTER in the cascades: their voxel grid (marched toward the sun, at every distance) instead of
+    // their billboard, for the types that have one. RT keeps the billboard.
+    bool voxelShadows = false;
+    float voxelShadowCoverage = 0.5f; // the coverage along the light at which the voxel caster's depth is written
+    // + the caster's grid level (log2), on top of a voxel about a cascade texel: the near cascade's texels are a few cm, so
+    // every caster marched the finest level there. +1 = voxels twice as large, half the steps.
+    float voxelShadowLodBias = 1.0f;
+    // THE FAR VOXEL TREES: every resident world record chunk but the near set's ("Trees/World/Near radius") expanded on the
+    // GPU and drawn as voxel boxes - out to the far volume's hand-over ("Far start" + "Far overlap"), or with the far volume
+    // off, to voxelFarEnd. Shadows / GI / RT: none (the near set's trees cast; the cascades end before the far ring).
+    bool voxelFarTrees = true;
+    float voxelFarEnd = 20000.0f; // m
 };
 
 // PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but
@@ -558,34 +590,34 @@ export struct RockParams
 // recreate the images.
 export struct FarTreeParams
 {
-    bool enabled = true;
-    float startDistance = 600.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
-    float endDistance = 12000.0f;  // and ends here (m)
-    float overlap = 100.0f;        // the billboards draw to startDistance + this; the volume fades in over it (m)
+    bool enabled = true;          // the far voxel trees ("Trees/Voxel far trees") draw out to its hand-over
+    float startDistance = 4000.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
+    float endDistance = 15000.0f;  // and ends here (m)
+    float overlap = 300.0f;        // the near representations draw to startDistance + this; the volume fades in over it (m)
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
-    uint32 slices = 16;            // height slices
+    uint32 slices = 8;             // height slices
     float height = 30.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 0.5f;    // x the baked extinction
-    float blobShrink = 0.75f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float densityScale = 1.5f;    // x the baked extinction
+    float blobShrink = 0.5f;     // 1/m off the baked extinction before the scale: blobs shrink toward their cores
     float stepScale = 0.8f;       // march step, x the cell size, at startDistance
-    float layerSamples = 8.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
+    float layerSamples = 1.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
     float stepExponent = 0.4f;  // ... x (r / startDistance) ^ this beyond: > 0 = finer near the start, coarser far out
     uint32 maxSteps = 600;
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
-    float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
+    float sunScale = 1.5f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
     float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
     float normalStrength = 0.5f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
-    float groundDarkening = 0.5f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 2.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+    float groundDarkening = 0.0f; // how much darker the sky light is at the ground than at the volume's top
+    float interiorShadow = 0.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
     float interiorRadius = 0.075f; // the taps' distance, x the cell size
-    float forwardScatter = -0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float forwardScatter = 0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
     // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
     // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 0.6f;
-    float transmissionFocus = 0.6f;
-    float albedoScale = 0.75f;   // x the leaf colour
+    float transmission = 0.25f;
+    float transmissionFocus = 0.0f;
+    float albedoScale = 1.0f;    // x the leaf colour
     float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
@@ -603,14 +635,14 @@ export struct FarTreeParams
     int floorSmoothing = 2;       // the tree floor's tent blur radius, in columns (tree_volume_floor_smooth.cs); >= 1
     // The world tree records' chunks within this of the bake centre (m) expand into their trees and bushes and splat in
     // detail; beyond, each record adds its mass per column (TreeVolumePipeline RecordSource).
-    float recordDetail = 4000.0f;
+    float recordDetail = 9456.6f;
     // A bake runs over about this many frames (the record splat's three passes spread evenly, plus a few steps of their
     // own); the march reads the previous bake until the last one. 1 = as fast as it goes.
     int bakeFrames = 12;
     // THE HAND-OVER: a finished bake CROSS-FADES into the shown one (a dithered per-ray pick, averaged by the temporal
     // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
     // (0 = at once; the swap then still takes the copy's frames).
-    float swapTime = 2.0f;
+    float swapTime = 0.2f;
     // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
     // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
     float rockExtinction = 4.0f;

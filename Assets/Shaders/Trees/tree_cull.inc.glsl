@@ -11,6 +11,9 @@
 // representations draw at once, so a tree has 4 FIXED record slots:
 //   mid tier:  0 = trunk, 1 = branch bark, 2 = leaves (once they are gone: the billboard), 3 = card mesh
 //   otherwise: 0 = bark, 1 = leaves, 3 = billboard
+// THE VOXEL TIER: a type with a `voxel` record draws it in the main pass wherever the billboard would (treeCullMainFar),
+// and with "Trees/Voxel shadows" casts it in the shadow passes in the billboard's slot (treeCullShadowRecord); the TLAS
+// keeps the billboard.
 //
 // A ROCK is a type with ONE mesh in the bark slot (LitRock): no billboard, fade, mid tier or wind, but a mesh LOD pick. In
 // the main pass it hands over to the far-tree volume at its start, as a billboard does; it keeps casting its sun shadow.
@@ -40,6 +43,7 @@ struct TreeCullType
     TreeCullRecord trunkFade;
     TreeCullRecord cardsIn;        // the mid tier only: the card mesh, fading in (the mid band) / out (the far band)
     TreeCullRecord cardsOut;
+    TreeCullRecord voxel;          // the VOXEL tier: the billboard's place in the MAIN pass (absent = the billboard itself)
     float farDistance;             // billboard switch distance (m); x u_present_treeFarScale
     float fadeWidth;               // crossfade band (m), centred on it
     float midDistance;             // the mid tier's switch distance (m; x u_present_treeFarScale); 0 = no mid tier
@@ -211,6 +215,14 @@ TreeCullRecord treeCullMode(uint mode, TreeCullRecord plain, TreeCullRecord fade
     return mode == 0u ? treeCullNone() : mode == 2u ? faded : plain;
 }
 
+// The main pass's FAR representation: the voxel tier where the type has one (its material carries the billboard's
+// fade-in band), else the billboard. The shadow and RT passes keep the billboard.
+TreeCullRecord treeCullMainFar(uint t)
+{
+    const TreeCullRecord voxel = in_treeTypes[t].voxel;
+    return voxel.meshMaterial != TREE_CULL_ABSENT ? voxel : in_treeTypes[t].billboard;
+}
+
 // The main pass's record in slot k (the header's layouts). In the mid tier the billboard shares slot 2 with the leaves
 // and waits for them (a mid band reaching into the far band would want both at once).
 TreeCullRecord treeCullMainRecord(TreeCullPiecePick pick, uint k)
@@ -220,11 +232,11 @@ TreeCullRecord treeCullMainRecord(TreeCullPiecePick pick, uint k)
         return k == 0u ? treeCullMode(pick.trunk, in_treeTypes[t].trunk, in_treeTypes[t].trunkFade)
              : k == 1u ? treeCullMode(pick.bark, in_treeTypes[t].bark, in_treeTypes[t].barkFade)
              : k == 2u ? (pick.leaves != 0u ? treeCullMode(pick.leaves, in_treeTypes[t].leaves, in_treeTypes[t].leavesFade)
-                        : pick.billboard ? in_treeTypes[t].billboard : treeCullNone())
+                        : pick.billboard ? treeCullMainFar(t) : treeCullNone())
              : treeCullMode(pick.cards, in_treeTypes[t].cardsIn, in_treeTypes[t].cardsOut);
     return k == 0u ? treeCullMode(pick.bark, in_treeTypes[t].bark, in_treeTypes[t].barkFade)
          : k == 1u ? treeCullMode(pick.leaves, in_treeTypes[t].leaves, in_treeTypes[t].leavesFade)
-         : k == 3u && pick.billboard ? in_treeTypes[t].billboard : treeCullNone();
+         : k == 3u && pick.billboard ? treeCullMainFar(t) : treeCullNone();
 }
 
 // The SHADOW (and rain-shelter) passes: the BILLBOARD (slot 3) stands in for the tree at every distance; the meshes
@@ -245,11 +257,16 @@ void treeCullShadowPiece(uint pieceIdx, out TreeCullPiecePick pick)
     treeCullLoadTransform(pieceIdx, pick);
 }
 
+// Slot 3, the far caster: with "Trees/Voxel shadows" the type's VOXEL record where it has one (the shadow cull routes it
+// to its own list: the caster marches its grid toward the sun and writes FragDepth), else the billboard.
 TreeCullRecord treeCullShadowRecord(TreeCullPiecePick pick, uint k)
 {
-    return k == 0u ? in_treeTypes[pick.typeIdx].bark
-         : k == 1u ? in_treeTypes[pick.typeIdx].leaves
-         : in_treeTypes[pick.typeIdx].billboard;
+    if (k == 0u)
+        return in_treeTypes[pick.typeIdx].bark;
+    if (k == 1u)
+        return in_treeTypes[pick.typeIdx].leaves;
+    const TreeCullRecord voxel = in_treeTypes[pick.typeIdx].voxel;
+    return u_foliage_voxelShadows > 0.5 && voxel.meshMaterial != TREE_CULL_ABSENT ? voxel : in_treeTypes[pick.typeIdx].billboard;
 }
 
 // The TLAS writer's (gi_tlas_instances.cs.glsl) ONE instance per tree: its billboard, else its leaves only (the bark of

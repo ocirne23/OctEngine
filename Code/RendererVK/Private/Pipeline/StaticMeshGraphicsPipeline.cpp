@@ -300,13 +300,14 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	});
 	// Variant 15 (EPipelineIndex::LitTree): the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the
 	// bark / leaf crossfade copies) - LitMasked plus the tree terms (the distance fade, the leaf shadow / N.V bend /
-	// transmission), in its own fragment shader so they never set LitMasked's register count. The VS is LitMasked's.
+	// transmission), in its own fragment shader so they never set LitMasked's register count. The VS is LitMasked's plus
+	// TREE_ORIGIN (the instance origin: the distance fade is per tree).
 	const oc::string treeVariantPath = "Shaders/Mesh/instanced_indirect_tree.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = graphicsPipelineLayout.vertexShader.text,
 			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
-			.defines = { { "ALPHA_MASK", "1" } },
+			.defines = { { "ALPHA_MASK", "1" }, { "TREE_ORIGIN", "1" } },
 		},
 		.fragmentShader = ShaderSource{
 			.text = FileSystem::readFileStr(treeVariantPath),
@@ -314,11 +315,30 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.writeMotion = true,
 	});
-	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitTree);
+	// Variant 16 (EPipelineIndex::LitTreeVoxel): the procedural trees' VOXEL tier (Procedural TreeSystem). The VS
+	// (TREE_VOXEL) passes the box's grid coordinate, the camera in grid space and the instance frame; the FS marches the
+	// tree's voxel atlases from the box's front face and writes the hit's depth (conservatively farther: early depth
+	// still rejects a hidden box), then lights it with the billboards' foliage terms. Back faces culled: the camera never
+	// stands inside a tree at the tier's distances.
+	const oc::string voxelVariantPath = "Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl";
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = graphicsPipelineLayout.vertexShader.text,
+			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
+			.defines = { { "TREE_VOXEL", "1" } },
+		},
+		.fragmentShader = ShaderSource{
+			.text = FileSystem::readFileStr(voxelVariantPath),
+			.debugFilePath = voxelVariantPath,
+		},
+		.writeMotion = true,
+	});
+	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitTreeVoxel);
 	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
 	const auto isLitCoreFragment = [&](const PipelineVariant& variant) {
 		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath
-			|| variant.fragmentShader.debugFilePath == foliageVariantPath || variant.fragmentShader.debugFilePath == treeVariantPath;
+			|| variant.fragmentShader.debugFilePath == foliageVariantPath || variant.fragmentShader.debugFilePath == treeVariantPath
+			|| variant.fragmentShader.debugFilePath == voxelVariantPath;
 	};
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
@@ -705,6 +725,38 @@ void StaticMeshGraphicsPipeline::buildClutterLayout(const GraphicsPipelineLayout
     clutter.fragmentShader = source(flowers ? "Shaders/Clutter/clutter_flower.fs.glsl" : "Shaders/Clutter/clutter.fs.glsl", main.fragmentShader.defines);
 }
 
+void StaticMeshGraphicsPipeline::buildTreeVoxelFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far)
+{
+    far.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    far.descriptorBindingFlags = main.descriptorBindingFlags;
+    far.pushConstantRanges = main.pushConstantRanges;
+    far.indirectBindable = false;
+    far.motionTarget = true; // the opaque family; the wind moves the boxes
+    far.writeMotion = true;
+    far.polygonMode = main.polygonMode;
+
+    // Binding 0 = the mesh mega-buffer's MeshVertex (as the main layout), binding 1 = TreeVoxelFarPipeline::InstanceGpu.
+    auto& bindings = far.vertexLayoutInfo.bindingDescriptions;
+    auto& attributes = far.vertexLayoutInfo.attributeDescriptions;
+    bindings.push_back(vk::VertexInputBindingDescription{ .binding = 0, .stride = sizeof(RendererVKLayout::MeshVertex), .inputRate = vk::VertexInputRate::eVertex });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, positionU) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, normalV) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 2, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, tangent) });
+    using Instance = TreeVoxelFarPipeline::InstanceGpu;
+    bindings.push_back(vk::VertexInputBindingDescription{ .binding = 1, .stride = sizeof(Instance), .inputRate = vk::VertexInputRate::eInstance });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 1, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(Instance, posScale) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 5, .binding = 1, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(Instance, yaw) });
+
+    const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
+        return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
+    };
+    oc::vector<ShaderDefine> vsDefines;
+    if (m_stereo)
+        vsDefines.push_back({ "STEREO", "1" });
+    far.vertexShader = source("Shaders/Trees/tree_voxel_far.vs.glsl", vsDefines);
+    // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
+    far.fragmentShader = source("Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl", main.fragmentShader.defines);}
+
 // The desktop-only pipelines built from the main layout: the grass blades, the rigid clutter, the flowers.
 void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload)
 {
@@ -724,6 +776,9 @@ void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout
     build(m_clutterPipeline, m_clutterBuilt, clutterLayout, "clutter");
     build(m_flowerPipeline, m_flowerBuilt, flowerLayout, "flower");
     build(m_texturedFlowerPipeline, m_texturedFlowerBuilt, texturedFlowerLayout, "textured flower");
+    GraphicsPipelineLayout treeVoxelFarLayout;
+    buildTreeVoxelFarLayout(main, treeVoxelFarLayout);
+    build(m_treeVoxelFarPipeline, m_treeVoxelFarBuilt, treeVoxelFarLayout, "far voxel trees");
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
@@ -826,9 +881,11 @@ void StaticMeshGraphicsPipeline::createExecutionSets()
 {
     m_indirectExecutionSet.destroy();
     m_transparentExecutionSet.destroy();
-    // The sky is drawn directly (record), never by a sequence.
+    // The sky is drawn directly (record), never by a sequence; so are the trees' voxel tier (it writes FragDepth, which
+    // the set's other pipelines do not) and the terrain film (in the transparent mask, its own list).
     constexpr uint32 skyBit = 1u << (uint32)RendererVKLayout::EPipelineIndex::Sky;
-    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet", ~(RendererVKLayout::PIPELINE_TRANSPARENT_MASK | skyBit));
+    constexpr uint32 voxelBit = 1u << (uint32)RendererVKLayout::EPipelineIndex::LitTreeVoxel;
+    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet", ~(RendererVKLayout::PIPELINE_TRANSPARENT_MASK | skyBit | voxelBit));
     m_transparentExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSetTransparent", RendererVKLayout::PIPELINE_TRANSPARENT_MASK);
 }
 
@@ -1111,6 +1168,23 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
             params.drawCountBuffer.getBuffer(), countIdx * sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
     };
+    // The trees' VOXEL tier, right after the opaque meshes it hands over from: its FS writes FragDepth, so it cannot join
+    // the execution set (every pipeline there must match the first one in that).
+    drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::LitTreeVoxel), m_graphicsPipeline.getPipelineLayout(),
+        params.treeVoxelCommandBuffer, 4);
+    // The FAR voxel trees (TreeVoxelFarPipeline): one indexed indirect draw per voxel mesh over its sorted records (the
+    // unused buckets draw 0 instances). The box meshes from the mega-buffers, the record instance-rate at binding 1.
+    if (params.treeVoxelFar && m_treeVoxelFarBuilt)
+    {
+        const TreeVoxelFarPipeline::Draw& far = *params.treeVoxelFar;
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipeline());
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        if (m_stereo)
+            vkCommandBuffer.pushConstants(m_treeVoxelFarPipeline.getPipelineLayout(), VIEW_PUSH_STAGES, 0, sizeof(uint32), &params.viewIndex);
+        vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer(), far.instances->getBuffer() }, { 0, 0 });
+        vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+        vkCommandBuffer.drawIndexedIndirect(far.commands->getBuffer(), 0, TreeVoxelFarPipeline::MAX_BUCKETS, 5 * sizeof(uint32));
+    }
     if (m_terrainTess && m_terrainTessBuilt)
         drawSequences(m_terrainTessPipeline.getPipelineVariant(0), m_terrainTessPipeline.getPipelineLayout(), params.terrainTessCommandBuffer, 2);
     // The GRASS after the ground (its depth rejects the buried blade parts early), before the film (which then stays

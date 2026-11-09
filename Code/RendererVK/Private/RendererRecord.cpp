@@ -214,6 +214,7 @@ void RendererState::recordShadowCull(uint32 frameIdx)
         .treePiecesBuffer = treeCullPieces(),
         .treeTypesBuffer = treeCullTypes(),
         .treeListBuffer = treeCullList(frameIdx),
+        .outVoxelCommandBuffer = m_indirectCullComputePipeline.getTreeVoxelCommandBuffer(frameIdx),
     };
     m_shadowCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -246,7 +247,13 @@ void RendererState::recordShadowDraw(uint32 frameIdx)
         .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .drawCountBuffer = m_shadowCullComputePipeline.getDrawCountBuffer(frameIdx),
         .preprocessBuffer = m_staticMeshGraphicsPipeline.getOpaquePreprocessBuffer(frameIdx),
+        .voxelCommandBuffer = m_indirectCullComputePipeline.getTreeVoxelCommandBuffer(frameIdx),
     };
+    // The far shadow casters (recorded in the primary before the shadow cull; emptied when off).
+    const TreeVoxelFarPipeline::Draw farShadow = m_treeVoxelFar.getShadowDraw(frameIdx);
+    params.farInstances = farShadow.instances;
+    params.farCommands = farShadow.commands;
+    params.farMaxDraws = TreeVoxelFarPipeline::MAX_BUCKETS;
     m_shadowMapGraphicsPipeline.record(cb, params);
     cb.end();
 }
@@ -335,6 +342,7 @@ void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uin
     setFullViewport(cb.getCommandBuffer());
     const GrassPipeline::Draw grassDraw = m_grassPipeline.getDraw(frameIdx);
     const ClutterPipeline::Draw clutterDraw = m_clutterPipeline.getDraw(frameIdx);
+    const TreeVoxelFarPipeline::Draw treeVoxelFarDraw = m_treeVoxelFar.getDraw(frameIdx);
     StaticMeshGraphicsPipeline::RecordParams drawParams
     {
         .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
@@ -348,6 +356,7 @@ void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uin
         .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
         .terrainTessCommandBuffer = m_indirectCullComputePipeline.getTerrainTessCommandBuffer(frameIdx),
         .terrainFilmCommandBuffer = m_indirectCullComputePipeline.getTerrainFilmCommandBuffer(frameIdx),
+        .treeVoxelCommandBuffer = m_indirectCullComputePipeline.getTreeVoxelCommandBuffer(frameIdx),
         .drawCountBuffer = m_indirectCullComputePipeline.getDrawCountBuffer(frameIdx),
         .drawSky = Globals::settings.sky.enabled,
         .lightInfosBuffer = submission.lightInfos,
@@ -369,6 +378,7 @@ void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uin
         .viewIndex = RendererVKLayout::eyeToViewIndex(eyeIndex, m_sceneViewCount),
         .grass = m_sceneViewCount == 1 ? &grassDraw : nullptr, // desktop only (the count is 0 while grass is off)
         .clutter = m_sceneViewCount == 1 ? &clutterDraw : nullptr, // the same (its draws are empty while it is off)
+        .treeVoxelFar = m_sceneViewCount == 1 ? &treeVoxelFarDraw : nullptr, // the same
     };
     // Each eye has its own descriptor set (per-eye AO + last frame's depth), so both eyes write their own.
     m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, true);
@@ -1468,8 +1478,33 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
     // static mesh pass's opaque DGC scratch, so both are free again before the main cull and the scene.
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays).
     const bool shadowCascades = !m_rtParams.effectiveSunShadow();
+    // The far voxel trees' and far shadow casters' inputs (only while their chunks are listed: the record pool exists).
+    const auto farParams = [&]
+    {
+        return TreeVoxelFarPipeline::RecordParams{
+            .ubo = frameData.ubo,
+            .records = m_treeRecords.records().getDeviceAddress(),
+            .map = m_treeRecords.map(frameIdx).getDeviceAddress(),
+            .mapSize = m_treeRecords.mapSize(),
+            .types = m_treeRecords.types().getDeviceAddress(),
+            .numTypes = m_treeRecords.numTypes(),
+            .worldSeed = m_treeRecordSeed,
+            .chunkSize = m_treeRecordChunkSize,
+            .endDistance = treeVoxelFarEnd(),
+        };
+    };
     if (shadowCascades)
     {
+        // The far shadow casters (the far ring's trees as billboards, TreeVoxelFarPipeline): inline, the chunk count
+        // changes per frame. Off, their draws are emptied.
+        if (m_treeVoxelFarShadowListed)
+        {
+            m_gpuProfiler.beginScope(primary, "Far tree shadows");
+            m_treeVoxelFar.recordShadow(primary, frameIdx, farParams());
+            m_gpuProfiler.endScope(primary);
+        }
+        else
+            m_treeVoxelFar.recordShadowClear(primary, frameIdx);
         executeScoped(primary, "Shadow cull", frameData.shadowCullCommandBuffer.getCommandBuffer());
         m_gpuProfiler.beginScope(primary, "Shadow draw");
         vk::ClearValue shadowClear;
@@ -1527,6 +1562,16 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
             executeScoped(primary, "Clutter cull", frameData.clutterCullCommandBuffer.getCommandBuffer());
         else
             m_clutterPipeline.recordClear(primary, frameIdx);
+        // The far voxel trees: their records expanded, culled and bucketed (inline: the chunk count changes per frame).
+        // Off, their draws are emptied.
+        if (m_treeVoxelFarListed)
+        {
+            m_gpuProfiler.beginScope(primary, "Far voxel trees");
+            m_treeVoxelFar.record(primary, frameIdx, farParams());
+            m_gpuProfiler.endScope(primary);
+        }
+        else
+            m_treeVoxelFar.recordClear(primary, frameIdx);
     }
     // The NEAR GRASS CASCADE: its own map, after the grass and clutter culls. Off, the receivers do not read it
     // (u_grass_nearRange = 0).

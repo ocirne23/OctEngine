@@ -200,7 +200,7 @@ The tree, rock and clutter generators' OUTPUT is saved under `Assets/Local` and 
 | A tree species: its piece library, its baked variants, their far-volume density grids | `Local/Trees/Meshes/<species>.treemesh` | the `.tree` file's text, `TREE_DENSITY_RES` |
 | A rock variant: its `RockShape`, LOD meshes, density grid | `Local/Rocks/Meshes/<type>_v<i>.rockmesh` | the `.rock` file's text, the grid resolution, the variant seed |
 | A clutter type's meshes (every LOD) | `Local/Clutter/Meshes/<type>.cluttermesh` | the `.clutter` file's text, `Clutter/Mesh resolution` |
-| A tree material's textures AS UPLOADED (bark, leaves, each billboard; `CachedTexture`) | `Local/Trees/Textures/<name>.tex` | the `.tree` file's text, `Trees/Compress textures`, the size |
+| A tree material's textures AS UPLOADED (bark, leaves, each billboard, each variant's voxel atlases; `CachedTexture`) | `Local/Trees/Textures/<name>.tex` | the `.tree` file's text, `Trees/Compress textures`, the size (the voxel atlases: + the resolution and `TREE_VOXEL_BAKE_VERSION`) |
 | A dead-wood rock type's tinted bark, as uploaded | `Local/Rocks/Textures/<type>.tex` | the bark `.tree` file's text, the tint, the size |
 | A flower clutter type's texture (BC3), as uploaded | `Local/Clutter/Textures/<type>.tex` | the `.clutter` file's text |
 

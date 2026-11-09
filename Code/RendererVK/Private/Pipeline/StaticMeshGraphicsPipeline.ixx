@@ -14,6 +14,7 @@ import :Sampler;
 import :GIProbePipeline;
 import :GrassPipeline;
 import :ClutterPipeline;
+import :TreeVoxelFarPipeline;
 
 class CommandBuffer;
 class ObjectContainer;
@@ -38,7 +39,8 @@ public:
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)
         Buffer& terrainFilmCommandBuffer;         // terrain film sequences (plain indirect draws)
-        Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] film
+        Buffer& treeVoxelCommandBuffer;           // the trees' voxel-tier sequences (plain indirect draws: FragDepth)
+        Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] film, [4] tree voxels
         bool drawSky;                             // "Sky/Enabled": one fullscreen triangle on the far plane
 
         Buffer& lightInfosBuffer;
@@ -69,6 +71,8 @@ public:
 		const GrassPipeline::Draw* grass = nullptr;
 		// The ground clutter (ClutterPipeline's sorted records + draws, the rigid meshes); null = none (VR).
 		const ClutterPipeline::Draw* clutter = nullptr;
+		// The far voxel trees (TreeVoxelFarPipeline's sorted records + one draw per voxel mesh); null = none (VR).
+		const TreeVoxelFarPipeline::Draw* treeVoxelFar = nullptr;
     };
 
     void initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
@@ -137,7 +141,10 @@ private:
     // The ground clutter the same way: the rigid meshes (their vertices + the record, instance rate) or the flowers
     // (the record only: built in the VS). Desktop only.
     void buildClutterLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& clutter, bool flowers);
-    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers
+    // The far voxel trees the same way: the box mesh's vertices + the record (instance rate), tree_voxel_far.vs.glsl and
+    // the voxel tier's fragment shader. Desktop only.
+    void buildTreeVoxelFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far);
+    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers + far voxel trees
 
     GraphicsPipeline m_graphicsPipeline;
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
@@ -153,6 +160,10 @@ private:
     bool m_clutterBuilt = false;
     bool m_flowerBuilt = false;
     bool m_texturedFlowerBuilt = false;
+    // The far voxel trees (TreeVoxelFarPipeline): one indexed indirect draw per voxel mesh, outside the execution set
+    // (it writes FragDepth).
+    GraphicsPipeline m_treeVoxelFarPipeline;
+    bool m_treeVoxelFarBuilt = false;
     // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
     // opaque family (colour + the motion target), the transparent sequence the transparent family (colour only;
     // RendererVKLayout::PIPELINE_TRANSPARENT_MASK).

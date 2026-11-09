@@ -68,7 +68,8 @@ TreeSpecies BirchClump
 		Type Cluster
 		Size 1.35
 		Aspect 0.65
-		PerBranch 3
+		PerBranch 4
+		Keep 0.83 0.6
 		Levels 2
 		Align 0.1
 		ClusterLeaves 8

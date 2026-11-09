@@ -211,7 +211,7 @@ crown). Each stem's top 24 % SPLITS three times into two branches fanning out wi
 7 flat SPLIT LIMBS (`SplitLimbs 7 84 0.4`, x the `Shape Cone` envelope: long low, short high - a flat cone; even
 lengths made a tall, narrow tree) branch the same way lower down - the ONLY side limbs (`Slots 0`:
 the plain module limbs read as spindly); every final tip curves up into a
-short whorl (`Crown Top 2 0.25`) carrying a round FOLIAGE PAD from its base (`Leaves Pad 22 0.6 0.1 0.3 0.05`,
+short whorl (`Crown Top 2 0.25`) carrying a round FOLIAGE PAD from its base (`Leaves Pad 29 0.6 0.1 0.3 0.05`,
 `Size 2.2`, `Cross true`, `Style Mat` - 90 shoots; FEW LARGE cards: every card hangs on its own twig mesh, and 55 small
 ones over a wide pad read as a mass of spindly straight twigs; fine needles `ClusterLeafSize 0.035`, a lighter green `Color Leaf
 0.20 0.33 0.15`): level sheets at many heights - clouds of foliage with the branches inside them, as in the photos.
@@ -444,6 +444,8 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   differently at their crossing axis. This needs the card's +u axis to run from the instance origin
   (`billboardViews`: right = piece +Y). A billboard material must draw on `LitFoliage`; **the cards cast their own
   alpha-tested shadows**, so the mesh nodes stop drawing entirely past the band.
+* **In the main pass a TREE's whole billboard is replaced by its voxel grid** with "Trees/Voxel impostors" ("The voxel
+  tier" below); everything here still holds for its shadows, GI and RT, and for the bushes.
 * **Crossfade** (billboards only): a band `FadeWidth` wide, centred on the billboard distance × `Far distance
   scale`. Inside it (centre distance ± the piece radius) the piece draws its mesh as `barkFade` / `leavesFade`
   — the same meshes on `LitTree` with species materials DERIVED with a distance fade-OUT
@@ -477,6 +479,46 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   shadows, GI and RT keep the whole billboard. 4 fixed record slots per tree, no pool (RendererVK "BAKED TREE
   RECORDS"). The CPU path (GPU expansion off) has no mid tier.
 * **None**: the meshes only.
+
+### The voxel tier (`Trees/Voxel impostors`)
+
+On by default; GPU path with billboards; TREES only (a bush keeps its billboard). In the MAIN pass a baked variant's
+whole-tree billboard is replaced by its PREFILTERED VOXEL GRID, marched per pixel (RendererVK `LitTreeVoxel`, Scene.md
+"THE VOXEL TIER"): the same band, the same fade-in, the same hand-over to the far-tree volume. With "Trees/Voxel
+shadows" (off, live) the grid is also the tree's sun-shadow caster at every distance (Scene.md "THE VOXEL SHADOW
+CASTERS"); GI and RT keep the billboard, so its texture stays. Past the world set's near chunks the renderer draws the
+records' trees as voxels too ("Trees/Voxel far trees", RendererVK Scene.md "THE FAR VOXEL TREES"): `updateWorld` hands it
+the set's chunk coordinates every frame. "Trees/Voxel resolution" (32 / 64 / **128** voxels per axis
+at level 0) and the toggle both reload.
+
+* **The bake** (`bakeTreeVoxels`, TreeImpostor.cpp; in `buildBillboards`, on the species job): over `treeVoxelBox` (the
+  billboard box + 1.5 voxels each side), the LOD-0 leaves and bark splatted by PROJECTED area per point of a barycentric
+  grid (half a voxel apart), each point's weight x the texture's ALPHA there and its colour the texture's (linear):
+  a leaf counts half its area (two-sided, random facing), the bark half too (a quarter - a convex body's mean - left
+  the trunks see-through: a surface far below a voxel thick is not spread evenly through it). The leaf normals are
+  turned out of the crown (from the leaves' box centre). Per voxel: OPACITY = `1 - exp(-area / crossing^2)` for one
+  crossing (the cube root of the voxel's volume), leaves and bark alike; the mean colour and the MEAN normal (short where
+  the leaves face every way), the bark weighted by what the voxel's own leaves leave of it, `exp(-leaf area /
+  crossing^2)` - by area alone the branches inside the crown greyed it, where the billboard bake's depth test hides them
+  (a bark-only voxel, the trunk under the crown, keeps the bark) - then x `Billboard AlbedoScale` as the whole-tree
+  billboards; and the INTERIOR = the smallest optical depth to the box's side along the six axes, over the tree's largest.
+  Colour and normal are dilated two rings into the empty voxels (the filter would pull a surface voxel toward black).
+* **The levels** halve down to 4 voxels: a coarse voxel's opacity is 1 - the MEAN TRANSMISSION through its children along
+  the three axes (12 two-voxel columns), not the mean opacity, so a dense clump keeps its cover far away; the rest
+  opacity-weighted.
+* **The atlases** (TreeImpostor.ixx "The VOXEL tier"): each level's z slices as tiles of one 2D image (`res / 8` x 8
+  tiles), level k the image halved - a tile keeps its uv rect at every level, and a slice is at least one BC block.
+  Albedo RGBA (sRGB colour, A = opacity), normal RGBA (the mean normal x 0.5 + 0.5, A = the interior), both BC3 with
+  "Compress textures". One `.tex` per variant, `<species>_treevoxel<v>r<res>_<hash>.tex`, keyed as the billboards are
+  plus `TREE_VOXEL_BAKE_VERSION` (bump it when the bake changes). The box is rebuilt from the geometry on every load.
+* **The material** (`PieceMeshes::voxelMaterial`, `MATERIAL_FLAG_LEAF`) takes the billboard's fade-in band in
+  `applyFadeBands`; the box mesh (`treeVoxelBoxMesh`) has no BLAS.
+* Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel self shadow",
+  "Voxel normal hull", "Voxel saturation" (about the linear luminance: the bake's averages - the twigs drawn in the leaf
+  texture, a sparse voxel's branches - read greyer than the mesh leaves), "Voxel brightness" (x the linear colour, after
+  the saturation), "Voxel transmission" / "... glow" / "... focus" (x the "Foliage transmission" ones) and "Voxel
+  transmission self shadow" (the share of the voxel self-shadow the transmitted sun takes; in place of "Foliage
+  transmission self shadow"); the other "Foliage ..." leaf terms apply as on the billboards.
 
 ### Texture files (`Assets/Local/Trees/Textures`)
 
@@ -620,7 +662,7 @@ was. **Mirrored in `Assets/Shaders/Trees/tree_record.inc.glsl` - keep in step.**
 before its `Enabled` check: it runs with the preview off.
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), but **no farther than the far-tree volume
-  draws** ("Trees/Far end", 12 km, + one chunk: a record past it serves nothing - the terrain's ring reaches ~33 km, ~7x
+  draws** ("Trees/Far end", 15 km, + one chunk: a record past it serves nothing - the terrain's ring reaches ~33 km, ~7x
   the chunks) and at least one past the keep radius; one chunk of hysteresis on eviction. A "Far end" change is a ring
   change: a restart.
   On a camera chunk change the missing chunks are requested; Low pump jobs (`Gen jobs`; 0, the default = one per job

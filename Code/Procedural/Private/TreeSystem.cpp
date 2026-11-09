@@ -252,7 +252,9 @@ namespace Procedural
 			Globals::terrain.setVegetation({}, {}, 0);
 		m_vegHooked = false;
 		m_vegChunkOf.clear();
+		m_prevSetKeys.clear();
 		m_vegNumChunks = 0;
+		Globals::rendererVK.setTreeNearChunks({});
 		m_treeSet.destroy();
 		m_setHasRocks = false;
 	}
@@ -281,7 +283,10 @@ namespace Procedural
 			const uint32 billboardFade = m_settings.forceFar ? 0u : fadeIn;
 			for (oc::vector<PieceMeshes>* pieces : { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes })
 				for (PieceMeshes& meshes : *pieces)
+				{
 					setFade(meshes.billboardMaterial, billboardFade);
+					setFade(meshes.voxelMaterial, billboardFade); // the voxel tier: the billboard's band (it takes its place)
+				}
 			// The MID tier: the leaves and the branch bark fade OUT and the card mesh IN over the mid band; the card mesh
 			// fades OUT over the far band with the trunk (barkFadeMaterial) while the billboard fades in
 			// (tree_cull.inc.glsl picks the side per tree).
@@ -468,6 +473,9 @@ namespace Procedural
 		settings.billboards = m_settings.farMode == 0;
 		settings.showLibrary = m_settings.showLibrary;
 		settings.billboardViews = m_settings.billboardViews == 0 ? 2u : 4u;
+		// The voxel tier needs the GPU path (its record) and the billboards (it takes their place and keeps their shadows).
+		settings.voxelRes = m_settings.voxelImpostors && m_settings.gpuExpansion && settings.billboards
+			? 32u << glm::clamp(m_settings.voxelResolution, 0, 2) : 0u;
 		for (const FileSystem::DirEntry& entry : entries)
 		{
 			if (entry.isDirectory || entry.extension != ".tree")
@@ -731,6 +739,16 @@ namespace Procedural
 				for (size_t v = 0; v < load.variantCards.size() && v < species.variantMeshes.size(); ++v)
 					species.variantMeshes[v].cards = uploadTreeMesh(renderer, load.variantCards[v], false); // main pass only
 			}
+			// The VOXEL tier (main pass only: no BLAS). LEAF: the leaf terms (transmission, the N.V bend, the sky wrap).
+			for (size_t v = 0; v < load.voxelTextures.size() && v < species.variantMeshes.size(); ++v)
+			{
+				if (load.voxelTextures[v].albedo.empty() || v >= load.voxelBoxes.size())
+					continue;
+				PieceMeshes& meshes = species.variantMeshes[v];
+				meshes.voxelMaterial = createTreeMaterial(load.voxelTextures[v], 0.0f, oc::format("TreeVoxel/{}_{}", name, v).c_str(),
+					RendererVKLayout::MATERIAL_FLAG_LEAF);
+				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
+			}
 			// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
 			species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
 			species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
@@ -883,6 +901,44 @@ namespace Procedural
 				billboard.texture = oc::move(texture);
 		}
 
+		// THE VOXEL TIER: per baked variant of a TREE (bushes keep their billboards) its prefiltered voxel grid as two atlases
+		// (bakeTreeVoxels), cached as one .tex beside the billboards: "<species>_treevoxel<v>r<res>_<hash>.tex", keyed as
+		// they are plus TREE_VOXEL_BAKE_VERSION. Its box comes from the geometry on every load (treeVoxelBox).
+		if (settings.voxelRes > 0 && !desc.bush)
+		{
+			const uint32 res = settings.voxelRes;
+			const uint32 numLevels = treeVoxelLevels(res);
+			out.voxelTextures.resize(variants.size());
+			out.voxelBoxes.resize(variants.size());
+			for (size_t v = 0; v < variants.size(); ++v)
+			{
+				const oc::string prefix = oc::format("{}_treevoxel{}r{}_", name, v, res);
+				const uint32 key = treeBakeHash(treeHash(speciesHash, treeHash(7u, (uint32)v)), TREE_VOXEL_BAKE_VERSION, res);
+				const oc::string stem = oc::format("{}{:08x}", prefix, key);
+				const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
+				const uint64 textureHash = meshCacheMix(meshCacheHash(stem), settings.compressTextures ? 1u : 0u);
+				const uint32 width = res / TREE_VOXEL_TILES_Y * res, height = TREE_VOXEL_TILES_Y * res;
+				CachedTexture& texture = out.voxelTextures[v];
+				if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture) || texture.width != width || texture.height != height
+					|| texture.albedo.size() != numLevels || texture.normal.size() != numLevels)
+				{
+					for (const FileSystem::DirEntry& entry : existing)
+						if (entry.name.rfind(prefix.c_str(), 0) == 0)
+							FileSystem::remove(entry.path);
+					bakeInputs();
+					TreeVoxelBake bake;
+					bakeTreeVoxels(variants[v], TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize }, res,
+						desc.billboardAlbedoScale, bake);
+					// BC3 both: every level's tiles are a multiple of 4 texels (TREE_VOXEL_MIN_RES), so no block mixes two slices.
+					texture = {};
+					encodeTexture(settings.compressTextures, bake.width, bake.height, bake.albedo, TextureConvert::EBlockFormat::BC3,
+						bake.normal, TextureConvert::EBlockFormat::BC3, texture);
+					saveTexture(path, textureHash, texture);
+				}
+				treeVoxelBoxMesh(treeVoxelBox(variants[v], res), out.voxelBoxes[v]);
+			}
+		}
+
 		// THE MID TIER's BRANCH CARDS. One ATLAS per species: the module billboards stacked top to bottom (module m in
 		// rows [m, m + 1) x size), each level the stack of the modules' own levels - exact (every module block halves
 		// cleanly) and every module keeps its coverage-preserving alpha. The levels are stacked IN THEIR ENCODING: a BC
@@ -999,6 +1055,9 @@ namespace Procedural
 						type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 						type.farDistance = species.desc.billboardDistance;
 						type.fadeWidth = species.desc.billboardFadeWidth;
+						// The VOXEL tier: the billboard's place in the main pass (its band, its fade-in material).
+						if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid())
+							type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
 						// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
 						// the BRANCH bark and the leaves fading out over the mid band while the CARD mesh (every module
 						// placement's billboard, merged; the species' atlas) fades in - and out over the far band.
@@ -1626,6 +1685,23 @@ namespace Procedural
 					if (m_expandInFlight.load(oc::memory_order_relaxed) >= MAX_IN_FLIGHT)
 						break;
 				}
+
+		// The chunks the set draws: the renderer's far voxel trees expand every OTHER record chunk (RendererVK Scene.md). Only
+		// the ones the set held LAST frame too: the terrain walk that lists the set's drawn chunks was kicked before this
+		// update, so a chunk added now draws from the next frame on - excluded at once, its trees vanished for a frame (a
+		// dark flash at the near radius). Drawn twice for that frame instead (the same voxels).
+		oc::vector<uint64> keys;
+		keys.reserve(m_vegChunkOf.size());
+		for (const auto& [k, setChunk] : m_vegChunkOf)
+			keys.push_back(k);
+		oc::sort(keys.begin(), keys.end());
+		oc::vector<glm::ivec2> setCoords;
+		setCoords.reserve(keys.size());
+		for (const uint64 k : keys)
+			if (oc::binary_search(m_prevSetKeys.begin(), m_prevSetKeys.end(), k))
+				setCoords.push_back(glm::ivec2((int32)(uint32)k, (int32)(uint32)(k >> 32)));
+		m_prevSetKeys = oc::move(keys);
+		renderer.setTreeNearChunks(setCoords);
 
 		updateColliders(camera);
 	}

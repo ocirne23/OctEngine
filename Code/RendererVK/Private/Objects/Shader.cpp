@@ -352,6 +352,7 @@ static oc::string buildLayoutPreamble()
     def("PIPELINE_IDX_TERRAIN_LIT", (uint32)EPipelineIndex::TerrainLit, "u"); // the cull emits the terrain overlay for these
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");
     def("PIPELINE_IDX_LIT_ROCK", (uint32)EPipelineIndex::LitRock, "u"); // the culls: a tree-set record that is a ROCK (LOD chain, no wind)
+    def("PIPELINE_IDX_LIT_TREE_VOXEL", (uint32)EPipelineIndex::LitTreeVoxel, "u"); // the main cull: the trees' voxel tier, its own list
     def("PIPELINE_TRANSPARENT_MASK", PIPELINE_TRANSPARENT_MASK, "u"); // the cull's sequence routing (Layout.ixx)
     def("MOTION_BLUR_TILE", MOTION_BLUR_TILE);
     def("MOTION_BLUR_SUBTILE", MOTION_BLUR_SUBTILE);
