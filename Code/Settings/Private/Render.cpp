@@ -336,7 +336,11 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre X (km)", &s.vortexCentreXKm, -500.0f, 500.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre Z (km)", &s.vortexCentreZKm, -500.0f, 500.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Radius (km)", &s.vortexRadiusKm, 1.0f, 300.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Falloff (km)", &s.vortexFalloffKm, 0.1f, 300.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Bottom offset (m)", &s.vortexBottomOffset, -3000.0f, 3000.0f, 10.0f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Top offset (m)", &s.vortexTopOffset, -3000.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye radius (km)", &s.vortexEyeRadiusKm, 0.05f, 50.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye shape", &s.vortexEyeShape, -1.0f, 1.0f, 0.01f); // -1 cone, 0 cylinder, 1 inverted cone
     Tweak::floatVar("Sky/Clouds/Vortex", "Eyewall width (km)", &s.vortexEyewallWidthKm, 0.05f, 30.0f, 0.01f);
     Tweak::intVar("Sky/Clouds/Vortex", "Arms", &s.vortexArms, 1, 8);
     Tweak::floatVar("Sky/Clouds/Vortex", "Spiral tightness", &s.vortexTightness, 0.1f, 20.0f, 0.05f);

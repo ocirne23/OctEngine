@@ -99,12 +99,13 @@ void cloudShellIntervals(float originAlt, float b, float tMax, out vec2 seg0, ou
     cloudBandIntervals(originAlt, b, tMax, u_clouds_shellBottom, u_clouds_shellTop, seg0, seg1);
 }
 
-// The MAIN layer's band alone.
+// The MAIN layer's band alone, as the marches cover it: widened by the vortex height offset (the REACH; the density
+// itself uses u_clouds_mainBottom / mainInvHeight).
 float cloudMainTop() { return u_clouds_mainTop; }
 
 void cloudMainIntervals(float originAlt, float b, float tMax, out vec2 seg0, out vec2 seg1)
 {
-    cloudBandIntervals(originAlt, b, tMax, u_clouds_mainBottom, cloudMainTop(), seg0, seg1);
+    cloudBandIntervals(originAlt, b, tMax, u_clouds_mainReachBottom, cloudMainTop(), seg0, seg1);
 }
 
 // Vertical density profile for a cloud type (0 = stratus, 0.5 = cumulus, 1 = cumulonimbus) at the normalized column
@@ -146,24 +147,37 @@ const float CLOUD_MACRO_LOD = 2.0;
 // the clear eye, and soft log-spiral arms from the eye's edge outward (phase = arms x angle + tightness x ln(r / radius)
 // - the spin, in a frame mirrored by u_clouds_vortexHand) that widen and CLOSE into the eyewall over the last "Eyewall
 // width" toward the eye. A separate eyewall ring with a clear moat read as a lone circle cut off from the arms. The arms
-// turn as ONE rigid pattern: an angle that depends on r and grows with time winds them up. All of it fades to the normal
-// coverage over the outer 40 % of the radius. The MAIN layer only: the upper layer keeps its own clouds, cleared within
-// u_clouds_vortexUpperClearRadius. u_clouds_vortexStrength blends all of it (pattern, shear, wall, upper clearing) from
-// the normal clouds (0) to the full vortex (1). rel = camera-relative XZ.
+// turn as ONE rigid pattern: an angle that depends on r and grows with time winds them up. The MAIN layer only: the upper
+// layer keeps its own clouds, cleared within u_clouds_vortexUpperClearRadius. rel = camera-relative XZ, r = the distance
+// from the eye.
+// THE WEIGHT (cloudVortexWeight): u_clouds_vortexStrength (0 = the normal clouds, 1 = the full vortex), x 1 out to the
+// radius, falling smoothly to 0 at u_clouds_vortexOuterRadius (radius + "Falloff"). It blends the pattern, the shear and
+// the wall; the upper clearing takes the strength alone.
+// THE BAND OFFSETS (cloudVortexBandOffset): the main layer's bottom and top move by u_clouds_vortexBottomOffset /
+// TopOffset at the eye, smoothly to 0 at the outer radius; the column and its noise squash / stretch with the band, kept
+// CLOUD_VORTEX_MIN_THICKNESS thick at least. The marches cover the moved band (u_clouds_mainReachBottom / mainTop).
+// THE EYE SHAPE (cloudVortexEyeAt): the eye radius over the layer's height - u_clouds_vortexEyeRadius at the middle, x
+// (1 + shape x (2 hf - 1)): -1 = a cone (0 at the top, 2x at the base), 0 = a cylinder, 1 = an inverted cone.
+
+float cloudVortexWeight(float r) { return (1.0 - smoothstep(u_clouds_vortexRadius, u_clouds_vortexOuterRadius, r)) * u_clouds_vortexStrength; }
+const float CLOUD_VORTEX_MIN_THICKNESS = 100.0; // m; = the CPU's cloudMainReachTop
+vec2 cloudVortexBandOffset(float r)
+{
+    return vec2(u_clouds_vortexBottomOffset, u_clouds_vortexTopOffset) * (u_clouds_vortexStrength * (1.0 - smoothstep(0.0, u_clouds_vortexOuterRadius, r)));
+}
+float cloudVortexEyeAt(float hf) { return u_clouds_vortexEyeRadius * max(1.0 + u_clouds_vortexEyeShape * (2.0 * hf - 1.0), 0.0); }
 
 // The eye's edge (0 inside, 1 out: a quarter wall width) and the arms' merge into the eyewall (1 at the eye's edge, 0 one
-// wall width out).
-float cloudVortexEyeCut(float r) { return smoothstep(u_clouds_vortexEyeRadius - 0.25 / u_clouds_vortexInvWallWidth, u_clouds_vortexEyeRadius, r); }
-float cloudVortexMerge(float r) { return 1.0 - smoothstep(u_clouds_vortexEyeRadius, u_clouds_vortexEyeRadius + 1.0 / u_clouds_vortexInvWallWidth, r); }
+// wall width out). eye = the eye radius at this height.
+float cloudVortexEyeCut(float r, float eye) { return smoothstep(eye - 0.25 / u_clouds_vortexInvWallWidth, eye, r); }
+float cloudVortexMerge(float r, float eye) { return 1.0 - smoothstep(eye, eye + 1.0 / u_clouds_vortexInvWallWidth, r); }
 
-// The eyewall's weight (0..1), x the fade.
-float cloudVortexWall(vec2 rel)
+// The eyewall's weight (0..1), x the vortex weight.
+float cloudVortexWall(float r, float eye)
 {
-    const float r = length(rel - u_clouds_vortexCentre);
-    if (r >= u_clouds_vortexRadius)
+    if (r >= eye + 1.0 / u_clouds_vortexInvWallWidth)
         return 0.0;
-    return cloudVortexEyeCut(r) * cloudVortexMerge(r) * (1.0 - smoothstep(0.6 * u_clouds_vortexRadius, u_clouds_vortexRadius, r))
-         * u_clouds_vortexStrength;
+    return cloudVortexEyeCut(r, eye) * cloudVortexMerge(r, eye) * cloudVortexWeight(r);
 }
 
 // The upper layer's coverage scale: 0 over the eye, soft over the outer half of the clear radius.
@@ -174,43 +188,43 @@ float cloudVortexUpperClear(vec2 rel)
     return mix(1.0, smoothstep(0.5 * R, R, r), u_clouds_vortexStrength);
 }
 
-// The column coverage under the vortex: the pattern, blended in by the fade.
-float cloudVortexCoverage(vec2 rel, float coverage)
+// The column coverage under the vortex: the pattern, blended in by the weight. eye = the eye radius at this height.
+float cloudVortexCoverage(vec2 rel, float coverage, float eye)
 {
     const vec2 q = rel - u_clouds_vortexCentre;
     const float r = length(q);
-    const float radius = u_clouds_vortexRadius;
-    if (r >= radius)
+    if (r >= u_clouds_vortexOuterRadius)
         return coverage;
-    const float eyeCut = cloudVortexEyeCut(r);
+    const float eyeCut = cloudVortexEyeCut(r, eye);
     float pattern = 0.0;
     if (eyeCut > 0.0 && r > 1.0) // atan and log need r > 0
     {
         const float angle = atan(u_clouds_vortexHand * q.y, q.x);
         const float phase = u_clouds_vortexArms * angle + u_clouds_vortexTightness * log(r * u_clouds_vortexInvRadius) - u_clouds_vortexPhase;
         // Soft arms: a wide ramp around the band edge, so the coverage rises and falls smoothly across an arm.
-        const float band = max(smoothstep(u_clouds_vortexBandEdge - 0.6, u_clouds_vortexBandEdge + 0.6, cos(phase)), cloudVortexMerge(r));
+        const float band = max(smoothstep(u_clouds_vortexBandEdge - 0.6, u_clouds_vortexBandEdge + 0.6, cos(phase)), cloudVortexMerge(r, eye));
         pattern = eyeCut * coverage * mix(u_clouds_vortexGapCoverage, 1.0, band); // an arm keeps the normal coverage
     }
-    return mix(coverage, clamp(pattern, 0.0, 1.0), (1.0 - smoothstep(0.6 * radius, radius, r)) * u_clouds_vortexStrength);
+    return mix(coverage, clamp(pattern, 0.0, 1.0), cloudVortexWeight(r));
 }
 
-// The noise lookup sheared along the spiral: turned about the eye by u_clouds_vortexTwist x ln(r / radius) (0 at the
-// radius, so it joins the plain lookup there; floored at the eye radius). STATIC - only the coverage bands spin. The
-// lookup moves by the rotation of the camera-relative offset, so the noise wrap stays continuous.
+// The noise lookup sheared along the spiral: turned about the eye by u_clouds_vortexTwist x ln(r / outer radius), x the
+// weight (both 0 at the outer radius, so it joins the plain lookup smoothly; floored at the eye radius). STATIC - only the
+// coverage bands spin. The lookup moves by the rotation of the camera-relative offset, so the noise wrap stays continuous.
 vec2 cloudVortexTwist(vec2 nxz)
 {
     const vec2 q = nxz - cloudNoiseOffset() - u_clouds_vortexCentre;
     const float r = length(q);
-    if (r >= u_clouds_vortexRadius)
+    if (r >= u_clouds_vortexOuterRadius)
         return nxz;
-    const float a = u_clouds_vortexStrength * u_clouds_vortexTwist * log(max(r, u_clouds_vortexEyeRadius) * u_clouds_vortexInvRadius);
+    const float a = cloudVortexWeight(r) * u_clouds_vortexTwist * log(max(r, u_clouds_vortexEyeRadius) / u_clouds_vortexOuterRadius);
     const float ca = cos(a), sa = sin(a);
     return nxz + vec2(ca * q.x - sa * q.y, sa * q.x + ca * q.y) - q;
 }
 
-// upper: the upper layer's column (the vortex only clears its eye), else the main layer's (the full pattern).
-float cloudColumnCoverage(float baseCoverage, float weatherR, vec2 nxz, bool upper)
+// upper: the upper layer's column (the vortex only clears its eye), else the main layer's (the full pattern, with the
+// eye radius eye at this height).
+float cloudColumnCoverage(float baseCoverage, float weatherR, vec2 nxz, bool upper, float eye)
 {
     const float ramp = min(baseCoverage * (1.0 / CLOUD_VARIATION_RAMP), 1.0);
     const vec2 macroUV = (nxz + u_clouds_macroShift) * u_clouds_invMacroPeriod;
@@ -218,7 +232,7 @@ float cloudColumnCoverage(float baseCoverage, float weatherR, vec2 nxz, bool upp
     const vec2 rel = nxz - cloudNoiseOffset(); // camera-relative XZ
     float coverage = clamp(baseCoverage + ((weatherR - 0.5) * u_clouds_coverageVariation + (macro - 0.5) * u_clouds_macroVariation) * ramp, 0.0, 1.0);
     if (u_clouds_vortexEnabled > 0.5)
-        coverage = upper ? coverage * cloudVortexUpperClear(rel) : cloudVortexCoverage(rel, coverage);
+        coverage = upper ? coverage * cloudVortexUpperClear(rel) : cloudVortexCoverage(rel, coverage, eye);
     const vec4 far = u_clouds_farCoverage; // x start (m), y 1 / range, z the far scale
     const float farScale = mix(1.0, far.z, smoothstep(0.0, 1.0, (length(rel) - far.x) * far.y));
     return coverage * farScale;
@@ -303,7 +317,7 @@ float cloudUpperDensity(vec2 nxz, float alt, float camDist, float detail, float 
         return 0.0;
 
     const vec4 weather = textureLod(u_cloudWeather, vec2(-nxz.y, nxz.x) * u_clouds_invWeatherPeriod + vec2(0.61, 0.13), 0.0);
-    const float coverage = cloudColumnCoverage(u_clouds_upperCoverage, weather.r, nxz, true);
+    const float coverage = cloudColumnCoverage(u_clouds_upperCoverage, weather.r, nxz, true, 0.0);
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_clouds_upperType + (weather.g - 0.5) * (0.5 * u_clouds_typeVariation), 0.0, 1.0);
@@ -333,13 +347,25 @@ float cloudUpperDensity(vec2 nxz, float alt, float camDist, float detail, float 
 float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
 {
     const float invH = u_clouds_mainInvHeight;
+    // The vortex moves the layer's bottom and top: alt becomes the altitude at the same height fraction of the UNMOVED
+    // layer, so the column and its noise squash / stretch with the band.
+    float vortexR = 0.0, eye = 0.0;
+    if (u_clouds_vortexEnabled > 0.5)
+    {
+        vortexR = length(nxz - cloudNoiseOffset() - u_clouds_vortexCentre);
+        const vec2 off = cloudVortexBandOffset(vortexR); // x bottom, y top (m)
+        const float h = 1.0 / invH;
+        alt = u_clouds_mainBottom + (alt - u_clouds_mainBottom - off.x) * (h / max(h + off.y - off.x, CLOUD_VORTEX_MIN_THICKNESS));
+    }
     const float hf = (alt - u_clouds_mainBottom) * invH;
     if (hf <= 0.0 || hf >= 1.0)
         return 0.0;
+    if (u_clouds_vortexEnabled > 0.5)
+        eye = cloudVortexEyeAt(hf);
 
     const vec2 wuv = nxz * u_clouds_invWeatherPeriod;
     const vec4 weather = textureLod(u_cloudWeather, wuv, 0.0);
-    const float coverage = cloudColumnCoverage(u_clouds_coverage, weather.r, nxz, false);
+    const float coverage = cloudColumnCoverage(u_clouds_coverage, weather.r, nxz, false, eye);
     if (coverage <= 0.001)
         return 0.0;
     float type = clamp(u_clouds_type + (weather.g - 0.5) * u_clouds_typeVariation, 0.0, 1.0);
@@ -350,7 +376,7 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
     // The vortex's EYEWALL: cumulonimbus towers up to the layer top.
     if (u_clouds_vortexEnabled > 0.5)
     {
-        const float wall = cloudVortexWall(nxz - cloudNoiseOffset());
+        const float wall = cloudVortexWall(vortexR, eye);
         type = mix(type, 1.0, wall);
         columnTop = mix(columnTop, 1.0, wall);
     }

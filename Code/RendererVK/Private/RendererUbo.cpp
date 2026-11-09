@@ -94,16 +94,27 @@ namespace
     // height-in-shell lighting cover).
     float cloudMainBottom(const CloudParams& c) { return glm::max(c.bottom, 0.0f); }
     float cloudMainTop(const CloudParams& c) { return glm::max(c.top, cloudMainBottom(c) + 100.0f); }
+    // The main layer's REACH: its band widened by the vortex bottom / top offsets (the band's edges move by up to those
+    // near the eye; the shader keeps it CLOUD_VORTEX_MIN_THICKNESS = 100 m thick at least), what the marches cover. The
+    // density keeps the band itself.
+    float cloudVortexBottomOffset(const CloudParams& c) { return c.vortexEnabled ? glm::clamp(c.vortexBottomOffset, -3000.0f, 3000.0f) : 0.0f; }
+    float cloudVortexTopOffset(const CloudParams& c) { return c.vortexEnabled ? glm::clamp(c.vortexTopOffset, -3000.0f, 3000.0f) : 0.0f; }
+    float cloudMainReachBottom(const CloudParams& c) { return glm::max(cloudMainBottom(c) + glm::min(cloudVortexBottomOffset(c), 0.0f), 0.0f); }
+    float cloudMainReachTop(const CloudParams& c)
+    {
+        return glm::max(cloudMainTop(c) + glm::max(cloudVortexTopOffset(c), 0.0f), cloudMainBottom(c) + glm::max(cloudVortexBottomOffset(c), 0.0f) + 100.0f);
+    }
     float cloudUpperBottom(const CloudParams& c) { return glm::max(c.upperBottom, 0.0f); }
     float cloudUpperTop(const CloudParams& c) { return glm::max(c.upperTop, cloudUpperBottom(c) + 50.0f); }
     bool cloudUpperOn(const CloudParams& c) { return c.upperEnabled; } // density and coverage are >= 0.01 (the tweak mins)
-    float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainBottom(c), cloudUpperBottom(c)) : cloudMainBottom(c); }
-    float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainTop(c), cloudUpperTop(c)) : cloudMainTop(c); }
+    float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainReachBottom(c), cloudUpperBottom(c)) : cloudMainReachBottom(c); }
+    float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainReachTop(c), cloudUpperTop(c)) : cloudMainReachTop(c); }
     float cloudCoverage(const CloudParams& c) { return glm::clamp(c.coverage, 0.0f, 1.0f); }
     // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
     float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
     float cloudVortexWallWidth(const CloudParams& c) { return glm::max(c.vortexEyewallWidthKm, 0.05f) * 1000.0f; }
     float cloudVortexRadius(const CloudParams& c) { return glm::max(glm::max(c.vortexRadiusKm, 1.0f) * 1000.0f, cloudVortexEye(c) + 4.0f * cloudVortexWallWidth(c)); }
+    float cloudVortexOuterRadius(const CloudParams& c) { return cloudVortexRadius(c) + glm::max(c.vortexFalloffKm, 0.1f) * 1000.0f; }
     float cloudVortexArms(const CloudParams& c) { return (float)glm::clamp(c.vortexArms, 1, 8); }
     float cloudVortexHand(const CloudParams& c) { return c.vortexReverse ? -1.0f : 1.0f; }
 
@@ -871,7 +882,12 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_vortexPhase", [this, &c] { return (float)std::fmod(m_cloudVortexAngle * (double)cloudVortexArms(c), glm::two_pi<double>()); }, UboLive);
         list.add("clouds_vortexRadius", [&] { return cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
         list.add("clouds_vortexInvRadius", [&] { return 1.0f / cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
+        list.add("clouds_vortexOuterRadius", [&] { return cloudVortexOuterRadius(c); },
+            c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm, c.vortexFalloffKm);
+        list.add("clouds_vortexBottomOffset", [&] { return cloudVortexBottomOffset(c); }, c.vortexEnabled, c.vortexBottomOffset);
+        list.add("clouds_vortexTopOffset", [&] { return cloudVortexTopOffset(c); }, c.vortexEnabled, c.vortexTopOffset);
         list.add("clouds_vortexEyeRadius", [&] { return cloudVortexEye(c); }, c.vortexEyeRadiusKm);
+        list.add("clouds_vortexEyeShape", [&] { return glm::clamp(c.vortexEyeShape, -1.0f, 1.0f); }, c.vortexEyeShape);
         list.add("clouds_vortexInvWallWidth", [&] { return 1.0f / cloudVortexWallWidth(c); }, c.vortexEyewallWidthKm);
         list.add("clouds_vortexArms", [&] { return cloudVortexArms(c); }, c.vortexArms);
         list.add("clouds_vortexHand", [&] { return cloudVortexHand(c); }, c.vortexReverse);
@@ -890,15 +906,17 @@ void RendererState::registerUboValues(UboBlock& list)
                 return (float)std::fmod(m_cloudEvolveOffset + cloudSeedOffset(c).z * period, period);
             }, UboLive);
         list.add("clouds_shellBottom", [&] { return cloudShellBottom(c); },
-            c.bottom, c.upperBottom, c.upperEnabled, UboLive);
+            c.bottom, c.upperBottom, c.upperEnabled, c.vortexEnabled, c.vortexBottomOffset, UboLive);
         list.add("clouds_shellTop", [&] { return cloudShellTop(c); },
-            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, UboLive);
+            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, c.vortexEnabled, c.vortexBottomOffset, c.vortexTopOffset, UboLive);
         list.add("clouds_invShellHeight", [&] { return 1.0f / (cloudShellTop(c) - cloudShellBottom(c)); },
-            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, UboLive);
+            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, c.vortexEnabled, c.vortexBottomOffset, c.vortexTopOffset, UboLive);
         list.add("clouds_coverage", [&] { return cloudCoverage(c); }, c.coverage, UboLive);
         list.add("clouds_mainBottom", [&] { return cloudMainBottom(c); }, c.bottom);
         list.add("clouds_mainInvHeight", [&] { return 1.0f / (cloudMainTop(c) - cloudMainBottom(c)); }, c.bottom, c.top);
-        list.add("clouds_mainTop", [&] { return cloudMainTop(c); }, c.bottom, c.top);
+        // The main layer's REACH (the marches' band): the layer widened by the vortex bottom / top offsets.
+        list.add("clouds_mainReachBottom", [&] { return cloudMainReachBottom(c); }, c.bottom, c.vortexEnabled, c.vortexBottomOffset);
+        list.add("clouds_mainTop", [&] { return cloudMainReachTop(c); }, c.bottom, c.top, c.vortexEnabled, c.vortexBottomOffset, c.vortexTopOffset);
         // The sun march's reach and the aerial steps' sun path divide by the sun's elevation, floored (a low sun).
         const SkyParams& sky = Globals::settings.sky;
         list.add("clouds_invSunUpLight", [&sky] { return 1.0f / glm::max(skySunDirection(sky).y, 0.02f); }, UboLive);

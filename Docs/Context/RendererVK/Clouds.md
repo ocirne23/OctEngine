@@ -51,21 +51,34 @@ variant (`sky.fs.glsl`) draws NO clouds.
   coverage, so the shadow map, the sky clouds and the air's cloud shadow all see it. **The MAIN layer only:** the
   upper layer keeps its own clouds and is only CLEARED over the eye ("Upper clear radius (km)", soft over its outer
   half; `cloudVortexUpperClear`, the `upper` argument of `cloudColumnCoverage`) - the spiral in a stratiform deck read
-  wrong. **"Strength"** (0 = the normal clouds, 1 = the full vortex; a Runtime row, so it stays live under the lock)
-  scales the pattern's blend weight, the noise shear's angle, the eyewall weight and the upper clearing, so the whole
-  vortex fades in and out smoothly. Out from the centre:
+  wrong. **THE WEIGHT** (`cloudVortexWeight`): "Strength" (0 = the normal clouds, 1 = the full vortex; a Runtime row,
+  so it stays live under the lock) x 1 out to "Radius (km)", falling smoothly to 0 over "Falloff (km)" past it
+  (`u_clouds_vortexOuterRadius` = radius + falloff). It blends the pattern, the noise shear and the eyewall; the upper
+  clearing takes the strength alone. So the whole vortex fades in and out smoothly, in time and toward its edge. Out from
+  the centre:
   ONE shape: the clear EYE (its edge a quarter "Eyewall width" wide), and soft log-spiral ARMS from the eye's edge
   outward: phase = arms x angle + "Spiral tightness" x ln(r / radius) - `u_clouds_vortexPhase`; an arm is where
   cos(phase) passes cos(pi x "Band width") (a wide ramp of +-0.6 around it), at the NORMAL coverage, and between the
   arms the normal coverage x "Gap coverage". Over "Eyewall width" toward the eye the arms widen and CLOSE into the EYEWALL
   (`cloudVortexMerge`; in the main layer it also pulls the type to cumulonimbus and the column top to the layer top). A
-  separate eyewall ring with a clear moat was tried and dropped: it read as a lone circle cut off from the arms. The
-  pattern blends back to the normal coverage over the outer 40 % of "Radius (km)".
+  separate eyewall ring with a clear moat was tried and dropped: it read as a lone circle cut off from the arms.
+  * **"Eye shape"** (`cloudVortexEyeAt`): the eye radius over the main layer's height (hf within the moved band) =
+    "Eye radius" x max(1 + shape x (2 hf - 1), 0): -1 = a cone (2x at the base, closed at the top), 0 = a cylinder,
+    1 = an inverted cone (closed at the base, 2x at the top). The eye cut, the merge and the eyewall all take this
+    radius; the noise shear's floor and the air's cloud shadow (`cloudAirSunVis`) take the plain one.
+  * **"Bottom offset (m)" / "Top offset (m)"** (`cloudVortexBandOffset`): the main layer's bottom and top move up (+)
+    or down (-) by these x strength at the eye, smoothly to 0 at the outer radius - both the same = the layer moves,
+    bottom up + top down = a thinner vortex. The column and the noise it thresholds squash / stretch with the band
+    (`alt` is mapped to the same height fraction of the unmoved layer), kept `CLOUD_VORTEX_MIN_THICKNESS` (100 m) thick
+    at least. The marches cover the moved band: `u_clouds_mainReachBottom` / `u_clouds_mainTop` and the shell are the
+    layer widened by the offsets (the density keeps `u_clouds_mainBottom` / `mainInvHeight`), so a downward bottom or an
+    upward top costs march steps everywhere while the vortex is on. The layer-height lighting
+    (`cloudLayerHeightFraction`) does not follow the offsets.
   * **The bands SPIN as ONE RIGID pattern** ("Spin (deg/min)", sim clock; the CPU accumulates the angle,
     `m_cloudVortexAngle`, and sends arms x it). An angle that depends on r AND grows with time winds the bands up.
   * **The noise is sheared along the spiral, STATICALLY** ("Noise twist"): the base and detail lookups turn about the
-    eye by `u_clouds_vortexTwist` x ln(r / radius) (= the spiral's own angle at twist 1; 0 at the radius, floored at the
-    eye radius). It moves the lookup by the rotation of the camera-relative offset, so the noise wrap stays continuous.
+    eye by `u_clouds_vortexTwist` x ln(r / outer radius) x the weight (= the spiral's own winding at twist 1; 0 at the
+    outer radius, floored at the eye radius). It moves the lookup by the rotation of the camera-relative offset, so the noise wrap stays continuous.
     The noise does not turn with the bands and still drifts with the wind: the bands sweep through it.
   * "Reverse spin" mirrors the frame (`u_clouds_vortexHand`): the spin and the spiral's hand together, so the arms
     always trail.

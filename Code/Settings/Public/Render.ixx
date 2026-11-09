@@ -129,15 +129,19 @@ export struct CloudParams
     float farCoverageEndKm = 55.0f;
     // VORTEX: a hurricane-like pattern at a fixed world position (the MAIN layer, before the far coverage): a clear EYE and
     // soft spiral ARMS from its edge outward that close into a tall EYEWALL near the eye, rotating slowly as one rigid
-    // pattern. The base and detail noise are sheared along the spiral (static: only the arms turn). Blends back to the
-    // normal coverage over the outer 40 % of the radius. The UPPER layer keeps its own clouds, only cleared over the eye.
+    // pattern. The base and detail noise are sheared along the spiral (static: only the arms turn). Full out to the radius,
+    // then blends back to the normal clouds over the falloff. The UPPER layer keeps its own clouds, only cleared over the eye.
     bool  vortexEnabled = false;
     float vortexStrength = 1.0f;       // 0 = the normal clouds, 1 = the full vortex (a smooth blend of the pattern, the shear and the upper clearing)
     float vortexUpperClearKm = 1.0f;   // the upper layer is cleared within this radius of the eye (km; soft over its outer half)
     float vortexCentreXKm = -3.6423f;  // world X of the eye (km); default = the free-fly camera's start (App Session START_POS)
     float vortexCentreZKm = -11.091f;  // world Z of the eye (km)
-    float vortexRadiusKm = 5.0f;       // the reach of the pattern (km)
-    float vortexEyeRadiusKm = 0.3f;    // the clear eye (km)
+    float vortexRadiusKm = 5.0f;       // the full pattern reaches this far (km)
+    float vortexFalloffKm = 5.0f;      // past the radius, the blend back to the normal clouds over this width (km)
+    float vortexBottomOffset = 0.0f;   // the main layer's bottom moves up (+) / down (-) by this at the eye (m), smoothly to 0 at radius + falloff
+    float vortexTopOffset = 0.0f;      // the same for its top: bottom up + top down = a thinner vortex
+    float vortexEyeRadiusKm = 0.3f;    // the clear eye (km), at the middle of the main layer
+    float vortexEyeShape = 0.0f;       // the eye over the height: -1 = a cone (closes at the top), 0 = a cylinder, 1 = an inverted cone (closes at the base)
     float vortexEyewallWidthKm = 0.3f; // how far out from the eye the arms close into the eyewall (km)
     int   vortexArms = 2;              // spiral bands
     float vortexTightness = 4.0f;      // spiral winding: band phase (rad) per e-fold of the radius
