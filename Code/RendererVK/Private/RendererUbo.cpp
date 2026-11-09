@@ -874,7 +874,11 @@ void RendererState::registerUboValues(UboBlock& list)
         // wind), and the band phase = arms x the accumulated spin angle.
         list.add("clouds_vortexEnabled", [&] { return c.vortexEnabled ? 1.0f : 0.0f; }, c.vortexEnabled);
         list.add("clouds_vortexStrength", [&] { return glm::clamp(c.vortexStrength, 0.0f, 1.0f); }, UboLive); // a Runtime row
-        list.add("clouds_vortexUpperClearRadius", [&] { return glm::max(c.vortexUpperClearKm, 0.05f) * 1000.0f; }, c.vortexUpperClearKm);
+        list.add("clouds_vortexUpperClearRadius", [&] { return glm::max(c.vortexUpperClearScale, 0.1f) * cloudVortexEye(c); }, c.vortexUpperClearScale, c.vortexEyeRadiusKm);
+        list.add("clouds_vortexTornado", [&] { return glm::clamp(c.vortexTornado, 0.0f, 1.0f); }, c.vortexTornado);
+        list.add("clouds_vortexTornadoLift", [&] { return glm::max(c.vortexTornadoLiftKm, 0.05f) * 1000.0f; }, c.vortexTornadoLiftKm);
+        list.add("clouds_vortexTornadoCurve", [&] { return glm::clamp(c.vortexTornadoCurve, 0.25f, 4.0f); }, c.vortexTornadoCurve);
+        list.add("clouds_vortexTornadoDrop", [&] { return glm::max(c.vortexTornadoDropKm, 0.05f) * 1000.0f; }, c.vortexTornadoDropKm);
         list.add("clouds_vortexCentre", [this, &c]
             {
                 return glm::vec2(glm::dvec2(c.vortexCentreXKm, c.vortexCentreZKm) * 1000.0 - glm::dvec2(m_cameraPos.x, m_cameraPos.z));

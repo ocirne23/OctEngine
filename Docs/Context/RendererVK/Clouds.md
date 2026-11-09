@@ -49,8 +49,8 @@ variant (`sky.fs.glsl`) draws NO clouds.
   `clouds.inc.glsl`): a hurricane-like pattern around a WORLD-FIXED eye ("Centre X / Z (km)"; `u_clouds_vortexCentre` =
   the centre relative to the camera, so the wind does not carry it away). In `cloudColumnCoverage`, before the far
   coverage, so the shadow map, the sky clouds and the air's cloud shadow all see it. **The MAIN layer only:** the
-  upper layer keeps its own clouds and is only CLEARED over the eye ("Upper clear radius (km)", soft over its outer
-  half; `cloudVortexUpperClear`, the `upper` argument of `cloudColumnCoverage`) - the spiral in a stratiform deck read
+  upper layer keeps its own clouds and is only CLEARED over the eye ("Upper clear radius (x eye)" x "Eye radius", soft
+  over its outer half; `cloudVortexUpperClear`, the `upper` argument of `cloudColumnCoverage`) - the spiral in a stratiform deck read
   wrong. **THE WEIGHT** (`cloudVortexWeight`): "Strength" (0 = the normal clouds, 1 = the full vortex; a Runtime row,
   so it stays live under the lock) x 1 out to "Radius (km)", falling smoothly to 0 over "Falloff (km)" past it
   (`u_clouds_vortexOuterRadius` = radius + falloff). It blends the pattern, the noise shear and the eyewall; the upper
@@ -74,6 +74,14 @@ variant (`sky.fs.glsl`) draws NO clouds.
     layer widened by the offsets (the density keeps `u_clouds_mainBottom` / `mainInvHeight`), so a downward bottom or an
     upward top costs march steps everywhere while the vortex is on. The layer-height lighting
     (`cloudLayerHeightFraction`) does not follow the offsets.
+  * **THE TORNADO** ("Vortex/Tornado", `cloudVortexTornadoLift`): the bottom rises further, as a share of the layer, by
+    a radial profile from the MIDDLE eye radius e (the band's height cannot hang on hf, which the band sets): 0 at the
+    eye's edge, a smoothstep DROP up to the peak ("Lift" x strength) at e + "Drop width", then the LIFT ramp - a
+    smoothstep to 0 over "Lift width" further out, raised to the "Lift curve" power (> 1 = low far out, steep near the
+    wall). So the deck climbs smoothly from the outside in and the wall hangs down to the layer bottom as a flared
+    column; at "Lift" 1 the peak is the 100 m minimum at the layer top. It takes the strength, not the weight (the lift
+    width may reach past the radius). Only raises, so it costs no march reach. With a non-zero "Eye shape" the wall
+    leans while the column profile does not.
   * **The bands SPIN as ONE RIGID pattern** ("Spin (deg/min)", sim clock; the CPU accumulates the angle,
     `m_cloudVortexAngle`, and sends arms x it). An angle that depends on r AND grows with time winds the bands up.
   * **The noise is sheared along the spiral, STATICALLY** ("Noise twist"): the base and detail lookups turn about the

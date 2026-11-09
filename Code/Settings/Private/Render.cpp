@@ -332,13 +332,17 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::boolean("Sky/Clouds/Vortex", "Enabled", &s.vortexEnabled);
     // Live under the lock: a blend to drag (or animate) without a shader rebake per change.
     Tweak::floatVar("Sky/Clouds/Vortex", "Strength", &s.vortexStrength, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Clouds/Vortex", "Upper clear radius (km)", &s.vortexUpperClearKm, 0.05f, 50.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Upper clear radius (x eye)", &s.vortexUpperClearScale, 0.1f, 50.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre X (km)", &s.vortexCentreXKm, -500.0f, 500.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre Z (km)", &s.vortexCentreZKm, -500.0f, 500.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Radius (km)", &s.vortexRadiusKm, 1.0f, 300.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Falloff (km)", &s.vortexFalloffKm, 0.1f, 300.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Bottom offset (m)", &s.vortexBottomOffset, -3000.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Top offset (m)", &s.vortexTopOffset, -3000.0f, 3000.0f, 10.0f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift", &s.vortexTornado, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift width (km)", &s.vortexTornadoLiftKm, 0.05f, 300.0f, 0.05f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift curve", &s.vortexTornadoCurve, 0.25f, 4.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Drop width (km)", &s.vortexTornadoDropKm, 0.05f, 30.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye radius (km)", &s.vortexEyeRadiusKm, 0.05f, 50.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye shape", &s.vortexEyeShape, -1.0f, 1.0f, 0.01f); // -1 cone, 0 cylinder, 1 inverted cone
     Tweak::floatVar("Sky/Clouds/Vortex", "Eyewall width (km)", &s.vortexEyewallWidthKm, 0.05f, 30.0f, 0.01f);

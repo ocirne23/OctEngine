@@ -156,6 +156,7 @@ const float CLOUD_MACRO_LOD = 2.0;
 // THE BAND OFFSETS (cloudVortexBandOffset): the main layer's bottom and top move by u_clouds_vortexBottomOffset /
 // TopOffset at the eye, smoothly to 0 at the outer radius; the column and its noise squash / stretch with the band, kept
 // CLOUD_VORTEX_MIN_THICKNESS thick at least. The marches cover the moved band (u_clouds_mainReachBottom / mainTop).
+// THE TORNADO (cloudVortexTornadoLift): the bottom rises further, as a share of the layer.
 // THE EYE SHAPE (cloudVortexEyeAt): the eye radius over the layer's height - u_clouds_vortexEyeRadius at the middle, x
 // (1 + shape x (2 hf - 1)): -1 = a cone (0 at the top, 2x at the base), 0 = a cylinder, 1 = an inverted cone.
 
@@ -165,6 +166,17 @@ vec2 cloudVortexBandOffset(float r)
 {
     return vec2(u_clouds_vortexBottomOffset, u_clouds_vortexTopOffset) * (u_clouds_vortexStrength * (1.0 - smoothstep(0.0, u_clouds_vortexOuterRadius, r)));
 }
+// The tornado's lift of the bottom (a share of the layer) over r, from the middle eye radius e (the band's height cannot
+// hang on hf, which the band sets): 0 at the eye's edge, the DROP (smoothstep) up to the peak over u_clouds_vortexTornadoDrop,
+// then the LIFT ramp falling to 0 over u_clouds_vortexTornadoLift further out (a smoothstep shaped by the curve power).
+// So the deck climbs smoothly toward the eye and the wall hangs down to the layer bottom as a flared column.
+float cloudVortexTornadoLift(float r)
+{
+    const float drop = u_clouds_vortexEyeRadius + u_clouds_vortexTornadoDrop;
+    const float rise = pow(1.0 - smoothstep(drop, drop + u_clouds_vortexTornadoLift, r), u_clouds_vortexTornadoCurve);
+    return u_clouds_vortexTornado * u_clouds_vortexStrength * smoothstep(u_clouds_vortexEyeRadius, drop, r) * rise;
+}
+
 float cloudVortexEyeAt(float hf) { return u_clouds_vortexEyeRadius * max(1.0 + u_clouds_vortexEyeShape * (2.0 * hf - 1.0), 0.0); }
 
 // The eye's edge (0 inside, 1 out: a quarter wall width) and the arms' merge into the eyewall (1 at the eye's edge, 0 one
@@ -353,8 +365,10 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
     if (u_clouds_vortexEnabled > 0.5)
     {
         vortexR = length(nxz - cloudNoiseOffset() - u_clouds_vortexCentre);
-        const vec2 off = cloudVortexBandOffset(vortexR); // x bottom, y top (m)
+        vec2 off = cloudVortexBandOffset(vortexR); // x bottom, y top (m)
         const float h = 1.0 / invH;
+        if (u_clouds_vortexTornado > 0.0)
+            off.x += cloudVortexTornadoLift(vortexR) * h;
         alt = u_clouds_mainBottom + (alt - u_clouds_mainBottom - off.x) * (h / max(h + off.y - off.x, CLOUD_VORTEX_MIN_THICKNESS));
     }
     const float hf = (alt - u_clouds_mainBottom) * invH;

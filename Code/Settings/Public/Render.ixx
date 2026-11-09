@@ -133,13 +133,18 @@ export struct CloudParams
     // then blends back to the normal clouds over the falloff. The UPPER layer keeps its own clouds, only cleared over the eye.
     bool  vortexEnabled = false;
     float vortexStrength = 1.0f;       // 0 = the normal clouds, 1 = the full vortex (a smooth blend of the pattern, the shear and the upper clearing)
-    float vortexUpperClearKm = 1.0f;   // the upper layer is cleared within this radius of the eye (km; soft over its outer half)
+    float vortexUpperClearScale = 2.5f; // the upper layer is cleared within this x the eye radius (soft over its outer half)
     float vortexCentreXKm = -3.6423f;  // world X of the eye (km); default = the free-fly camera's start (App Session START_POS)
     float vortexCentreZKm = -11.091f;  // world Z of the eye (km)
     float vortexRadiusKm = 5.0f;       // the full pattern reaches this far (km)
     float vortexFalloffKm = 5.0f;      // past the radius, the blend back to the normal clouds over this width (km)
     float vortexBottomOffset = 0.0f;   // the main layer's bottom moves up (+) / down (-) by this at the eye (m), smoothly to 0 at radius + falloff
     float vortexTopOffset = 0.0f;      // the same for its top: bottom up + top down = a thinner vortex
+    // TORNADO: the main layer's bottom rises toward the eye (a funnel) and drops back down to the eye's edge (the wall column).
+    float vortexTornado = 0.0f;        // 0..1: the peak lift, as a share of the layer (1 = the deck thins to its top)
+    float vortexTornadoLiftKm = 4.0f;  // how far out from the drop the lift starts (km): 0 there, rising smoothly to the peak
+    float vortexTornadoCurve = 1.0f;   // the lift's curve: > 1 = it stays low far out and climbs near the wall, < 1 = it climbs early
+    float vortexTornadoDropKm = 0.5f;  // the drop from the peak down to the layer bottom at the eye's edge (km): the wall column's flare
     float vortexEyeRadiusKm = 0.3f;    // the clear eye (km), at the middle of the main layer
     float vortexEyeShape = 0.0f;       // the eye over the height: -1 = a cone (closes at the top), 0 = a cylinder, 1 = an inverted cone (closes at the base)
     float vortexEyewallWidthKm = 0.3f; // how far out from the eye the arms close into the eyewall (km)
