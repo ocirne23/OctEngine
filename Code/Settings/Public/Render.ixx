@@ -129,15 +129,15 @@ export struct CloudParams
     float farCoverageEndKm = 55.0f;
     // VORTEX: a hurricane-like pattern at a fixed world position (the MAIN layer, before the far coverage): a clear EYE and
     // soft spiral ARMS from its edge outward that close into a tall EYEWALL near the eye, rotating slowly as one rigid
-    // pattern. The base and detail noise are sheared along the spiral (static: only the arms turn). Full out to the radius,
-    // then blends back to the normal clouds over the falloff. The UPPER layer keeps its own clouds, only cleared over the eye.
+    // pattern. The base and detail noise are sheared along the spiral (static: only the arms turn). Full at the eye, it
+    // blends smoothly back to the normal clouds out to the falloff radius. The UPPER layer keeps its own clouds, only
+    // cleared over the eye.
     bool  vortexEnabled = false;
     float vortexStrength = 1.0f;       // 0 = the normal clouds, 1 = the full vortex (a smooth blend of the pattern, the shear and the upper clearing)
     float vortexUpperClearScale = 2.5f; // the upper layer is cleared within this x the eye radius (soft over its outer half)
     float vortexCentreXKm = -3.6423f;  // world X of the eye (km); default = the free-fly camera's start (App Session START_POS)
     float vortexCentreZKm = -11.091f;  // world Z of the eye (km)
-    float vortexRadiusKm = 5.0f;       // the full pattern reaches this far (km)
-    float vortexFalloffKm = 5.0f;      // past the radius, the blend back to the normal clouds over this width (km)
+    float vortexFalloffKm = 10.0f;     // the vortex's size (km): full at the eye, blending smoothly back to the normal clouds at this radius
     float vortexBottomOffset = 0.0f;   // the main layer's bottom moves up (+) / down (-) by this at the eye (m), smoothly to 0 at radius + falloff
     float vortexTopOffset = 0.0f;      // the same for its top: bottom up + top down = a thinner vortex
     // TORNADO: the main layer's bottom rises toward the eye (a funnel) and drops back down to the eye's edge (the wall column).
@@ -145,6 +145,9 @@ export struct CloudParams
     float vortexTornadoLiftKm = 4.0f;  // how far out from the drop the lift starts (km): 0 there, rising smoothly to the peak
     float vortexTornadoCurve = 1.0f;   // the lift's curve: > 1 = it stays low far out and climbs near the wall, < 1 = it climbs early
     float vortexTornadoDropKm = 0.5f;  // the drop from the peak down to the layer bottom at the eye's edge (km): the wall column's flare
+    float vortexTornadoDropCurve = 1.0f; // the drop's curve: > 1 = a slim column that flares late, < 1 = a wide skirt
+    float vortexWobbleKm = 0.0f;       // the eye (and the wall column) snakes sideways over the height by this (km)
+    float vortexWobbleWaves = 1.0f;    // turns of the wobble over the main layer's height
     float vortexEyeRadiusKm = 0.3f;    // the clear eye (km), at the middle of the main layer
     float vortexEyeShape = 0.0f;       // the eye over the height: -1 = a cone (closes at the top), 0 = a cylinder, 1 = an inverted cone (closes at the base)
     float vortexEyewallWidthKm = 0.3f; // how far out from the eye the arms close into the eyewall (km)
@@ -152,6 +155,10 @@ export struct CloudParams
     float vortexTightness = 4.0f;      // spiral winding: band phase (rad) per e-fold of the radius
     float vortexBandWidth = 0.95f;     // a band's share of the space between two arms
     float vortexGapCoverage = 0.8f;    // x the normal coverage between the bands
+    float vortexBandBreakup = 0.4f;    // the weather map moves the band edges: arms break into streaks along their length
+    float vortexFineBands = 0.35f;     // 0..1: a second, finer set of spiral bands (feeder bands) carved into the arms
+    int   vortexFineArms = 8;          // the fine bands' count
+    float vortexFineWinding = 1.0f;    // the fine bands' winding against the arms' (1 = parallel, else they cross)
     float vortexTwist = 1.0f;          // how far the noise is sheared along the spiral (1 = it follows the bands)
     float vortexSpinDegPerMin = 60.0f; // the bands' rotation (degrees per minute of the sim clock; 0 = still)
     bool  vortexReverse = false;       // mirror the spin and the spiral's hand

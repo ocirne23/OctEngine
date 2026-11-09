@@ -71,7 +71,7 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
         const float mid = u_clouds_mainBottom + 0.5 / u_clouds_mainInvHeight;
         const float tSun = max(mid - cloudAltitude(rel, camAlt), 0.0) * u_clouds_invSunUpAir; // L is the sun
         const vec2 nxz = (rel + L * tSun).xz + cloudNoiseOffset();
-        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r, nxz, false, u_clouds_vortexEyeRadius);
+        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r, nxz, false, u_clouds_vortexEyeRadius, -1.0, 0.0);
         farT = 1.0 - smoothstep(0.35, 0.75, c);
     }
 
@@ -146,10 +146,11 @@ struct CloudMarchResult
 
 // Marches from a camera-relative origin (this view's camera) along dir through the shell intervals seg0 / seg1
 // (cloudShellIntervals from that origin). jitter offsets every sample within its step; pixelAngle sets the mip
-// level from the footprint. densityOnly = the debug view (white, unlit). jitter < 0 = the ray ends in the SKY (see
-// "Aerial fade" at the end; cloudSkyJitter): the flag rides in the sign of a value the march holds anyway - as its own
-// bool, live through the whole march, it cost cloud_march 64 -> 72 registers. |jitter| is a free source modifier.
-float cloudSkyJitter(float jitter, bool skyBehind) { return skyBehind ? -max(jitter, 1e-7) : jitter; }
+// level from the footprint. densityOnly = the debug view (white, unlit). jitter < 0 = the "Aerial fade" keeps the cloud
+// OPAQUE and fades it to the sky's colour (the view march, cloudOpaqueFadeJitter), else it raises the transmittance
+// (the sky-map bake, composited over the clear sky). The flag rides in the sign of a value the march holds anyway - as
+// its own bool, live through the whole march, it cost cloud_march 64 -> 72 registers. |jitter| is a free source modifier.
+float cloudOpaqueFadeJitter(float jitter) { return -max(jitter, 1e-7); }
 
 CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int maxSteps, float jitter, float pixelAngle, bool densityOnly)
 {
@@ -396,12 +397,16 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const float fade = exp(-dot(airTau, vec3(1.0 / 3.0)) * u_clouds_aerialFade);
     r.inScatter *= fade;
     const float fadeOpacity = (1.0 - r.transmittance) * (1.0 - fade);
-    // A SKY pixel holds the sun disc and halo, and the composite passes scene x transmittance: the opacity the fade took
-    // off let the disc shine through any cloud at any density. There the cloud stays opaque and fades into the clear sky
-    // instead (the mirror cache: no disc, seen from the ground). Done here, not by the caller: a second value returned
-    // past the aerial scatter cost cloud_march 64 -> 72 registers.
-    if (jitter < 0.0) // the ray ends in the sky (cloudSkyJitter)
-        r.inScatter += fadeOpacity * textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR_CACHE), 0.0).rgb;
+    // THE VIEW: the composite passes scene x transmittance, so opacity the fade gave back as transmittance let the scene
+    // behind show through any cloud at any density - the sun disc on a sky pixel, the skyline on a terrain pixel. The
+    // cloud stays opaque and fades into the clear sky's colour instead (the mirror cache: no disc, seen from the ground;
+    // read at the horizon or above, so a cloud below it fades into the horizon haze). Done here, not by the caller: a
+    // second value returned past the aerial scatter cost cloud_march 64 -> 72 registers.
+    if (jitter < 0.0) // cloudOpaqueFadeJitter
+    {
+        const vec3 skyDir = normalize(vec3(dir.x, max(dir.y, 0.01), dir.z));
+        r.inScatter += fadeOpacity * textureLod(u_skyMap, vec3(skyMapUV(skyDir), SKY_MAP_LAYER_MIRROR_CACHE), 0.0).rgb;
+    }
     else
         r.transmittance += fadeOpacity;
     return r;

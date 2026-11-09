@@ -52,22 +52,29 @@ variant (`sky.fs.glsl`) draws NO clouds.
   upper layer keeps its own clouds and is only CLEARED over the eye ("Upper clear radius (x eye)" x "Eye radius", soft
   over its outer half; `cloudVortexUpperClear`, the `upper` argument of `cloudColumnCoverage`) - the spiral in a stratiform deck read
   wrong. **THE WEIGHT** (`cloudVortexWeight`): "Strength" (0 = the normal clouds, 1 = the full vortex; a Runtime row,
-  so it stays live under the lock) x 1 out to "Radius (km)", falling smoothly to 0 over "Falloff (km)" past it
-  (`u_clouds_vortexOuterRadius` = radius + falloff). It blends the pattern, the noise shear and the eyewall; the upper
+  so it stays live under the lock) x a smoothstep from 1 at the eye to 0 at "Falloff (km)" (`u_clouds_vortexOuterRadius`,
+  the vortex's ONE size; at least the eye + 4 eyewall widths; the falloff alone = `cloudVortexFalloff`). A separate full-strength radius before the falloff did
+  the same job twice and was dropped. It blends the pattern, the noise shear and the eyewall; the upper
   clearing takes the strength alone. So the whole vortex fades in and out smoothly, in time and toward its edge. Out from
   the centre:
   ONE shape: the clear EYE (its edge a quarter "Eyewall width" wide), and soft log-spiral ARMS from the eye's edge
-  outward: phase = arms x angle + "Spiral tightness" x ln(r / radius) - `u_clouds_vortexPhase`; an arm is where
+  outward: phase = arms x angle + "Spiral tightness" x ln(r / outer radius) - `u_clouds_vortexPhase`; an arm is where
   cos(phase) passes cos(pi x "Band width") (a wide ramp of +-0.6 around it), at the NORMAL coverage, and between the
   arms the normal coverage x "Gap coverage". Over "Eyewall width" toward the eye the arms widen and CLOSE into the EYEWALL
   (`cloudVortexMerge`; in the main layer it also pulls the type to cumulonimbus and the column top to the layer top). A
   separate eyewall ring with a clear moat was tried and dropped: it read as a lone circle cut off from the arms.
+  * **The spiral detail:** inside the vortex the main layer reads its WEATHER map in the twisted frame too (the noise
+    shear below), so the coverage variation, the types and the towers streak along the spiral. **"Band breakup"**: the
+    band edge moves by (weather type channel - 0.5) x this, so an arm thins and swells along its length. **"Fine
+    bands"** (0..1; "Fine arms", "Fine winding"): a second spiral of more, thinner bands, carved into the arms and the
+    gaps (not the eyewall): its tightness = tightness x fine arms / arms x winding (1 = parallel to the arms, else they
+    cross), its phase = fine arms x the spin angle (the same rigid turn), its edge also moved by the breakup value.
   * **"Eye shape"** (`cloudVortexEyeAt`): the eye radius over the main layer's height (hf within the moved band) =
     "Eye radius" x max(1 + shape x (2 hf - 1), 0): -1 = a cone (2x at the base, closed at the top), 0 = a cylinder,
     1 = an inverted cone (closed at the base, 2x at the top). The eye cut, the merge and the eyewall all take this
     radius; the noise shear's floor and the air's cloud shadow (`cloudAirSunVis`) take the plain one.
   * **"Bottom offset (m)" / "Top offset (m)"** (`cloudVortexBandOffset`): the main layer's bottom and top move up (+)
-    or down (-) by these x strength at the eye, smoothly to 0 at the outer radius - both the same = the layer moves,
+    or down (-) by these x the weight - both the same = the layer moves,
     bottom up + top down = a thinner vortex. The column and the noise it thresholds squash / stretch with the band
     (`alt` is mapped to the same height fraction of the unmoved layer), kept `CLOUD_VORTEX_MIN_THICKNESS` (100 m) thick
     at least. The marches cover the moved band: `u_clouds_mainReachBottom` / `u_clouds_mainTop` and the shell are the
@@ -75,19 +82,31 @@ variant (`sky.fs.glsl`) draws NO clouds.
     upward top costs march steps everywhere while the vortex is on. The layer-height lighting
     (`cloudLayerHeightFraction`) does not follow the offsets.
   * **THE TORNADO** ("Vortex/Tornado", `cloudVortexTornadoLift`): the bottom rises further, as a share of the layer, by
-    a radial profile from the MIDDLE eye radius e (the band's height cannot hang on hf, which the band sets): 0 at the
-    eye's edge, a smoothstep DROP up to the peak ("Lift" x strength) at e + "Drop width", then the LIFT ramp - a
-    smoothstep to 0 over "Lift width" further out, raised to the "Lift curve" power (> 1 = low far out, steep near the
-    wall). So the deck climbs smoothly from the outside in and the wall hangs down to the layer bottom as a flared
-    column; at "Lift" 1 the peak is the 100 m minimum at the layer top. It takes the strength, not the weight (the lift
-    width may reach past the radius). Only raises, so it costs no march reach. With a non-zero "Eye shape" the wall
-    leans while the column profile does not.
+    a radial profile: 0 at the eye's edge, a smoothstep DROP up to the peak ("Lift" x strength) over "Drop width", then
+    the LIFT ramp - 1 at the MIDDLE eye radius + "Drop width", a smoothstep to 0 over "Lift width" further out, raised
+    to the "Lift curve" power (> 1 = low far out, steep near the wall). So the deck climbs smoothly from the outside in
+    and the wall hangs down to the layer bottom as a flared column; at "Lift" 1 the peak is the 100 m minimum at the
+    layer top. **The drop follows the eye shape**: it starts at the eye radius of the sample's height within the band
+    WITHOUT the tornado (the tornado's own lift cannot set that height; where the drop is, that lift is near 0). The
+    lift ramp does not lean. It takes the strength, not the weight (the lift width may reach past the falloff). Only
+    raises, so it costs no march reach. **"Drop curve"**: the drop's smoothstep raised to this power (> 1 = a slim
+    column that flares late, < 1 = a wide skirt).
+  * **THE WOBBLE** ("Tornado/Wobble (km)", "Wobble waves"; `cloudVortexWobble`): the eye moves sideways over the
+    height - a helix of "Wobble waves" turns over the main layer, turned by the spin angle (`u_clouds_vortexSpinAngle`),
+    at the UNMOVED layer height (the band cannot set its own). The eye cut, the merge, the eyewall and the tornado drop
+    measure from the wobbled eye (rEye); the arms, the weight and the lift ramp from the centre. So the eye and the wall
+    column snake while the arms stay put. `cloudAirSunVis` and the upper clearing take the centre.
   * **The bands SPIN as ONE RIGID pattern** ("Spin (deg/min)", sim clock; the CPU accumulates the angle,
     `m_cloudVortexAngle`, and sends arms x it). An angle that depends on r AND grows with time winds the bands up.
   * **The noise is sheared along the spiral, STATICALLY** ("Noise twist"): the base and detail lookups turn about the
-    eye by `u_clouds_vortexTwist` x ln(r / outer radius) x the weight (= the spiral's own winding at twist 1; 0 at the
-    outer radius, floored at the eye radius). It moves the lookup by the rotation of the camera-relative offset, so the noise wrap stays continuous.
-    The noise does not turn with the bands and still drifts with the wind: the bands sweep through it.
+    eye by `u_clouds_vortexTwist` x ln(r / outer radius) x the radial falloff (= the spiral's own winding at twist 1; 0
+    at the outer radius, floored at the eye radius). It moves the lookup by the rotation of the camera-relative offset,
+    so the noise wrap stays continuous. The noise does not turn with the bands and still drifts with the wind: the bands
+    sweep through it. **The twist does NOT take the strength:** a twist x strength turned the lookup by up to several
+    radians while "Strength" moved, and every cloud swept round the eye. "Strength" CROSS-FADES the plain and the
+    twisted lookups instead (`cloudMainDensity`: the weather, the lift field and the shape each read twice and mixed),
+    only while 0 < strength < 1 inside the falloff radius - a transition costs about a second main-layer shape there.
+    The band offsets and the tornado lift still scale with the strength, so the clouds move UP / DOWN while it changes.
   * "Reverse spin" mirrors the frame (`u_clouds_vortexHand`): the spin and the spiral's hand together, so the arms
     always trail.
   * **Keep the spin slow:** the temporal pass reprojects by the wind only, and the far shadow cascade renders each
@@ -219,11 +238,13 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     less of it than terrain at the same distance. **"Aerial dimming"** scales the air's optical depth on the
     cloud's own light (per colour: warmer and darker far out; 1 = physical). **"Aerial fade"** takes the air's MEAN
     optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them.
-    **On a SKY pixel** (march limit = "Max distance", `cloud_march.cs.glsl`) the faded opacity stays in alpha and
-    becomes the CLEAR sky's colour instead (the mirror cache layer, no disc): the sky pixel holds the SUN DISC and halo,
-    and the raised transmittance let them through any cloud at any density. `cloudRaymarch` does it itself, and the sky
-    flag rides in the SIGN of `jitter` (`cloudSkyJitter`; the march takes `abs(jitter)`): a second value returned past
-    the aerial scatter, or a bool held through the march, cost cloud_march 64 -> 72 registers. **Each step is in the
+    **In the VIEW** (`cloud_march.cs.glsl`, sky AND scene pixels) the faded opacity stays in alpha and becomes the
+    CLEAR sky's colour (the mirror cache layer, no disc; read at the horizon or above, so a cloud below it fades into
+    the horizon haze): the composite passes scene x transmittance, and a raised transmittance let the sun disc or the
+    skyline through any cloud at any density. Only the sky-map bake (`cloud_sky.cs.glsl`, composited over the clear
+    sky) raises the transmittance. `cloudRaymarch` does it itself, and the flag rides in the SIGN of `jitter`
+    (`cloudOpaqueFadeJitter`; the march takes `abs(jitter)`): a second value returned past the aerial scatter, or a
+    bool held through the march, cost cloud_march 64 -> 72 registers. **Each step is in the
     clouds' shadow** (`cloudAirSunVis`, `cloud_raymarch.inc.glsl`): the shadow map inside it, and PAST it the
     WEATHER MAP - the coverage of the column where the sun ray from the air point crosses the main layer's
     middle, `1 - smoothstep(0.35, 0.75, coverage)`. The steps sit at the ray's per-pixel / per-frame jitter:

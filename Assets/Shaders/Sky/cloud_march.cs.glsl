@@ -99,7 +99,7 @@ void main()
         return;
     }
 
-    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), cloudSkyJitter(cloudJitter(px), limit >= maxDist),
+    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), cloudOpaqueFadeJitter(cloudJitter(px)),
                                              pixelAngle, CLOUD_DEBUG_MODE == 2);
     // Re-derived after the march instead of held live across it (registers): the pixel and the limit's log.
     const ivec2 outPx = marchPixel();

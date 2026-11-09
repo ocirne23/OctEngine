@@ -113,8 +113,7 @@ namespace
     // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
     float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
     float cloudVortexWallWidth(const CloudParams& c) { return glm::max(c.vortexEyewallWidthKm, 0.05f) * 1000.0f; }
-    float cloudVortexRadius(const CloudParams& c) { return glm::max(glm::max(c.vortexRadiusKm, 1.0f) * 1000.0f, cloudVortexEye(c) + 4.0f * cloudVortexWallWidth(c)); }
-    float cloudVortexOuterRadius(const CloudParams& c) { return cloudVortexRadius(c) + glm::max(c.vortexFalloffKm, 0.1f) * 1000.0f; }
+    float cloudVortexOuterRadius(const CloudParams& c) { return glm::max(glm::max(c.vortexFalloffKm, 1.0f) * 1000.0f, cloudVortexEye(c) + 4.0f * cloudVortexWallWidth(c)); }
     float cloudVortexArms(const CloudParams& c) { return (float)glm::clamp(c.vortexArms, 1, 8); }
     float cloudVortexHand(const CloudParams& c) { return c.vortexReverse ? -1.0f : 1.0f; }
 
@@ -879,15 +878,31 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_vortexTornadoLift", [&] { return glm::max(c.vortexTornadoLiftKm, 0.05f) * 1000.0f; }, c.vortexTornadoLiftKm);
         list.add("clouds_vortexTornadoCurve", [&] { return glm::clamp(c.vortexTornadoCurve, 0.25f, 4.0f); }, c.vortexTornadoCurve);
         list.add("clouds_vortexTornadoDrop", [&] { return glm::max(c.vortexTornadoDropKm, 0.05f) * 1000.0f; }, c.vortexTornadoDropKm);
+        list.add("clouds_vortexTornadoDropCurve", [&] { return glm::clamp(c.vortexTornadoDropCurve, 0.25f, 4.0f); }, c.vortexTornadoDropCurve);
+        // The wobble: the eye's sideways offset (m) over the height, turned by the spin angle so it rides with the bands.
+        list.add("clouds_vortexWobble", [&] { return glm::max(c.vortexWobbleKm, 0.0f) * 1000.0f; }, c.vortexWobbleKm);
+        list.add("clouds_vortexWobbleWaves", [&] { return glm::two_pi<float>() * glm::max(c.vortexWobbleWaves, 0.0f); }, c.vortexWobbleWaves);
+        list.add("clouds_vortexSpinAngle", [this] { return (float)m_cloudVortexAngle; }, UboLive);
+        // The fine bands: their own arm count, a tightness that winds them (fine winding 1) parallel to the arms, and
+        // their phase = fine arms x the spin angle (the same rigid rotation).
+        list.add("clouds_vortexBandBreakup", [&] { return glm::max(c.vortexBandBreakup, 0.0f); }, c.vortexBandBreakup);
+        list.add("clouds_vortexFineBands", [&] { return glm::clamp(c.vortexFineBands, 0.0f, 1.0f); }, c.vortexFineBands);
+        list.add("clouds_vortexFineArms", [&] { return (float)glm::clamp(c.vortexFineArms, 2, 32); }, c.vortexFineArms);
+        list.add("clouds_vortexFineTightness", [&]
+            {
+                return glm::max(c.vortexTightness, 0.1f) * (float)glm::clamp(c.vortexFineArms, 2, 32) / cloudVortexArms(c) * c.vortexFineWinding;
+            }, c.vortexTightness, c.vortexFineArms, c.vortexArms, c.vortexFineWinding);
+        list.add("clouds_vortexFinePhase", [this, &c]
+            {
+                return (float)std::fmod(m_cloudVortexAngle * (double)glm::clamp(c.vortexFineArms, 2, 32), glm::two_pi<double>());
+            }, UboLive);
         list.add("clouds_vortexCentre", [this, &c]
             {
                 return glm::vec2(glm::dvec2(c.vortexCentreXKm, c.vortexCentreZKm) * 1000.0 - glm::dvec2(m_cameraPos.x, m_cameraPos.z));
             }, UboLive);
         list.add("clouds_vortexPhase", [this, &c] { return (float)std::fmod(m_cloudVortexAngle * (double)cloudVortexArms(c), glm::two_pi<double>()); }, UboLive);
-        list.add("clouds_vortexRadius", [&] { return cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
-        list.add("clouds_vortexInvRadius", [&] { return 1.0f / cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
-        list.add("clouds_vortexOuterRadius", [&] { return cloudVortexOuterRadius(c); },
-            c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm, c.vortexFalloffKm);
+        list.add("clouds_vortexOuterRadius", [&] { return cloudVortexOuterRadius(c); }, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm, c.vortexFalloffKm);
+        list.add("clouds_vortexInvOuterRadius", [&] { return 1.0f / cloudVortexOuterRadius(c); }, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm, c.vortexFalloffKm);
         list.add("clouds_vortexBottomOffset", [&] { return cloudVortexBottomOffset(c); }, c.vortexEnabled, c.vortexBottomOffset);
         list.add("clouds_vortexTopOffset", [&] { return cloudVortexTopOffset(c); }, c.vortexEnabled, c.vortexTopOffset);
         list.add("clouds_vortexEyeRadius", [&] { return cloudVortexEye(c); }, c.vortexEyeRadiusKm);

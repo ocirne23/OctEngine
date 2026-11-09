@@ -335,14 +335,16 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Vortex", "Upper clear radius (x eye)", &s.vortexUpperClearScale, 0.1f, 50.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre X (km)", &s.vortexCentreXKm, -500.0f, 500.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Centre Z (km)", &s.vortexCentreZKm, -500.0f, 500.0f, 0.1f);
-    Tweak::floatVar("Sky/Clouds/Vortex", "Radius (km)", &s.vortexRadiusKm, 1.0f, 300.0f, 0.1f);
-    Tweak::floatVar("Sky/Clouds/Vortex", "Falloff (km)", &s.vortexFalloffKm, 0.1f, 300.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Falloff (km)", &s.vortexFalloffKm, 1.0f, 300.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Bottom offset (m)", &s.vortexBottomOffset, -3000.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Top offset (m)", &s.vortexTopOffset, -3000.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift", &s.vortexTornado, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift width (km)", &s.vortexTornadoLiftKm, 0.05f, 300.0f, 0.05f);
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Lift curve", &s.vortexTornadoCurve, 0.25f, 4.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Drop width (km)", &s.vortexTornadoDropKm, 0.05f, 30.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Drop curve", &s.vortexTornadoDropCurve, 0.25f, 4.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Wobble (km)", &s.vortexWobbleKm, 0.0f, 10.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Wobble waves", &s.vortexWobbleWaves, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye radius (km)", &s.vortexEyeRadiusKm, 0.05f, 50.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye shape", &s.vortexEyeShape, -1.0f, 1.0f, 0.01f); // -1 cone, 0 cylinder, 1 inverted cone
     Tweak::floatVar("Sky/Clouds/Vortex", "Eyewall width (km)", &s.vortexEyewallWidthKm, 0.05f, 30.0f, 0.01f);
@@ -350,6 +352,10 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Vortex", "Spiral tightness", &s.vortexTightness, 0.1f, 20.0f, 0.05f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Band width", &s.vortexBandWidth, 0.05f, 0.95f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Gap coverage", &s.vortexGapCoverage, 0.01f, 2.0f, 0.01f); // x the normal coverage
+    Tweak::floatVar("Sky/Clouds/Vortex", "Band breakup", &s.vortexBandBreakup, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Fine bands", &s.vortexFineBands, 0.0f, 1.0f, 0.01f);
+    Tweak::intVar("Sky/Clouds/Vortex", "Fine arms", &s.vortexFineArms, 2, 32);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Fine winding", &s.vortexFineWinding, -2.0f, 3.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Noise twist", &s.vortexTwist, 0.01f, 2.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Spin (deg/min)", &s.vortexSpinDegPerMin, 0.0f, 60.0f, 0.1f); // CPU only (the phase)
     Tweak::boolean("Sky/Clouds/Vortex", "Reverse spin", &s.vortexReverse);
