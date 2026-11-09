@@ -71,7 +71,7 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
         const float mid = u_clouds_mainBottom + 0.5 / u_clouds_mainInvHeight;
         const float tSun = max(mid - cloudAltitude(rel, camAlt), 0.0) * u_clouds_invSunUpAir; // L is the sun
         const vec2 nxz = (rel + L * tSun).xz + cloudNoiseOffset();
-        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r, nxz);
+        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r, nxz, false);
         farT = 1.0 - smoothstep(0.35, 0.75, c);
     }
 

@@ -100,6 +100,12 @@ namespace
     float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainBottom(c), cloudUpperBottom(c)) : cloudMainBottom(c); }
     float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainTop(c), cloudUpperTop(c)) : cloudMainTop(c); }
     float cloudCoverage(const CloudParams& c) { return glm::clamp(c.coverage, 0.0f, 1.0f); }
+    // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
+    float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
+    float cloudVortexWallWidth(const CloudParams& c) { return glm::max(c.vortexEyewallWidthKm, 0.05f) * 1000.0f; }
+    float cloudVortexRadius(const CloudParams& c) { return glm::max(glm::max(c.vortexRadiusKm, 1.0f) * 1000.0f, cloudVortexEye(c) + 4.0f * cloudVortexWallWidth(c)); }
+    float cloudVortexArms(const CloudParams& c) { return (float)glm::clamp(c.vortexArms, 1, 8); }
+    float cloudVortexHand(const CloudParams& c) { return c.vortexReverse ? -1.0f : 1.0f; }
 
     // The effective RT sun shadow: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
     bool rtSunShadowActive(const RTParams& rt) { return rt.enabled && rt.rtSunShadow; }
@@ -497,6 +503,9 @@ void RendererState::buildUboClouds(const Camera& camera)
     m_cloudWindStep = glm::dvec2(m_windParams.direction()) * ((double)glm::max(m_windParams.speed, 0.0f) * (double)c.windSpeedScale * dt);
     m_cloudWindOffset = glm::mod(m_cloudWindOffset + m_cloudWindStep, glm::dvec2(weatherPeriod));
     m_cloudEvolveOffset = std::fmod(m_cloudEvolveOffset + (double)c.evolveSpeed * dt, detailPeriod);
+    // The vortex bands turn as one rigid pattern (no wind-up): the angle only, the shader takes arms x it as the phase.
+    if (c.vortexEnabled)
+        m_cloudVortexAngle = std::fmod(m_cloudVortexAngle + glm::radians((double)glm::max(c.vortexSpinDegPerMin, 0.0f)) / 60.0 * dt, glm::two_pi<double>());
 
     // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
     // texels in light space (in double, world space) so the map does not swim when the camera moves.
@@ -850,6 +859,31 @@ void RendererState::registerUboValues(UboBlock& list)
             }, UboLive);
         list.add("clouds_invMacroPeriod", [&] { return (float)(1.0 / cloudMacroPeriod(c)); }, UboLive);
         list.add("clouds_macroVariation", [&] { return glm::max(c.macroVariation, 0.0f); }, UboLive);
+        // THE VORTEX (clouds.inc.glsl, cloudVortex): the eye's centre relative to the camera (m; world-fixed, not in the
+        // wind), and the band phase = arms x the accumulated spin angle.
+        list.add("clouds_vortexEnabled", [&] { return c.vortexEnabled ? 1.0f : 0.0f; }, c.vortexEnabled);
+        list.add("clouds_vortexStrength", [&] { return glm::clamp(c.vortexStrength, 0.0f, 1.0f); }, UboLive); // a Runtime row
+        list.add("clouds_vortexUpperClearRadius", [&] { return glm::max(c.vortexUpperClearKm, 0.05f) * 1000.0f; }, c.vortexUpperClearKm);
+        list.add("clouds_vortexCentre", [this, &c]
+            {
+                return glm::vec2(glm::dvec2(c.vortexCentreXKm, c.vortexCentreZKm) * 1000.0 - glm::dvec2(m_cameraPos.x, m_cameraPos.z));
+            }, UboLive);
+        list.add("clouds_vortexPhase", [this, &c] { return (float)std::fmod(m_cloudVortexAngle * (double)cloudVortexArms(c), glm::two_pi<double>()); }, UboLive);
+        list.add("clouds_vortexRadius", [&] { return cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
+        list.add("clouds_vortexInvRadius", [&] { return 1.0f / cloudVortexRadius(c); }, c.vortexRadiusKm, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm);
+        list.add("clouds_vortexEyeRadius", [&] { return cloudVortexEye(c); }, c.vortexEyeRadiusKm);
+        list.add("clouds_vortexInvWallWidth", [&] { return 1.0f / cloudVortexWallWidth(c); }, c.vortexEyewallWidthKm);
+        list.add("clouds_vortexArms", [&] { return cloudVortexArms(c); }, c.vortexArms);
+        list.add("clouds_vortexHand", [&] { return cloudVortexHand(c); }, c.vortexReverse);
+        list.add("clouds_vortexTightness", [&] { return glm::max(c.vortexTightness, 0.1f); }, c.vortexTightness);
+        // A band = where cos(phase) passes cos(pi x width): that share of the arm spacing.
+        list.add("clouds_vortexBandEdge", [&] { return std::cos(glm::pi<float>() * glm::clamp(c.vortexBandWidth, 0.05f, 0.95f)); }, c.vortexBandWidth);
+        list.add("clouds_vortexGapCoverage", [&] { return glm::max(c.vortexGapCoverage, 0.01f); }, c.vortexGapCoverage);
+        // The noise shear: the lookup turns by this x ln(r / radius) - the spiral's own angle (tightness / arms), mirrored with the hand.
+        list.add("clouds_vortexTwist", [&]
+            {
+                return cloudVortexHand(c) * glm::max(c.vortexTwist, 0.01f) * glm::max(c.vortexTightness, 0.1f) / cloudVortexArms(c);
+            }, c.vortexReverse, c.vortexTwist, c.vortexTightness, c.vortexArms);
         list.add("clouds_detailDrift", [this, &c] // the detail's vertical drift (m, wrapped) + the seed's offset
             {
                 const double period = cloudDetailPeriod(c);

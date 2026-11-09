@@ -127,7 +127,26 @@ export struct CloudParams
     float farCoverage = 0.5f;          // 1 = off
     float farCoverageStartKm = 0.0f;
     float farCoverageEndKm = 55.0f;
-    float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
+    // VORTEX: a hurricane-like pattern at a fixed world position (the MAIN layer, before the far coverage): a clear EYE and
+    // soft spiral ARMS from its edge outward that close into a tall EYEWALL near the eye, rotating slowly as one rigid
+    // pattern. The base and detail noise are sheared along the spiral (static: only the arms turn). Blends back to the
+    // normal coverage over the outer 40 % of the radius. The UPPER layer keeps its own clouds, only cleared over the eye.
+    bool  vortexEnabled = false;
+    float vortexStrength = 1.0f;       // 0 = the normal clouds, 1 = the full vortex (a smooth blend of the pattern, the shear and the upper clearing)
+    float vortexUpperClearKm = 1.0f;   // the upper layer is cleared within this radius of the eye (km; soft over its outer half)
+    float vortexCentreXKm = -3.6423f;  // world X of the eye (km); default = the free-fly camera's start (App Session START_POS)
+    float vortexCentreZKm = -11.091f;  // world Z of the eye (km)
+    float vortexRadiusKm = 5.0f;       // the reach of the pattern (km)
+    float vortexEyeRadiusKm = 0.3f;    // the clear eye (km)
+    float vortexEyewallWidthKm = 0.3f; // how far out from the eye the arms close into the eyewall (km)
+    int   vortexArms = 2;              // spiral bands
+    float vortexTightness = 4.0f;      // spiral winding: band phase (rad) per e-fold of the radius
+    float vortexBandWidth = 0.95f;     // a band's share of the space between two arms
+    float vortexGapCoverage = 0.8f;    // x the normal coverage between the bands
+    float vortexTwist = 1.0f;          // how far the noise is sheared along the spiral (1 = it follows the bands)
+    float vortexSpinDegPerMin = 60.0f; // the bands' rotation (degrees per minute of the sim clock; 0 = still)
+    bool  vortexReverse = false;       // mirror the spin and the spiral's hand
+    float cloudType = 1.0f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
     // bottom - flat, aligned bases); the clouds' own height shrinks to (1 - this). A field drifting over

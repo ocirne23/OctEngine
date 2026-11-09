@@ -329,6 +329,22 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Far coverage", "Scale", &s.farCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Far coverage", "Start (km)", &s.farCoverageStartKm, 0.0f, 200.0f, 0.1f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Far coverage", "End (km)", &s.farCoverageEndKm, 1.0f, 300.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::boolean("Sky/Clouds/Vortex", "Enabled", &s.vortexEnabled);
+    // Live under the lock: a blend to drag (or animate) without a shader rebake per change.
+    Tweak::floatVar("Sky/Clouds/Vortex", "Strength", &s.vortexStrength, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Upper clear radius (km)", &s.vortexUpperClearKm, 0.05f, 50.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Centre X (km)", &s.vortexCentreXKm, -500.0f, 500.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Centre Z (km)", &s.vortexCentreZKm, -500.0f, 500.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Radius (km)", &s.vortexRadiusKm, 1.0f, 300.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye radius (km)", &s.vortexEyeRadiusKm, 0.05f, 50.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eyewall width (km)", &s.vortexEyewallWidthKm, 0.05f, 30.0f, 0.01f);
+    Tweak::intVar("Sky/Clouds/Vortex", "Arms", &s.vortexArms, 1, 8);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Spiral tightness", &s.vortexTightness, 0.1f, 20.0f, 0.05f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Band width", &s.vortexBandWidth, 0.05f, 0.95f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Gap coverage", &s.vortexGapCoverage, 0.01f, 2.0f, 0.01f); // x the normal coverage
+    Tweak::floatVar("Sky/Clouds/Vortex", "Noise twist", &s.vortexTwist, 0.01f, 2.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Spin (deg/min)", &s.vortexSpinDegPerMin, 0.0f, 60.0f, 0.1f); // CPU only (the phase)
+    Tweak::boolean("Sky/Clouds/Vortex", "Reverse spin", &s.vortexReverse);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &s.densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds", "Base breakup (km)", &s.baseBreakupKm, 0.0f, 20.0f, 0.01f, {}, ETweakFlags::Runtime);

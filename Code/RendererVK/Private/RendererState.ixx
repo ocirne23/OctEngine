@@ -662,6 +662,7 @@ protected:
     bool m_cloudsSuppressed = false;
     glm::dvec2 m_cloudWindOffset = glm::dvec2(0.0); // accumulated wind (m), wrapped by the weather period
     double m_cloudEvolveOffset = 0.0;              // accumulated detail drift (m), wrapped by the detail period
+    double m_cloudVortexAngle = 0.0;               // the vortex bands' accumulated rotation (rad), wrapped by 2 pi
     // The cloud shadow map cascades (buildUboClouds): world-space centres + extents of what each layer holds.
     oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
     oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};

@@ -45,6 +45,33 @@ variant (`sky.fs.glsl`) draws NO clouds.
   spread included) x a scale going 1 -> "Scale" over "Start" .. "End" (km, smoothstep) of the column's HORIZONTAL
   distance from the camera, `length(nxz - cloudNoiseOffset())` - not the sample's `camDist`, which the sun march and
   the shadow map do not pass, so the shadows and the air's cloud shadow (`cloudAirSunVis`) see the same clouds.
+* **THE VORTEX** ("Sky/Clouds/Vortex", default off; `cloudVortexCoverage` / `cloudVortexWall` / `cloudVortexTwist` in
+  `clouds.inc.glsl`): a hurricane-like pattern around a WORLD-FIXED eye ("Centre X / Z (km)"; `u_clouds_vortexCentre` =
+  the centre relative to the camera, so the wind does not carry it away). In `cloudColumnCoverage`, before the far
+  coverage, so the shadow map, the sky clouds and the air's cloud shadow all see it. **The MAIN layer only:** the
+  upper layer keeps its own clouds and is only CLEARED over the eye ("Upper clear radius (km)", soft over its outer
+  half; `cloudVortexUpperClear`, the `upper` argument of `cloudColumnCoverage`) - the spiral in a stratiform deck read
+  wrong. **"Strength"** (0 = the normal clouds, 1 = the full vortex; a Runtime row, so it stays live under the lock)
+  scales the pattern's blend weight, the noise shear's angle, the eyewall weight and the upper clearing, so the whole
+  vortex fades in and out smoothly. Out from the centre:
+  ONE shape: the clear EYE (its edge a quarter "Eyewall width" wide), and soft log-spiral ARMS from the eye's edge
+  outward: phase = arms x angle + "Spiral tightness" x ln(r / radius) - `u_clouds_vortexPhase`; an arm is where
+  cos(phase) passes cos(pi x "Band width") (a wide ramp of +-0.6 around it), at the NORMAL coverage, and between the
+  arms the normal coverage x "Gap coverage". Over "Eyewall width" toward the eye the arms widen and CLOSE into the EYEWALL
+  (`cloudVortexMerge`; in the main layer it also pulls the type to cumulonimbus and the column top to the layer top). A
+  separate eyewall ring with a clear moat was tried and dropped: it read as a lone circle cut off from the arms. The
+  pattern blends back to the normal coverage over the outer 40 % of "Radius (km)".
+  * **The bands SPIN as ONE RIGID pattern** ("Spin (deg/min)", sim clock; the CPU accumulates the angle,
+    `m_cloudVortexAngle`, and sends arms x it). An angle that depends on r AND grows with time winds the bands up.
+  * **The noise is sheared along the spiral, STATICALLY** ("Noise twist"): the base and detail lookups turn about the
+    eye by `u_clouds_vortexTwist` x ln(r / radius) (= the spiral's own angle at twist 1; 0 at the radius, floored at the
+    eye radius). It moves the lookup by the rotation of the camera-relative offset, so the noise wrap stays continuous.
+    The noise does not turn with the bands and still drifts with the wind: the bands sweep through it.
+  * "Reverse spin" mirrors the frame (`u_clouds_vortexHand`): the spin and the spiral's hand together, so the arms
+    always trail.
+  * **Keep the spin slow:** the temporal pass reprojects by the wind only, and the far shadow cascade renders each
+    texel once in 64 frames, so a fast band motion ghosts in the clouds and lags in the shadows.
+  * `u_clouds_vortexEnabled` is a lockable UBO value: locked and off (the default), the branches compile out.
 * **EROSION CUTOFF** ("Quality/Erosion cutoff", `u_clouds_erosionCutoff`): the erosion's remap
   `(d - lo) / (1 - lo)` leaves a thin rest wherever the detail fBm is low, which over kilometres of ray reads as
   haze. `cloudLayerShape` ends with `(d - cut) / (1 - cut)`: the rest goes, the cores stay at 1. Monotonic, so
