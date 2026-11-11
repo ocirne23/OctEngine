@@ -6,24 +6,16 @@ import Core;
 // that classify it (placeable, cable, crossing, emitter, barracks, ...). Nothing here touches an
 // entity or a system - it is what StructureSystem (Game:Structures) and every other Game partition
 // switch on. Re-exported through Game:Structures.
-// SAVE FILES STORE Type AS AN INT: never remove or reorder values - new types APPEND before Count.
-// Connector is a RETIRED slot (range links are gone; cables are physical now): its table entries
-// remain, placement refuses it and loadFrom skips it. BarracksBrute/Runner/Spitter are RETIRED
-// too (ONE barracks type now produces the unit type its owner picks): placement refuses them and
-// loadFrom maps an old-save entry to a Barracks with that unit type preset.
-export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Count };
+// A save file stores Type as this enum's INT, and NO save compatibility is kept: a type that is no longer used is
+// REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
+// names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
+// scenario file then loads wrong.
+export enum class EStructureType : uint8 { Emitter, Generator, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Count };
 
-export constexpr bool isRetiredBarracksType(EStructureType t)
-{
-    return t == EStructureType::BarracksBrute || t == EStructureType::BarracksRunner
-        || t == EStructureType::BarracksSpitter;
-}
-// Placeable = anything a player may build. The Base only enters through spawnBase; the Connector
-// and the per-type barracks are retired.
+// Placeable = anything a player may build. The Base only enters through spawnBase.
 export constexpr bool isPlaceableType(EStructureType t)
 {
-    return (int)t < (int)EStructureType::Count
-        && t != EStructureType::Base && t != EStructureType::Connector && !isRetiredBarracksType(t);
+    return (int)t < (int)EStructureType::Count && t != EStructureType::Base;
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
 // BUILT segments is one transport RUN; the buildings it touches are its ports (see
@@ -73,7 +65,6 @@ export constexpr int conduitMediumOf(EStructureType t) // cable OR crossing medi
     return isCableType(t) ? cableMediumOf(t) : crossingMediumOf(t);
 }
 
-// (No live structure ever carries a retired per-type barracks value - loadFrom converts them.)
 export constexpr bool isBarracksType(EStructureType t)
 {
     return t == EStructureType::Barracks;

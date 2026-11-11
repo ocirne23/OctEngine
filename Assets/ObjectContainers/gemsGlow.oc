@@ -1,0 +1,7 @@
+# The light crystals (Models/gems.obj) drawn UNLIT, so a `Color` with an `Emissive` strength GLOWS on them (the
+# bloom takes it). The buildings' `Crystal` pieces use this container. No ray tracing: a crystal casts no shadow.
+ObjectContainer gemsGlow
+	Path "Models/gems.obj"
+	MaterialOverrides
+		PipelineIdx UnlitOpaque
+		ExcludeFromRayTracing true

@@ -1,14 +1,18 @@
 # Bastion emitter: the heavy anchor variant - bigger, stronger bubble, much hungrier ("Bastion
 # output/reach/energy" tweaks; the live output is driven by the power tick like every emitter).
 # Spawned origin 2.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a tall stone pedestal (the root) with a
+# turned bronze cap, and a large DIAMOND that floats high over it (gems.obj), above the 4x4x4 m collider box.
+# The child pieces are render-only.
 Prefab gameBastion
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node Pillar2
 		Type StaticMesh
-		Color 0.15 0.45 1
-		Scale 2
+		Color 0.5 0.48 0.44
+		Position 0 -0.4 0
+		Scale 0.8
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -22,3 +26,24 @@ Prefab gameBastion
 	Component GameStructure
 		MeleeRadius 2
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Collar
+			Position 0 1.45 0
+			Rotation 0 45 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 1.1
+		Entity
+			Name Crystal
+			Position 0 3.5 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.85 0.45
+				Emissive 2.5
+				Scale 1.25

@@ -13,7 +13,7 @@ export enum class ELightType : uint8
     Point, // omnidirectional; direction/rotation unused
     Spot,  // cone along direction, coneAngle half-angle + edgeSoftness falloff
     Area,  // rectangle of width x height facing direction, rolled by rotation
-    Tube,  // capsule of radius `width` and `length` along direction, rolled by rotation
+    Beam,  // a line of light of radius `width` and `length` along direction, centred on the light (the renderer's BeamLight)
 };
 
 export const char* lightTypeToken(ELightType type);

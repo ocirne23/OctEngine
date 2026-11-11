@@ -41,6 +41,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // The sandbox world's terrain: no y = 0 plane for the unit height rules, ground tests for placement, the
     // third-person player (falling through the world is far below any terrain, not under y = 0).
     Globals::settings.game.unitParams.flatGround = !m_sandboxWorld;
+    stampLightRules(); // the neutral values outside the sandbox world (a PvP match after a co-op one)
     m_structures.setTerrainGround(m_sandboxWorld);
     m_player.setDirectControl(m_sandboxWorld);
     if (m_sandboxWorld)
@@ -65,6 +66,18 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         preset.normalBias = 0.0f;
         Globals::rendererVK.setShadowParams(preset);
         Globals::rendererVK.setCloudsSuppressed(true);
+    }
+    else
+    {
+        // The palette of the light rules: the players' fields are warm gold lantern light, the demons' glow is violet.
+        // Written into the live "Force/Teams" tweaks (still editable in the panel); the old colours come back in ~GameMatch.
+        glm::vec3* colors = Globals::settings.force.teamColors;
+        m_savedTeamColors[0] = colors[0];
+        m_savedTeamColors[1] = colors[CoopAiTeam];
+        colors[0] = glm::vec3(1.0f, 0.72f, 0.28f);
+        colors[CoopAiTeam] = glm::vec3(0.62f, 0.22f, 1.0f);
+        Tweak::notifyChanged(colors[0]);
+        Tweak::notifyChanged(colors[CoopAiTeam]);
     }
 
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
@@ -103,6 +116,12 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     {
         if (m_sandboxWorld)
         {
+            // THE BUILD UI: the cursor is free and IS the aim - unless the middle button turns the camera.
+            if (m_buildUi && !m_mmbDown)
+            {
+                m_mousePos = glm::vec2(float(evt.x), float(evt.y));
+                return;
+            }
             // Mouse look (the window is in relative mode): only the motion counts - the aim is the crosshair, so
             // m_mousePos stays on the viewport center (updateWindowed). Not while a menu owns the mouse.
             if (Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused() && !Globals::ui.isEscapeMenuOpen()
@@ -168,7 +187,28 @@ GameMatch::~GameMatch()
         Globals::rendererVK.setShadowParams(restored);
         Globals::rendererVK.setCloudsSuppressed(false);
     }
+    else
+    {
+        glm::vec3* colors = Globals::settings.force.teamColors;
+        colors[0] = m_savedTeamColors[0];
+        colors[CoopAiTeam] = m_savedTeamColors[1];
+        Tweak::notifyChanged(colors[0]);
+        Tweak::notifyChanged(colors[CoopAiTeam]);
+    }
+    restoreBeacon();
+    Globals::settings.game.unitParams.fieldPush = true; // the light rules' runtime params back to neutral
+    Globals::settings.game.unitParams.sunBurnTeam = -1;
+    Globals::settings.game.unitParams.shadowTeam = -1;
+    Globals::settings.game.unitParams.lightPointCount = 0;
+    Globals::settings.game.unitParams.slowTeam = -1;
+    Globals::settings.game.unitParams.fieldZoneCount = 0;
+    if (m_sandboxWorld)
+        Globals::settings.forceSystem.bakeSampleHeight = m_savedBakeHeight;
+    Globals::settings.game.unitParams.sunDps = 0.0f;
+    Globals::settings.game.structures.solarDaylight = 1.0f;
+    Globals::settings.game.structures.fieldNight = 1.0f;
     Globals::gameHud.setCrosshair(false);
+    Globals::gameHud.removeCounter("Sun");
     Globals::gameHud.removeCounter("Can't build");
     // The tweaks are global settings (registered once at startup): nothing registered on this
     // object. StructureSystem drops its own listeners in its dtor.
@@ -203,6 +243,12 @@ void GameMatch::spawnWorld()
         m_basePos = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f);
         m_playerStart = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f, 1.0f, -6.0f);
         m_waveTimer = m_settings.waveFirstDelay;
+        // The light rules: the match starts in the morning, with the sun cycle running (the night is the wave clock).
+        if (m_sandboxWorld && !m_isClient && m_settings.startTimeOfDay >= 0.0f)
+        {
+            Globals::settings.sky.sunCycle = true;
+            Globals::settings.sky.timeOfDay = glm::min(m_settings.startTimeOfDay, 23.99f);
+        }
     }
 
     // The flat maps stand on a 600 m ground box; the sandbox world stands on the terrain.
@@ -349,16 +395,19 @@ void GameMatch::spawnWorld()
 
     // The grid hotbar is always up in game mode: the ROOT page in Select/Delete, a category page in
     // Build. refreshBuildHotbar rebuilds it every windowed frame.
-    Globals::gameHud.setHotbarLayout(4, m_sandboxWorld ? c_gridNumberKeyLabels : c_gridKeyLabels);
+    if (m_sandboxWorld)
+        Globals::gameHud.setHotbarLayout(0, c_buildBarKeyLabels); // one row: the build bar
+    else
+        Globals::gameHud.setHotbarLayout(4, c_gridKeyLabels);
     Globals::gameHud.setHotbarVisible(true);
     m_buildCategory = -1;
     refreshBuildHotbar();
 
     if (m_sandboxWorld)
         Log::info("Game mode (sandbox world): WASD walk, Space jumps, LShift sprints, the mouse looks, LMB at the "
-                  "crosshair places / inspects. Grid hotkeys on the number row: 1/2 = build categories "
-                  "(Combat/Production), 5/6/7 = cables, 0 = delete, - = cancel. Buildings need flat, dry ground "
-                  "without trees or rocks");
+                  "crosshair places / inspects. BUILD: Tab steps through the pages (Defence, Works, Roads, off), "
+                  "Q / E pick the item, LMB places, RMB or Esc cancels, X deletes. The number row arms a slot "
+                  "directly. Buildings need flat, dry ground without trees or rocks");
     else
         Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
                   "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
@@ -469,11 +518,12 @@ void GameMatch::spawnSandboxNodes()
     // The starter pair: the first fitting spot on a small ring each, mineral east-ish, fuel north-ish.
     for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(0.4f + i * 0.52f), std::sin(0.4f + i * 0.52f)) * 11.0f, ENodeType::Mineral); ++i) {}
     for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(1.9f + i * 0.52f), std::sin(1.9f + i * 0.52f)) * 11.0f, ENodeType::Fuel); ++i) {}
-    constexpr int c_nodeTarget = 14;
+    constexpr int c_nodeTarget = 7;
+    constexpr int c_nodeTries = 40;
     int count = 0;
-    for (int i = 0; i < 80 && count < c_nodeTarget; ++i)
+    for (int i = 0; i < c_nodeTries && count < c_nodeTarget; ++i)
     {
-        const float t = ((float)i + 0.5f) / 80.0f;
+        const float t = ((float)i + 0.5f) / (float)c_nodeTries;
         const float r = glm::mix(24.0f, 80.0f, std::sqrt(t)); // sqrt = uniform area
         const float a = (float)i * 2.3999632f;                 // the golden angle
         if (tryNode(base + glm::vec2(std::cos(a), std::sin(a)) * r, (count % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral))
@@ -510,6 +560,26 @@ void GameMatch::updatePlayer(float deltaSec)
         // CLIENT: adopt + drive our own capsule (the owner simulates; claims stream the state);
         // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
         m_player.clientAdopt(teamStartPos((uint8)m_team));
+    }
+    // A building was placed on our player (a player never blocks a placement): step out through the nearest side.
+    // Pre-physics, so the teleport's direct body setters are sanctioned here.
+    if (m_player.entity())
+    {
+        const glm::vec3 pos = m_player.bodyPos();
+        glm::vec3 center;
+        glm::vec2 half;
+        if (m_structures.buildingAt(pos, center, half))
+        {
+            constexpr float c_clear = 0.9f; // the capsule's radius and a little room
+            const glm::vec2 d(pos.x - center.x, pos.z - center.z);
+            glm::vec3 out = pos;
+            if (half.x - glm::abs(d.x) < half.y - glm::abs(d.y)) // the nearer pair of sides
+                out.x = center.x + (d.x >= 0.0f ? 1.0f : -1.0f) * (half.x + c_clear);
+            else
+                out.z = center.z + (d.y >= 0.0f ? 1.0f : -1.0f) * (half.y + c_clear);
+            out.y = pos.y + 0.1f;
+            m_player.teleport(out);
+        }
     }
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
     m_player.tickShieldAndHealth(deltaSec); // body writes too: the shield push impulse, the death stop
@@ -573,12 +643,49 @@ void GameMatch::update(float deltaSec)
             m_fieldZones.clear();
             m_structures.collectShieldBubbles(m_fieldZones, World::MaxSimLodZones);
             Globals::world.setSimLodZones(m_fieldZones.data(), (uint32)m_fieldZones.size());
+            // The same spheres for the units' flat field test on the terrain (GameUnitParams::fieldZones).
+            GameUnitParams& unit = Globals::settings.game.unitParams;
+            const int zones = m_sandboxWorld ? (int)glm::min(m_fieldZones.size(), (size_t)64) : 0;
+            for (int i = 0; i < zones; ++i)
+            {
+                unit.fieldZones[i][0] = m_fieldZones[i].x;
+                unit.fieldZones[i][1] = m_fieldZones[i].y;
+                unit.fieldZones[i][2] = m_fieldZones[i].z;
+                unit.fieldZones[i][3] = m_fieldZones[i].w;
+            }
+            unit.fieldZoneCount = zones;
+            unit.fieldZoneTeam = 0; // co-op: every player is on team 0
         }
         for (const glm::vec3& c : m_focusClusters)
             if (focusCount < World::MaxSimLodFocus)
                 focus[focusCount++] = c;
         Globals::world.setSimLodFocus(focus, focusCount);
     }
+    stampLightRules();    // every instance: a client's fields sleep by day on its own sun too
+    {
+        // The staff lights: every player's position (ours and the client twins'), for the units' shadow form.
+        GameUnitParams& unit = Globals::settings.game.unitParams;
+        int count = 0;
+        const auto add = [&](const glm::vec3& pos)
+        {
+            float* light = unit.lightPoints[count++];
+            light[0] = pos.x;
+            light[1] = pos.y;
+            light[2] = pos.z;
+            light[3] = m_settings.staffLightRadius;
+        };
+        if (m_sandboxWorld && m_settings.staffLightRadius > 0.0f)
+        {
+            add(m_player.bodyPos());
+            for (const auto& [id, p] : m_clientPlayers)
+                if (p && count < 8)
+                    add(p->pos);
+        }
+        unit.lightPointCount = count;
+    }
+    tickBeacon(deltaSec); // every instance: the cloud hole, the Shroud and the beam follow the mirrored Base
+    tickFogEffects(deltaSec); // the spawn sites' fog, and the fields' clearings (m_fieldZones, refreshed above)
+    tickLightning(deltaSec);  // the night's flashes in the clouds and their arcs
 
     if (m_isClient)
     {
@@ -604,6 +711,7 @@ void GameMatch::update(float deltaSec)
         tickBaseSite(deltaSec); // the Base, the player and the nodes wait for the terrain under the anchor
     const glm::vec3 playerPos = m_player.bodyPos();
     m_matchTime += deltaSec; // the HUD clock: authority sim time (a pause stops the sim delta)
+    stampLightRules();
     m_structures.tickAuthority(playerPos, deltaSec);
     tickBaseHealing(deltaSec);
     tickMedicHealing(deltaSec);
@@ -962,15 +1070,28 @@ void GameMatch::updateHud()
 {
     GameHud& hud = Globals::gameHud;
     hud.setBar("Health", m_player.health(), m_player.healthMax(), glm::vec3(0.9f, 0.25f, 0.2f));
-    hud.setBar("Energy", m_player.energy(), m_player.energyMax(), glm::vec3(0.3f, 0.8f, 1.0f));
-    hud.setBar("Materials", m_player.materials(), m_player.materialsMax(), glm::vec3(1.0f, 0.8f, 0.4f)); // carried inventory
+    // The player-facing names are the setting's: the staff's light (the shield battery), the carried stone (materials).
+    hud.setBar("Staff light", m_player.energy(), m_player.energyMax(), glm::vec3(1.0f, 0.85f, 0.4f));
+    hud.setBar("Stone", m_player.materials(), m_player.materialsMax(), glm::vec3(0.7f, 0.68f, 0.64f)); // carried inventory
     // (Pressure, density, shield radius, minerals and fuel are deliberately NOT counters: they
     // read on the structure labels and the tweaks, and the HUD column is kept to what a player
     // acts on each second.)
-    hud.setBar("Grid energy", m_structures.gridEnergy(), glm::max(m_structures.gridEnergyCapacity(), 1.0f),
+    hud.setBar("Stored light", m_structures.gridEnergy(), glm::max(m_structures.gridEnergyCapacity(), 1.0f),
         glm::vec3(1.0f, 0.9f, 0.3f));
-    hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
-    hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
+    hud.setCounter("Light in/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
+    hud.setCounter("Light out/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
+    {
+        // The team's jobs against its workers: red when production runs slow for want of houses. The free workers
+        // carry goods on the road: "+ n" of them are out now.
+        const int jobs = m_structures.teamJobs((uint8)m_team), workers = m_structures.teamWorkers((uint8)m_team);
+        const int carriers = m_structures.teamCarriers((uint8)m_team);
+        char text[48];
+        if (carriers > 0)
+            snprintf(text, sizeof(text), "%d + %d / %d", jobs, carriers, workers);
+        else
+            snprintf(text, sizeof(text), "%d / %d", jobs, workers);
+        hud.setCounterText("Workers", text, jobs > workers ? glm::vec3(1.0f, 0.4f, 0.3f) : glm::vec3(0.8f, 0.9f, 0.75f));
+    }
     if (m_coop && !m_isClient && m_settings.coopEnemies) // the wave clock is authority state (clients get the GWv log)
     {
         // The match clock as h:mm:ss (sim time since the world spawned; saved and restored).
@@ -978,7 +1099,18 @@ void GameMatch::updateHud()
         char clock[16];
         snprintf(clock, sizeof(clock), "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60);
         hud.setCounterText("Time", clock, glm::vec3(0.9f, 0.9f, 0.9f));
-        hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
+        if (m_sandboxWorld) // the light rules: the sun is the wave clock
+        {
+            const float hours = Globals::settings.sky.timeOfDay;
+            char sun[32];
+            snprintf(sun, sizeof(sun), "%s %d  %02d:%02d", m_night ? "Night" : "Day", m_night ? m_nightIndex : m_nightIndex + 1,
+                (int)hours % 24, (int)(hours * 60.0f) % 60);
+            hud.setCounterText("Sun", sun, m_night ? glm::vec3(0.6f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.85f, 0.4f));
+        }
+        if (!m_sandboxWorld || m_night)
+            hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
+        else
+            hud.removeCounter("Next wave (s)");
         hud.setCounter("Next wave power", nextWaveBudget(), 0, glm::vec3(1.0f, 0.45f, 0.3f)); // budget points before the alive cap
         // Live AI bodies against "Max enemy units" - an O(1) roster size, so no caching.
         hud.setCounter("AI alive", (float)aiAliveCount(), 0, glm::vec3(1.0f, 0.45f, 0.3f));
@@ -1016,6 +1148,14 @@ void GameMatch::updateGameInput(const Camera& camera)
         lmbEdge = false;
         rmbEdge = false;
         m_rmbMoveDrag = false; // dragging a move order onto the hotbar ends it
+    }
+    // The build UI: a right click CLOSES it at once, whatever is armed or half done (setMode drops both). The
+    // item stays the page's last one, so Tab arms it again.
+    if (m_sandboxWorld && m_buildUi && rmbEdge)
+    {
+        setMode(EPlayerMode::Select);
+        m_buildUi = false;
+        rmbEdge = false;
     }
     const bool confirmEdge = lmbEdge;
     refreshBuildHotbar(); // page + counts + highlight, every frame
@@ -1085,12 +1225,33 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // DETACHED ("Game/Player/Detach camera"): main already ran the fly camera into `camera`; the
     // follow camera and every game input stand down (LMB/WASD are the fly controls now). The
     // listener-fed edges are still drained so no click lands the moment the tweak flips back.
+    // F3 flips that tweak: fly around, and the same key gives the view back to the player. The key also turns
+    // "Detach focus point" on, so the scene focus goes with the fly camera.
+    const bool flyKeyDown = Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
+        && Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F3);
+    if (flyKeyDown && !m_flyKeyWasDown)
+    {
+        GamePlayerSettings& player = Globals::settings.game.player;
+        player.detachCamera = !player.detachCamera;
+        if (player.detachCamera)
+            player.detachFocus = true;
+    }
+    m_flyKeyWasDown = flyKeyDown;
     const bool detached = m_player.cameraDetached();
     if (m_sandboxWorld)
     {
-        // Crosshair aim: every cursor ray (placement, hover, picking) leaves through the viewport center.
-        const Rect viewport = Globals::ui.getViewportRect();
-        m_mousePos = glm::vec2((float)(viewport.min.x + viewport.max.x), (float)(viewport.min.y + viewport.max.y)) * 0.5f;
+        // Crosshair aim: every cursor ray (placement, hover, picking) leaves through the viewport center. In the
+        // BUILD UI the cursor is free and m_mousePos is the cursor (the mouse listener), with no crosshair.
+        if (!m_buildUi)
+        {
+            const Rect viewport = Globals::ui.getViewportRect();
+            m_mousePos = glm::vec2((float)(viewport.min.x + viewport.max.x), (float)(viewport.min.y + viewport.max.y)) * 0.5f;
+        }
+        if (m_crosshairShown != !m_buildUi)
+        {
+            m_crosshairShown = !m_buildUi;
+            Globals::gameHud.setCrosshair(m_crosshairShown);
+        }
         if (!detached)
         {
             const PhysicsComponent* pc = m_player.entity() ? getComponent<PhysicsComponent>(m_player.entity()) : nullptr;

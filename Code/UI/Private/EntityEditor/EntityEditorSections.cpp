@@ -893,7 +893,7 @@ void EntityEditor::renderLightSection(EntityDocNode& node)
 		const oc::string label = oc::to_string(i) + ": " + lightTypeToken(desc.type) + "###light";
 		if (ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
 		{
-			static const char* typeNames[] = { "Point", "Spot", "Area", "Tube" };
+			static const char* typeNames[] = { "Point", "Spot", "Area", "Beam" };
 			int type = int(desc.type);
 			if (fieldCombo("Type", type, typeNames, 4))
 			{
@@ -923,7 +923,7 @@ void EntityEditor::renderLightSection(EntityDocNode& node)
 				edited |= fieldFloat("Height", desc.height, 0.01f, 0.001f, 1000.0f);
 				edited |= fieldFloat("Rotation", desc.rotation, 0.5f, -180.0f, 180.0f, "Extra roll about the aim axis, on top of the entity's own rotation", "%.1f deg");
 			}
-			if (desc.type == ELightType::Tube)
+			if (desc.type == ELightType::Beam)
 			{
 				edited |= fieldFloat("Radius", desc.width, 0.01f, 0.001f, 1000.0f);
 				edited |= fieldFloat("Length", desc.length, 0.01f, 0.001f, 1000.0f);
@@ -1001,6 +1001,7 @@ void EntityEditor::renderGameUnitSection(EntityDocNode& node)
 		}
 	}
 	edited |= fieldCheck("Always Show Health", unit.alwaysDisplayHealth);
+	edited |= fieldCheck("Field Blocked", unit.fieldBlocked);
 	edited |= fieldFloat("Height Limit", unit.heightLimit, 0.1f, 0.0f, 0.0f, "0 = the game's limit, > 0 = its own ceiling, < 0 = none (flying)");
 	bool colored = unit.color.x >= 0.0f;
 	if (fieldCheck("Unit colour", colored, "A colour on every render node of the subtree"))

@@ -14,18 +14,13 @@ Prefab gameEnemyElite
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.9
-		Reach 3.5
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName ELIT
 		Color 1 0.8 0.2
 		HealthMax 130
-		EnergyMax 70
-		ShieldOutput 0.9
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 4.6
 		AttackInterval 0.8
 		AttackDamage 9

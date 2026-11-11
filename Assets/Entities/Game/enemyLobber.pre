@@ -15,18 +15,13 @@ Prefab gameEnemyLobber
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.85
-		Reach 3.5
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName LOB
 		Color 0.55 0.15 0.9
 		HealthMax 70
-		EnergyMax 50
-		ShieldOutput 0.7
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 2.8
 		AttackInterval 1.0
 		AttackDamage 0

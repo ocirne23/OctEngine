@@ -39,7 +39,10 @@ public:
     // A copy of material `source` (any index: a solid colour too) with `extraFlags` added, SHARING its textures: the handle owns the slot only.
     static RenderMaterial derive(uint16 source, uint32 extraFlags);
     // The per-entity TINT (RenderNode::setMaterialOverride): a plain index, cached and shared, never freed. [Concurrency: LOCK-FREE on a hit]
-    static uint16 getOrCreateSolidColor(const glm::vec3& color);
+    // `emissive` > 0 = an EMISSIVE colour: drawn by the UNLIT pipeline (a container with `PipelineIdx UnlitOpaque`) as
+    // colour x emissive (up to 15.9, in steps of 1/16; above 1 the bloom takes it); the lit pipelines draw it as the
+    // plain colour.
+    static uint16 getOrCreateSolidColor(const glm::vec3& color, float emissive = 0.0f);
 
     // ---- The handle ----
 

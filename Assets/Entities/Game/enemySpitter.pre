@@ -14,18 +14,13 @@ Prefab gameEnemySpitter
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.8
-		Reach 3
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName SPIT
 		Color 0.75 0.3 1
 		HealthMax 15
-		EnergyMax 32
-		ShieldOutput 0.64
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 3.6
 		AttackInterval 1.0
 		AttackDamage 0

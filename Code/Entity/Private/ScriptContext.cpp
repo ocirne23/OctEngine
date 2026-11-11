@@ -474,10 +474,10 @@ void registerScriptDslBindings()
                 "(void)($r.coneAngle = $1, $r.edgeSoftness = $2)" },
             { "setAreaSize",  T::Void, { { "width", T::Float }, { "height", T::Float } },
                 "(void)($r.width = $1, $r.height = $2)" },
-            { "setTubeShape", T::Void, { { "radius", T::Float }, { "length", T::Float } },
+            { "setBeamShape", T::Void, { { "radius", T::Float }, { "length", T::Float } },
                 "(void)($r.width = $1, $r.length = $2)" }, // radius rides the width field
-            // The tube reading of the overloaded width field, so a script never has to know the aliasing.
-            { "tubeRadius",   T::Float, {}, "$r.width" },
+            // The beam reading of the overloaded width field, so a script never has to know the aliasing.
+            { "beamRadius",   T::Float, {}, "$r.width" },
         } });
 
     // The component's light list as a WRITABLE sequence: `foreach [ref] Light l in self.light.lights` and

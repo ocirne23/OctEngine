@@ -17,18 +17,13 @@ Prefab gameEnemySpawner
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 1.0
-		Reach 4
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName HIVE
 		Color 0.1 0.85 0.95
 		HealthMax 320
-		EnergyMax 100
-		ShieldOutput 1.0
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 2.2
 		AttackInterval 1.0
 		AttackDamage 0

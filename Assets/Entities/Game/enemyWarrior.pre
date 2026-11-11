@@ -1,8 +1,6 @@
-# Enemy Warrior: the SHIELDED grunt - a grunt body WITH a Component Force: a team-1 bubble that
-# presses on player shields and a shield battery that absorbs damage first (the GPU-readback
-# path; shield-less bodies are pushed/burned by the baked field instead), a third more health and
-# harder hits. The early-wave line unit once the shield-less horde stops cutting it. Bigger than
-# the grunt, yellow.
+# Enemy Warrior: the tough grunt - a third more health and harder hits, no bubble (only the Titan
+# carries one). The early-wave line unit once the plain horde stops cutting it. Bigger than the
+# grunt, yellow.
 Prefab gameEnemyWarrior
 	CullMode RootOnly
 	Component Scene
@@ -17,18 +15,13 @@ Prefab gameEnemyWarrior
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.8
-		Reach 3
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName WARR
 		Color 0.85 0.75 0.1
 		HealthMax 80
-		EnergyMax 40
-		ShieldOutput 0.8
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 4.0
 		AttackInterval 1.0
 		AttackDamage 8

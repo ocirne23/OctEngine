@@ -378,7 +378,7 @@ protected:
     uint16 addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
     uint16 addTextureMaterial(const RenderMaterial::TextureDesc& desc);
     uint16 addDerivedMaterial(uint16 source, uint32 extraFlags);
-    uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
+    uint16 getOrCreateSolidColorMaterial(const glm::vec3& color, float emissive = 0.0f);
     uint16 addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
                       RenderMaterial::ETextureEncoding encoding);
     void destroyTextureMaterial(uint16 materialIdx); // the slot and its textures
@@ -678,6 +678,11 @@ protected:
     glm::dvec2 m_cloudWindOffset = glm::dvec2(0.0); // accumulated wind (m), wrapped by the weather period
     double m_cloudEvolveOffset = 0.0;              // accumulated detail drift (m), wrapped by the detail period
     double m_cloudVortexAngle = 0.0;               // the vortex bands' accumulated rotation (rad), wrapped by 2 pi
+    // THE FRAME'S BEAM LIGHTS (addLightInfo: lock-free claims, the first MAX_BEAM_COLUMNS; reset in beginFrame): the fog
+    // apply draws each one's glow in the air from u_present_beam* (vol_apply.fs.glsl keeps the same count).
+    static constexpr uint32 MAX_BEAM_COLUMNS = 32;
+    RendererVKLayout::LightInfo m_beamLights[MAX_BEAM_COLUMNS]{};
+    uint32 m_beamLightCount = 0;
     // The cloud shadow map cascades (buildUboClouds): world-space centres + extents of what each layer holds.
     oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
     oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};

@@ -248,8 +248,16 @@ public:
 			const int columns = hud.columns > 0 ? hud.columns : GameHud::NumSlots;
 			const int rows = (GameHud::NumSlots + columns - 1) / columns;
 			const float totalH = rows * slot + (rows - 1) * pad;
-			const float x0 = vpMin.x + margin;
+			// ONE ROW (columns <= 0) is a BAR: wide slots (a caption fits at full size), centred at the bottom of the
+			// viewport on a dark plate, the armed slot in gold. A grid stays square, bottom left.
+			const bool bar = hud.columns <= 0;
+			const float slotW = bar ? slot * 1.45f : slot;
+			const float totalW = columns * slotW + (columns - 1) * pad;
+			const float x0 = bar ? (vpMin.x + vpMax.x - totalW) * 0.5f : vpMin.x + margin;
 			const float y0 = vpMax.y - totalH - margin;
+			if (bar)
+				dl->AddRectFilled(ImVec2(x0 - pad * 1.5f, y0 - pad * 1.5f), ImVec2(x0 + totalW + pad * 1.5f, y0 + totalH + pad * 1.5f),
+					col(0.03f, 0.03f, 0.04f, 0.55f), 8.0f * s);
 			const float keyFontSize = fontSize * 0.95f;
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
 			glm::vec4 rects[GameHud::NumSlots];
@@ -257,11 +265,11 @@ public:
 			ImVec2 cardAnchor(0.0f, 0.0f);
 			for (int i = 0; i < GameHud::NumSlots; ++i)
 			{
-				const float x = x0 + (i % columns) * (slot + pad);
+				const float x = x0 + (i % columns) * (slotW + pad);
 				const float y = y0 + (i / columns) * (slot + pad);
 				const HudSlot& hudSlot = hud.slots[i];
 				const bool selected = i == hud.selectedSlot;
-				const ImVec2 sMin(x, y), sMax(x + slot, y + slot);
+				const ImVec2 sMin(x, y), sMax(x + slotW, y + slot);
 				rects[i] = glm::vec4(sMin.x, sMin.y, sMax.x, sMax.y);
 				// hover: only ASSIGNED slots light up -- an empty cell is not a button
 				const bool hovered = hudSlot.used && mouse.x >= sMin.x && mouse.x <= sMax.x
@@ -275,7 +283,7 @@ public:
 					: hovered ? col(0.16f, 0.18f, 0.22f, 0.85f) : col(0.06f, 0.06f, 0.08f, 0.65f), 5.0f * s);
 				if (selected)
 					dl->AddRect(ImVec2(sMin.x - 2.0f * s, sMin.y - 2.0f * s), ImVec2(sMax.x + 2.0f * s, sMax.y + 2.0f * s),
-						col(1.0f, 1.0f, 1.0f, 0.95f), 6.0f * s, 0, 2.5f * s);
+						bar ? col(1.0f, 0.82f, 0.35f, 1.0f) : col(1.0f, 1.0f, 1.0f, 0.95f), 6.0f * s, 0, 2.5f * s);
 				else if (hovered)
 					dl->AddRect(sMin, sMax, col(1.0f, 1.0f, 1.0f, 0.8f), 5.0f * s, 0, 2.0f * s);
 				else
@@ -291,13 +299,13 @@ public:
 				{
 					float labelSize = fontSize * hudSettings.hotbarTextScale;
 					ImVec2 ts = font->CalcTextSizeA(labelSize, noWrap, 0.0f, hudSlot.label.c_str());
-					const float maxW = slot - 8.0f * s;
+					const float maxW = slotW - 8.0f * s;
 					if (ts.x > maxW)
 					{
 						labelSize *= maxW / ts.x;
 						ts = font->CalcTextSizeA(labelSize, noWrap, 0.0f, hudSlot.label.c_str());
 					}
-					text(ImVec2(x + (slot - ts.x) * 0.5f, y + (slot - ts.y) * 0.5f), labelSize, col(1.0f, 1.0f, 1.0f, 1.0f), hudSlot.label.c_str());
+					text(ImVec2(x + (slotW - ts.x) * 0.5f, y + (slot - ts.y) * 0.5f), labelSize, col(1.0f, 1.0f, 1.0f, 1.0f), hudSlot.label.c_str());
 				}
 				if (hudSlot.count > 0) // stack count, bottom right
 				{

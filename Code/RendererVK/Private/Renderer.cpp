@@ -683,6 +683,7 @@ void RendererState::beginFrame()
     buildFrameUbo(m_frameCamera, camera, vrBaseOrientation, frameData);
 
     m_submission.beginFrame();
+    m_beamLightCount = 0;
     // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
     // (Grid jobs left in flight by a present() that returned early must finish first - normally done.)
     Globals::jobSystem.wait(m_gridJobCounter);

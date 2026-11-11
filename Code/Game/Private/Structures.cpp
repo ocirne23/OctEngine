@@ -18,14 +18,16 @@ import :Structures;
 // request queues and the two tick entry points (authority / mirror) that sequence the topic units
 // (placement, network, economy, sync - see the list at the end of Structures.ixx).
 
-static constexpr const char* structureNames[] = { "Emitter", "Generator", "Connector", "Extractor",
-    "Battery", "Fuel tank", "Solar", "Fabricator", "Bastion", "Lance", "Barracks", "Brute barracks",
-    "Runner barracks", "Spitter barracks", "Wall", "Turret", "Mineral silo", "Constructor", "Base",
-    "Power cable", "Pipeline", "Conveyor", "Power crossing", "Pipe crossing", "Conveyor crossing",
-    "House", "Medic station" };
+// The PLAYER-FACING names are the setting's (Docs/GDD.md): light, wood and stone for energy, fuel and minerals. The
+// code, the tweaks and the save keys keep the old words.
+static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Work camp",
+    "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
+    "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
+    "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
+    "House", "Healer's hut" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
-static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 3.0f, 2.0f, 0.5f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
+    2.0f, 1.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
     0.25f, 1.5f, 1.0f };
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
@@ -69,86 +71,100 @@ oc::string StructureSystem::describeType(EStructureType type) const
     case EStructureType::Bastion:
     case EStructureType::Lance:
         desc = type == EStructureType::Lance
-            ? "Shield CONE along its aimed facing: pushes enemies out and drains them."
-            : "Shield bubble: pushes enemies out and drains their batteries.";
-        in(emitterDrawOf(type), "energy");
-        in(m_settings.emitterPressureDraw, "energy", " more at full pressure");
+            ? "A CONE of hardened light along its aimed facing. Demons inside it are solid and burn."
+            : "A lantern bubble of hardened light. Demons inside it are solid and burn, and they drain it.";
+        line("Sleeps by day: faint, and it uses no light until dark or until a demon is on it");
+        in(emitterDrawOf(type), "light");
+        in(m_settings.emitterPressureDraw, "light", " more at full pressure");
         range(emitterReachOf(type));
         break;
     case EStructureType::Generator:
-        desc = "Burns fuel into grid energy.";
-        in(m_settings.fuelBurnRate, "fuel");
-        out_(m_settings.genEnergyPerSec, "energy");
+        desc = "Burns wood into light, day and night, for the nearest Crystal store or the Beacon in reach.";
+        line(oc::format("Needs {} workers", m_settings.workersGenerator));
+        in(m_settings.fuelBurnRate, "wood");
+        out_(m_settings.genEnergyPerSec, "light");
         break;
     case EStructureType::Solar:
-        desc = "Free energy trickle. Needs no fuel.";
-        out_(m_settings.solarEnergyPerSec, "energy");
+        desc = "Catches sunlight and sends it on a beam to the nearest Crystal store or the Beacon. The beam needs a clear line. Gives nothing at night.";
+        out_(m_settings.solarEnergyPerSec, "light", " in full daylight");
+        range(m_settings.mirrorBeamRange);
         break;
     case EStructureType::Extractor:
-        desc = "Mines the resource node under it.";
-        in(m_settings.extractorEnergyPerSec, "energy");
-        out_(m_settings.mineralRate, "minerals", " on a mineral node");
-        out_(m_settings.fuelRate, "fuel", " on a fuel node");
+        desc = "Works the resource node under it: a quarry on rock, a lumber camp on logs. Needs no light.";
+        line(oc::format("Needs {} workers", m_settings.workersExtractor));
+        out_(m_settings.mineralRate, "stone", " on a rock node");
+        out_(m_settings.fuelRate, "wood", " on a wood node");
         break;
     case EStructureType::Fabricator:
-        desc = "Converts fuel and power into minerals.";
-        in(m_settings.fabricatorEnergyPerSec, "energy");
-        in(m_settings.fabricatorFuelPerSec, "fuel");
-        out_(m_settings.fabricatorMineralsPerSec, "minerals");
+        desc = "Makes cut stone with wood, where no rock node is near. Needs no light.";
+        line(oc::format("Needs {} workers", m_settings.workersFabricator));
+        in(m_settings.fabricatorFuelPerSec, "wood");
+        out_(m_settings.fabricatorMineralsPerSec, "stone");
         break;
     case EStructureType::Constructor:
-        desc = "Builds and repairs nearby structures from its mineral stock.";
-        in(m_settings.extractorEnergyPerSec, "energy");
-        in(m_settings.constructorBuildRate, "minerals", " while building");
+        desc = "Builds and repairs nearby structures from its stone stock. Needs no light.";
+        line(oc::format("Needs {} workers", m_settings.workersConstructor));
+        in(m_settings.constructorBuildRate, "stone", " while building");
         range(m_settings.constructorRange);
         break;
     case EStructureType::Battery:
-        desc = "Banks grid energy for the peaks.";
-        banks(m_settings.batteryCapacity, "energy");
+        desc = "Holds the day's light for the night, and feeds every light building in its reach that it has a clear line to. Two stores in range share their light.";
+        banks(m_settings.batteryCapacity, "light");
+        range(m_settings.lightHubReach);
         break;
     case EStructureType::FuelTank:
-        desc = "Banks the fuel the extractors pipe in.";
-        banks(m_settings.fuelTankCapacity, "fuel");
+        desc = "Holds the wood the lumber camps send in.";
+        banks(m_settings.fuelTankCapacity, "wood");
         break;
     case EStructureType::MineralSilo:
-        desc = "Banks minerals: only silos and the Base hold SPENDABLE stock.";
-        banks(m_settings.mineralSiloCapacity, "minerals");
+        desc = "Holds every good the carriers bring: stone and wood. Only storehouses and the Beacon hold stone you can BUILD with.";
+        banks(m_settings.mineralSiloCapacity, "stone");
+        banks(m_settings.fuelTankCapacity, "wood");
         break;
     case EStructureType::Barracks:
-        desc = "Trains units. Its power draw IS the build bar.";
-        in(m_settings.barracksEnergyIntake, "energy");
-        line(oc::format("Build time = the unit's energy cost / {:g}", m_settings.barracksEnergyIntake));
+        desc = "Trains units. Its light draw IS the build bar.";
+        in(m_settings.barracksEnergyIntake, "light");
+        line(oc::format("Build time = the unit's light cost / {:g}", m_settings.barracksEnergyIntake));
         line(oc::format("Population {} (+{} per linked house)", m_settings.barracksPopulation, m_settings.housePopulation));
         break;
     case EStructureType::House:
-        desc = "Raises the population cap of the nearest barracks. Needs no power.";
-        line(oc::format("+ {} population", m_settings.housePopulation));
+        desc = "Homes for workers: production runs on them, and the free ones carry goods on the road (the house must touch a road). It also raises the population cap of the nearest barracks.";
+        line(oc::format("+ {} workers", m_settings.houseWorkers));
+        line(oc::format("+ {} barracks population", m_settings.housePopulation));
         range(m_settings.houseLinkRadius); // how far it reaches for that barracks
         break;
     case EStructureType::Turret:
-        desc = "Hitscan lightning at the nearest enemy unit. Never misses.";
-        in(p.turretShotEnergy / glm::max(p.turretFireInterval, 1e-3f), "energy");
-        banks(p.turretShotEnergy, "energy per shot");
+        desc = "Strikes the nearest SOLID demon with light: only a demon inside a lantern bubble. Never misses.";
+        in(p.turretShotEnergy / glm::max(p.turretFireInterval, 1e-3f), "light");
+        banks(p.turretShotEnergy, "light per shot");
         line(oc::format("{:g} damage every {:g} s", p.turretDamage, p.turretFireInterval));
         range(p.turretRange);
         break;
     case EStructureType::MedicStation:
         desc = "Heals own units and players standing in its radius.";
-        in(m_settings.medicEnergyPerSec, "energy");
-        out_(medicHealRate(), "health", " and shield, per body");
+        in(m_settings.medicEnergyPerSec, "light");
+        out_(medicHealRate(), "health", " and staff light, per body");
         range(medicHealRadius());
         break;
     case EStructureType::Wall:
-        desc = "Breachable barrier: enemies chew through it instead of walking around. Needs no power.";
+        desc = "Cut stone. It stops solid demons: they chew through it instead of walking around. Needs no light.";
         break;
     case EStructureType::CablePower:
     case EStructureType::CablePipe:
     case EStructureType::CableConveyor:
     {
-        static constexpr const char* c_what[3] = { "energy", "fuel", "minerals" };
+        static constexpr const char* c_what[3] = { "light", "wood", "stone" };
         const int medium = cableMediumOf(type);
-        desc = oc::format("Carries {} between the buildings its run touches.", c_what[medium]);
-        out_(m_settings.cableThroughput[medium], c_what[medium], " per link");
+        if (medium != 0 && m_settings.carriers)
+        {
+            desc = "Free workers walk it with wood and stone, from the building that makes them to the nearest one that takes them. They come from houses on the road.";
+            line(oc::format("A worker takes {:g} goods at {:g} m/s", m_settings.carrierLoad, m_settings.carrierSpeed));
+        }
+        else
+        {
+            desc = oc::format("Carries {} between the buildings its run touches.", c_what[medium]);
+            out_(m_settings.cableThroughput[medium], c_what[medium], " per link");
+        }
         line("Paint it: hold and drag. Crossings place themselves.");
         break;
     }
@@ -156,8 +172,8 @@ oc::string StructureSystem::describeType(EStructureType type) const
     case EStructureType::CrossingPipe:
     case EStructureType::CrossingConveyor:
     {
-        static constexpr const char* c_what[3] = { "energy", "fuel", "minerals" };
-        desc = oc::format("Bridges {} over a line of another medium.", c_what[crossingMediumOf(type)]);
+        static constexpr const char* c_what[3] = { "light", "wood", "stone" };
+        desc = oc::format("Bridges {} over a line of another kind.", c_what[crossingMediumOf(type)]);
         line("Placed automatically by a paint stroke.");
         break;
     }
@@ -171,7 +187,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
     {
         if (!out.empty())
             out += '\n';
-        out += oc::format("- {:g} minerals to build", cost);
+        out += oc::format("- {:g} stone to build", cost);
     }
     if (!flows.empty())
     {
@@ -226,6 +242,17 @@ glm::vec2 StructureSystem::structureFacing(int index) const
 }
 
 // (Declared in Structures.ixx - shared by every Game implementation unit.)
+float emitterShellAlpha(float charge, uint32 id, float warnCharge)
+{
+    if (warnCharge <= 0.0f || charge >= warnCharge)
+        return 1.0f;
+    const float low = 1.0f - glm::clamp(charge / warnCharge, 0.0f, 1.0f); // 0 at the warning level, 1 at empty
+    const float t = (float)Globals::time.getElapsedSec() * glm::mix(4.0f, 14.0f, low) + (float)(id % 64u);
+    // Two sines of unrelated rates: an uneven lantern flicker, not a regular blink.
+    const float flicker = 0.5f + 0.25f * std::sin(t) + 0.25f * std::sin(t * 2.7f + 1.3f);
+    return 1.0f - low * 0.75f * flicker;
+}
+
 uint32 packColor(const glm::vec3& c)
 {
     const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
@@ -359,6 +386,10 @@ void StructureSystem::clear()
     joinTransport(); // the job holds component pointers: joined before any entity dies
     for (const Ref& s : roster)
         Globals::world.removeRootEntity(s.entity);
+    for (const Walker& walker : m_walkers)
+        if (walker.entity)
+            Globals::world.removeRootEntity(walker.entity.get());
+    m_walkers.clear();
     for (Node& n : m_nodes)
         if (n.entity)
             Globals::world.removeRootEntity(n.entity.get());
@@ -526,6 +557,9 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
     tickConstructors(deltaSec);
+    tickCarriers(deltaSec); // wood and stone: the walkers on the road
+    tickLight(deltaSec);    // light: the beams between the buildings and their hubs
+    drawLightLinks();       // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
     // The transport: inject the due runs' supply/demand and kick the job - it overlaps present
     // and the next frame's front, joined at the top of the next tick.
     m_transportTime += deltaSec;
@@ -538,6 +572,34 @@ void StructureSystem::tickMirror(float deltaSec)
     refresh();
     rebuildNetworks(); // clients derive the graph locally from the mirrored structures - same
                        // code, same inputs; the fills arrive by id (GCf), nothing is simulated
+    updateStaffing();  // the HUD's workers and the "Short of workers" badge, from the mirrored roster
+    if (m_settings.lightBeams) // the light links, for the beams and the badges (the flow is the authority's)
+    {
+        m_lightLinkTimer -= deltaSec;
+        if (m_lightLinkTimer <= 0.0f || m_lightLinkCount != m_frame.size())
+        {
+            m_lightLinkTimer = 1.0f;
+            rebuildLightLinks();
+        }
+        // The mirror moves no light: each link's flow is an ESTIMATE from what the building makes or draws.
+        for (Ref& ref : m_frame)
+        {
+            float flow = 0.0f;
+            if (ref.lightId != 0 && !ref.state->blueprint)
+            {
+                if (ref.type == EStructureType::Solar)
+                    flow = m_settings.solarEnergyPerSec * m_settings.solarDaylight;
+                else if (ref.type == EStructureType::Generator)
+                    flow = ref.state->store[1] > 0.0f ? m_settings.genEnergyPerSec : 0.0f;
+                else if (hasShieldEmitter(ref.type))
+                    flow = emitterDrawOf(ref.type) * glm::clamp(m_settings.fieldNight, 0.0f, 1.0f);
+                else if (ref.state->capacity[0] > 0.0f && ref.state->store[0] < ref.state->capacity[0] - 0.05f)
+                    flow = m_settings.lightFeedRate;
+            }
+            ref.lightFlow = flow;
+        }
+        drawLightLinks();
+    }
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it - the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)
@@ -552,6 +614,10 @@ void StructureSystem::tickMirror(float deltaSec)
         {
             fc->emitter.setOutput(emitterOutputOf(ref.type) * s.emitter.outputFrac);
             fc->emitter.setReach(emitterReachOf(ref.type));
+            // The mirror knows no unit drain: a field is awake at night, or under the pressure its own emitter reads.
+            const float awake = fc->emitter.getPressure() > 0.01f ? 1.0f : glm::clamp(m_settings.fieldNight, 0.0f, 1.0f);
+            fc->emitter.setShellAlpha(emitterShellAlpha(s.capacity[0] > 0.0f ? s.store[0] / s.capacity[0] : 0.0f,
+                s.structureId, m_settings.emitterWarnCharge) * glm::mix(m_settings.fieldDayAlpha, 1.0f, awake));
         }
     }
 }

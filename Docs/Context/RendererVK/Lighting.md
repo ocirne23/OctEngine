@@ -346,13 +346,41 @@ which is a baked define).
 On by default, starting at 5 h (before a sunrise); "Paused" holds the time (the direction still follows a dragged time /
 latitude). While "Enabled", `Renderer::advanceSunCycle` (main, in `kickBeginFrameJob`, before the begin-frame job
 reads the sky) advances "Time of day (h)" by the SIM delta x "Speed (x real time)" (1 = real time, 60 = a day in 24
-minutes; the pause holds the sun), wraps it at 24 h and WRITES the "Sun Direction" tweak every frame (`sunCycleDirection`:
+minutes; the pause holds the sun), wraps it at 24 h and WRITES the "Sun Direction" tweak every frame (`SkyParams::cycleSunDirection`, in Settings so the game reads the same sun through `SkyParams::sunHeight`:
 the declination from "Day of year", the hour angle 15 degrees per hour from noon, "Latitude (deg)"; east +X, up +Y,
 north -Z) - a hand edit of the direction is overwritten while it runs, a dragged time / latitude shows at once even at
 speed 0. **Sky Radiance** follows the day: `skyRadianceNow` scales the UBO's `sky_radiance` by a smooth step over the
 sun's height (x "Night sky radiance" with the sun down, x 1 from ~15 degrees up); the "Sky Radiance" tweak keeps its
 value. The cycle tweaks are Runtime, and they are `sky_radiance`'s sources: that entry stays a LIVE uniform (never
 baked under the "Sky" lock).
+
+## Beam lights (`BeamLight`, Light.ixx)
+
+A straight line of light of any length: a lamp tube, or a column kilometres tall (the co-op Base's beacon). The record
+is the former tube light's (`radius < 0`, `width` = the core radius, `direction` x the full length, `pos` = the CENTRE).
+
+* **Surfaces** (`doBeamLight`, punctual_lights.inc.glsl): the closest point on the line drives the falloff over the
+  light's range; the specular is the representative point.
+* **The shadow is ONE ray at a FIXED point** (`beamLightVisibility`): the closest point on the line, moved along the
+  axis by the distance to the line (the ray leaves at 45 degrees, over what stands at the beam's foot), clamped to the
+  line. A point BELOW the beam's start measures from the start (`max(along, 0)`), so ground lower than a beacon still
+  aims well up the beam and not into the building under it. No jitter, so no noise: a jittered point over a line this long never converges under TAA.
+* **The glow in the air is closed form, in the fog apply** (`beamColumns`, vol_apply.fs.glsl): along the view ray the
+  squared distance to the line is a quadratic, and two profiles integrate exactly over it - a tight core
+  `r^3 / (d^2 + r^2)^2` and a weak halo `r / (d^2 + r^2)` (`BEAM_HALO`) that ends at the light's range. **The halo's ends are ROUND:** its
+  fade takes the distance to the beam as a capsule (from the point where the ray passes the beam to the SEGMENT), and
+  its ray part reaches the range past each end plane; cut on the end planes it showed a flat bottom and top. The core is
+  cut to the beam's length, both to the scene depth; a cloud in front dims it by the cloud's transmittance; the fog and the
+  far trees do not dim it. No march, no shadow ray. **Only with the fog on** (the cloud apply draws none).
+* **The frame's first `RendererState::MAX_BEAM_COLUMNS` (32, `BEAM_COLUMNS` in the shader: change both) beams** get a column: `addLightInfo` claims a slot
+  (lock-free, reset in the begin-frame job), and they ride the UBO's PRESENT values (`u_present_beamCount` /
+  `beamFoot` / `beamAxis` / `beamColor`) - lights are added after the begin-frame build.
+* **The light grid** bins a beam over at most 1024 m of its height from its lower end (`MAX_GRIDS_PER_AXIS`): surfaces
+  above that get no light from it. **A tall beam with a wide range does not belong in the grid:** the grid holds every
+  32 m grid in the light's bound (the range on all sides), about 147 KB each at 2 m cells, so the count grows with
+  range^3 (a 300 m range = ~8000 grids, over 1 GB). `Renderer::addBeamColumn` adds the glow in the air ALONE (a column
+  slot, no light record), and `addLightInfo(light, false)` a beam with no column: the co-op beacon is a tall column
+  plus a short surface beam at its foot. The fog froxels, GI and particles see a beam as a point at its centre.
 
 ## Long-range sun shadows
 

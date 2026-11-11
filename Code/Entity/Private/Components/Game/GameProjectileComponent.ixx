@@ -42,7 +42,7 @@ export struct GameProjectileComponent
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}
     void update(Entity& entity, float deltaSec);
-    void onContact(Entity& self, Entity& other, bool begin);
+    void onContact(Entity& self, Entity* other, bool begin); // other = null: a body with no entity (the terrain, a tree, a rock)
 };
 
 export const GameProjectileComponent::SpawnInfo* getGameProjectileSpawnInfo(const Entity* entity);

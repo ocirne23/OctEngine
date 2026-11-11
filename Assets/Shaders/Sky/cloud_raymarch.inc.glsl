@@ -191,6 +191,13 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     float sumSunHigh   = 0.0; // sum(absorbed * sun * hf)
     float sumAmbHigh   = 0.0; // sum(absorbed * hf)
     float sumAmbGround = 0.0; // sum(absorbed * exp(-h * k))
+    // THE VORTEX'S EYE LIGHT (u_clouds_vortexLight: the game's beacon beam): a vertical line light on the eye's axis, the
+    // fifth per-ray colour. With d = the sample's horizontal distance from the axis: 1 inside the eye, then the line's
+    // 1 / d x exp(-(d - eye) / reach) - the clouds past the eye's edge take the light away. Not shadowed.
+    float sumEyeLight  = 0.0;
+    // THE FLASHES (u_clouds_flash[]: lightning inside the clouds, pushed by the game): point lights in the cloud volume,
+    // the sixth per-ray colour (one colour for all). Per flash 1 / (1 + d^2 / r^2)^2 of its radiance. Not shadowed.
+    float sumFlash     = 0.0;
 
     // The self-shadow comes from the shadow map where it covers the sample (one fetch instead of a sun march); the map
     // is relative to the CENTRE view's camera. u_clouds_shadowRendered = the map was rendered this frame.
@@ -338,6 +345,18 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 sumSunHigh   += sunWeight * hf;
                 sumAmbHigh   += absorbed * hf;
                 sumAmbGround += absorbed * exp(-max(alt - u_clouds_mainBottom, 0.0) * u_clouds_invGroundLightDepth);
+                if (u_clouds_vortexEnabled > 0.5 && u_clouds_vortexLight.r + u_clouds_vortexLight.g + u_clouds_vortexLight.b > 0.0)
+                {
+                    const float d = max(length(rel.xz - u_clouds_vortexCentre), u_clouds_vortexEyeRadius);
+                    sumEyeLight += absorbed * (u_clouds_vortexEyeRadius / d) * exp2((u_clouds_vortexEyeRadius - d) * u_clouds_vortexLightFalloff);
+                }
+                if (u_clouds_flash[0].w + u_clouds_flash[1].w > 0.0)
+                {
+                    const vec3 d0 = vec3(rel.xz - u_clouds_flash[0].xy, alt - u_clouds_flash[0].z);
+                    const vec3 d1 = vec3(rel.xz - u_clouds_flash[1].xy, alt - u_clouds_flash[1].z);
+                    const vec2 f = 1.0 / (1.0 + vec2(dot(d0, d0), dot(d1, d1)) * u_clouds_flashInvRadius2);
+                    sumFlash += absorbed * dot(f * f, vec2(u_clouds_flash[0].w, u_clouds_flash[1].w));
+                }
             }
 
             if (r.front < 0.0)
@@ -375,9 +394,11 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // Ambient: the CLEAR sky (a 5-direction mean baked once per frame into one texel by gi_sky_map.cs.glsl),
     // and the ground bounce: the sky's ground colour x the cloud albedo x (sun + sky) irradiance / PI.
     const vec3 ambSky = texelFetch(u_skyMap, SKY_MAP_CLOUD_AMBIENT_TEXEL, 0).rgb * u_clouds_ambient;
-    const vec3 ambGround = u_clouds_groundBounceAlbedo * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky);
+    // At night both are ~0: u_clouds_groundNightLight is the ground's light then (the night's Sky Radiance, 0 by day).
+    const vec3 ambGround = u_clouds_groundBounceAlbedo * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky + u_clouds_groundNightLight);
 
-    r.inScatter = sunBottom * (sumSun - sumSunHigh) + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;
+    r.inScatter = sunBottom * (sumSun - sumSunHigh) + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh
+                + u_clouds_vortexLight * sumEyeLight + u_clouds_flashColor * sumFlash;
 
     // Aerial perspective between the origin and the cloud, taken at the distance whose air transmittance is the
     // in-scatter-weighted mean (airSum). With almost no air along the ray (up, from altitude) that distance is

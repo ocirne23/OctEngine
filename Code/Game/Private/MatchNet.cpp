@@ -488,9 +488,17 @@ void GameMatch::handleNetEvent(oc::string_view name)
         else if (name == "GWv")
         {
             // Co-op wave announcement (the wave itself arrives as replicated unit entities).
+            // With the spawn site (the fog effect; radius 0 = none).
             const uint16 wave = reader.read<uint16>();
+            glm::vec3 fogPos;
+            fogPos.x = reader.read<float>(); fogPos.y = reader.read<float>(); fogPos.z = reader.read<float>();
+            const float fogRadius = reader.read<float>();
             if (!reader.overflowed())
+            {
                 Log::info(oc::format("Co-op: wave {} incoming", (int)wave));
+                if (fogRadius > 0.0f)
+                    addSpawnFog(fogPos, fogRadius);
+            }
         }
         else if (name == "GMp")
         {

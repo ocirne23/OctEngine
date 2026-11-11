@@ -73,12 +73,21 @@ static float unitRand01(uint32& state) // per-unit stream, independent of schedu
 // Every render node of the subtree. unitColor (the prefab's GameUnit Color) wins over a node's own
 // authored colour; the friendly tint pulls toward green, not to a flat colour, so the unit types stay
 // told apart.
-static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
+static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly, bool shadow = false)
 {
     const auto tint = [&](RenderNode& renderNode, const RenderComponent::SpawnInfo* info)
     {
         if (!renderNode.isValid())
             return;
+        // AN EYE (a piece of the unlit `eyes` container, see Debug/CubeGuy.pre): never the body's colour. An enemy's
+        // keeps its authored glow, the shadow form included; a friendly unit's is pale.
+        if (info && info->containerName == "eyes")
+        {
+            // An enemy's eyes GLOW at their authored strength; a friendly unit's are pale and do not glow.
+            renderNode.setMaterialOverride(friendly ? RenderMaterial::getOrCreateSolidColor(glm::vec3(0.85f, 0.95f, 1.0f))
+                : RenderMaterial::getOrCreateSolidColor(info->color.x >= 0.0f ? info->color : glm::vec3(1.0f, 0.12f, 0.08f), info->emissive));
+            return;
+        }
         glm::vec3 color(1.0f);
         if (unitColor)
             color = *unitColor;
@@ -88,6 +97,8 @@ static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
         constexpr float c_tintStrength = 0.55f;
         if (friendly)
             color = glm::mix(color, c_friendlyGreen, c_tintStrength);
+        if (shadow) // the shadow form: near-black smoke with a trace of the type's colour, so the types stay told apart
+            color = color * 0.06f + glm::vec3(0.012f, 0.008f, 0.02f);
         renderNode.setMaterialOverride(RenderMaterial::getOrCreateSolidColor(color));
     };
     if (RenderComponent* rc = getComponent<RenderComponent>(node))
@@ -97,7 +108,7 @@ static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
             tint(boneModel->bones[i].node, boneModel->rig->bones[i].render.get());
     if (const SceneComponent* sc = getComponent<SceneComponent>(node))
         for (const EntityPtr& child : sc->children)
-            tintSubtree(child.get(), unitColor, friendly);
+            tintSubtree(child.get(), unitColor, friendly, shadow);
 }
 
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
@@ -123,6 +134,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     fireInterval = info.fireInterval;
     shotKind = info.shotKind;
     alwaysDisplayHealth = info.alwaysDisplayHealth;
+    fieldBlocked = info.fieldBlocked;
     heightLimit = info.heightLimit;
     for (float& h : m_outputHistory)
         h = shieldOutput;
@@ -314,7 +326,7 @@ void GameUnitComponent::applyHeightLimit(Tick& t)
 bool GameUnitComponent::applyDamageAndHeal(Tick& t)
 {
     // The battery eats direct damage first (the player's applyDamage rule); shield-less bodies take it all.
-    if (const float dmg = takePendingDamage(); dmg > 0.0f)
+    if (const float dmg = takePendingDamage(); dmg > 0.0f && solid) // the shadow form drops what hit it
     {
         float remaining = dmg;
         if (!collapsed && shieldOutput > 0.0f && params.damageAbsorb > 0.0f && energy > 0.0f)
@@ -328,6 +340,8 @@ bool GameUnitComponent::applyDamageAndHeal(Tick& t)
         if (remaining > 0.0f)
             health = glm::max(health - remaining, 0.0f);
     }
+    if (params.sunDps > 0.0f && (int)team == params.sunBurnTeam) // daylight burns this team (no shield absorbs it)
+        health = glm::max(health - params.sunDps * t.deltaSec, 0.0f);
     // Death before the heal: a heal landing the same tick must not revive the unit (a medic
     // station's radius was making units immortal).
     if (health <= 0.0f || (params.flatGround && t.pos.y < params.voidY))
@@ -651,8 +665,8 @@ void GameUnitComponent::tickSteering(Tick& t)
         }
         const glm::vec2 dir = raster ? steerHeading(t, goalDir, *raster) : goalDir;
         const glm::vec2 measured(t.vel.x, t.vel.z); // the body's REAL planar velocity (pre-command)
-        const float walkSpeed = wandering
-            ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed;
+        const float walkSpeed = (wandering
+            ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed) * speedScale();
         glm::vec3 dv(dir.x * walkSpeed - t.vel.x, 0.0f, dir.y * walkSpeed - t.vel.z);
         const float maxDv = accel * t.deltaSec;
         const float dvLen = glm::length(dv);
@@ -812,6 +826,7 @@ void GameUnitComponent::tickField(Tick& t)
         t.fc->emitter.setOutput(energy > 0.0f ? shieldOutput : 0.01f);
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
+        setSolid(t, pressure, iso);
         if (collapsed && t.fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
         {
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * t.deltaSec);
@@ -822,7 +837,7 @@ void GameUnitComponent::tickField(Tick& t)
         // shield is shoved exactly like a live one.
         const glm::vec3 force = t.fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
         const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
-        if (glm::dot(force, force) > 1e-8f && pushRamp > 0.0f)
+        if ((params.fieldPush || fieldBlocked) && glm::dot(force, force) > 1e-8f && pushRamp > 0.0f)
             t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp);
         m_outputHistory[0] = m_outputHistory[1];
         m_outputHistory[1] = m_outputHistory[2];
@@ -832,6 +847,7 @@ void GameUnitComponent::tickField(Tick& t)
     const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(t.pos, team);
     if (!fs.valid)
     {
+        setSolid(t, t.inEnemyBubble ? 1.0f : 0.0f, 1.0f);
         if (t.inEnemyBubble) // bake disabled: the stamped-radius fallback (damage only, no push)
         {
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * t.deltaSec);
@@ -842,7 +858,24 @@ void GameUnitComponent::tickField(Tick& t)
     // Graded by field depth: the push equilibrium parks a pressing unit AT the shell, where a
     // binary `inside` test read false most frames (units ground against bubbles taking no damage).
     const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
-    const float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
+    float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
+    // ON TERRAIN (not flatGround) the bake is ONE horizontal slice of the field, at one world height: a unit higher
+    // or lower than that slice reads a weaker field than the one it stands in, or none. The combat probe's planar
+    // test against the emitters' bubble radii (inEnemyBubble) does not depend on the height: inside a bubble by it,
+    // the unit is in the field whatever the slice says.
+    bool inBubble = !params.flatGround && t.inEnemyBubble;
+    // The published field zones cover what the probe's radius does not: a large bubble's outer part is farther
+    // from its emitter than the probe reaches.
+    if (!params.flatGround && !inBubble && (int)team != params.fieldZoneTeam)
+        for (int i = 0; i < glm::min(params.fieldZoneCount, 64) && !inBubble; ++i)
+        {
+            const float* zone = params.fieldZones[i];
+            const glm::vec2 d(t.pos.x - zone[0], t.pos.z - zone[2]);
+            inBubble = glm::dot(d, d) < zone[3] * zone[3];
+        }
+    if (inBubble)
+        exposure = 1.0f;
+    setSolid(t, inBubble ? iso : fs.opposing, iso);
     if (exposure > 0.0f)
     {
         health = glm::max(0.0f,
@@ -851,6 +884,8 @@ void GameUnitComponent::tickField(Tick& t)
     }
     // Reproduces the shielded chain (appliedForce / output = forceGain x self-weighted mean of
     // -grad over the bubble, mean self-weight ~0.35) so ONE "Field push gain" rules both paths.
+    if (!params.fieldPush && !fieldBlocked) // the unit walks through the shell: it only burns
+        return;
     constexpr float c_bubbleSelfWeight = 0.35f;
     const glm::vec3 grad = fs.opposingGradient;
     const float pressure = fs.opposing;
@@ -862,6 +897,24 @@ void GameUnitComponent::tickField(Tick& t)
             * (c_bubbleSelfWeight * Globals::forceSystem.getParams().forceGain);
         t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp);
     }
+}
+
+// Solid from half the iso field on: a little outside the drawn shell, so a turret reaches a demon at the edge.
+void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
+{
+    inField = opposing >= iso * 0.5f; // for speedScale: a field slows the slow team (next tick's steering reads it)
+    bool now = (int)team != params.shadowTeam || params.sunDps > 0.0f || inField;
+    for (int i = 0; !now && i < glm::min(params.lightPointCount, 8); ++i) // a player's staff light
+    {
+        const float* light = params.lightPoints[i];
+        const glm::vec3 d = t.pos - glm::vec3(light[0], light[1], light[2]);
+        now = glm::dot(d, d) < light[3] * light[3];
+    }
+    if (now == solid)
+        return;
+    solid = now;
+    const SpawnInfo* info = getGameUnitSpawnInfo(&t.entity);
+    tintSubtree(&t.entity, info && info->color.x >= 0.0f ? &info->color : nullptr, tintState == 1, !now);
 }
 
 void GameUnitComponent::applyPush(Tick& t)
@@ -976,9 +1029,9 @@ bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& 
         if (best.valid && glm::dot(best.descentDir, best.descentDir) > 0.5f)
             dir = best.descentDir;
     }
-    speed = targetLocked && moveOrder && wanderOrder // wanderOrder stays set after the order, so gate on it
+    speed = (targetLocked && moveOrder && wanderOrder // wanderOrder stays set after the order, so gate on it
         ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax)
-        : moveSpeed;
+        : moveSpeed) * speedScale();
     if (spread)
     {
         // Persistent per-unit bias: unbiased, every unit walks the same descent cells in one file.
@@ -1003,7 +1056,10 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client || puppet || !alive() || deltaSec <= 0.0f)
         return false;
-    if (params.flatGround && entity.pos.y < params.voidY) // the full sim never visits an unselected unit: kill it here
+    if (params.sunDps > 0.0f && (int)team == params.sunBurnTeam) // the full sim's daylight burn, at the far cadence
+        health = glm::max(health - params.sunDps * deltaSec, 0.0f);
+    // The full sim never visits an unselected unit: kill it here.
+    if (health <= 0.0f || (params.flatGround && entity.pos.y < params.voidY))
     {
         kill(entity);
         return false;
@@ -1081,6 +1137,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.fireInterval != d.fireInterval) out.set("FireInterval", info.fireInterval);
     if (info.shotKind != d.shotKind)         out.set("ShotKind", oc::to_string((int)info.shotKind));
     if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
+    if (info.fieldBlocked != d.fieldBlocked) out.set("FieldBlocked", info.fieldBlocked);
     if (info.heightLimit != d.heightLimit)   out.set("HeightLimit", info.heightLimit);
     if (info.color.x >= 0.0f)                out.set("Color", info.color);
 }

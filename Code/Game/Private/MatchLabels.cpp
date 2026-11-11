@@ -52,39 +52,69 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     //    arrive, or the output has nowhere to go. Structural, so it does NOT gate on the current
     //    stock: a cabled-but-starved or cabled-but-backed-up machine is not a badge (its bars say
     //    that, and it resolves itself), while an uncabled one never resolves.
-    //    The BASE is exempt: it is the hub, self-generates, and starts every match bare.
+    //    The BASE is exempt: it is the hub, and starts every match bare.
     const int node = m_structures.structureNodeIndex(index);
     const bool fuelNode = node >= 0 && node < m_structures.nodeCount()
         && m_structures.nodeType(node) == ENodeType::Fuel; // an extractor makes ONE of the two
     // ENERGY: burnt by the emitters/machines/turrets, banked by batteries, made by gen + solar.
-    const bool energy = hasShieldEmitter(type) || isBarracksType(type)
-        || type == EStructureType::Extractor || type == EStructureType::Fabricator
-        || type == EStructureType::Constructor || type == EStructureType::MedicStation
+    const bool energy = hasShieldEmitter(type) || isBarracksType(type) // (production runs on workers: no light)
+        || type == EStructureType::MedicStation
         || type == EStructureType::Turret || type == EStructureType::Generator
         || type == EStructureType::Solar || type == EStructureType::Battery;
     // FUEL: burnt by generators and fabricators, banked by tanks, made by a fuel-node extractor.
     const bool fuel = type == EStructureType::Generator || type == EStructureType::Fabricator
-        || type == EStructureType::FuelTank || (type == EStructureType::Extractor && fuelNode);
+        || type == EStructureType::FuelTank || type == EStructureType::MineralSilo
+        || (type == EStructureType::Extractor && fuelNode);
     // MINERALS: spent by constructors, banked by silos, made by fabricators + mineral extractors.
     const bool minerals = type == EStructureType::Constructor || type == EStructureType::MineralSilo
         || type == EStructureType::Fabricator || (type == EStructureType::Extractor && !fuelNode);
     if (type != EStructureType::Base)
     {
-        if (energy && !linked(0))
+        if (m_structures.lightBeams())
+        {
+            // Light on beams: a building that makes or uses light needs a HUB (a Crystal store, the Beacon) in reach
+            // with a clear line. A Crystal store alone is no problem.
+            if (energy && type != EStructureType::Battery && !m_structures.structureLightLinked(index))
+            {
+                color = c_red;
+                return m_structures.structureLightBlocked(index) ? "Light blocked" : "No light store in reach";
+            }
+        }
+        else if (energy && !linked(0))
         {
             color = c_red;
-            return "No power cable";
+            return "No light conduit";
         }
-        if (fuel && !linked(1))
+        // Wood and stone go by CARRIER on the road (the conveyor medium): one badge for both.
+        if (Globals::settings.game.structures.carriers)
+        {
+            if ((fuel || minerals) && !linked(2))
+            {
+                color = c_amber;
+                return "No road";
+            }
+            if (type == EStructureType::House && !m_structures.structureOnRoad(index)) // its workers cannot go out to carry
+            {
+                color = c_amber;
+                return "No road";
+            }
+        }
+        else if (fuel && !linked(1))
         {
             color = c_orange;
-            return "No pipeline";
+            return "No wood track";
         }
-        if (minerals && !linked(2))
+        else if (minerals && !linked(2))
         {
             color = c_amber;
-            return "No conveyor";
+            return "No stone track";
         }
+    }
+    // 1b) TOO FEW WORKERS: every production building of the team runs slow (build houses).
+    if (m_structures.workersNeeded(type) > 0 && m_structures.staffing((uint8)m_team) < 0.999f)
+    {
+        color = c_amber;
+        return "Short of workers";
     }
     // 2) POPULATION CAPPED: the build bar fills but the unit can never be born (build houses).
     if (isBarracksType(type)
@@ -178,7 +208,7 @@ void GameMatch::buildWorldLabels()
             label.warning = warning;
             label.warningColor = m_structures.structureWarningColor(i);
         }
-        const bool consumer = hasShieldEmitter(type) || type == EStructureType::Extractor
+        const bool consumer = hasShieldEmitter(type)
             || type == EStructureType::Fabricator || type == EStructureType::MedicStation;
         label.barValue = m_structures.structureHealth(i);
         label.barMax = healthMax; // per-type: cables are softer than buildings
@@ -259,13 +289,13 @@ void GameMatch::buildWorldLabels()
             int len = snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
             if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len,
-                    isBarracksType(type) ? "\nBuild %.0f / %.0f" : "\nEnergy %.0f / %.0f",
+                    isBarracksType(type) ? "\nBuild %.0f / %.0f" : "\nLight %.0f / %.0f",
                     m_structures.structureCharge(i), energyCap);
             if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
+                len += snprintf(info + len, sizeof(info) - len, "\nWood %.0f / %.0f",
                     m_structures.structureFuel(i), fuelCap);
             if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
+                len += snprintf(info + len, sizeof(info) - len, "\nStone %.0f / %.0f",
                     m_structures.structureMinerals(i), mineralCap);
             if (isBarracksType(type) && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nPopulation %d / %d (%d houses)",
@@ -278,7 +308,7 @@ void GameMatch::buildWorldLabels()
             {
                 // The segment's transport readout: cells held, cells that left it last tick
                 // against its out-rate, and its run's total (see StructureSystem::cableInfo).
-                static constexpr const char* c_medium[3] = { "Energy", "Fuel", "Minerals" };
+                static constexpr const char* c_medium[3] = { "Light", "Wood", "Stone" };
                 StructureSystem::CableInfo ci;
                 if (m_structures.cableInfo(i, ci))
                     len += snprintf(info + len, sizeof(info) - len, "\n%s %d / %d cells, %.1f / %.1f per s\nRun %d / %d cells over %d segments",
@@ -305,7 +335,7 @@ void GameMatch::buildWorldLabels()
                     HudPopupButton& b = popup.buttons.emplace_back();
                     b.label = c_unitTypeNames[t];
                     char sub[32];
-                    snprintf(sub, sizeof(sub), "%d pop  %.0f E", m_structures.unitPopulation(t),
+                    snprintf(sub, sizeof(sub), "%d pop  %.0f light", m_structures.unitPopulation(t),
                         m_structures.unitSpawnEnergy(t));
                     b.sub = sub;
                     b.selected = t == (int)produced;

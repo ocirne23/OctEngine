@@ -1,14 +1,18 @@
-# Emitter pylon: projects the friendly field while powered by its grid. The Game layer overrides
-# the live output every tick (0 when unpowered); authored Output/Reach are the powered values'
-# defaults only. Spawned with its origin at half height (1.5) above the ground hit.
+# Field generator (the Emitter): projects the friendly lantern field while powered by its grid. The
+# Game layer overrides the live output every tick (0 when unpowered); authored Output/Reach are the
+# powered values' defaults only. Spawned with its origin at half height (1.0) above the ground hit.
+# SHAPE (a placeholder; Scale is uniform, so the pieces are the baseshapes variants): a tall stone pedestal
+# (the root) with a bronze cap, and a DIAMOND that floats high over it (gems.obj), above the 2x2x2 m collider
+# box, so a field generator shows from far. The child pieces are render-only.
 Prefab gameEmitter
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node Pillar2
 		Type StaticMesh
-		Color 0.3 0.85 1
-		Scale 1
+		Color 0.52 0.5 0.46
+		Position 0 -0.2 0
+		Scale 0.4
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -23,3 +27,23 @@ Prefab gameEmitter
 	Component GameStructure
 		MeleeRadius 1
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Collar
+			Position 0 0.72 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.55
+		Entity
+			Name Crystal
+			Position 0 1.85 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.85 0.45
+				Emissive 2.5
+				Scale 0.6

@@ -1,14 +1,16 @@
-# Solar panel: trickles a small amount of energy into its own buffer, no fuel needed. FLAT: a
+# Mirror collector (the Solar): trickles light into its own buffer by day, no fuel needed. FLAT: a
 # 4x1x4 m slab (CubeQuarter = cube with 0.25x height). Spawned origin 0.5 above ground.
 # WALK-THROUGH like the cables: Layer Cable collides only with Projectile, so players and units
 # pass over it (StructureSystem::isWalkThrough keeps it out of the nav obstacles too).
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): the slab is the pale mirror (the
+# root), with a bronze post and a small collector crystal at its centre. The child pieces are render-only.
 Prefab gameSolar
 	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node CubeQuarter
 		Type StaticMesh
-		Color 1 1 0.6
+		Color 0.86 0.93 1
 		Scale 2
 	Component Physics
 		Body Static
@@ -19,3 +21,23 @@ Prefab gameSolar
 		HalfExtents 2 0.5 2
 	Component GameStructure
 		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Post
+			Position 0 0.74 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.12
+		Entity
+			Name Crystal
+			Position 0 1.16 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.85 0.45
+				Emissive 2.5
+				Scale 0.15

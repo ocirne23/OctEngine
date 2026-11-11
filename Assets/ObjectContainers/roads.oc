@@ -1,0 +1,2 @@
+ObjectContainer roads
+	Path "Models/roads.obj"

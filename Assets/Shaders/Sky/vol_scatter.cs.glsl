@@ -329,6 +329,14 @@ void main()
         const vec3 soft = fv.halfExtents * fv.edgeSoftness;
         const vec3 t = clamp((fv.halfExtents - d) / soft, vec3(0.0), vec3(1.0));
         const float falloff = t.x * t.y * t.z;
+        if (fv.density < 0.0) // a CLEARING volume: it removes that share of the medium gathered so far (the height fog
+        {                     // and the volumes before it in the list), so the adder puts its clearing volumes last
+            const float keep = 1.0 - min(-fv.density * falloff, 1.0);
+            density *= keep;
+            albedoWeighted *= keep;
+            emissive *= keep;
+            continue;
+        }
         const float dv = fv.density * falloff * noiseMul;
         density += dv;
         albedoWeighted += fv.albedo * dv;

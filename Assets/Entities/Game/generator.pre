@@ -1,16 +1,69 @@
-# Generator: burns Fuel to produce grid power. No field of its own. Spawned origin 0.75 above ground.
+# Hearth (the Generator): burns Fuel (wood) into light, day and night. No field of its own. A 4x4x4 m box (2x2
+# cells). Spawned origin 2.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a large brick KILN - a wide base (the root), a
+# narrower drum and a cap stepping in over it, a dark chimney that stands out of the box, and a glowing fire mouth in
+# the -Z face of the base (a cube of the unlit `eyes` container with an Emissive strength). The child pieces are
+# render-only.
 Prefab gameGenerator
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Wedge
+		Node CubeHalf
 		Type StaticMesh
-		Color 1 0.85 0.2
-		Scale 1
+		Color 0.5 0.27 0.2
+		Position 0 -1.05 0
+		Scale 1.9
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 1 1 1
+		HalfExtents 2 2 2
 	Component GameStructure
-		MeleeRadius 1
+		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Drum
+			Position 0 0.65 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeHalf
+				Type StaticMesh
+				Color 0.56 0.31 0.23
+				Scale 1.5
+		Entity
+			Name Cap
+			Position 0 1.675 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.44 0.24 0.18
+				Scale 1.1
+		Entity
+			Name Chimney
+			Position 0.6 2.6 0.6
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.2 0.19 0.18
+				Scale 0.33
+		Entity
+			Name Lintel
+			Position 0 -0.55 -1.86
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.2 0.19 0.18
+				Scale 0.75
+		Entity
+			Name Fire
+			Position 0 -1.3 -1.6
+			Component Render
+				ObjectContainer eyes
+				Node Cube
+				Type StaticMesh
+				Color 1 0.42 0.08
+				Emissive 3
+				Scale 0.55

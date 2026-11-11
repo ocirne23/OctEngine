@@ -6,6 +6,7 @@ import Core.Log;
 import Entity;
 import Network;
 import Nav;
+import RendererVK; // the beacon's beam (debug lines + a point light)
 import Threading; // the ambient wander rides the post-update batch
 import File; // AssetNode (the trickle save state)
 import :Match;
@@ -110,11 +111,477 @@ ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) cons
 // - a They-are-Billions-sized wave materialized in one frame would be a multi-hundred-spawn hitch.
 void GameMatch::tickWaves(float deltaSec)
 {
+    // A NIGHT BUILDS UP: each wave is bigger than the one before, every Nth one is a surge, and the size and the
+    // pause both vary at random - the night has lulls and peaks, and its last hours are its worst. m_waveScale is
+    // rolled for the NEXT wave (at dawn for the night's first one, at each launch for the one after), so the HUD's
+    // "Next wave power" shows the wave that will come.
+    const float variation = glm::clamp(m_settings.nightWaveVariation, 0.0f, 0.9f);
+    const auto rollNextWave = [&]
+    {
+        const bool surge = m_settings.nightSurgeEvery > 0 && (m_nightWave + 1) % m_settings.nightSurgeEvery == 0;
+        m_waveScale = (1.0f + m_settings.nightWaveRamp * (float)m_nightWave) * glm::linearRand(1.0f - variation, 1.0f + variation)
+            * (surge ? m_settings.nightSurgeSize : 1.0f);
+    };
+    if (m_sandboxWorld) // the light rules: demons come out at night only
+    {
+        const bool night = Globals::settings.sky.sunHeight() < 0.0f;
+        if (night != m_night)
+        {
+            m_night = night;
+            if (night)
+            {
+                ++m_nightIndex;
+                m_waveTimer = 0.0f; // the first wave launches at dusk
+                Log::info(oc::format("Co-op: night {} falls", m_nightIndex));
+            }
+            else
+            {
+                m_wavePendingBudget = 0.0f; // nothing more comes out in daylight
+                m_nightWave = 0;
+                rollNextWave(); // the coming night's first wave
+                Log::info(oc::format("Co-op: dawn after night {}", m_nightIndex));
+            }
+        }
+        if (!night)
+            return;
+        // The night's first wave waits for the Beacon: its ignition (tickBeacon) must be over before a demon comes out.
+        if (m_nightWave == 0 && m_settings.beaconEnabled && m_beaconSet && m_beaconIgnite < 1.0f)
+            return;
+    }
     m_waveTimer -= deltaSec;
     if (m_waveTimer > 0.0f)
         return;
     m_waveTimer = m_settings.waveInterval;
     queueWave();
+    if (m_sandboxWorld)
+    {
+        m_waveTimer = m_settings.nightWaveInterval * glm::linearRand(1.0f - variation, 1.0f + variation);
+        ++m_nightWave;
+        rollNextWave();
+    }
+}
+
+int GameMatch::waveLevel() const
+{
+    if (!m_sandboxWorld)
+        return m_waveIndex;
+    return glm::max(m_night ? m_nightIndex - 1 : m_nightIndex, 0); // by day: the coming night
+}
+
+// The light rules own three runtime params. The sandbox world: a field does not push a demon (it walks in and burns),
+// daylight burns the AI team, and the solar yield follows the daylight. Every other mode gets the neutral values.
+void GameMatch::stampLightRules()
+{
+    GameUnitParams& unit = Globals::settings.game.unitParams;
+    unit.fieldPush = !m_sandboxWorld || m_settings.fieldsBlockDemons;
+    unit.sunBurnTeam = m_sandboxWorld ? (int)CoopAiTeam : -1;
+    unit.slowTeam = m_sandboxWorld ? (int)CoopAiTeam : -1;
+    unit.slowMult = glm::clamp(m_settings.demonSpeed, 0.05f, 2.0f);
+    unit.fieldSlowMult = glm::clamp(m_settings.demonFieldSpeed, 0.05f, 1.0f);
+    unit.shadowTeam = m_sandboxWorld && m_settings.demonShadowForm ? (int)CoopAiTeam : -1;
+    // The burn starts only with the sun OVER the horizon (daylight() already rises a little under it, for the dusk
+    // of the fields and the mirrors): a wave that comes out right after sunset must not burn in the dark.
+    unit.sunDps = m_sandboxWorld ? m_settings.sunlightDps * glm::smoothstep(0.02f, 0.2f, Globals::settings.sky.sunHeight()) : 0.0f;
+    Globals::settings.game.structures.solarDaylight = daylight();
+    Globals::settings.game.structures.fieldNight = m_sandboxWorld ? 1.0f - daylight() : 1.0f; // elsewhere no field sleeps
+}
+
+float GameMatch::daylight() const
+{
+    return m_sandboxWorld ? glm::smoothstep(-0.05f, 0.15f, Globals::settings.sky.sunHeight()) : 1.0f;
+}
+
+// THE BEACON. The cloud hole is the clouds' vortex: this only places it on the Base and drives its three live values
+// (the strength is a Runtime row, the spin is CPU-only, the coverage and its two variations are Runtime rows), so nothing here re-bakes a
+// shader after the one-time enable. Every instance runs it off its own structure mirror.
+void GameMatch::tickBeacon(float deltaSec)
+{
+    if (!m_sandboxWorld)
+        return;
+    if (!m_settings.beaconEnabled)
+    {
+        restoreBeacon();
+        return;
+    }
+    const GameStructureComponent* base = nullptr;
+    glm::vec3 basePos(0.0f);
+    for (const StructureSystem::Ref& ref : m_structures.structures()) // the Base is the first structure spawned
+        if (ref.type == EStructureType::Base && ref.state && ref.owner && ref.state->team == 0)
+        {
+            base = ref.state;
+            basePos = ref.owner->pos;
+            break;
+        }
+    if (!base)
+        return;
+    // The force bake is one horizontal slice of the fields ("Force/Bake" "Sample height", made for the y = 0 maps):
+    // on the terrain it goes 1 m over the Base's ground, where the bodies around the base are (the Base's origin is
+    // 3 m over its ground). ~GameMatch puts the old height back.
+    Globals::settings.forceSystem.bakeSampleHeight = basePos.y - 2.0f;
+    CloudParams& clouds = Globals::settings.clouds;
+    if (!m_beaconSet)
+    {
+        m_beaconSaved = { clouds.vortexEnabled, clouds.vortexCentreXKm, clouds.vortexCentreZKm, clouds.vortexStrength,
+            clouds.vortexSpinDegPerMin, clouds.coverage, clouds.coverageVariation, clouds.macroVariation, clouds.vortexEyeScale,
+            clouds.vortexLightIntensity, clouds.vortexLightColor };
+        clouds.vortexEnabled = true;
+        clouds.vortexCentreXKm = basePos.x * 0.001f;
+        clouds.vortexCentreZKm = basePos.z * 0.001f;
+        Tweak::notifyChanged(clouds.vortexEnabled);
+        Tweak::notifyChanged(clouds.vortexCentreXKm);
+        Tweak::notifyChanged(clouds.vortexCentreZKm);
+        m_beaconSet = true;
+        m_beaconPower = 0.0f;
+        m_beaconNightSec = 0.0f;
+        m_beaconIgnite = 0.0f;
+        m_beaconClimb = 0.0f;
+        m_beaconGlow = 0.0f;
+        m_beaconLit = false;
+    }
+    // Power = the Base field's output (it latches dark when starved) x its charge: a low store shows as a weak hole.
+    const float charge = base->capacity[0] > 0.0f ? glm::clamp(base->store[0] / base->capacity[0], 0.0f, 1.0f) : 0.0f;
+    const bool alive = !base->blueprint && base->health > 0.0f;
+    const float target = alive ? glm::clamp(base->emitter.outputFrac, 0.0f, 1.0f) * glm::mix(0.4f, 1.0f, charge) : 0.0f;
+    m_beaconPower += (target - m_beaconPower) * (1.0f - std::exp(-glm::max(deltaSec, 0.0f) / 2.0f));
+    // The SHROUD's night. AT DUSK (the afternoon) the clouds close over a sun-height span of 0.2 down to "Shroud full at
+    // sun height (dusk)" (0 = the horizon, where the night's first wave is due: it waits for the ignition below). AT
+    // DAWN they open from sun height 0 to 0.25. Both are 1 under the horizon and 0 at noon, so the switch does not show.
+    const SkyParams& sky = Globals::settings.sky;
+    const float duskFull = m_settings.shroudDuskSunHeight;
+    const float night = 1.0f - (sky.timeOfDay >= 12.0f ? glm::smoothstep(duskFull, duskFull + 0.2f, sky.sunHeight())
+                                                       : glm::smoothstep(0.0f, 0.25f, sky.sunHeight()));
+    // THE IGNITION: at dusk the clouds close first, with no hole. "Ignite delay" after the clouds are closed the Beacon turns
+    // on, in three steps. THE GLOW ("Beam glow time", m_beaconGlow 0 -> 1): a short beam on the Base brightens. THE CLIMB
+    // ("Beam climb time", m_beaconClimb): its tip goes up to the cloud base, slow near the ground and faster in the sky.
+    // THE PIERCE ("Pierce time", m_beaconIgnite): the beam TEARS through - the hole is there within the first quarter,
+    // as a small eye, and the eye then GROWS to its size over the rest (the vortex's live "Eye size scale").
+    // AT DAWN: the clouds start to open (the shroud's night falls under 1), the light goes off (the glow runs back), then
+    // the hole closes SLOWLY (the pierce runs back over "Hole close time": calm, like the clouds drifting shut).
+    const float dt = glm::max(deltaSec, 0.0f);
+    m_beaconNightSec = night >= 0.999f ? m_beaconNightSec + dt : 0.0f;
+    // On: the clouds closed + the delay. Off: only when the shroud is down to "Light off at shroud" (dawn: the clouds
+    // are half open and a lot of sun is through them already). Then the beam FADES out over "Beam fade out time".
+    if (!m_beaconLit)
+        m_beaconLit = night >= 0.999f && m_beaconNightSec >= m_settings.beaconIgniteDelay;
+    else if (night < glm::clamp(m_settings.beaconOffShroud, 0.0f, 0.99f))
+        m_beaconLit = false;
+    const bool lit = m_beaconLit;
+    const float glowStep = dt / glm::max(m_settings.beaconGlowSeconds, 0.01f);
+    const float climbStep = dt / glm::max(m_settings.beaconClimbSeconds, 0.01f);
+    const float pierceStep = dt / glm::max(m_settings.beaconPierceSeconds, 0.1f);
+    if (lit)
+    {
+        if (m_beaconGlow < 1.0f)
+            m_beaconGlow = glm::min(m_beaconGlow + glowStep, 1.0f);
+        else if (m_beaconClimb < 1.0f)
+            m_beaconClimb = glm::min(m_beaconClimb + climbStep, 1.0f);
+        else
+            m_beaconIgnite = glm::min(m_beaconIgnite + pierceStep, 1.0f);
+    }
+    else if (m_beaconGlow > 0.0f) // DAWN: the light goes off first (the whole beam fades), then the hole closes
+        m_beaconGlow = glm::max(m_beaconGlow - dt / glm::max(m_settings.beaconFadeSeconds, 0.01f), 0.0f);
+    else
+    {
+        m_beaconClimb = 0.0f;
+        m_beaconIgnite = glm::max(m_beaconIgnite - dt / glm::max(m_settings.beaconCloseSeconds, 0.1f), 0.0f);
+    }
+    // The tear: 0 until the beam is at the clouds, full within the first quarter. The CLOSE (unlit) is calm: the hole
+    // fades over the whole "Hole close time", like the clouds drifting shut.
+    const float pierce = glm::smoothstep(0.0f, lit ? 0.25f : 1.0f, m_beaconIgnite);
+    const float grow = glm::mix(0.05f, 1.0f, glm::smoothstep(0.0f, 1.0f, m_beaconIgnite));
+    // The hole follows the IGNITION, not the shroud: it stays open under the beam while the clouds thin at dawn. The
+    // day's hole ("Day hole strength", full size) comes in with the daylight where the ignition's is weaker.
+    const float dayHole = glm::clamp(m_settings.beaconDayStrength, 0.0f, 1.0f) * (1.0f - night);
+    clouds.vortexEyeScale = pierce >= dayHole && pierce > 0.0f ? grow : 1.0f;
+    clouds.vortexStrength = m_beaconPower * glm::max(pierce, dayHole);
+    clouds.vortexSpinDegPerMin = glm::mix(m_settings.beaconCalmSpin, m_settings.beaconPressureSpin, night * (1.0f - charge));
+    clouds.coverage = glm::mix(m_beaconSaved.coverage, m_settings.shroudCoverage, night);
+    // The night's deck is UNIFORM: no weather-map or macro spread, so the shroud covers the whole sky.
+    clouds.coverageVariation = m_beaconSaved.coverageVariation * (1.0f - night);
+    clouds.macroVariation = m_beaconSaved.macroVariation * (1.0f - night);
+
+    // The beam, from the Base's top: it lights the ground and the buildings around it, and the fog apply draws its
+    // column in the air (see BeamLight in the renderer's Light.ixx).
+    // Only while LIT (the glow): by day the Beacon is dark (its diamond and the cloud hole still mark it).
+    // It also lights the clouds around the hole: the vortex's eye light (a live value), on the eye's axis = the Base.
+    const float beam = m_beaconPower;
+    const bool beamOn = beam >= 0.02f && m_beaconGlow > 0.0f && m_settings.beaconLightIntensity > 0.0f;
+    const glm::vec3 beamColor(1.0f, 0.82f, 0.45f);
+    clouds.vortexLightColor = beamColor;
+    const float glow = glm::smoothstep(0.0f, 1.0f, m_beaconGlow);
+    clouds.vortexLightIntensity = beamOn ? glm::max(m_settings.beaconCloudLight, 0.0f) * beam * pierce * glow : 0.0f;
+    if (!beamOn)
+        return;
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const float fullHeight = glm::max(m_settings.beaconBeamHeight, 50.0f);
+    const float toClouds = glm::clamp(clouds.bottom - basePos.y, 50.0f, fullHeight);
+    // The tip's height grows GEOMETRICALLY (a constant factor per second): slow near the ground, faster in the sky.
+    constexpr float c_glowHeight = 8.0f; // the short beam of the glow step
+    const float climbed = c_glowHeight * std::pow(toClouds / c_glowHeight, m_beaconClimb);
+    const float height = climbed * std::pow(fullHeight / climbed, pierce);
+    const glm::vec3 foot = basePos + up * 3.2f; // over the Base's crown, under its diamond, which floats INSIDE the beam (base.pre)
+    // TWO records: the tall beam is the glow in the air ALONE, and a SHORT beam at its foot lights the surfaces. The
+    // light grid holds every 32 m grid in a light's range: the tall beam with its range took gigabytes of it.
+    constexpr float c_surfaceBeamHeight = 30.0f;
+    const float range = glm::max(m_settings.beaconLightRange, 1.0f);
+    const float radius = glm::max(m_settings.beaconBeamRadius, 0.05f);
+    const float intensity = m_settings.beaconLightIntensity * beam * glow;
+    Globals::rendererVK.addBeamColumn(BeamLight(foot + up * (height * 0.5f), range, beamColor, intensity, up, radius, height));
+    const float surfaceHeight = glm::min(height, c_surfaceBeamHeight);
+    Globals::rendererVK.addLightInfo(BeamLight(foot + up * (surfaceHeight * 0.5f), range, beamColor, intensity, up, radius, surfaceHeight), false);
+}
+
+void GameMatch::addSpawnFog(const glm::vec3& pos, float radius)
+{
+    m_spawnFog[m_spawnFogNext] = { pos, glm::clamp(radius, 6.0f, 60.0f), 0.0f };
+    m_spawnFogNext = (m_spawnFogNext + 1) % c_spawnFogSites;
+}
+
+void GameMatch::tickFogEffects(float deltaSec)
+{
+    if (!m_sandboxWorld)
+        return;
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::vec3 smoke(0.35f, 0.16f, 0.6f); // the demons' violet
+    const float life = glm::max(m_settings.spawnFogSeconds, 1.0f);
+    for (SpawnFog& site : m_spawnFog)
+    {
+        if (site.age < 0.0f)
+            continue;
+        site.age += deltaSec;
+        if (site.age >= life || m_settings.spawnFogDensity <= 0.0f)
+        {
+            site.age = -1.0f;
+            continue;
+        }
+        const float fade = glm::smoothstep(0.0f, 4.0f, site.age) * (1.0f - glm::smoothstep(life * 0.7f, life, site.age));
+        // The bank on the ground, wider than the spawn blob.
+        RendererVKLayout::FogVolumeInfo bank;
+        bank.pos = site.pos + up * 5.0f;
+        bank.density = m_settings.spawnFogDensity * fade;
+        bank.halfExtents = glm::vec3(site.radius * 1.4f, 9.0f, site.radius * 1.4f);
+        bank.edgeSoftness = 0.8f;
+        bank.albedo = smoke;
+        bank.emissive = m_settings.spawnFogGlow;
+        Globals::rendererVK.addFogVolume(bank);
+        // The column: the demons come down out of the clouds. Thinner than the bank, up to the cloud base.
+        const float height = glm::max(Globals::settings.clouds.bottom - site.pos.y, 60.0f);
+        RendererVKLayout::FogVolumeInfo column = bank;
+        column.pos = site.pos + up * (height * 0.5f);
+        column.density = bank.density * 0.5f;
+        column.halfExtents = glm::vec3(site.radius * 0.45f, height * 0.5f, site.radius * 0.45f);
+        column.edgeSoftness = 1.0f;
+        Globals::rendererVK.addFogVolume(column);
+    }
+    // The fields clear the fog: AFTER the sites above (a clearing volume removes what the list holds before it).
+    if (m_settings.fieldFogClear > 0.0f)
+    {
+        constexpr size_t c_maxClear = 16; // every volume is one box test per froxel
+        for (size_t i = 0; i < glm::min(m_fieldZones.size(), c_maxClear); ++i)
+        {
+            const glm::vec4& zone = m_fieldZones[i];
+            RendererVKLayout::FogVolumeInfo clear;
+            clear.pos = glm::vec3(zone);
+            clear.density = -glm::min(m_settings.fieldFogClear, 1.0f);
+            clear.halfExtents = glm::vec3(zone.w); // a box around the sphere: its soft edge rounds the corners off
+            clear.edgeSoftness = 0.45f;
+            clear.albedo = glm::vec3(0.0f);
+            clear.emissive = 0.0f;
+            Globals::rendererVK.addFogVolume(clear);
+        }
+    }
+}
+
+// LIGHTNING: at night, flashes of light inside the clouds around the player (the clouds' flash slots, lit in the cloud
+// march), a share of them with an ARC to the ground - a zigzag of glow-only beam columns (Renderer::addBeamColumn: no
+// light record, nothing in the light grid), sometimes with a side fork. A look only, rolled per instance.
+namespace
+{
+    float lightningHash(uint32 seed, uint32 n)
+    {
+        uint32 h = seed + n * 0x9E3779B9u;
+        h = (h ^ (h >> 16)) * 0x7feb352du;
+        h = (h ^ (h >> 15)) * 0x846ca68bu;
+        return (float)((h ^ (h >> 16)) >> 8) * (1.0f / 16777216.0f);
+    }
+
+    // A flash is 1 to 6 STROKES, all from its seed: each at a random time after the one before (most gaps short, some
+    // long), with a random strength and a random decay - so one flash is a single pop, the next a long stutter. Returns
+    // the light's level at `age`; outLife = when the last stroke has died. timeScale stretches all of it.
+    float lightningLevel(uint32 seed, float age, float timeScale, float& outLife)
+    {
+        const int strokes = 1 + (int)(lightningHash(seed, 1u) * lightningHash(seed, 2u) * 5.99f); // few strokes are the most common
+        float level = 0.0f, start = 0.0f;
+        outLife = 0.0f;
+        for (int k = 0; k < strokes; ++k)
+        {
+            const uint32 n = 10u + (uint32)k * 4u;
+            const float gap = lightningHash(seed, n);
+            if (k > 0)
+                start += timeScale * glm::mix(0.03f, 0.45f, gap * gap * gap);
+            const float strength = glm::mix(0.25f, 1.0f, lightningHash(seed, n + 1u));
+            const float decay = timeScale * glm::mix(0.03f, 0.22f, lightningHash(seed, n + 2u) * lightningHash(seed, n + 3u));
+            if (age >= start)
+                level += strength * std::exp(-(age - start) / decay);
+            outLife = glm::max(outLife, start + decay * 5.0f);
+        }
+        return glm::min(level, 1.5f);
+    }
+}
+
+void GameMatch::tickLightning(float deltaSec)
+{
+    if (!m_sandboxWorld)
+        return;
+    CloudParams& clouds = Globals::settings.clouds;
+    const float dt = glm::max(deltaSec, 0.0f);
+    const float night = 1.0f - daylight();
+    const glm::vec3 centre = m_player.bodyPos();
+
+    // A new flash: the gaps are random around the mean, and longer while the night is not full.
+    if (m_settings.lightningEnabled && night > 0.5f && m_settings.lightningPerMinute > 0.0f)
+    {
+        m_lightningTimer -= dt * night;
+        if (m_lightningTimer <= 0.0f)
+        {
+            m_lightningTimer = 60.0f / m_settings.lightningPerMinute * glm::linearRand(0.2f, 1.8f);
+            // Slot 0 alone may carry the arc (one zigzag of columns a frame at most).
+            const bool wantStrike = glm::linearRand(0.0f, 1.0f) < m_settings.lightningStrikeShare && m_lightning[0].age < 0.0f;
+            Lightning* slot = wantStrike ? &m_lightning[0] : m_lightning[1].age < 0.0f ? &m_lightning[1] : m_lightning[0].age < 0.0f ? &m_lightning[0] : nullptr;
+            if (slot)
+            {
+                const float minDist = glm::max(m_settings.lightningMinDistance, 0.0f);
+                const float dist = glm::mix(minDist, glm::max(m_settings.lightningMaxDistance, minDist + 1.0f), std::sqrt(glm::linearRand(0.0f, 1.0f)));
+                const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
+                const float thickness = glm::max(clouds.top - clouds.bottom, 100.0f);
+                // An arc leaves from just inside the cloud base; a flash with no arc sits deeper in the layer.
+                const float alt = clouds.bottom + thickness * (wantStrike ? 0.08f : glm::linearRand(0.15f, 0.6f));
+                slot->pos = glm::vec3(centre.x + std::cos(angle) * dist, alt, centre.z + std::sin(angle) * dist);
+                // THE VORTEX: no flash in the hole (no cloud there). A point that falls into it, and "Vortex wall share"
+                // of all flashes while the hole is open, go to the EYEWALL instead, at any height of the layer (10 - 85 %)
+                // - an arc from there starts at the hole's inner edge and runs down inside it.
+                if (clouds.vortexEnabled && clouds.vortexStrength > 0.3f)
+                {
+                    const glm::vec2 eyeCentre(clouds.vortexCentreXKm * 1000.0f, clouds.vortexCentreZKm * 1000.0f);
+                    const float eye = glm::max(clouds.vortexEyeRadiusKm, 0.05f) * 1000.0f * glm::clamp(clouds.vortexEyeScale, 0.0f, 1.0f);
+                    const float wall = glm::max(clouds.vortexEyewallWidthKm, 0.05f) * 1000.0f;
+                    glm::vec2 fromEye = glm::vec2(slot->pos.x, slot->pos.z) - eyeCentre;
+                    if (glm::length(fromEye) < eye * 1.05f || glm::linearRand(0.0f, 1.0f) < m_settings.lightningWallShare)
+                    {
+                        const float wallAngle = glm::linearRand(0.0f, glm::two_pi<float>());
+                        fromEye = glm::vec2(std::cos(wallAngle), std::sin(wallAngle)) * (eye * 1.05f + (wantStrike ? 0.0f : glm::linearRand(0.0f, wall * 0.5f)));
+                        slot->pos = glm::vec3(eyeCentre.x + fromEye.x, clouds.bottom + thickness * glm::linearRand(0.1f, 0.85f), eyeCentre.y + fromEye.y);
+                    }
+                }
+                slot->age = 0.0f;
+                slot->strike = wantStrike;
+                slot->fork = wantStrike && glm::linearRand(0.0f, 1.0f) < m_settings.lightningForkShare;
+                slot->seed = (uint32)glm::linearRand(1, 0x7ffffffe);
+                lightningLevel(slot->seed, 0.0f, glm::max(m_settings.lightningDuration, 0.05f) / 0.6f, slot->life);
+                if (wantStrike)
+                {
+                    const float lean = (slot->pos.y - centre.y) * 0.3f; // the arc leans: its foot is not straight under its top
+                    const glm::vec2 foot(slot->pos.x + glm::linearRand(-lean, lean), slot->pos.z + glm::linearRand(-lean, lean));
+                    slot->ground = glm::vec3(foot.x, groundY(foot.x, foot.y, centre.y), foot.y);
+                }
+            }
+        }
+    }
+
+    clouds.flashColor = m_settings.lightningColor;
+    clouds.flashRadius = glm::max(m_settings.lightningCloudRadius, 10.0f);
+    for (int i = 0; i < 2; ++i)
+    {
+        Lightning& flash = m_lightning[i];
+        clouds.flashes[i] = glm::vec4(0.0f);
+        if (flash.age < 0.0f)
+            continue;
+        flash.age += dt;
+        if (flash.age >= flash.life)
+        {
+            flash.age = -1.0f;
+            continue;
+        }
+        // The level: the flash's own strokes (lightningLevel), x a little shimmer 30 times a second.
+        float life;
+        const float level = lightningLevel(flash.seed, flash.age, glm::max(m_settings.lightningDuration, 0.05f) / 0.6f, life)
+            * (0.8f + 0.2f * lightningHash(flash.seed, 1000u + (uint32)(flash.age * 30.0f)));
+        clouds.flashes[i] = glm::vec4(flash.pos, m_settings.lightningCloudLight * level);
+
+        if (!flash.strike || m_settings.lightningArcIntensity <= 0.0f)
+            continue;
+        // THE ARC: a random walk sideways around the straight line, pulled back to it at the ground. The same seed
+        // every frame, so the arc holds its shape while it flickers.
+        constexpr int c_segments = 12;
+        constexpr int c_forkAt = 5, c_forkSegments = 4;
+        const glm::vec3 span = flash.ground - flash.pos;
+        const float length = glm::length(span);
+        if (length < 1.0f)
+            continue;
+        const glm::vec3 dir = span / length;
+        const glm::vec3 side = glm::normalize(glm::cross(dir, glm::abs(dir.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)));
+        const glm::vec3 side2 = glm::cross(dir, side);
+        const float step = glm::clamp(m_settings.lightningArcJitter, 0.0f, 0.5f) * length / std::sqrt((float)c_segments);
+        const float radius = glm::max(m_settings.lightningArcRadius, 0.05f);
+        const float glow = m_settings.lightningArcIntensity * level;
+        const auto column = [&](const glm::vec3& a, const glm::vec3& b, float intensity, float coreRadius)
+        {
+            const glm::vec3 seg = b - a;
+            const float len = glm::length(seg);
+            if (len > 0.01f)
+                Globals::rendererVK.addBeamColumn(BeamLight((a + b) * 0.5f, coreRadius * 25.0f, m_settings.lightningColor, intensity, seg, coreRadius, len));
+        };
+        glm::vec2 walk(0.0f);
+        glm::vec3 prev = flash.pos;
+        for (int k = 1; k <= c_segments; ++k)
+        {
+            const float s = (float)k / (float)c_segments;
+            walk += glm::vec2(lightningHash(flash.seed, 100u + (uint32)k), lightningHash(flash.seed, 200u + (uint32)k)) * 2.0f - 1.0f;
+            const glm::vec2 off = walk * (step * (1.0f - s * s));
+            const glm::vec3 point = flash.pos + span * s + side * off.x + side2 * off.y;
+            column(prev, point, glow, radius);
+            if (flash.fork && k == c_forkAt)
+            {
+                // THE FORK: a thinner, dimmer branch off to one side, ending in the air.
+                const float turn = lightningHash(flash.seed, 300u) * glm::two_pi<float>();
+                const glm::vec3 out = glm::normalize(dir + (side * std::cos(turn) + side2 * std::sin(turn)) * 0.9f);
+                const float forkStep = length * 0.3f / (float)c_forkSegments;
+                glm::vec3 from = point;
+                for (int j = 1; j <= c_forkSegments; ++j)
+                {
+                    const glm::vec2 kink = glm::vec2(lightningHash(flash.seed, 400u + (uint32)j), lightningHash(flash.seed, 500u + (uint32)j)) * 2.0f - 1.0f;
+                    const glm::vec3 to = from + out * forkStep + (side * kink.x + side2 * kink.y) * (forkStep * 0.35f);
+                    column(from, to, glow * 0.4f, radius * 0.6f);
+                    from = to;
+                }
+            }
+            prev = point;
+        }
+    }
+}
+
+void GameMatch::restoreBeacon()
+{
+    CloudParams& clouds = Globals::settings.clouds;
+    for (glm::vec4& flash : clouds.flashes) // the lightning's cloud flashes end with the match
+        flash = glm::vec4(0.0f);
+    if (!m_beaconSet)
+        return;
+    clouds.vortexEnabled = m_beaconSaved.vortexEnabled;
+    clouds.vortexCentreXKm = m_beaconSaved.centreXKm;
+    clouds.vortexCentreZKm = m_beaconSaved.centreZKm;
+    clouds.vortexStrength = m_beaconSaved.strength;
+    clouds.vortexSpinDegPerMin = m_beaconSaved.spin;
+    clouds.coverage = m_beaconSaved.coverage;
+    clouds.coverageVariation = m_beaconSaved.coverageVariation;
+    clouds.macroVariation = m_beaconSaved.macroVariation;
+    clouds.vortexEyeScale = m_beaconSaved.eyeScale;
+    clouds.vortexLightIntensity = m_beaconSaved.lightIntensity;
+    clouds.vortexLightColor = m_beaconSaved.lightColor;
+    Tweak::notifyChanged(clouds.vortexEnabled);
+    Tweak::notifyChanged(clouds.vortexCentreXKm);
+    Tweak::notifyChanged(clouds.vortexCentreZKm);
+    m_beaconSet = false;
 }
 
 // Live units - ambient and previous waves alike (player-team units too): the component's own
@@ -129,8 +596,9 @@ int GameMatch::aiAliveCount() const
 // base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)) for the 0-based wave index i.
 float GameMatch::nextWaveBudget() const
 {
-    const float wave = (float)m_waveIndex;
-    return (float)m_settings.waveBudget + m_settings.waveBudgetGrowth * wave + m_settings.waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f;
+    const float wave = (float)waveLevel();
+    return ((float)m_settings.waveBudget + m_settings.waveBudgetGrowth * wave + m_settings.waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f)
+        * m_waveScale * m_settings.waveSizeMult; // the night's build-up (tickWaves; 1 outside the sandbox world) x the user's knob
 }
 
 // The wave blob's radius for `budget` points of the CURRENT mix. Area - not radius - scales with
@@ -198,8 +666,9 @@ void GameMatch::queueWave()
     // recipe twice in a row when a choice exists - then jitter its weights so repeats still vary.
     int eligible[c_numWaveArchetypes];
     int numEligible = 0;
+    const int level = m_sandboxWorld ? m_nightIndex : m_waveIndex; // 1-based: the recipes unlock by night there
     for (int i = 0; i < c_numWaveArchetypes; ++i)
-        if (m_waveIndex >= c_waveArchetypes[i].minWave && (i != m_lastArchetype || numEligible == 0))
+        if (level >= c_waveArchetypes[i].minWave && (i != m_lastArchetype || numEligible == 0))
             eligible[numEligible++] = i;
     if (numEligible > 1 && eligible[0] == m_lastArchetype) // slot 0 was only a can't-be-empty seed
     {
@@ -221,11 +690,21 @@ void GameMatch::queueWave()
     Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
     Log::info(oc::format("Co-op: wave {} incoming - budget {:.0f} ({}) from ({:.0f}, {:.0f})", m_waveIndex,
         budget, c_waveArchetypes[pick].name, m_waveOrigin.x, m_waveOrigin.z));
+    glm::vec3 fogPos = m_waveOrigin;
+    float fogRadius = 0.0f; // 0 = no spawn fog (the flat maps)
+    if (m_sandboxWorld)
+    {
+        fogPos.y = groundY(fogPos.x, fogPos.z, m_basePos.y);
+        fogRadius = glm::min(m_waveRadius, m_settings.sandboxWaveDistance * 0.5f);
+        addSpawnFog(fogPos, fogRadius);
+    }
     if (m_isServer)
     {
-        uint8 buffer[4];
+        uint8 buffer[24];
         NetWriter writer(buffer);
         writer.write<uint16>((uint16)m_waveIndex);
+        writer.write<float>(fogPos.x); writer.write<float>(fogPos.y); writer.write<float>(fogPos.z);
+        writer.write<float>(fogRadius);
         Globals::networkManager.fireNetworkEvent("GWv", writer.data());
     }
 }

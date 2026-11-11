@@ -202,7 +202,10 @@ from ONE 2×2 bilinear fetch. The gradient is the analytic derivative of the bil
 planar (XZ).
 
 **A position outside every chunk reads as ZERO field — correct by construction**, since the chunks
-cover every support box. Worker-safe between updates; ~3 frames latent end to end.
+cover every support box. **The bake is ONE horizontal slice at "Sample height": `sampleBakedField` ignores the
+position's Y.** On terrain a consumer above or below the slice reads the slice, not its own height (the co-op
+sandbox world moves the slice to its Base and adds a planar bubble test: The field test on terrain in
+[`Docs/Context/Game/Modes.md`](../Game/Modes.md)). Worker-safe between updates; ~3 frames latent end to end.
 
 ## `update()` — the main-thread pass order
 
@@ -548,7 +551,10 @@ This is the game's shield and emitter glow (there is no `Component Light` on tho
 
 ## `ForceEmitter::setShellAlpha`
 
-`outputParams.y`, default 1. **0 SKIPS the ray-marched shell draw entirely while the field stays
+`outputParams.y`, default 1. **It scales the WHOLE look of the shell**: its base alpha, the interior dome, the
+geometry glow's alpha and the additive lift (`forceShadeHit`), and the bubble light (`stepBubbleLight`) - so a faint
+shell is faint as a whole (the co-op game's fields that sleep by day). Only the contact term against an enemy field
+keeps its weight. **0 SKIPS the ray-marched shell draw entirely while the field stays
 live** — it still deforms other bubbles and serves force, pressure and query readbacks. The intended
 use is a huge invisible field whose proxy box would otherwise become a full-screen march.
 
@@ -577,7 +583,7 @@ Registered by `Settings::registerForce` (`Code/Settings/Private/Force.cpp`).
 
 | Group | Entries |
 |---|---|
-| `Force` | Enabled, Iso threshold (0.15), March steps (10), Use grid, Force gain (5), Activate ramp (0.6 s), Emitters + GPU slots (stats) |
+| `Force` | Enabled, Iso threshold (0.01), March steps (10), Use grid, Force gain (5), Activate ramp (0.6 s), Emitters + GPU slots (stats) |
 | `Force/Bake` | Enabled, Sample height (1 m), Chunks (stat) |
 | `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (8 m), Volume view margin (10 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha (0), Backface alpha (1), Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
 | `Force/Glow` | Contact intensity (0.33), Contact width (0.15), Contact wall alpha (0.5), Geometry distance (0.5 m), **Bubble light** (on), Bubble light intensity (2 × radius²), Bubble light range (2 × radius), Bubble light height (0.8 × radius), Bubble light fade (0.5 s), Bubble light white mix (0.2) |

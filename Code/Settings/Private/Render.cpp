@@ -361,6 +361,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Wobble (km)", &s.vortexWobbleKm, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex/Tornado", "Wobble waves", &s.vortexWobbleWaves, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye radius (km)", &s.vortexEyeRadiusKm, 0.05f, 50.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye size scale", &s.vortexEyeScale, 0.02f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye shape", &s.vortexEyeShape, -1.0f, 1.0f, 0.01f); // -1 cone, 0 cylinder, 1 inverted cone
     Tweak::floatVar("Sky/Clouds/Vortex", "Eyewall width (km)", &s.vortexEyewallWidthKm, 0.05f, 30.0f, 0.01f);
     Tweak::intVar("Sky/Clouds/Vortex", "Arms", &s.vortexArms, 1, 8);
@@ -374,6 +375,8 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Vortex", "Noise twist", &s.vortexTwist, 0.01f, 2.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Vortex", "Spin (deg/min)", &s.vortexSpinDegPerMin, 0.0f, 60.0f, 0.1f); // CPU only (the phase)
     Tweak::boolean("Sky/Clouds/Vortex", "Reverse spin", &s.vortexReverse);
+    Tweak::color3("Sky/Clouds/Vortex", "Eye light", &s.vortexLightColor, &s.vortexLightIntensity, 0.0f, 100.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye light reach (km)", &s.vortexLightReachKm, 0.05f, 50.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &s.densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds", "Base breakup (km)", &s.baseBreakupKm, 0.0f, 20.0f, 0.01f, {}, ETweakFlags::Runtime);
@@ -389,6 +392,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter strength", &s.multiScatterStrength, 0.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &s.ambient, 0.0f, 4.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground albedo", &s.groundAlbedo, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Night ground light", &s.groundNightLight, 0.0f, 100.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground light depth (m)", &s.groundLightDepth, 10.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &s.dropletSize, 5.0f, 50.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &s.forwardPeakLimit, 0.8f, 1.0f, 0.001f);

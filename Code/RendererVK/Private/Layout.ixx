@@ -695,6 +695,10 @@ export namespace RendererVKLayout
         Opaque = 0,
         Mask   = 1,
         Blend  = 2,
+        // An EMISSIVE solid colour (RenderMaterial::getOrCreateSolidColor with a strength): MaterialInfo::opacity
+        // holds the STRENGTH (x the colour, above 1 = HDR, the bloom takes it). Only the UNLIT shader reads it; every
+        // other pass sees an opaque material (none of them tests for this value).
+        Emissive = 3,
     };
 
     enum class EPipelineIndex : uint16
@@ -997,7 +1001,8 @@ export namespace RendererVKLayout
     struct alignas(16) FogVolumeInfo
     {
         glm::vec3 pos;
-        float density;          // extinction added inside the box (1/m)
+        float density;          // extinction added inside the box (1/m); < 0 = a CLEARING volume: it removes -density
+                                // (0..1) of the fog gathered before it in the list (the height fog, earlier volumes)
         glm::vec3 halfExtents;
         float edgeSoftness;     // 0..1 fraction of each half extent that fades out
         glm::vec3 albedo;       // scattering tint of this volume's media

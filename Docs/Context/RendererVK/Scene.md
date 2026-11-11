@@ -11,7 +11,7 @@
 > CAS-min records it, `present()` clamps (`clampInstanceCountToOverflow`), and capacity regrows at the
 > next `beginFrame` (`checkFrameCapacities`). **NEVER roll a bump cursor back.**
 
-`addLightInfo` (a `PointLight` / `SpotLight` / `AreaLight` / `TubeLight`) / `addFogVolume` / `addDecal` are lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
+`addLightInfo` (a `PointLight` / `SpotLight` / `AreaLight` / `BeamLight`) / `addFogVolume` / `addDecal` are lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
 `DebugLinePipeline::upload`, which copies each worker list straight into the slot's mapped vertex
 buffer (one memcpy per list, no merged CPU copy) and clears it.
 
@@ -489,6 +489,20 @@ billboard card paths. **`LitTreeVoxel`** (variant 16, `instanced_indirect_tree_v
 `RenderMaterial::getOrCreateSolidColor(color)` mints a material whose diffuse is a 1×1 solid-colour texture,
 **cached per quantized colour so repeat calls are free.** Pass the index to
 `RenderNode::setMaterialOverride`.
+
+### Emissive
+
+**Emissive is a STRENGTH on a solid colour, drawn by the UNLIT pipeline only.** `getOrCreateSolidColor(color,
+emissive)` with a strength above 0 (in sixteenths, up to 15.9; it is part of the cache key) mints the colour's
+material with `EAlphaMode::Emissive` and the strength in `MaterialInfo::opacity`. `instanced_indirect_unlit.fs.glsl`
+then outputs colour × strength × a facet term (full where the surface faces the eye, 55 % at a grazing angle, so a
+faceted shape stays readable with no lighting): HDR, and the bloom takes it.
+
+* **The lit shaders are untouched** (no emissive term, no register): a lit pipeline draws such a material as its
+  plain colour. So a glowing piece must be a node of a container with `PipelineIdx UnlitOpaque` (`eyes.oc`,
+  `gemsGlow.oc`), authored `Color r g b` + `Emissive s` in its `Component Render`.
+* No other pass tests for the Emissive alpha mode: they see an opaque material. Those two containers are out of ray
+  tracing (`ExcludeFromRayTracing`), so a glowing piece casts no shadow and lights nothing - it is a look, not a light.
 
 ---
 

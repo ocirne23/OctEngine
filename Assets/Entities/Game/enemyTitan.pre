@@ -1,6 +1,8 @@
-# Enemy Titan: the wave 11+ boss body - a walking siege tower: enormous health and battery, the
-# strongest unit bubble in the game, crushing melee against structures and players, and an
-# emitter drain that blacks out a single emitter it leans on. Very slow. Near-black block.
+# Enemy Titan: the wave 11+ boss body - a walking siege tower and THE ONE demon with a bubble: a
+# large field of darkness (about 13 m) that squishes the players' fields back where they meet and
+# drains the structures it covers. Enormous health and battery, crushing melee against structures
+# and players, and an emitter drain that blacks out a single emitter it leans on. Very slow.
+# Near-black block.
 Prefab gameEnemyTitan
 	CullMode RootOnly
 	Component Scene
@@ -17,8 +19,8 @@ Prefab gameEnemyTitan
 		ContactEvents true
 	Component Force
 		Team 1
-		Output 1.3
-		Reach 10
+		Output 2.2
+		Reach 30
 		Centered true
 	Component Network
 	Component GameUnit
@@ -26,7 +28,7 @@ Prefab gameEnemyTitan
 		Color 0.2 0.02 0.08
 		HealthMax 2200
 		EnergyMax 450
-		ShieldOutput 1.3
+		ShieldOutput 2.2
 		MoveSpeed 1.6
 		AttackRange 4
 		AttackInterval 2.5

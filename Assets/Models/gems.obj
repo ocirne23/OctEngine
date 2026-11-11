@@ -1,0 +1,35 @@
+# A light crystal: TWO PYRAMIDS joined at their bases (a tall octahedron), flat facets, the same above and below.
+# The square girdle has its corners 0.7 from the axis at y = 0 (the origin); the two points are at y = +1 and -1.
+# So scale 1 = 2 m tall and 1.4 m across. Written by hand: 6 positions, one normal per facet, planar UVs (x, z).
+o Diamond
+# girdle corners (1..4), then the top point (5) and the bottom point (6)
+v 0.7 0 0
+v 0 0 0.7
+v -0.7 0 0
+v 0 0 -0.7
+v 0 1 0
+v 0 -1 0
+vt 0.85 0.5
+vt 0.5 0.85
+vt 0.15 0.5
+vt 0.5 0.15
+vt 0.5 0.5
+# upper facet normals (1..4), lower facet normals (5..8)
+vn 0.6337 0.4436 0.6337
+vn -0.6337 0.4436 0.6337
+vn -0.6337 0.4436 -0.6337
+vn 0.6337 0.4436 -0.6337
+vn 0.6337 -0.4436 0.6337
+vn -0.6337 -0.4436 0.6337
+vn -0.6337 -0.4436 -0.6337
+vn 0.6337 -0.4436 -0.6337
+# upper pyramid
+f 1/1/1 5/5/1 2/2/1
+f 2/2/2 5/5/2 3/3/2
+f 3/3/3 5/5/3 4/4/3
+f 4/4/4 5/5/4 1/1/4
+# lower pyramid
+f 1/1/5 2/2/5 6/5/5
+f 2/2/6 3/3/6 6/5/6
+f 3/3/7 4/4/7 6/5/7
+f 4/4/8 1/1/8 6/5/8

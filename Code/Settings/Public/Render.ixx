@@ -52,6 +52,20 @@ export struct SkyParams
     float latitude = -45.0f;            // degrees north (< 0 = south)
     float dayOfYear = 300.0f;           // 1..365: the sun's declination (172 = the June solstice, 80 = the March equinox)
     float nightSkyRadiance = 0.1f;      // x the Sky Radiance with the sun down
+    // THE SUN CYCLE's sun at `timeOfDay` (solar time): the declination (Cooper's approximation), the hour angle (15
+    // degrees per hour from noon), then east / up / north - east +X, up +Y, north -Z.
+    glm::vec3 cycleSunDirection() const
+    {
+        const float decl = glm::radians(23.44f) * std::sin(glm::two_pi<float>() * (284.0f + dayOfYear) / 365.0f);
+        const float hourAngle = glm::radians(15.0f * (timeOfDay - 12.0f));
+        const float lat = glm::radians(latitude);
+        const float east = -std::cos(decl) * std::sin(hourAngle);
+        const float height = std::sin(lat) * std::sin(decl) + std::cos(lat) * std::cos(decl) * std::cos(hourAngle);
+        const float north = std::cos(lat) * std::sin(decl) - std::sin(lat) * std::cos(decl) * std::cos(hourAngle);
+        return glm::normalize(glm::vec3(east, height, -north));
+    }
+    // The sine of the sun's elevation NOW (< 0 = below the horizon), valid the moment `timeOfDay` is written.
+    float sunHeight() const { return sunCycle ? cycleSunDirection().y : glm::normalize(sunDirection).y; }
 
     // Ambient + sky radiance (the non-sun lighting inputs)
     glm::vec3 ambientColor = glm::vec3(1.0f);   // flat non-physical minimum ambient
@@ -149,7 +163,8 @@ export struct CloudParams
     float vortexWobbleKm = 0.0f;       // the eye (and the wall column) snakes sideways over the height by this (km)
     float vortexWobbleWaves = 1.0f;    // turns of the wobble over the main layer's height
     float vortexEyeRadiusKm = 0.3f;    // the clear eye (km), at the middle of the main layer
-    float vortexEyeShape = 0.0f;       // the eye over the height: -1 = a cone (closes at the top), 0 = a cylinder, 1 = an inverted cone (closes at the base)
+    float vortexEyeScale = 1.0f;       // x the eye radius, LIVE (the game grows the hole with it); the falloff and the eyewall width stay
+    float vortexEyeShape = 0.0f;      // the eye over the height: -1 = a cone (closes at the top), 0 = a cylinder, 1 = an inverted cone (closes at the base)
     float vortexEyewallWidthKm = 0.3f; // how far out from the eye the arms close into the eyewall (km)
     int   vortexArms = 2;              // spiral bands
     float vortexTightness = 4.0f;      // spiral winding: band phase (rad) per e-fold of the radius
@@ -162,6 +177,16 @@ export struct CloudParams
     float vortexTwist = 1.0f;          // how far the noise is sheared along the spiral (1 = it follows the bands)
     float vortexSpinDegPerMin = 60.0f; // the bands' rotation (degrees per minute of the sim clock; 0 = still)
     bool  vortexReverse = false;       // mirror the spin and the spiral's hand
+    // THE EYE LIGHT: a vertical line light on the eye's axis (the game's beacon beam) that lights the clouds around the eye.
+    glm::vec3 vortexLightColor = glm::vec3(1.0f, 0.82f, 0.45f);
+    float vortexLightIntensity = 0.0f; // the radiance on the clouds at the eye's edge (0 = no light)
+    // THE FLASHES (lightning inside the clouds; pushed per frame by the game, no tweak rows): up to two point lights in
+    // the cloud volume - WORLD position (xyz) + radiance (w, 0 = off) - of one colour and one radius.
+    static constexpr int MaxFlashes = 2;
+    glm::vec4 flashes[MaxFlashes] = {};
+    glm::vec3 flashColor = glm::vec3(0.75f, 0.85f, 1.0f);
+    float flashRadius = 600.0f;        // m: the light is at 1/4 at this distance
+    float vortexLightReachKm = 0.4f; // how far past the eye's edge the light goes into the clouds (km, to 1/e)
     float cloudType = 1.0f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
@@ -208,6 +233,7 @@ export struct CloudParams
                                        // the sunlit side seen with the sun behind the viewer lives on it alone
     float ambient = 1.0f;              // sky ambient strength
     float groundAlbedo = 0.15f;      // ground bounce onto the cloud bottoms
+    float groundNightLight = 1.5f;  // at night the ground under the clouds is lit by the night's Sky Radiance x this (the sun cycle)
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
     float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays); >= 0.01
@@ -944,7 +970,7 @@ export struct ForceFieldParams
     // Static per-pixel march-phase jitter (rebuild-class: compiled out of force_union.fs when
     // off): turns step banding into spatial noise so larger "Union step (m)" stays presentable.
     bool unionJitter = false;
-    float isoThreshold = 0.15f;      // field strength where an uncontested bubble surface sits
+    float isoThreshold = 0.01f;      // field strength where an uncontested bubble surface sits
     int marchSteps = 10;             // ray-march steps through a shell proxy's ray interval
     bool useGrid = true;             // hash-grid candidate gathering; off = brute-force scan of every
                                      // emitter per evaluation (small scenes / A-B correctness check).

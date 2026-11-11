@@ -1,0 +1,8 @@
+# The base shapes again, drawn UNLIT: a piece of this container shows its plain colour whatever the light, so in
+# the dark it reads as a glow. The units' eyes (Debug/CubeGuy.pre) are its spheres. No ray tracing: an eye casts
+# no shadow.
+ObjectContainer eyes
+	Path "Models/baseshapes.glb"
+	MaterialOverrides
+		PipelineIdx UnlitOpaque
+		ExcludeFromRayTracing true

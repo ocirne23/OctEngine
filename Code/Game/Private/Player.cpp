@@ -102,7 +102,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     ProfileScope scope("Player movement", EProfileCategory::Game);
     const GamePlayerSettings& s = Globals::settings.game.player;
     Input& input = Globals::input;
-    if (!input.isWindowHasFocus() || !Globals::ui.isViewportFocused())
+    if (!input.isWindowHasFocus() || !Globals::ui.isViewportFocused() || cameraDetached()) // detached: WASD flies the camera
         return;
     PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())

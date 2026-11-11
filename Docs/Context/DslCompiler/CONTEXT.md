@@ -211,7 +211,7 @@ Components (need `@require`; legal only on `self` — reach another entity's via
 * `self.light` — member `lights` (writable `Light` sequence: `foreach ref Light l in self.light.lights`,
   `ifexist ref Light l in self.light.lights at i`), member `count`. `Light` struct members: `enabled`,
   `color`, `intensity`, `range`, `offset`, `direction`, `coneAngle`, `edgeSoftness`, `width`, `height`,
-  `length`, `rotation`; helpers `setSpotCone`, `setAreaSize`, `setTubeShape`, `tubeRadius`. Edits land via
+  `length`, `rotation`; helpers `setSpotCone`, `setAreaSize`, `setBeamShape`, `beamRadius`. Edits land via
   the `ref` write-back. The list never grows or shrinks from a script, so there is no push/clear
 * `self.unit` (`GameUnitComponent`) — `setHealth`, `setEnergy`, `damage(amount)`,
   `setTarget(position)` (**LOCKS the walk target, overriding auto-targeting, until `clearTarget`**),

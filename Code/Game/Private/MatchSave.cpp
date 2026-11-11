@@ -39,6 +39,12 @@ void GameMatch::saveGame()
         // load resumes the escalation instead of restarting at wave 1.
         root.set("WaveIndex", oc::to_string(m_waveIndex));
         root.set("WaveTimer", glm::max(m_waveTimer, 0.0f));
+        if (m_sandboxWorld) // the light rules: the sun is the wave clock, so the time of day rides along
+        {
+            root.set("NightIndex", oc::to_string(m_nightIndex));
+            root.set("Night", m_night);
+            root.set("TimeOfDay", Globals::settings.sky.timeOfDay);
+        }
         root.set("MatchTime", m_matchTime); // the HUD clock (sim seconds since the world spawned)
         saveTrickle(root); // the wave/ambient spawns still queued (a save mid-wave loses nothing)
     }
@@ -110,6 +116,15 @@ void GameMatch::loadGame(oc::string_view path)
         m_waveIndex = glm::max(n->asInt(), 0);
     if (const AssetNode* n = root.find("WaveTimer"))
         m_waveTimer = glm::max(n->asFloat(), 0.0f);
+    if (m_sandboxWorld)
+    {
+        if (const AssetNode* n = root.find("NightIndex"))
+            m_nightIndex = glm::max(n->asInt(), 0);
+        if (const AssetNode* n = root.find("Night"))
+            m_night = n->asBool();
+        if (const AssetNode* n = root.find("TimeOfDay"))
+            Globals::settings.sky.timeOfDay = glm::clamp(n->asFloat(), 0.0f, 23.99f);
+    }
     if (const AssetNode* n = root.find("MatchTime"))
         m_matchTime = glm::max(n->asFloat(), 0.0f);
     // The local player back to where it stood. Both call sites (F10 in updateWindowed, the

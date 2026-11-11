@@ -110,8 +110,8 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             {
                 Entity* other = reinterpret_cast<Entity*>(user);
                 const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
-                if (!u || u->puppet || u->team == team || !u->alive())
-                    return; // turrets never target player capsules (known gap)
+                if (!u || u->puppet || u->team == team || !u->alive() || !u->solid)
+                    return; // turrets never target player capsules (known gap), nor a demon in its shadow form
                 const glm::vec3 d = other->pos - pos;
                 if (glm::dot(d, d) < bestDistSq)
                 {

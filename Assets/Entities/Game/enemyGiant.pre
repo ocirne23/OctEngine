@@ -15,18 +15,13 @@ Prefab gameEnemyGiant
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 1.15
-		Reach 7
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName GIANT
 		Color 0.55 0.05 0.05
 		HealthMax 600
-		EnergyMax 160
-		ShieldOutput 1.15
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 2.0
 		AttackRange 2.2
 		AttackInterval 2.0

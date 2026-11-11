@@ -19,6 +19,29 @@ Prefab CubeGuy
 				ObjectContainer baseshapes
 				Node Cube
 				Type StaticMesh
+		# THE EYES: two unlit spheres (the `eyes` container) on the head's front face (+X is the model's front). A piece
+		# of that container is an EYE for GameUnitComponent's tint: it keeps this colour on an enemy (also in the
+		# shadow form, where the body is near-black) and is pale on a friendly unit.
+		Bone EyeL
+			Position 0.92 2.2 0.4
+			Rotation 0 -0 0
+			Scale 0.22
+			Component Render
+				ObjectContainer eyes
+				Node Sphere
+				Type StaticMesh
+				Color 1 0.12 0.08
+				Emissive 4
+		Bone EyeR
+			Position 0.92 2.2 -0.4
+			Rotation 0 -0 0
+			Scale 0.22
+			Component Render
+				ObjectContainer eyes
+				Node Sphere
+				Type StaticMesh
+				Color 1 0.12 0.08
+				Emissive 4
 		Bone Body
 			Position 0 -0.5 0
 			Rotation 0 -0 0

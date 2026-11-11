@@ -45,11 +45,11 @@ static_assert(oc::size(c_gridNumberKeyLabels) == c_gridSlots);
 static constexpr int c_rootDeleteSlot = 9;     // X
 static constexpr int c_cancelSlot = 10;        // C: straight back to Select (Esc/Tab step back one level instead)
 static constexpr int c_numCategories = 2;
-static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD" };      // slot captions
-static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production" }; // log prose
+static constexpr const char* c_buildCategories[c_numCategories] = { "DFNC", "WORK" };      // slot captions
+static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Defence", "Works" }; // log prose
 static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the slots' hover cards
-    "Combat\nShields, walls, turrets and the barracks.",
-    "Production\nPower, extraction, refining and storage." };
+    "Defence\nLantern fields, walls, light towers and the barracks.",
+    "Works\nLight, wood and stone: collecting, working and storing." };
 // The three cables live on the ROOT page (A/S/D) - no page of their own. Arming one enters Build
 // with this HIDDEN category, which draws and behaves as the root page (see isRootPage).
 static constexpr int c_cableCategory = 2;
@@ -63,7 +63,6 @@ static constexpr EStructureType c_combatItems[] = {
     EStructureType::Wall,
     EStructureType::Turret,
     EStructureType::Barracks,
-    EStructureType::House,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
@@ -75,18 +74,19 @@ static constexpr EStructureType c_productionItems[] = {
     EStructureType::Extractor,
     EStructureType::Fabricator,
     EStructureType::Constructor,
-    EStructureType::Battery,
-    EStructureType::MineralSilo,
-    EStructureType::FuelTank,
     EStructureType::MedicStation,
 };
 // PHYSICAL cables: one segment type per medium, on the root page's A/S/D. Placement PAINTS
 // (press + drag, see updateCablePlacement); connections derive from cell adjacency. The per-medium
 // crossings are NOT on the hotbar: the paint stroke places them itself (placeCableLine).
 static constexpr EStructureType c_cableItems[] = {
-    EStructureType::CablePower,
-    EStructureType::CablePipe,
+    // LOGISTICS (the sandbox world's third page; the flat modes' root page shows the same items): the ROAD - the
+    // carriers walk it with wood and stone - the House (the workers) and the two storage buildings. The power cable
+    // and the pipeline are off the hotbar: light moves on beams (Light.cpp).
     EStructureType::CableConveyor,
+    EStructureType::House,
+    EStructureType::MineralSilo, // the Storehouse: stone AND wood (the Fuel tank is off the hotbar)
+    EStructureType::Battery,
 };
 static oc::span<const EStructureType> buildCategoryItems(int category)
 {
@@ -250,6 +250,11 @@ void GameMatch::refreshBuildHotbar()
             m_typeCards[t] = oc::string(structureTypeName((EStructureType)t)) + "\n"
                 + m_structures.describeType((EStructureType)t);
     }
+    if (m_sandboxWorld)
+    {
+        refreshBuildBar();
+        return;
+    }
     uint32 used = 0; // slots this page filled; everything else is cleared at the end
     const auto itemSlot = [&](int slot, EStructureType type)
     {
@@ -334,6 +339,25 @@ void GameMatch::activateSlot(int slot)
 {
     if (slot < 0 || slot >= c_gridSlots)
         return;
+    if (m_sandboxWorld) // the build bar: a page tab shows its page (nothing armed), an item slot arms its item
+    {
+        m_buildUi = true;
+        if (slot < c_buildBarTabs)
+        {
+            setMode(EPlayerMode::Build);
+            m_buildCategory = slot;
+            m_buildSelection = -1;
+            m_lanceAiming = false;
+            m_wallPlacing = false;
+            m_cablePainting = false;
+            m_cablePendingValid = false;
+            m_lastPage = slot;
+            refreshBuildHotbar();
+        }
+        else if (slot - c_buildBarTabs < (int)buildCategoryItems(buildBarPage()).size())
+            armPageItem(buildBarPage(), slot - c_buildBarTabs);
+        return;
+    }
     if (isRootPage())
     {
         // ROOT page
@@ -385,25 +409,175 @@ void GameMatch::activateSlot(int slot)
     refreshBuildHotbar();
 }
 
+void GameMatch::armPageItem(int category, int selection)
+{
+    const int count = (int)buildCategoryItems(category).size();
+    if (count <= 0)
+        return;
+    setMode(EPlayerMode::Build);
+    m_buildCategory = category;
+    m_lanceAiming = false; // switching items drops half-done aims/flows
+    m_wallPlacing = false;
+    m_cablePainting = false;
+    m_cablePendingValid = false;
+    m_buildSelection = glm::clamp(selection, 0, count - 1);
+    m_pageSelection[category] = m_buildSelection;
+    m_lastPage = category;
+    refreshBuildHotbar();
+}
+
+void GameMatch::toggleBuildUi()
+{
+    if (m_buildUi) // open already: Tab is the NEXT PAGE (it wraps), armed on that page's last item
+    {
+        const int next = (buildBarPage() + 1) % c_buildBarTabs;
+        armPageItem(next, m_pageSelection[next]);
+        return;
+    }
+    m_buildUi = true;
+    armPageItem(m_lastPage, m_pageSelection[m_lastPage]); // open on what was armed last: Tab + a click builds again
+}
+
+int GameMatch::buildBarPage() const
+{
+    return m_mode == EPlayerMode::Build && m_buildCategory >= 0 ? m_buildCategory : m_lastPage;
+}
+
+// The sandbox world's hotbar: nothing in PLAY, the build bar in the BUILD UI - the three page tabs, then the items
+// of the shown page. The cursor is free there, so every slot is a button with its hover card.
+void GameMatch::refreshBuildBar()
+{
+    GameHud& hud = Globals::gameHud;
+    static constexpr const char* c_pageNames[c_buildBarTabs] = { "Defence", "Works", "Logistics" };
+    static constexpr const char* c_tabLabels[c_buildBarTabs] = { "DEFENCE", "WORKS", "LOGISTICS" };
+    static constexpr const char* c_tabOpenLabels[c_buildBarTabs] = { "[DEFENCE]", "[WORKS]", "[LOGISTICS]" };
+    static constexpr const char* c_tabCards[c_buildBarTabs] = {
+        "Defence\nLantern fields, walls, light towers and the barracks.",
+        "Works\nMaking light, wood and stone, and the builder's and the healer's hut.",
+        "Logistics\nRoads for the carriers (hold and drag to paint), houses for the workers, the storehouse for goods and the crystal store for light." };
+    if (!m_buildUi)
+    {
+        for (int i = 0; i < GameHud::NumSlots; ++i)
+            hud.clearSlot(i); // no assigned slot = no bar
+        hud.setCounterText("Build", "Tab: build   X: delete", glm::vec3(0.7f, 0.7f, 0.7f));
+        return;
+    }
+    const int page = buildBarPage();
+    const bool building = m_mode == EPlayerMode::Build;
+    for (int tab = 0; tab < c_buildBarTabs; ++tab)
+    {
+        hud.setSlot(tab, building && tab == page ? c_tabOpenLabels[tab] : c_tabLabels[tab], 0);
+        hud.setSlotTooltip(tab, c_tabCards[tab]);
+    }
+    const oc::span<const EStructureType> items = buildCategoryItems(page);
+    for (int i = 0; i < GameHud::NumSlots - c_buildBarTabs; ++i)
+    {
+        const int slot = c_buildBarTabs + i;
+        if (i >= (int)items.size())
+        {
+            hud.clearSlot(slot);
+            continue;
+        }
+        hud.setSlot(slot, c_structureShortNames[(int)items[i]], m_structures.affordableCount(items[i], (uint8)m_team));
+        hud.setSlotTooltip(slot, m_typeCards[(int)items[i]]);
+    }
+    const bool armed = building && m_buildSelection >= 0 && m_buildSelection < (int)items.size();
+    hud.selectSlot(armed ? c_buildBarTabs + m_buildSelection : -1);
+    char text[128];
+    if (m_mode == EPlayerMode::Delete)
+        snprintf(text, sizeof(text), "Delete: click a structure   X: back   RMB: close");
+    else if (armed)
+        snprintf(text, sizeof(text), "%s: %s (%.0f stone)   LMB place, Q/E item, Tab page, RMB close, MMB look",
+            c_pageNames[page], structureTypeName(items[m_buildSelection]), m_structures.mineralCost(items[m_buildSelection]));
+    else
+        snprintf(text, sizeof(text), "%s: Q/E or click an item   Tab page, X delete, RMB close", c_pageNames[page]);
+    hud.setCounterText("Build", text, m_mode == EPlayerMode::Delete ? glm::vec3(1.0f, 0.4f, 0.3f) : glm::vec3(1.0f, 0.85f, 0.45f));
+}
+
+void GameMatch::stepSelection(int direction)
+{
+    m_buildUi = true;
+    if (m_mode != EPlayerMode::Build || m_buildCategory < 0)
+    {
+        armPageItem(m_lastPage, m_pageSelection[m_lastPage]); // from Select: back to what was armed last
+        return;
+    }
+    // ONE list over all pages: past a page's last item comes the next page's first (and the other way), wrapping.
+    int page = m_buildCategory;
+    int selection = m_buildSelection < 0 ? (direction > 0 ? 0 : (int)buildCategoryItems(page).size() - 1) : m_buildSelection + direction;
+    if (selection >= (int)buildCategoryItems(page).size())
+    {
+        page = (page + 1) % c_buildBarTabs;
+        selection = 0;
+    }
+    else if (selection < 0)
+    {
+        page = (page + c_buildBarTabs - 1) % c_buildBarTabs;
+        selection = (int)buildCategoryItems(page).size() - 1;
+    }
+    armPageItem(page, selection);
+}
+
 void GameMatch::updateModeSwitching()
 {
     Input& input = Globals::input;
     const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
+    if (m_sandboxWorld)
+    {
+        static constexpr SDL_Scancode c_buildKeys[4] = { SDL_Scancode::SDL_SCANCODE_TAB, SDL_Scancode::SDL_SCANCODE_Q,
+            SDL_Scancode::SDL_SCANCODE_E, SDL_Scancode::SDL_SCANCODE_X };
+        for (int k = 0; k < 4; ++k)
+        {
+            const bool down = focused && input.isKeyDown(c_buildKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+            if (down && !m_buildKeyWasDown[k])
+                switch (k)
+                {
+                case 0: toggleBuildUi(); break;
+                case 1: stepSelection(-1); break;
+                case 2: stepSelection(1); break;
+                default: // X: Delete mode, and back to the page from it
+                    if (m_mode == EPlayerMode::Delete)
+                    {
+                        setMode(EPlayerMode::Build);
+                        m_buildCategory = m_lastPage;
+                    }
+                    else
+                    {
+                        m_buildUi = true;
+                        setMode(EPlayerMode::Delete);
+                    }
+                    refreshBuildHotbar();
+                    break;
+                }
+            m_buildKeyWasDown[k] = down;
+        }
+    }
     // Grid hotkeys: polled edges on the 12 keys, each mapping straight onto its slot.
     const SDL_Scancode* gridKeys = m_sandboxWorld ? c_gridNumberKeys : c_gridKeys;
     for (int k = 0; k < c_gridSlots; ++k)
     {
         const bool down = focused && input.isKeyDown(gridKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
         if (down && !m_gridKeyWasDown[k])
-            activateSlot(k);
+        {
+            if (!m_sandboxWorld)
+                activateSlot(k);
+            else if (k < GameHud::NumSlots - c_buildBarTabs) // the build bar: 1..9 are its item slots
+                activateSlot(c_buildBarTabs + k);
+        }
         m_gridKeyWasDown[k] = down;
     }
     // Escape/Tab: one level back.
     const bool backDown = focused && (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_ESCAPE)
-        || input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB));
+        || (!m_sandboxWorld && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB))); // the sandbox world: Tab = the pages
     if (backDown && !m_modeKeyWasDown[0])
         cancelOneLevel();
     m_modeKeyWasDown[0] = backDown;
+    // The build UI closes when the mode is back at Select (Esc at the end of its chain, Tab, a finished demolish).
+    if (m_buildUi && m_mode == EPlayerMode::Select)
+    {
+        m_buildUi = false;
+        refreshBuildHotbar();
+    }
     // F9 save / F10 load (authority only - a client has no sim to save).
     const bool saveDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F9);
     if (saveDown && !m_saveKeyWasDown)
@@ -701,6 +875,14 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.constructorRange(), color, 40);
+    if (m_structures.lightBeams())
+    {
+        // Light on beams: a hub shows the reach it would feed, a Mirror how far its beam reaches a hub.
+        if (aim.type == EStructureType::Battery)
+            drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.lightHubReach(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 48);
+        if (aim.type == EStructureType::Solar)
+            drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.mirrorBeamRange(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 64);
+    }
     if (aim.type == EStructureType::House) // show how far it links to a barracks
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
     if (aim.type == EStructureType::MedicStation) // show the heal reach

@@ -1,10 +1,11 @@
 export module Settings.Game;
 
 import Core;
+import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 27;
+export constexpr int GameStructureTypeCount = 23;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -39,8 +40,65 @@ export struct GameMatchSettings
     // Co-op in the SANDBOX WORLD (terrain, trees, ocean) with the third-person player; off = the generated rock map
     // with the top-down camera. Read when the match is constructed.
     bool coopSandboxWorld = true;
-    bool coopEnemies = false;         // waves + the ambient scatter (off: a peaceful building game)
+    bool coopEnemies = true;          // waves + the ambient scatter (off: a peaceful building game)
     float sandboxWaveDistance = 70.0f; // sandbox world: m from the Base a wave spawns (inside the collider ring)
+    // THE LIGHT RULES (the sandbox world): the waves come at NIGHT only, daylight burns the demons, and a field does
+    // not push them - they walk in and burn.
+    float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
+    float nightWaveInterval = 45.0f;  // s between the waves of one night (the first one launches at dusk)
+    float waveSizeMult = 1.0f;        // x every wave's budget: the one knob for "how many enemies"
+    float nightWaveRamp = 0.25f;     // each later wave of a night is this much bigger (x the night's base size, added per wave)
+    float nightWaveVariation = 0.4f;  // random +- on a night wave's size and on the time to the next one
+    int   nightSurgeEvery = 4;        // every Nth wave of a night is a surge (0 = none)
+    float nightSurgeSize = 2.0f;      // x the size of a surge wave
+    float sunlightDps = 20.0f;        // health/s a demon loses in full daylight
+    bool fieldsBlockDemons = false;   // on = the fields push every demon, as on the flat maps
+    bool demonShadowForm = true;      // a demon outside a player field (and outside daylight) takes no direct damage
+    float staffLightRadius = 10.0f;   // m around a player in which a demon is solid (0 = the fields alone)
+    // The fields do not push a demon, so the demons are slower: everywhere, and more inside a player field.
+    float demonSpeed = 0.7f;          // x every demon's MoveSpeed
+    float demonFieldSpeed = 0.5f;     // x that again inside a player field
+    // THE BEACON (the sandbox world): the Base's power holds a hole in the clouds (the clouds' vortex, centred on the
+    // Base) and sends a beam up; at night the cloud coverage rises to the Shroud's.
+    bool beaconEnabled = true;
+    float shroudCoverage = 1.0f;     // the cloud coverage at night (the day's is the "Sky/Clouds" value at the match start)
+    float shroudDuskSunHeight = 0.0f; // at dusk the clouds are closed at this sun height (the sine of its elevation; they start 0.2 above it)
+    float beaconDayStrength = 0.0f; // x the hole's strength in full daylight
+    float beaconIgniteDelay = 8.0f;   // s of full night (the clouds closed) before the Beacon turns on
+    float beaconGlowSeconds = 1.5f;   // s: a short beam on the Base brightens
+    float beaconClimbSeconds = 1.5f;  // s: the beam's tip travels from the Base up to the cloud base (slow near the ground, faster in the sky)
+    float beaconPierceSeconds = 5.0f; // s: then the beam tears through the clouds (the first quarter) and the hole grows to its size
+    float beaconOffShroud = 0.5f;     // at dawn the light goes off when the shroud (1 = closed, 0 = the day's clouds) is down to this
+    float beaconFadeSeconds = 8.0f;   // s: the beam fades out over this at dawn
+    float beaconCloseSeconds = 40.0f; // s: at dawn, after the light is off, the hole closes over this (calm)
+    float beaconCalmSpin = 10.0f;   // deg/min: the vortex's spin with a full Base store
+    float beaconPressureSpin = 60.0f; // deg/min: at night with an empty Base store
+    float beaconBeamHeight = 80000.0f; // m above the Base
+    float beaconLightIntensity = 1.0f; // the beam light's intensity (the column's glow and the light on the ground), x the power
+    float beaconLightRange = 80.0f; // m from the beam it lights surfaces (and its halo in the air ends)
+    float beaconBeamRadius = 0.75f;   // m: the column's core
+    float beaconCloudLight = 0.33f;   // the beam's light on the clouds around the hole (the vortex's eye light), x the power
+    // LIGHTNING (the sandbox world, at night): flashes of light inside the clouds around the player, a share of them
+    // with an ARC down to the ground. A look only: no damage, no light on surfaces.
+    bool lightningEnabled = true;
+    float lightningPerMinute = 10.0f;      // flashes per minute at full night (the gaps are random)
+    float lightningStrikeShare = 0.33f;    // the share of the flashes with an arc to the ground
+    float lightningMinDistance = 100.0f;   // m from the player: the nearest flash
+    float lightningMaxDistance = 4000.0f;  // m: the farthest
+    float lightningWallShare = 0.2f;      // while the vortex is open: the share of the flashes placed on its eyewall, high up (none is ever in the hole)
+    float lightningDuration = 0.6f;       // s: the time scale of a flash (its 1 to 6 strokes: 0.6 = one lasts ~0.15 s, a long one ~2 s)
+    glm::vec3 lightningColor = glm::vec3(0.75f, 0.85f, 1.0f);
+    float lightningCloudLight = 8.0f;      // the flash's radiance on the clouds at its centre
+    float lightningCloudRadius = 600.0f;   // m: the flash's size in the clouds (1/4 of the light at this distance)
+    float lightningArcIntensity = 60.0f;   // the arc's glow
+    float lightningArcRadius = 1.0f;       // m: the arc's core
+    float lightningArcJitter = 0.1f;       // how far the arc zigzags sideways, as a share of its length
+    float lightningForkShare = 0.6f;       // the share of the arcs with a side fork
+    // THE FOG EFFECTS (the sandbox world): a wave's spawn site, and the fields' clearings.
+    float spawnFogDensity = 0.05f;    // 1/m: the bank's extinction at a spawn site (0 = no spawn fog)
+    float spawnFogGlow = 0.6f;        // its own glow (the night gives fog no light)
+    float spawnFogSeconds = 40.0f;    // how long a site holds its fog
+    float fieldFogClear = 1.0f;       // 0..1: the share of the fog a field removes inside its bubble (0 = off)
     // Map generation inputs, read once at generation on the AUTHORITY (the lobby writes them too).
     int mapSeed = 0;                  // 0 = random each run
     float terrainFill = 0.3f;         // fraction of interior cells turned to rock (before carving)
@@ -107,10 +165,9 @@ export struct GamePlayerSettings
 // StructureSystem: costs, the economy, the cable transport, the shield structures, barracks and houses.
 export struct GameStructureSettings
 {
-    float costs[GameStructureTypeCount] = { // indexed by EStructureType (Base/Connector free)
+    float costs[GameStructureTypeCount] = { // indexed by EStructureType
         30.0f,  // Emitter
         40.0f,  // Generator
-        0.0f,   // Connector (retired)
         25.0f,  // Extractor
         40.0f,  // Battery
         30.0f,  // FuelTank
@@ -119,9 +176,6 @@ export struct GameStructureSettings
         70.0f,  // Bastion
         45.0f,  // Lance
         150.0f, // Barracks
-        0.0f,   // BarracksBrute (retired)
-        0.0f,   // BarracksRunner (retired)
-        0.0f,   // BarracksSpitter (retired)
         5.0f,   // Wall (per segment)
         75.0f,  // Turret
         25.0f,  // MineralSilo
@@ -139,7 +193,7 @@ export struct GameStructureSettings
     float startMinerals = 200.0f;
     float extractorSnapRadius = 6.0f;
     float mineralRate = 2.0f;
-    float fuelRate = 4.0f;
+    float fuelRate = 1.0f;
     float baseIncomeMult = 0.25f;
     float placeRange = 30.0f;
     float cableThroughput[3] = { 20.0f, 4.0f, 4.0f }; // by MEDIUM (energy, fuel, minerals): a segment's OUT-RATE in cells/s
@@ -152,22 +206,50 @@ export struct GameStructureSettings
     float storageHighMark = 0.75f;    // ... and pulls while at/above this (hysteresis between)
     int statTransportNodes = 0;       // read-only stats, written by StructureSystem
     int statTransportTicks = 0;
+    // LIGHT ON BEAMS: light moves between the buildings and their HUBS (the Crystal stores and the Beacon), not as
+    // cells on the power cables.
+    bool lightBeams = true;           // off = the old cell flow on power cables
+    float mirrorBeamRange = 60.0f;    // m: a Mirror reaches a hub this far away
+    float lightHubReach = 30.0f;      // m: a hub feeds the consumers this near (and a Hearth reaches a hub this far)
+    float lightHubLinkRange = 60.0f;  // m: two hubs this near share their light
+    float lightBeamRate = 20.0f;      // light/s a producer sends
+    float lightFeedRate = 10.0f;      // light/s a consumer takes (the barracks and the turret keep their own intake)
+    float lightShareRate = 10.0f;     // light/s between two hubs
+    // The look of a link's beam (the nearest few are BeamLights): its glow, its core, how far it lights surfaces.
+    float lightBeamGlow = 1.5f;       // at the full flow
+    float lightBeamFullFlow = 1.0f;   // light/s at which a beam has its full glow and radius (less light = less beam):
+                                      // a Lantern's draw - a Mirror's 0.21 is a thin beam, a Hearth's 0.45 a half one
+    float lightBeamRadius = 0.35f;    // m, at the full flow (half of it at no flow)
+    float lightBeamGlowRange = 8.0f;  // m
+    // THE CARRIERS: wood and stone move by walkers on the road (the conveyor segments), not as cells on the cables.
+    bool carriers = true;             // off = the old cell flow on pipelines and conveyors
+    float carrierLoad = 5.0f;         // goods a walker carries
+    float carrierSpeed = 3.5f;        // m/s
+    int   carriersPerBuilding = 6;    // walkers one sending building can have at most
     float cableHealthMax = 40.0f;     // segments/crossings are softer than buildings
     float internalBuffer = 10.0f;
     float emitterBuffer = 50.0f;      // the shield emitters' energy stores (their pressure draw spikes)
     float bastionBuffer = 150.0f;
     float lanceBuffer = 100.0f;
     float generatorBuffer = 10.0f;
-    float batteryCapacity = 200.0f;
+    // THE CRYSTAL STORE: one full store runs TWO field generators through one night. A night is ~640 s (the sun cycle
+    // at 60x, the default latitude and day), a generator draws 1 light/s awake: 2 x 640 = 1280, plus room for the extra
+    // draw under pressure. Filled by day: a Mirror makes ~780 light in one day, so two Mirrors fill one store.
+    float batteryCapacity = 1500.0f;
     float generatorFuelTank = 10.0f;
     float fuelTankCapacity = 200.0f;
     float mineralSiloCapacity = 200.0f;
     float mineralBaseCapacity = 200.0f;
     float medicEnergyPerSec = 1.5f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
-    float genEnergyPerSec = 5.0f;
-    float solarEnergyPerSec = 1.0f;
-    float fuelBurnRate = 1.0f;
+    // THE LIGHT BALANCE (the default sun cycle: a day gives a Mirror ~780 s of full daylight, a night keeps a field
+    // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 1 light/s awake, a Great lantern 3.
+    //   4 Mirrors carry 1 Lantern through the night:  4 x 0.21 x 780 = 655 >= 640.  12 Mirrors: 1 Great lantern.
+    //   1 Hearth, burning day and night (1440 s), carries 1 Lantern:  0.45 x 1440 = 648 >= 640.  3 Hearths: 1 Great.
+    float genEnergyPerSec = 0.45f;    // the Hearth: an early, inefficient source (1 wood/s for this much light)
+    float solarEnergyPerSec = 0.21f;
+    float solarDaylight = 1.0f;       // runtime (GameMatch): x the solar yield - the daylight in the sandbox world, else 1
+    float fuelBurnRate = 0.5f;
     float fabricatorMineralsPerSec = 0.5f;
     float fabricatorFuelPerSec = 1.0f;
     float fabricatorEnergyPerSec = 1.0f;
@@ -175,23 +257,28 @@ export struct GameStructureSettings
     float pressureDrawTension = 1.5f;
     float emitterEnergyPerSec = 1.0f;
     float emitterOutput = 1.2f;
-    float emitterReach = 27.0f;
+    float emitterReach = 54.0f;
     // The Base's shield: it pays for itself from the Base's own energy store.
     float baseEnergyCapacity = 100.0f;
-    float baseEnergyGenPerSec = 2.0f; // free self-generation into its own store
-    float baseShieldEnergyPerSec = 1.5f;
+    float baseShieldEnergyPerSec = 1.5f; // the field's standing draw AND the Base's own generation: its idle field is free
     float baseShieldOutput = 2.4f;
-    float baseShieldReach = 27.0f;
-    float bastionEnergyPerSec = 2.0f;
+    float baseShieldReach = 54.0f;
+    float bastionEnergyPerSec = 3.0f; // 3 Lanterns' worth (see THE LIGHT BALANCE)
     float bastionOutput = 2.6f;
-    float bastionReach = 45.0f;
+    float bastionReach = 90.0f;
     float lanceEnergyPerSec = 3.0f;
     float lanceOutput = 0.08f;
-    float lanceReach = 26.0f;
+    float lanceReach = 52.0f;
     float emitterPressureDraw = 3.0f;
     float emitterShrinkTime = 1.5f;
     float emitterGrowTime = 0.5f;
     float emitterRestartCharge = 6.0f;
+    float emitterWarnCharge = 0.35f;  // store fraction below which a field's shell flickers (0 = never)
+    // FIELDS SLEEP BY DAY (the sandbox world): with no darkness and no demon on it, a field draws no light and its
+    // shell is faint - it still shows its area. fieldNight is runtime (GameMatch): 0 = full day .. 1 = night; 1 in
+    // every other mode, where a field never sleeps.
+    float fieldNight = 1.0f;
+    float fieldDayAlpha = 0.15f;      // x the shell alpha of a sleeping field (the shell's glow and its light follow it)
     float structureHealthMax = 100.0f;
     float constructorRange = 27.0f;
     float constructorBuildRate = 4.0f;
@@ -199,10 +286,19 @@ export struct GameStructureSettings
     int wallBreachCost = 10;          // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
     bool cheatInstantBuild = false;
     // The sandbox world's ground test: the highest minus the lowest terrain sample under a footprint may not pass this.
-    float maxGroundStep = 0.75f;
+    // 0 = no slope limit.
+    float maxGroundStep = 0.0f;
     // Per UNIT TYPE (ENpcType order): the ENERGY a barracks pays per spawned unit and the POPULATION the unit holds.
     float spawnEnergy[GameUnitTypeCount] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f };
     int unitPopulation[GameUnitTypeCount] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3 };
+    // WORKERS: production runs on population, not on light. A team has baseWorkers + houseWorkers for each House; every
+    // production building asks for its workers; short of workers, all production of the team slows by workers / jobs.
+    int baseWorkers = 6;
+    int houseWorkers = 4;
+    int workersExtractor = 2;
+    int workersFabricator = 3;
+    int workersConstructor = 2;
+    int workersGenerator = 1;
     int barracksPopulation = 20;      // a barracks' own population cap
     int housePopulation = 10;         // added per linked house
     float houseLinkRadius = 25.0f;
@@ -230,7 +326,7 @@ export struct GameUnitParams
 {
     float energyDrainRate = 25.0f; // energy/s per unit of pressure (player shield rule, no regen)
     float tension = 1.5f;          // drain + push scale by (1 + tension*pressure)
-    float fieldDps = 10.0f;        // health/s while squished below damageRadius under pressure
+    float fieldDps = 2.0f;        // health/s while squished below damageRadius under pressure
     float fieldDpsMult = 1.0f;
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe
@@ -256,6 +352,26 @@ export struct GameUnitParams
     float heightLimit = 5.0f;      // world Y ceiling for units AND player capsules (GamePlayer too)
     bool flatGround = true;        // runtime (GameMatch): false = the sandbox terrain world - no height ceiling, no
                                    // void floor and no bite height window, which all assume the y = 0 plane
+    // Runtime (GameMatch, the co-op sandbox world's light rules; the other modes keep the defaults):
+    bool fieldPush = true;         // false = an enemy field does not push a unit (it walks in and burns); a prefab's
+                                   // `FieldBlocked true` keeps the push for that type
+    int shadowTeam = -1;           // the team that is SHADOW outside an opposing field: no direct damage, no turret
+                                   // lock (-1 = none); daylight makes it solid
+    // THE PLAYERS' STAFF LIGHT (runtime, GameMatch): a shadow-team unit this near a player is solid too, so a player
+    // can always fight what attacks next to it. Per point: x, y, z of the player, then the radius.
+    float lightPoints[8][4]{};
+    int lightPointCount = 0;
+    // THE FIELD ZONES (runtime, GameMatch, the terrain world): the bubbles of fieldZoneTeam's field buildings as
+    // spheres (x, y, z, radius). A unit of another team inside one, measured FLAT on the map, is in the field
+    // whatever the force bake's height slice reads (GameUnitComponent::tickField).
+    float fieldZones[64][4]{};
+    int fieldZoneCount = 0;
+    int fieldZoneTeam = -1;
+    int slowTeam = -1;             // the team whose units walk slower (runtime; -1 = none): x slowMult, and
+    float slowMult = 1.0f;         // x fieldSlowMult more while a unit stands in an opposing field
+    float fieldSlowMult = 1.0f;
+    int sunBurnTeam = -1;          // the team daylight burns (-1 = none)
+    float sunDps = 0.0f;           // health/s that team loses now: "Sunlight damage/s" x the daylight
     bool navEnabled = true;
     float hurtLightIntensity = 8.0f;
     float hurtLightDecay = 0.25f;  // seconds from full to dark

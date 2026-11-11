@@ -185,20 +185,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
         const uint32 id = n->find("Id") ? (uint32)n->find("Id")->asInt() : 0;
         if (typeInt < 0 || typeInt >= (int)EStructureType::Count || id == 0 || structureIndexById(id) >= 0)
             continue; // garbage / duplicate entry
-        if (typeInt == (int)EStructureType::Connector)
-        {
-            Log::warning("Load game: Connector is retired - entry skipped (old save)");
-            continue;
-        }
-        // Old saves' per-type barracks become a Barracks producing that type (Brute 1 / Runner 2 /
-        // Spitter 3 in ENpcType order); a UnitType key from a newer save wins below.
-        int unitType = 0;
-        if (isRetiredBarracksType((EStructureType)typeInt))
-        {
-            unitType = typeInt == (int)EStructureType::BarracksBrute ? 1
-                     : typeInt == (int)EStructureType::BarracksRunner ? 2 : 3;
-            typeInt = (int)EStructureType::Barracks;
-        }
+        int unitType = 0; // a barracks' unit type: the UnitType key below
         const glm::vec3 pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
         const glm::vec3 facing = n->find("Facing") ? n->find("Facing")->asVec3() : glm::vec3(0.0f);
         glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);

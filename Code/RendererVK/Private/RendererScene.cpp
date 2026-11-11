@@ -126,11 +126,13 @@ void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask)
     }
 }
 
-uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color)
+uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color, float emissive)
 {
     const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
+    // The emissive strength is part of the key, in sixteenths (0 = a plain colour): 8 bits over the 24 of the colour.
+    const uint32 strength = (uint32)glm::clamp(emissive * 16.0f + 0.5f, 0.0f, 255.0f);
     const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
-        | (uint32(c.z * 255.0f + 0.5f) << 16);
+        | (uint32(c.z * 255.0f + 0.5f) << 16) | (strength << 24);
     // Lock-free hit (every spawn of a tinted entity after the colour's first): linear probe until an empty entry.
     const uint32 home = (key * 2654435761u) >> 22; // 10 bits: SOLID_COLOR_TABLE_SIZE
     static_assert(SOLID_COLOR_TABLE_SIZE == 1024);
@@ -173,6 +175,11 @@ uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color)
     material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
     material.metalRoughnessTexIdx = 0xFFFF; // lit shading's "no texture": metal 0, roughness 0.65
     material.alphaMode = 0;
+    if (strength > 0) // EMISSIVE: the unlit shader reads the strength from `opacity` (EAlphaMode::Emissive)
+    {
+        material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Emissive;
+        material.opacity = (float)strength / 16.0f;
+    }
     const uint16 materialIdx = (uint16)addMaterialInfos({ material });
     m_solidColorMaterials.emplace(key, materialIdx);
     // Publish to the lock-free mirror (inserts only happen here, under the lock). A full mirror just leaves
@@ -485,7 +492,7 @@ RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags)
     return material;
 }
 
-uint16 RenderMaterial::getOrCreateSolidColor(const glm::vec3& color) { return Globals::rendererVK.getOrCreateSolidColorMaterial(color); }
+uint16 RenderMaterial::getOrCreateSolidColor(const glm::vec3& color, float emissive) { return Globals::rendererVK.getOrCreateSolidColorMaterial(color, emissive); }
 
 void RenderMaterial::destroy()
 {
@@ -866,7 +873,7 @@ uint32 RendererState::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::
 // height (the direction's magnitude) and its width / radius get a 0.1 mm floor (a zero axis becomes +Y), so the
 // axis divide and the area's horizon smoothstep never see 0. A spot's |direction| (edge softness) is
 // already >= 0.001 (SpotLight).
-void Renderer::addLightInfo(const RendererVKLayout::LightInfo& lightIn)
+void Renderer::addLightInfo(const RendererVKLayout::LightInfo& lightIn, bool airColumn)
 {
     if (!(glm::abs(lightIn.radius) > 1e-5f))
         return;
@@ -880,9 +887,20 @@ void Renderer::addLightInfo(const RendererVKLayout::LightInfo& lightIn)
         light.width = glm::max(light.width, minSize);
     }
     assert(light.width >= 0.0f || glm::length(light.direction) >= 1e-3f - 1e-6f);
+    if (airColumn && light.width > 0.0f && light.radius < 0.0f) // a beam: also one of the frame's air columns
+        if (const uint32 slot = oc::atomic_ref<uint32>(m_beamLightCount).fetch_add(1); slot < MAX_BEAM_COLUMNS)
+            m_beamLights[slot] = light;
     const uint32 idx = m_submission.addLight(m_swapChain.getCurrentFrameIndex(), light);
     if (idx != UINT32_MAX)
         m_lightGridComputePipeline.addLight(idx, light); // bounds + grid claims, right here on the adding thread
+}
+
+void Renderer::addBeamColumn(const RendererVKLayout::LightInfo& beam)
+{
+    if (!(beam.width > 0.0f && beam.radius < -1e-5f && glm::length(beam.direction) >= 1e-4f))
+        return;
+    if (const uint32 slot = oc::atomic_ref<uint32>(m_beamLightCount).fetch_add(1); slot < MAX_BEAM_COLUMNS)
+        m_beamLights[slot] = beam;
 }
 
 // vol_scatter.cs.glsl divides by halfExtents x edgeSoftness unguarded: that product is >= 1 mm per axis here.

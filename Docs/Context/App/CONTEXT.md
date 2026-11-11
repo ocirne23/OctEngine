@@ -377,7 +377,7 @@ are skipped.
 | 3 | Point light, range 15.5..16.5, intensity 30, random colour |
 | 4 | Spot along the camera direction, range 12.5, intensity 20, cone 25°, edge softness 0.25 |
 | 5 | Area quad, 1×1, range 10, emitting along the camera direction |
-| 6 | Tube, radius 0.1, length 1, range 10, axis = camera up |
+| 6 | Beam, radius 0.1, length 1, range 10, axis = camera up |
 | 7 | Burst of 100 small random point lights near the world origin (not the camera) |
 
 All share ONE spawn template (a lone Light component); the values live on the component and are

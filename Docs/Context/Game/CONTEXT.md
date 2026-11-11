@@ -34,6 +34,28 @@ documentation lives in topic files in this folder — read the ones for the area
 | [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, routes), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
 | [Units.md](Units.md) | Units and the player: the unit sim / NpcSystem split, targets, melee, damage, the far tick, parked loose units, friction; the player shield, problem bubbles, world labels, HUD |
 
+## The names: code words and player words
+
+The setting is [`Docs/GDD.md`](../../GDD.md), and its economy plan is [`Docs/GDD-Economy.md`](../../GDD-Economy.md).
+**Every text a PLAYER reads uses the setting's words; the code, the tweaks, the save keys, the prefab file names and
+these documents keep the code words.** The two tables are `structureNames` (Structures.cpp) and
+`c_structureShortNames` (Match.ixx); the hover cards (`describeType`), the labels, the badges and the HUD follow.
+
+| Code word | Player word |
+|---|---|
+| energy / fuel / minerals | light / wood / stone |
+| Base | Beacon (BEACN) |
+| Emitter / Bastion / Lance | Lantern (LNTN) / Great lantern (GLNT) / Lance |
+| Turret | Light tower (TOWR) |
+| Solar / Generator / Battery | Mirror (MIRR) / Hearth (HRTH) / Crystal store (CRYS) |
+| Extractor / Fabricator | Work camp (CAMP) / Stoneworks (STNW) |
+| Mineral silo / Fuel tank | Storehouse (STOR) / Woodshed (WOOD) |
+| Constructor / Medic station | Builder's hut (BUIL) / Healer's hut (HEAL) |
+| Conveyor | Road (ROAD): the carriers walk it. The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
+| the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
+| HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
+| badges: No power cable / No pipeline, No conveyor | No light store in reach, Light blocked / No road |
+
 ## The architecture rule
 
 **Code/Game holds NO entity lists and runs NO world-wide spatial queries.**
@@ -81,7 +103,8 @@ type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, the se
 prefab table lives here), `StructuresNetwork.cpp` (`rebuildNetworks` + `updateArms`),
 `StructuresEconomy.cpp` (`tickProduction`, the death sweep, constructors, materials / repairs,
 the tint, `drawDebug`), `StructuresSync.cpp` (the `mirror*` appliers, `saveTo` / `loadFrom` /
-`clearAllStructures`) and `Transport.cpp` (the cable transport tick).
+`clearAllStructures`), `Transport.cpp` (the cable transport tick), `Carriers.cpp` (the walkers that move wood and
+stone on the road) and `Light.cpp` (the light links and their flow) - see [Economy.md](Economy.md).
 
 **`GameMatch`'s bodies are split over seven implementation units by topic** (all `module Game;`,
 the list is repeated at the end of `Match.ixx`): `Match.cpp` (construction, `spawnWorld`, the three
@@ -229,7 +252,8 @@ A full sim snapshot to `Assets/Local/gamesave.txt` through AssetParser
 blueprint / stores / route — **cable segments are ordinary Structure entries, with NO Cable nodes** —
 plus the map inputs and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
 clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds to it) and
-`MatchTime` (the HUD clock), so a load resumes the escalation. **Shots are NOT saved**; projectiles
+`MatchTime` (the HUD clock), so a load resumes the escalation; the sandbox world adds `NightIndex` / `Night` /
+`TimeOfDay` (the light rules, [Modes.md](Modes.md)). **Shots are NOT saved**; projectiles
 are transient and a load clears them.
 
 **A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, NodeIndex,
@@ -270,10 +294,11 @@ F10 in `updateWindowed` and the `--scenario` timer — are main thread and PRE-`
 those direct body setters are sanctioned. **REMOTE players are not saved, and no player STATE is**
 (health, energy, materials): a load leaves every player's pools as they are.
 
-> **SAVE COMPAT: `Type` is the raw enum INT, so `EStructureType` values are never removed or
-> reordered.** New types APPEND before Count; the retired Connector (index 2) keeps its dead slot
-> (`loadFrom` skips it with a warning), the retired per-type barracks map to a Barracks with that unit
-> type, and Cable nodes in a save are ignored since links re-derive. `ENpcType` follows the same rule.
+> **NO SAVE COMPATIBILITY IS KEPT.** `Type` is the raw enum INT (`EStructureType`, `ENpcType`). A type that is no
+> longer used is REMOVED from the enum and from every table indexed by it (the names and spawn heights in
+> Structures.cpp, the short names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs and their tweak
+> indices in Settings.Game); an older save or a file in `Assets/Scenarios/` then loads wrong types. No "retired"
+> slot, no load mapping.
 
 `loadFrom` clears first (removal hooks → GRm prune connected clients) preserving ids, then the server
 re-broadcasts everything (GPl, GRt, GBu). Unit entities resync through normal network despawn and

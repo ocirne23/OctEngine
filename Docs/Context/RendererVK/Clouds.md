@@ -73,6 +73,9 @@ variant (`sky.fs.glsl`) draws NO clouds.
     "Eye radius" x max(1 + shape x (2 hf - 1), 0): -1 = a cone (2x at the base, closed at the top), 0 = a cylinder,
     1 = an inverted cone (closed at the base, 2x at the top). The eye cut, the merge and the eyewall all take this
     radius; the noise shear's floor and the air's cloud shadow (`cloudAirSunVis`) take the plain one.
+  * **"Eye size scale"** (a Runtime row, so `u_clouds_vortexEyeRadius` and `u_clouds_vortexUpperClearRadius` are LIVE):
+    x the eye radius as the shader cuts it (10 m at least; `cloudVortexEyeScaled`), so the hole can grow without a
+    re-bake. The outer radius ("Falloff") and the eyewall width keep the unscaled eye.
   * **"Bottom offset (m)" / "Top offset (m)"** (`cloudVortexBandOffset`): the main layer's bottom and top move up (+)
     or down (-) by these x the weight - both the same = the layer moves,
     bottom up + top down = a thinner vortex. The column and the noise it thresholds squash / stretch with the band
@@ -111,7 +114,24 @@ variant (`sky.fs.glsl`) draws NO clouds.
     always trail.
   * **Keep the spin slow:** the temporal pass reprojects by the wind only, and the far shadow cascade renders each
     texel once in 64 frames, so a fast band motion ghosts in the clouds and lags in the shadows.
+  * **THE EYE LIGHT** ("Vortex/Eye light" colour x intensity, "Eye light reach (km)"; all Runtime rows, live:
+    `u_clouds_vortexLight`, `u_clouds_vortexLightFalloff`): a vertical LINE LIGHT on the eye's axis that lights the
+    clouds around the eye. In `cloudRaymarch` it is a fifth per-ray colour (`sumEyeLight`, applied after the loop): with
+    d = the sample's horizontal distance from the centre, the weight is 1 inside the eye radius, then
+    (eye / d) x exp(-(d - eye) / reach). The intensity is the radiance on the clouds at the eye's edge. No shadow march
+    and no phase: the reach stands for the clouds taking the light away. It takes the plain eye radius and the centre
+    (no eye shape, no wobble), and it does not end with height. The sky clouds share the march, so the reflections and
+    the GI sky see it too. Intensity 0 (the default) skips the term per sample.
   * `u_clouds_vortexEnabled` is a lockable UBO value: locked and off (the default), the branches compile out.
+* **THE FLASHES** (lightning inside the clouds; `CloudParams::flashes` / `flashColor` / `flashRadius`, no tweak rows -
+  the co-op game pushes them per frame, see Lightning in [`Docs/Context/Game/Modes.md`](../Game/Modes.md)): up to
+  `CloudParams::MaxFlashes` (2) point lights in the cloud volume, a WORLD position + a radiance each, one colour and
+  one radius for all. Live UBO values (`u_clouds_flash[2]`: camera-relative x / z, the altitude, the radiance;
+  `u_clouds_flashColor`, `u_clouds_flashInvRadius2`). In `cloudRaymarch` they are a sixth per-ray colour (`sumFlash`,
+  applied after the loop): per flash `1 / (1 + d^2 / r^2)^2` of its radiance, d from the sample (flat: x / z and the
+  altitude). No shadow march, no phase. Both radiances 0 skips the term per sample. The sky clouds share the march.
+  * **The co-op game drives it as the beacon's cloud hole** (the centre on the Base, the strength and the spin from
+    the Base's power; the beacon in [`Docs/Context/Game/Modes.md`](../Game/Modes.md)).
 * **EROSION CUTOFF** ("Quality/Erosion cutoff", `u_clouds_erosionCutoff`): the erosion's remap
   `(d - lo) / (1 - lo)` leaves a thin rest wherever the detail fBm is low, which over kilometres of ray reads as
   haze. `cloudLayerShape` ends with `(d - cut) / (1 - cut)`: the rest goes, the cores stay at 1. Monotonic, so
@@ -221,7 +241,9 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
       too), plus the ground bounce falling off EXPONENTIALLY from below: albedo `u_clouds_groundBounceAlbedo` =
       the sky's "Ground Albedo" COLOUR (its hue, not its intensity) x the cloud "Ground albedo",
       `exp(-h / depth)` with h = metres above the MAIN layer's base and depth = "Ground light depth (m)" - it
-      lights the undersides only.
+      lights the undersides only. **At NIGHT** the sun term is 0 and the clear sky's ambient near 0, so the ground's
+      light gets `u_clouds_groundNightLight` added: the night's Sky Radiance x "Lighting/Night ground light" x
+      (1 - the day step of the sun cycle), 0 by day and with the sun cycle off.
     * The sun at the cloud uses the atmosphere transmittance along the LOCAL up of the entry point (the
       sunset on distant clouds).
     * **The sun march** (`cloudLightOpticalDepth`, "Light steps", quadratic spacing) runs only where the shadow

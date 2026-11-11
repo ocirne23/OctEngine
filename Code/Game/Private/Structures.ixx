@@ -56,6 +56,19 @@ public:
         // House: the barracks it feeds population to (0 = none in range), re-derived every
         // refresh() - nearest BUILT own-team barracks within "House link radius".
         uint32 linkedId = 0;
+        // THE WALKERS' VIEW OF THIS BUILDING (authority only; Carriers.cpp). Counted from m_walkers at the top of every
+        // tickCarriers, except sendReady (the ~1 s pass).
+        uint8 walkers = 0;      // walkers whose transport job is this building
+        uint8 walkersIdle = 0;  // ... of them: waiting at the pickup, or on their way to it
+        uint8 waitRank = 0;     // scratch of the walker loop: the waiting walkers seen so far (the first one loads)
+        uint8 homeWalkers = 0;  // House / Beacon: its workers that are out on the road
+        bool sendReady = false; // it has a load to send now (a storage: and a consumer on its road wants it)
+        // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store or the
+        // Beacon) this structure sends its light to (a producer), takes it from (a consumer) or shares with (another
+        // hub). 0 = none. lightBlocked: a hub is in range but nothing has a clear line to it.
+        uint32 lightId = 0;
+        bool lightBlocked = false;
+        float lightFlow = 0.0f; // light/s on the link, smoothed (tickLight; an estimate on a mirror): the beam shows while > 0
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -299,10 +312,8 @@ public:
         case EStructureType::Emitter:     return m_settings.emitterBuffer; // shield emitters hold a deeper charge:
         case EStructureType::Bastion:     return m_settings.bastionBuffer; // pressure draw spikes under a push
         case EStructureType::Lance:       return m_settings.lanceBuffer;
-        case EStructureType::Extractor:
+        // (The Extractor, the Fabricator and the Constructor hold no light: production runs on WORKERS, see staffing.)
         case EStructureType::Solar:
-        case EStructureType::Fabricator:
-        case EStructureType::Constructor:
         case EStructureType::MedicStation:
         case EStructureType::Turret:      return m_settings.internalBuffer;
         case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
@@ -313,6 +324,33 @@ public:
         default:                          return 0.0f;
         }
     }
+    // ---- POPULATION: production needs WORKERS, not light ----
+    // A team's workers = "Base workers" + "House workers" for each built House. Every built production building asks
+    // for its workers (workersNeeded). With fewer workers than jobs, every production rate of the team scales by
+    // staffing() = workers / jobs. Derived on every instance (updateStaffing: the authority's tick and the mirror's).
+    int workersNeeded(EStructureType t) const
+    {
+        switch (t)
+        {
+        case EStructureType::Extractor:   return m_settings.workersExtractor;
+        case EStructureType::Fabricator:  return m_settings.workersFabricator;
+        case EStructureType::Constructor: return m_settings.workersConstructor;
+        case EStructureType::Generator:   return m_settings.workersGenerator;
+        default:                          return 0;
+        }
+    }
+    // The light link of a roster entry (see Ref::lightId), for the badge and the ghost's rings.
+    bool structureLightLinked(int index) const { return m_frame[index].lightId != 0; }
+    bool structureLightBlocked(int index) const { return m_frame[index].lightBlocked; }
+    bool lightBeams() const { return m_settings.lightBeams; }
+    float lightHubReach() const { return m_settings.lightHubReach; }
+    float mirrorBeamRange() const { return m_settings.mirrorBeamRange; }
+    int teamWorkers(uint8 team) const { return m_workers[team]; }
+    int teamJobs(uint8 team) const { return m_jobs[team]; }
+    int teamCarriers(uint8 team) const { return m_carrierCount[team]; } // workers out on the road (Carriers.cpp; the authority)
+    bool structureOnRoad(int index) const { return touchesRoad(index); }
+    float staffing(uint8 team) const { return m_jobs[team] > m_workers[team] ? (float)m_workers[team] / (float)m_jobs[team] : 1.0f; }
+    void updateStaffing();
     float structureFuel(int index) const { return m_frame[index].state->store[1]; }
     float structureFuelCapacity(int index) const { return fuelCapacityOf(m_frame[index].type); }
     float structureFlowUtil(int index) const { return m_frame[index].state->flowUtil; }
@@ -324,6 +362,8 @@ public:
         {
         case EStructureType::Generator:  return m_settings.generatorFuelTank;
         case EStructureType::FuelTank:   return m_settings.fuelTankCapacity;
+        // THE STOREHOUSE holds every good: stone (below) AND wood. The Fuel tank (the Woodshed) is off the hotbar.
+        case EStructureType::MineralSilo: return m_settings.fuelTankCapacity;
         case EStructureType::Extractor:
         case EStructureType::Fabricator: return m_settings.internalBuffer;
         default:                         return 0.0f;
@@ -366,6 +406,8 @@ public:
         switch (t)
         {
         case EStructureType::FuelTank:
+        case EStructureType::Generator:
+        case EStructureType::Battery:
         case EStructureType::Bastion:
         case EStructureType::Turret:
         case EStructureType::Solar:
@@ -410,6 +452,9 @@ public:
     // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
     // cell just because units stand nearby.
     static bool actorInFootprint(EStructureType type, const glm::vec3& snappedGroundPos);
+    // The building (never a walk-through piece) whose footprint holds the point, unless the point is on top of it:
+    // its centre and its XZ half extents. The player's push-out reads it (a placement may stand on a player).
+    bool buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm::vec2& outHalf) const;
     void setPlacementBounds(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
     {
         m_boundsMin = boundsMin;
@@ -500,6 +545,57 @@ private:
     void tickProduction(float deltaSec); // income, fuel burn, consumer drain, emitter ramps
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
+    // ---- LIGHT ON BEAMS (Light.cpp; "Game/Light" "Beams") ----
+    // Light does not ride the cable transport: the power cable is off the hotbar. HUBS are the Crystal stores and the
+    // Beacon. A MIRROR sends its light on one beam to the nearest hub within "Mirror beam range" that it has a clear
+    // line to; a Hearth to the nearest hub in the hub reach. A hub FEEDS every consumer in "Hub reach" with a clear
+    // line, and SHARES with the nearest other hub in "Hub link range". rebuildLightLinks derives the links (every
+    // instance); tickLight moves the light along them (authority); drawLightLinks draws the beams.
+    void rebuildLightLinks();
+    void tickLight(float deltaSec);
+    void drawLightLinks() const;
+    bool lightLineClear(const Ref& from, const Ref& to) const;
+    glm::vec3 beamPointOf(const Ref& ref) const; // a beam's end on a building: the centre of its crystal
+    float m_lightLinkTimer = 0.0f;
+    size_t m_lightLinkCount = 0; // the roster size of the last derivation: a change re-derives at once
+    // ---- THE CARRIERS (Carriers.cpp, authority) ----
+    // Wood and stone do not ride the cable transport ("Game/Carriers" "Enabled"): WORKERS carry them over the ROAD
+    // (built conveyor segments and conveyor crossings). A walker is one FREE worker of its team (workers - production
+    // jobs), and it comes out of a House (or the Beacon) that touches a road. It takes a TRANSPORT JOB = a building
+    // that sends goods: it walks to that building's road cell (the pickup) and stays there - load, deliver to the
+    // nearest taker, come back, wait. A second walker joins a job only while a load is ready and nobody waits for it;
+    // a walker that waits behind another one looks for other work on its road network.
+    struct Walker
+    {
+        EntityPtr entity;            // carrier.pre
+        oc::vector<glm::vec3> path;  // the current leg: road cell centres, in walking order
+        float along = 0.0f;          // metres walked on the leg
+        float load = 0.0f;           // goods carried
+        float wait = 0.0f;           // seconds to the next search (waiting)
+        float idle = 0.0f;           // seconds waited with nothing to carry
+        uint32 homeId = 0;           // its House / Beacon
+        uint32 jobId = 0;            // the building it carries FROM
+        uint32 targetId = 0;         // the building the load goes to
+        uint8 good = 1;              // the store index it carries: 1 = wood, 2 = stone
+        uint8 state = 0;             // EWalkerState (Carriers.cpp)
+        bool dismissed = false;      // its worker is needed elsewhere: it walks home when it is next idle
+    };
+    oc::vector<Walker> m_walkers;
+    int m_carrierCount[GameMaxTeams] = {}; // walkers on the road per team (the HUD)
+    float m_carrierPassTimer = 0.0f;       // the ~1 s pass: sendReady, and the houses send out / call back workers
+    void tickCarriers(float deltaSec);
+    void carrierHousePass();
+    bool roadAt(int cx, int cz, float& outY) const;
+    bool touchesRoad(int index) const;
+    bool carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, bool& isConsumer) const;
+    // ONE breadth-first search over the road cells, from a structure's footprint (fromStructure >= 0) or from one road
+    // cell. goal(roster index) of every building a visited cell touches: 2 = take it (the search ends), 1 = keep the
+    // first such as the fallback, 0 = no. Returns the roster index (-1 = none) and the walking path to its road cell.
+    int roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const;
+    // Where a load of `good` from sourceIdx goes: the first CONSUMER the search reaches, else the first STORAGE.
+    int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, oc::vector<glm::vec3>& outPath) const;
+    bool carrierSendGood(int index, int good, bool& consumersOnly) const; // does it have a load of `good` to send?
+    int carrierJobTier(int index, uint8 team) const;                      // roadSearch goal: 2 = a load waits for a walker, 1 = a producer with no walker
 
     // ---- CELL OCCUPANCY + DERIVED LINKS ----
     // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a
@@ -660,6 +756,8 @@ private:
     bool m_terrainGround = false;           // the sandbox world (setTerrainGround)
     static constexpr float c_nodeHeight = 0.8f; // a resource node entity's center above its ground
 
+    int m_workers[GameMaxTeams] = {}; // see staffing()
+    int m_jobs[GameMaxTeams] = {};
     float m_minerals[GameMaxTeams] = {};
     float m_fuelTotal[GameMaxTeams] = {};
     float m_gridEnergyTotal = 0.0f;
@@ -678,6 +776,9 @@ private:
 // Debug-line helpers shared by the Game implementation units (Structures, Npc, the Match*.cpp
 // files). Module linkage, NOT exported; bodies in Structures.cpp.
 uint32 packColor(const glm::vec3& c);
+// A field structure's shell alpha from its energy charge (0..1): steady above "Low charge warning", below it a flicker
+// that gets deeper and faster as the store empties. `id` offsets the phase, so two shells never flicker in step.
+float emitterShellAlpha(float charge, uint32 id, float warnCharge);
 void drawCircle(const glm::vec3& center, float radius, uint32 color, int segments = 32);
 
 // StructureSystem's bodies, all `module Game;` implementation units (Match.ixx lists its own the
@@ -690,5 +791,7 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
 //                             graph) + updateArms
 //   StructuresEconomy.cpp   - tickProduction, the death sweep, constructors, materials / repairs,
 //                             the tint, drawDebug
+//   Carriers.cpp            - the walkers that move wood and stone on the road (tickCarriers, findRoadTarget)
+//   Light.cpp               - light on beams: the derived links to the hubs, their flow, their lines
 //   StructuresSync.cpp      - the mirror* appliers, saveTo / loadFrom / clearAllStructures
 //   Transport.cpp           - the cable transport tick (see the block above)

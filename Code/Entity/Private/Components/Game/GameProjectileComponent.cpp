@@ -67,7 +67,7 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
     }
 }
 
-void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
+void GameProjectileComponent::onContact(Entity& self, Entity* other, bool begin)
 {
     if (!begin || spent || Globals::networkManager.role() == ENetRole::Client)
         return;
@@ -87,9 +87,12 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
                 sc->damage(structureDamage);
         });
     }
-    else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
+    else if (!other)
+    {
+    }
+    else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(other); unit && unit->team != team)
         unit->damage(unitDamage, team);
-    else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(&other); sc && sc->team != team)
+    else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(other); sc && sc->team != team)
         sc->damage(structureDamage);
     spent = true; // any contact spends the shot, own team and ground included
     Globals::scriptEvents.addDestroyRequest(EntityPtr(&self));

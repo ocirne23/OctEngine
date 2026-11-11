@@ -46,18 +46,6 @@ namespace
     {
         return sunVisibleFraction(skySunDirection(sky), skyMoonDirection(sky), sky.sunAngularCos, skyMoonCos(sky), sky.sunGlow);
     }
-    // THE SUN CYCLE's sun at `hours` (solar time) on `dayOfYear` at `latitudeDeg`: the declination (Cooper's
-    // approximation), the hour angle (15 degrees per hour from noon), then east / up / north - east +X, up +Y, north -Z.
-    glm::vec3 sunCycleDirection(float hours, float dayOfYear, float latitudeDeg)
-    {
-        const float decl = glm::radians(23.44f) * std::sin(glm::two_pi<float>() * (284.0f + dayOfYear) / 365.0f);
-        const float hourAngle = glm::radians(15.0f * (hours - 12.0f));
-        const float lat = glm::radians(latitudeDeg);
-        const float east = -std::cos(decl) * std::sin(hourAngle);
-        const float up = std::sin(lat) * std::sin(decl) + std::cos(lat) * std::cos(decl) * std::cos(hourAngle);
-        const float north = std::cos(lat) * std::sin(decl) - std::sin(lat) * std::cos(decl) * std::cos(hourAngle);
-        return glm::normalize(glm::vec3(east, up, -north));
-    }
     // The Sky Radiance the shaders see: x 1 by day, x "Night sky radiance" with the sun down (a smooth step over the sun's
     // height, from just below the horizon to ~15 degrees up) - only while the sun cycle runs.
     glm::vec3 skyRadianceNow(const SkyParams& sky)
@@ -112,6 +100,8 @@ namespace
     float cloudCoverage(const CloudParams& c) { return glm::clamp(c.coverage, 0.0f, 1.0f); }
     // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
     float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
+    // The eye as the shader cuts it: x the LIVE "Eye size scale" (the hole grows), 10 m at least. The outer radius keeps the unscaled eye.
+    float cloudVortexEyeScaled(const CloudParams& c) { return glm::max(cloudVortexEye(c) * glm::clamp(c.vortexEyeScale, 0.0f, 1.0f), 10.0f); }
     float cloudVortexWallWidth(const CloudParams& c) { return glm::max(c.vortexEyewallWidthKm, 0.05f) * 1000.0f; }
     float cloudVortexOuterRadius(const CloudParams& c) { return glm::max(glm::max(c.vortexFalloffKm, 1.0f) * 1000.0f, cloudVortexEye(c) + 4.0f * cloudVortexWallWidth(c)); }
     float cloudVortexArms(const CloudParams& c) { return (float)glm::clamp(c.vortexArms, 1, 8); }
@@ -208,7 +198,7 @@ void RendererState::advanceSunCycle()
         const float hours = s.timeOfDay + (float)(glm::min(Globals::time.getSimDeltaSec(), 0.25) * s.sunCycleSpeed / 3600.0);
         s.timeOfDay = hours - 24.0f * std::floor(hours / 24.0f);
     }
-    s.sunDirection = sunCycleDirection(s.timeOfDay, s.dayOfYear, s.latitude);
+    s.sunDirection = s.cycleSunDirection();
 }
 
 void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
@@ -848,6 +838,27 @@ void RendererState::registerUboValues(UboBlock& list)
         // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity) x the cloud "Ground albedo".
         list.add("clouds_groundBounceAlbedo", [this, &c] { return m_skyParams.groundColor * c.groundAlbedo; }, UboLive);
         list.add("clouds_giSkyHistory", [&c, skyHistory] { return skyHistory(c.giSkyHistorySec); }, UboLive);
+        // The vortex's EYE LIGHT (cloud_raymarch.inc.glsl): its radiance at the eye's edge, and the falloff past the edge
+        // as an exp2 rate (1/m, x log2(e)).
+        list.add("clouds_vortexLight", [&c] { return c.vortexEnabled ? c.vortexLightColor * glm::max(c.vortexLightIntensity, 0.0f) : glm::vec3(0.0f); }, UboLive);
+        // The ground bounce's light at NIGHT: the sun term is 0 then and the clear sky's ambient near 0, so the ground gets
+        // the night's Sky Radiance x "Night ground light", faded out by day (the day's bounce stays as it was).
+        list.add("clouds_groundNightLight", [&c]
+            {
+                const SkyParams& s = Globals::settings.sky;
+                const float night = s.sunCycle ? 1.0f - glm::smoothstep(-0.1f, 0.25f, skySunDirection(s).y) : 0.0f;
+                return skyRadianceNow(s) * (night * glm::max(c.groundNightLight, 0.0f));
+            }, UboLive);
+        list.add("clouds_vortexLightFalloff",[&c] { return 1.44269504f / (glm::max(c.vortexLightReachKm, 0.05f) * 1000.0f); }, UboLive);
+        // THE FLASHES (cloud_raymarch.inc.glsl, lightning in the clouds): one colour and 1 / radius^2 for all; per flash
+        // the camera-relative x / z, the altitude and the radiance (0 = off).
+        list.add("clouds_flashColor", [&c] { return c.flashColor; }, UboLive);
+        list.add("clouds_flashInvRadius2", [&c] { const float r = glm::max(c.flashRadius, 1.0f); return 1.0f / (r * r); }, UboLive);
+        list.addArray("clouds_flash", (uint32)CloudParams::MaxFlashes, [this, &c](uint32 i)
+            {
+                const glm::vec4& f = c.flashes[i];
+                return glm::vec4(glm::vec2(glm::dvec2(f.x, f.z) - glm::dvec2(m_cameraPos.x, m_cameraPos.z)), f.y, glm::max(f.w, 0.0f));
+            }, UboLive);
         // Noise space = world - wind (+ the seed's offset), wrapped by the weather period: the field travels WITH the wind.
         list.add("clouds_noiseOrigin", [this, &c]
             {
@@ -873,7 +884,8 @@ void RendererState::registerUboValues(UboBlock& list)
         // wind), and the band phase = arms x the accumulated spin angle.
         list.add("clouds_vortexEnabled", [&] { return c.vortexEnabled ? 1.0f : 0.0f; }, c.vortexEnabled);
         list.add("clouds_vortexStrength", [&] { return glm::clamp(c.vortexStrength, 0.0f, 1.0f); }, UboLive); // a Runtime row
-        list.add("clouds_vortexUpperClearRadius", [&] { return glm::max(c.vortexUpperClearScale, 0.1f) * cloudVortexEye(c); }, c.vortexUpperClearScale, c.vortexEyeRadiusKm);
+        list.add("clouds_vortexUpperClearRadius", [&] { return glm::max(c.vortexUpperClearScale, 0.1f) * cloudVortexEyeScaled(c); },
+            c.vortexUpperClearScale, c.vortexEyeRadiusKm, c.vortexEyeScale);
         list.add("clouds_vortexTornado", [&] { return glm::clamp(c.vortexTornado, 0.0f, 1.0f); }, c.vortexTornado);
         list.add("clouds_vortexTornadoLift", [&] { return glm::max(c.vortexTornadoLiftKm, 0.05f) * 1000.0f; }, c.vortexTornadoLiftKm);
         list.add("clouds_vortexTornadoCurve", [&] { return glm::clamp(c.vortexTornadoCurve, 0.25f, 4.0f); }, c.vortexTornadoCurve);
@@ -905,7 +917,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_vortexInvOuterRadius", [&] { return 1.0f / cloudVortexOuterRadius(c); }, c.vortexEyeRadiusKm, c.vortexEyewallWidthKm, c.vortexFalloffKm);
         list.add("clouds_vortexBottomOffset", [&] { return cloudVortexBottomOffset(c); }, c.vortexEnabled, c.vortexBottomOffset);
         list.add("clouds_vortexTopOffset", [&] { return cloudVortexTopOffset(c); }, c.vortexEnabled, c.vortexTopOffset);
-        list.add("clouds_vortexEyeRadius", [&] { return cloudVortexEye(c); }, c.vortexEyeRadiusKm);
+        list.add("clouds_vortexEyeRadius", [&] { return cloudVortexEyeScaled(c); }, c.vortexEyeRadiusKm, c.vortexEyeScale); // live: the scale is a Runtime row
         list.add("clouds_vortexEyeShape", [&] { return glm::clamp(c.vortexEyeShape, -1.0f, 1.0f); }, c.vortexEyeShape);
         list.add("clouds_vortexInvWallWidth", [&] { return 1.0f / cloudVortexWallWidth(c); }, c.vortexEyewallWidthKm);
         list.add("clouds_vortexArms", [&] { return cloudVortexArms(c); }, c.vortexArms);
@@ -1919,5 +1931,25 @@ void RendererState::registerUboValues(UboBlock& list)
         // m: the shadow cull drops a tree from the cascades whose split + this it lies beyond (instanced_indirect_shadow.cs.glsl).
         list.add("present_treeShadowMargin", [&f] { return oc::max(f.shadowCascadeMargin, 0.0f); }, UboPresent);
         list.add("present_giTlasNumInstances", [this] { return giTlasLiveCount(); }, UboPresent); // the TLAS-instance writer's live count
+        // THE BEAM LIGHTS' AIR COLUMNS (vol_apply.fs.glsl beamColumns): the frame's first MAX_BEAM_COLUMNS beams, added
+        // after the begin-frame build. Foot (xyz) + core radius; unit axis (xyz) + length; colour (rgb) + light range.
+        // An unused slot is all 0 and the count stops the loop before it.
+        list.add("present_beamCount", [this] { return oc::min(m_beamLightCount, MAX_BEAM_COLUMNS); }, UboPresent);
+        list.addArray("present_beamFoot", MAX_BEAM_COLUMNS, [this](uint32 i)
+            {
+                const RendererVKLayout::LightInfo& b = m_beamLights[i];
+                return i < m_beamLightCount ? glm::vec4(b.pos - b.direction * 0.5f, b.width) : glm::vec4(0.0f);
+            }, UboPresent);
+        list.addArray("present_beamAxis", MAX_BEAM_COLUMNS, [this](uint32 i)
+            {
+                const RendererVKLayout::LightInfo& b = m_beamLights[i];
+                const float length = glm::length(b.direction); // >= 1e-4 (addLightInfo)
+                return i < m_beamLightCount ? glm::vec4(b.direction / length, length) : glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+            }, UboPresent);
+        list.addArray("present_beamColor", MAX_BEAM_COLUMNS, [this](uint32 i)
+            {
+                const RendererVKLayout::LightInfo& b = m_beamLights[i];
+                return i < m_beamLightCount ? glm::vec4(b.color, -b.radius) : glm::vec4(0.0f);
+            }, UboPresent);
     }
 }

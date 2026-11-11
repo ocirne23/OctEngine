@@ -46,7 +46,11 @@ public:
 
     void renderNode(const RenderNode& node, uint32 passMask);
     void renderNode(const RenderNode& node) { renderNode(node, node.getPassMask()); }
-    void addLightInfo(const RendererVKLayout::LightInfo& light); // a PointLight / SpotLight / AreaLight / TubeLight (Light.ixx)
+    // A PointLight / SpotLight / AreaLight / BeamLight (Light.ixx). airColumn false = a beam with no glow in the air.
+    void addLightInfo(const RendererVKLayout::LightInfo& light, bool airColumn = true);
+    // A beam's glow in the air ALONE: no light on surfaces, not in the light grid (a column kilometres tall: the light
+    // grid holds every 32 m grid in a light's range, so a long beam with a wide range costs it gigabytes).
+    void addBeamColumn(const RendererVKLayout::LightInfo& beam);
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);
     void addDecal(const RendererVKLayout::DecalInfo& decal);
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color); // per-worker staging, merged in present

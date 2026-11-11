@@ -53,6 +53,35 @@ armed.** F9 / F10 save and load (see Save / load ([CONTEXT.md](CONTEXT.md))).
 `escWouldCancel()` is true while Esc still has an in-game meaning, and **the escape MENU only opens
 when it is false — so the cancel chain keeps first claim.**
 
+### The sandbox world: PLAY and the BUILD UI
+
+Two states (`GameMatch::m_buildUi`). The grid pages above are the flat modes'; the sandbox world has its own bar.
+
+| | PLAY | BUILD UI |
+|---|---|---|
+| Mouse | captured: it looks (`wantsMouseCapture`) | FREE: the cursor is the aim (`m_mousePos` from the mouse listener). **Middle button held = capture, the camera turns.** |
+| Aim | the crosshair (the viewport centre) | the cursor: placement, hover, picking, the wall drag and the road paint all ray through it |
+| Bar | none (no slot is assigned) | the BUILD BAR |
+
+**The build bar** (`refreshBuildBar`; `setHotbarLayout(0, ...)` = one row, which the overlay draws as a centred bar of
+wide slots on a dark plate, the armed slot in gold): slots 0-2 are the PAGE TABS (Defence, Works, Logistics; the open
+one in brackets), slots 3-11 the open page's items with their affordable counts. **Logistics** (`c_cableItems`) =
+the Road, the House, the Storehouse (Mineral silo: it banks stone AND wood - `fuelCapacityOf`, a Storage port in
+both media; the Fuel tank is off the hotbar and new goods go to the Storehouse too) and the Battery; Works (`c_productionItems`) holds the rest. Every slot is a button with its hover
+card. `activateSlot`: a tab shows its page with nothing armed; an item slot arms it (`armPageItem`).
+
+| Key | What |
+|---|---|
+| **Tab** | `toggleBuildUi`: opens the build UI on the LAST armed item (Tab + a click builds again). While it is open: the NEXT PAGE (Defence → Works → Logistics → Defence), armed on that page's last item. |
+| **Q / E** | `stepSelection`: the previous / next item in ONE list over all pages (past a page's end comes the next page), wrapping. Opens the build UI. |
+| **1 .. 9** | the item slots of the open page. Opens the build UI. |
+| **X** | Delete mode (opens the build UI: a click needs the cursor), and back to the page from it. |
+| **RMB** | CLOSES the build UI at once, whatever is armed or half done (`updateGameInput`). The item stays the page's last one, so Tab arms it again. |
+| **Esc** | `cancelOneLevel`: the two-click step, then the armed item, then the bar. |
+
+**The build UI closes whenever the mode is back at Select** (`updateModeSwitching`): a right click, Esc at the end of
+its chain, a finished demolish. Tab does not close it. The HUD counter "Build" names the page, the armed item, its cost and the keys.
+
 ### Q — Combat
 
 **Emitter · Bastion · Lance · Wall · Turret · Barracks · House**
@@ -91,8 +120,7 @@ when it is false — so the cancel chain keeps first claim.**
   > interval" (1.2 s), so a fed turret fires at exactly the authored cadence, a starved one fires
   > slower, and a full turret with no target holds its charge and fires the instant one appears. Its
   > bar is progress-green and always shown.
-* **Barracks** — ONE type, 3×3, cable-fed. The Brute/Runner/Spitter barracks are RETIRED enum
-  slots; `loadFrom` maps them to a Barracks with that unit type. See below.
+* **Barracks** — ONE type, 3×3; its owner picks the unit type it makes. See below.
 * **House** — 2×2, no grid role. Every built house links to the nearest built own-team barracks within
   "House link radius" (25 m), **one barracks per house**, re-derived every `refresh()` on every
   instance by `linkHouses`. Drawn as a line to its barracks plus the radius ring while selected.
@@ -139,7 +167,8 @@ line chain with circles for the own team.
 **Generator · Solar · Extractor · Fabricator · Constructor · Battery · Mineral silo · Fuel tank ·
 Medic station**
 
-Solar is a free trickle with no fuel (a flat `CubeQuarter` slab); the fabricator turns energy + fuel
+Solar is a free trickle with no fuel (a flat `CubeQuarter` slab; in the sandbox world its yield follows the daylight,
+see the light rules in [Modes.md](Modes.md)); the fabricator turns energy + fuel
 into minerals; the mineral silo is the team's spendable bank.
 
 * **Medic station** — 2×2, a plain powered consumer ("Medic energy/s" 1.5 from its internal buffer,
@@ -156,7 +185,8 @@ into minerals; the mineral silo is the team's spendable bank.
 
 ### A / S / D — Cables (root page)
 
-**Power cable · Pipeline · Conveyor** (slots `CBL-P/F/M`). **The crossings are NOT on the hotbar** —
+**Conveyor** only (slot A, the "Roads" page): it is the carriers' ROAD. The Power cable and the Pipeline are off the
+hotbar: light moves on beams and wood by carrier (see Light on beams and Carriers in [Economy.md](Economy.md)). **The crossings are NOT on the hotbar** —
 only the paint stroke places them (auto-crossing below).
 
 Cable segments place by **PAINTING only** (`updateCablePlacement`): an LMB press starts a stroke at
@@ -180,19 +210,18 @@ One placement burst caps at `c_cableMaxSegments` 32 cells.
 
 ### The Bases
 
-They exist from game start only (`spawnBase`; `isPlaceableType` keeps Base and the retired types
-off placement), one per team.
+They exist from game start only (`spawnBase`; `isPlaceableType` keeps the Base off placement), one per team.
 
 * Respawn anchor.
 * A passive trickle of Minerals at "Base income mult" (0.25) of an extractor.
-* MINERAL + ENERGY storage, **no fuel**: spawned with a full energy store and "Start minerals",
-  self-generating "Base energy gen/s"; power cables attach.
-* **Its SHIELD runs on EMITTER RULES, minus the bill** — `hasShieldEmitter` includes Base in
-  the production tick, `strainable`, mirror and save: unit siege drain, latching dark when starved,
-  output and reach from the "Base shield output" / "Base shield reach" tweaks (which override
-  `base.pre`'s authored values) — but **no per-second draw and no pressure surcharge** ("Base shield
-  energy/s" is unused): the Base is a STORAGE building on the energy grid (a transport storage
-  port). Only enemies leaning on it drain it.
+* MINERAL + ENERGY storage, **no fuel**: spawned with a full energy store and "Start minerals"; power cables attach.
+* **Its SHIELD runs on EMITTER RULES, and the Base GENERATES EXACTLY THE FIELD'S STANDING DRAW** —
+  `hasShieldEmitter` includes Base in the production tick, `strainable`, mirror and save: unit siege drain,
+  latching dark when starved, output and reach from the "Base shield output" / "Base shield reach" tweaks (which
+  override `base.pre`'s authored values). "Base shield energy/s" (1.5) x the field's awake factor is both the draw
+  and the generation, so the idle field is free and the Base has NO light to give away; there is no pressure
+  surcharge. Only enemies leaning on the field drain the store. Dark, the field draws nothing and the same
+  generation refills the store to the restart charge.
 * DAMAGEABLE but **the death sweep never destroys it**: at 0 hp it stands dead until repaired.
   Constructors heal it at its `costs` entry (100) — **never placed, so that entry only prices
   repairs**; `investMaterials` admits Base alongside placeables. Delete mode refuses it.
@@ -207,6 +236,10 @@ Every structure taps the pressure bake at its position (`sampleBakedField`, no G
 **THE EMITTER GLOW is the Force system's bubble light** (no `Component Light` on the emitter
 prefabs): one point light per bubble at its centre, sized by its iso radius, so it grows and fades
 with the powered field and goes dark with it — see [`Docs/Context/Force/CONTEXT.md`](../Force/CONTEXT.md).
+
+**A LOW STORE SHOWS ON THE SHELL** (`emitterShellAlpha`, authority and mirror): below "Low charge warning (fill)"
+(0.35 of the store) the shell alpha flickers, deeper and faster toward empty, each structure at its own phase. The
+bubble keeps its size.
 
 Emitters shrink out over "Emitter shrink time" when starved and **latch off until "Emitter restart
 charge"**, pay a pressure surcharge ("Emitter energy/s @ pressure 1") plus a per-unit siege drain

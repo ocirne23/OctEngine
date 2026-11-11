@@ -339,6 +339,7 @@ static oc::string buildLayoutPreamble()
     def("ALPHA_MODE_OPAQUE", (uint32)EAlphaMode::Opaque, "u");
     def("ALPHA_MODE_MASK", (uint32)EAlphaMode::Mask, "u");
     def("ALPHA_MODE_BLEND", (uint32)EAlphaMode::Blend, "u");
+    def("ALPHA_MODE_EMISSIVE", (uint32)EAlphaMode::Emissive, "u");
     def("MATERIAL_FLAG_NO_RAYTRACING", MATERIAL_FLAG_NO_RAYTRACING, "u");
     def("MATERIAL_FLAG_BC5_NORMAL", MATERIAL_FLAG_BC5_NORMAL, "u");
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");

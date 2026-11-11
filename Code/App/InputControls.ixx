@@ -517,14 +517,14 @@ public:
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_6 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {
             LightComponent::LightDesc light;
-            light.type = ELightType::Tube;
-            light.direction = cameraController.getUp(); // tube axis
+            light.type = ELightType::Beam;
+            light.direction = cameraController.getUp(); // beam axis
             light.range = 10.0f;
             light.color = glm::vec3(1.0f, 0.9f, 0.7f);
             light.intensity = 10.0f;
-            light.width = 0.1f; // tube radius
+            light.width = 0.1f; // beam radius
             light.length = 1.0f;
-            spawnLight("TestTubeLight", cameraController.getPosition(), light);
+            spawnLight("TestBeamLight", cameraController.getPosition(), light);
         }
         // 8/9: throw a dynamic physics cube/sphere from the camera
         if ((evt.scancode == SDL_Scancode::SDL_SCANCODE_8 || evt.scancode == SDL_Scancode::SDL_SCANCODE_9) && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)

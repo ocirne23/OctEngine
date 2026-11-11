@@ -5,8 +5,11 @@
 ## Co-op PvE (`--coop`)
 
 Co-op has two worlds, picked by "Game/Coop" "Sandbox world" (default on, read when `GameMatch` is constructed:
-`GameMatch::sandboxWorld()`), and **no enemies by default** — "Spawn enemies" (off) gates the waves AND the ambient
-scatter in both worlds (the wave HUD counters go with them).
+`GameMatch::sandboxWorld()`). "Spawn enemies" (on) gates the waves AND the ambient scatter in both worlds (the wave
+HUD counters go with them); off = a peaceful building game.
+
+**The setting is [`Docs/GDD.md`](../../GDD.md)**: light is safety, demons come at night. The sandbox world runs its
+first rules — see "The light rules" below. The flat maps keep the abstract rules.
 
 ### The sandbox world (the default)
 
@@ -28,7 +31,7 @@ camera looking along the anchor direction. The Base takes the nearest point on 4
 [Economy.md](Economy.md)) and its footprint stays 2 m off the player's spot. Then the nodes. No site → the Base goes on
 that point ahead anyway (warning); no ground at all after 60 s → the anchor's own height.
 
-**Nodes** (`spawnSandboxNodes`): a starter mineral + fuel pair on an 11 m ring, then up to 14 more on a golden-angle
+**Nodes** (`spawnSandboxNodes`): a starter mineral + fuel pair on an 11 m ring, then up to 7 more on a golden-angle
 spiral from 24 to 80 m — only spots where an EXTRACTOR passes the ground test, 13 m apart. They need terrain heights,
 and the collider exists only near the camera, so there are none farther out. **Clients get them as `GNd` events**
 (index, ground point, type), in order, replayed on join; a client appends only its next index, so extractor node
@@ -42,8 +45,9 @@ mouse mode (the App holds it while `wantsMouseCapture()`, the viewport is focuse
 zooms ("Game/Camera" "Third person ..."), a ray pulls the eye in front of walls, and the clip planes are the fly
 camera's ("Editor/Camera Near / Far") so the view reaches the horizon. **Aim = the crosshair** (GameHud
 `setCrosshair`): `m_mousePos` is the viewport center, so placement, hover and picking all ray through it, and the aim
-ray hits the TERRAIN layer only. No box select (a click never drags); RMB orders only the selected units (the player
-walks with WASD). The grid hotkeys move to the number row (1..9, 0, −, =).
+ray hits the TERRAIN layer only. RMB orders only the selected units (the player walks with WASD). **Building has its
+own state, the BUILD UI: the cursor is free and is the aim, and the middle button turns the camera** - see The
+sandbox world: PLAY and the BUILD UI in [Hotbar.md](Hotbar.md).
 
 **The unit height rules** assume the y = 0 plane: `GameUnitParams::flatGround` (runtime, stamped by the match) is
 false here, which drops the height ceiling, the void floor and the bite height window. Barracks units spawn 1 m over
@@ -52,6 +56,113 @@ the terrain under their spawn point.
 **With "Spawn enemies" on:** waves only (the ambient scatter needs the generated map's depth). A wave enters on a ring
 "Sandbox wave distance (m)" (70) around the Base — inside the collider ring, a body with no terrain under it falls —
 in a disc of at most half that, 1 m over the terrain, and marches to the Base's near face.
+
+#### The light rules (sandbox world only)
+
+The sun is the wave clock. `SkyParams::sunHeight()` (Settings: the sun cycle's elevation from "Time of day (h)", valid
+the moment the time is written) is the one input; a day's length is "Sky/Sun cycle" "Speed (x real time)".
+
+| Rule | What |
+|---|---|
+| The start | The authority sets the time to "Start time of day (h)" (7; < 0 = keep it) in `spawnWorld` and switches the sun cycle on. |
+| Night waves | `tickWaves`: the dusk edge (`m_night`) counts a night (`m_nightIndex`) and launches the first wave at once; then one wave every "Night wave interval (s)" (45) until dawn, each from its own random direction. **A night builds up** (`m_nightWave`, `m_waveScale`): wave n of the night (0-based) has the night's budget x (1 + "Night wave growth per wave" (0.25) x n), every "Night surge every N waves" (4)th one is x "Night surge size" (2), and "Night wave variation" (0.4) is a random +- on the size and on the pause to the next wave. The scale is rolled AHEAD (at dawn for the night's first wave, at each launch for the one after) and is in `nextWaveBudget`, so the HUD's "Next wave power" is the wave that will come. "Wave size multiplier" (1) scales every wave (and that HUD value) at once. The dawn edge drops the points still queued. "First wave delay" and "Wave interval" are not used. |
+| Wave size | `waveLevel()`: the NIGHT number sizes every wave of a night (`nextWaveBudget`) and gates the recipes (`minWave` = the first night), not the wave count. `m_waveIndex` still counts waves (GWv, the log). |
+| Daylight burn | `stampLightRules` (authority, per frame) writes `GameUnitParams::sunBurnTeam` (the AI team) and `sunDps` = "Sunlight damage/s" (20) × a smooth step over the sun height 0.02 .. 0.2: only with the sun OVER the horizon (the `daylight()` of the fields and the mirrors starts a little under it, and a wave that comes out right after sunset must not burn in the dark). The unit's tick and the far tick both apply it, so a demon nobody is near burns too. |
+| Fields | `GameUnitParams::fieldPush` is false: a field does not push a demon. It walks through the shell, takes the graded exposure damage ("Field damage/s") and drains the emitter (`addLoad`). "Fields block demons" brings the push back for all; `FieldBlocked true` in a `Component GameUnit` brings it back for one type. |
+| Shadow form | `GameUnitParams::shadowTeam` (the AI team; "Demon shadow form" off = none): a demon is SOLID only where the opposing field is at least half the iso value (a little outside the drawn shell), in daylight, or within "Staff light radius (m)" (10) of a PLAYER (`GameUnitParams::lightPoints`, stamped per frame from our player and the client twins: a player can always fight what attacks next to it) (`GameUnitComponent::solid`, set in its `tickField`). Not solid: its damage inbox is dropped (turret, melee, shells, the player aura), turrets do not pick it, and its model is near-black. Field exposure and the daylight burn write health directly, so they always land. The tint is not replicated: a client sees every demon solid. |
+| The field test on terrain | The force bake is ONE horizontal slice of the fields at one world height, made for the y = 0 maps. Two rules make it hold on the terrain: `tickBeacon` moves the slice to 1 m over the Base's ground ("Force/Bake" "Sample height", restored in `~GameMatch`), and a unit inside a field building's bubble by a PLANAR test, any height - the combat probe's `inEnemyBubble` (an emitter within the probe's ~20 m), or one of `GameUnitParams::fieldZones` (the merged bubble spheres of `collectShieldBubbles`, stamped with the SIM LOD zones every 0.25 s: they cover a large bubble's outer part, which the probe does not reach) - is in the field whatever the slice says: full exposure, and solid (`GameUnitComponent::tickField`, only with `flatGround` off). Without them a demon on ground higher or lower than the slice stood in a bubble and read no field. |
+| Demon speed | `GameUnitParams::slowTeam` (the AI team) with `slowMult` = "Demon speed (x)" (0.7) and `fieldSlowMult` = "Demon speed in a field (x)" (0.5): `GameUnitComponent::speedScale()` scales the walk speed in the steering and in the far tick - every demon is slower, and slower again while it stands in a player field (`inField`, the field test of the shadow form, without the staff light and the daylight). A field does not push a demon; it holds it back. |
+| Demon bubbles | Only `enemyTitan.pre` authors a `Component Force` (reach 30, output 2.2: a bubble of about 13 m that squishes the players' fields at the equilibrium and drains the structures it covers). Every other enemy prefab is health-only. |
+| Solar | `GameStructureSettings::solarDaylight` (the same daylight) scales the solar yield: nothing at night. |
+| Palette | The ctor writes "Force/Teams" team 0 (warm gold) and team 1 (violet); `~GameMatch` restores them. |
+| HUD | "Sun": `Day N  hh:mm` / `Night N  hh:mm`. "Next wave (s)" shows at night only. |
+| Save | `NightIndex`, `Night`, `TimeOfDay` (a load sets the sun cycle's time). |
+
+Outside the sandbox world `stampLightRules` writes the neutral values (push on, no burn, daylight 1).
+
+#### Lightning (sandbox world only)
+
+`GameMatch::tickLightning`, every instance, after the beacon. "Game/Lightning" tweaks. A LOOK only, rolled per instance
+(not synced): no damage, no light on surfaces.
+
+* **When:** while the night (`1 - daylight()`) is over 0.5; the timer runs at the night's rate, and a gap is
+  60 / "Flashes per minute" × a random 0.2 .. 1.8.
+* **A flash** is one of the clouds' two flash slots (The flashes in
+  [`Docs/Context/RendererVK/Clouds.md`](../RendererVK/Clouds.md)): a point inside the cloud layer, "Min distance" ..
+  "Max distance" from the PLAYER (uniform by area), "Cloud light" × its level, "Cloud light radius (m)", "Colour". **A flash is 1 to 6 STROKES** (`lightningLevel`, all from the flash's seed; few strokes are the most common): each at
+  a random time after the one before (most gaps short, some long), with a random strength and a random decay - one
+  flash is a single pop, the next a long stutter. The level is their sum (x a little shimmer); the flash ends when the
+  last stroke has died. "Flash time (s)" scales all the times (0.6 = the times as authored).
+* **The vortex:** no flash is in the hole. While the hole is open (strength over 0.3), a point that falls inside the
+  eye (the radius x the live eye scale), and "Vortex wall share" of all flashes, go to the EYEWALL instead, 10 - 85 %
+  up the layer; an arc from there starts at the hole's inner edge and runs down inside the hole.
+* **An arc** ("Arc share" of the flashes; slot 0 alone, so one a frame): from just inside the cloud base to the ground
+  (`groundY`; the foot leans up to 30 % of the height off the top). 12 glow-only beam columns
+  (`Renderer::addBeamColumn`: nothing in the light grid) along a random walk sideways ("Arc zigzag" × its length),
+  pulled back to the line at the ground; the walk comes from the flash's seed, so the arc holds its shape while it
+  flickers. "Arc intensity" × the level, "Arc radius (m)". **A fork** ("Fork share" of the arcs): 4 thinner, dimmer
+  columns off the fifth point, 30 % of the arc's length, ending in the air. The columns draw only with the fog on (Beam
+  lights in [`Docs/Context/RendererVK/Lighting.md`](../RendererVK/Lighting.md)); an arc + a fork take 16 of the frame's
+  32 columns.
+
+#### The beacon (sandbox world only)
+
+`GameMatch::tickBeacon`, every instance, in `update` before the client branch, off the team-0 Base of the local
+structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX** (see The vortex in
+[`Docs/Context/RendererVK/Clouds.md`](../RendererVK/Clouds.md)): its shape (eye radius, arms, falloff) stays in
+"Sky/Clouds/Vortex".
+
+* **Once, when the Base exists:** it saves the cloud values it takes (`m_beaconSaved`), sets the vortex "Enabled" and
+  its centre to the Base (`Tweak::notifyChanged`: the one shader re-bake). `restoreBeacon` (the dtor, or "Enabled"
+  off) writes them back.
+* **Power** (`m_beaconPower`, eased over ~2 s) = the Base field's `outputFrac` × (0.4 .. 1 by its energy charge); 0
+  for a dead Base.
+* **THE IGNITION** (each dusk): the clouds close first, with no hole. "Ignite delay (s)" after the night is full
+  (`m_beaconNightSec`) three steps run. THE GLOW ("Beam glow time (s)", `m_beaconGlow`): a short beam (8 m) on the
+  Base brightens. THE CLIMB ("Beam climb time (s)", `m_beaconClimb`): its tip goes up to the cloud base, the height
+  growing geometrically (slow near the ground, faster in the sky). THE PIERCE ("Pierce time (s)", `m_beaconIgnite`):
+  the beam tears through - within the first quarter the hole is at full strength as a SMALL eye, the beam runs out to
+  "Beam height (m)" and the light on the clouds comes up - and over the whole time the eye GROWS from 5 % to its size
+  (the vortex's live "Eye size scale"; 1 by day). **AT DAWN** the coverage starts to fall at sun height 0, and the Beacon stays
+  LIT (`m_beaconLit`) until the shroud is down to "Light off at shroud" (0.5: a lot of sun is through the clouds
+  already). Then the LIGHT fades out (the glow runs back over "Beam fade out time (s)": the whole beam dims), then the
+  HOLE closes
+  CALMLY (the pierce runs back over "Hole close time (s)", its strength fading over the whole time, not the tear's
+  quarter); the coverage is back at the day's at sun height 0.25.
+* **The shroud's night** (the `night` of `tickBeacon`, not `daylight()`): at dusk (time of day >= 12) the clouds close
+  over a sun-height span of 0.2 down to "Shroud full at sun height (dusk)" (0); at dawn they open from 0 to 0.25. The
+  night's first wave waits for the ignition (`tickWaves`).
+* **Per frame, three LIVE cloud values** (no re-bake): the vortex "Strength" = power × max(the pierce, "Day hole
+  strength" × the daylight of the shroud) - the hole follows the ignition, not the shroud; "Spin (deg/min)" = "Calm spin" .. "Pressure spin" by night × the missing charge; "Coverage" = its value
+  at the match start by day, "Shroud coverage" (1) at night (`daylight()`). **The night's deck is uniform:** "Coverage
+  variation" and "Macro variation" go from their match-start values by day to 0 at night, so the shroud covers the
+  whole sky. A panel edit of those rows does not hold while the beacon runs.
+* **The beam is TWO records:** the tall beam is the glow in the air alone (`Renderer::addBeamColumn`), and a SHORT beam
+  at its foot (30 m, `addLightInfo` with no air column) lights the surfaces - the tall beam with its range took
+  gigabytes of the light grid. Both: a `BeamLight` from just over the Base's crown (3.2 m over its centre; the diamond floats inside it) up "Beam height (m)": "Beam light intensity" × power, "Beam
+  light range (m)", "Beam radius (m)". It lights the ground around the Base and the fog apply draws its column (Beam
+  lights in [`Docs/Context/RendererVK/Lighting.md`](../RendererVK/Lighting.md)). **At night only**: its intensity is
+power × (1 - the daylight), and none below 2 %. **It also lights the clouds around the hole:** the vortex's "Eye
+  light" (a live cloud value; the eye's axis is the Base) = the beam's colour × "Beam light on clouds" × the same
+  power × night, 0 while the beam is off. `restoreBeacon` writes the old light back.
+
+#### The fog effects (sandbox world only)
+
+`GameMatch::tickFogEffects`, every instance, right after `tickBeacon`. "Game/Fog" tweaks. Per-frame fog volumes
+(`Renderer::addFogVolume`).
+
+* **A wave's spawn site** (`addSpawnFog`, 4 slots, from `queueWave`; clients get the site in `GWv`: index, ground
+  point, radius): for "Spawn fog time (s)" a violet fog BANK over the spawn blob ("Spawn fog density (1/m)", with its
+  own glow "Spawn fog glow": the night gives fog no light) and a thinner COLUMN from the ground to the cloud base.
+  Both fade in over 4 s and out over the last 30 %.
+* **The fields clear the fog:** one CLEARING volume (negative density, see `FogVolumeInfo`) per field zone
+  (`m_fieldZones`: the merged shield bubbles, at most 16), added AFTER the sites - a clearing volume removes "Field
+  fog clearing" of what the list holds before it, the height fog included. A box around the bubble with a soft edge;
+  only inside the froxel range (the far field does not know volumes).
+
+**Not built yet (GDD):** damage sources that reach a shadow-form demon, a hole RADIUS that follows the power (the
+eye radius is a baked value), lightning, outpost beacons, light beams, crystals and the realistic
+resources, the staff. The time of day is not synced to clients.
 
 **Known gaps:** the scene focus, the colliders and the Base site all follow THIS instance's camera, so in multiplayer a
 client building far from the server's player has its height trusted (`placeStructure`'s fallback), and the server's
@@ -109,8 +220,8 @@ and fields UNITS ONLY.
 ### Shield-less bodies
 
 `ENpcType::Swarm` (`enemySwarm.pre`) is **the cheap horde body: health only, NO `Component Force`**,
-so no bubble, battery or GPU readbacks. Built for many-thousand counts. Grunt and Runner are
-health-only too.
+so no bubble, battery or GPU readbacks. Built for many-thousand counts. **Every enemy type but the
+Titan is health-only** (the barracks' Warrior and Brute included: they share the prefabs).
 
 **Shield-less units interact with emitters through the BAKED PRESSURE FIELD**
 (`ForceSystem::sampleBakedField` in the entity pass — a CPU bilinear tap, no per-unit GPU slot,
@@ -230,13 +341,12 @@ shows "Next wave (s)".
 #### Unit types and costs
 
 `ENpcType`: Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior.
-**SAVE FILES store the type as an int — APPEND only.** Costs are the "Game/Coop" "Cost \<type\>"
-defaults.
+Costs are the "Game/Coop" "Cost \<type\>" defaults.
 
 | Type | Cost | Notes |
 |---|---|---|
 | Grunt / Brute / Runner / Spitter / Swarm | 3 / 25 / 2 / 10 / 1 | The barracks tier. Spitter is enemy-only. Grunt, Runner and Swarm are HEALTH-ONLY bodies (no Component Force). |
-| Warrior | 5 | `enemyWarrior.pre`: the SHIELDED grunt (bubble + battery, 80 hp, harder hits, a bit bigger and yellow) — a BARRACKS option too (12 energy, 3 pop); "warrior line" from wave 4, "shield wall" from 6. |
+| Warrior | 5 | `enemyWarrior.pre`: the tough grunt (80 hp, harder hits, a bit bigger and yellow) — a BARRACKS option too (12 energy, 3 pop); "warrior line" from wave 4, "shield wall" from 6. |
 | Elite / Giant / Titan / Lobber / Spawner | 15 / 100 / 500 / 30 / 40 | **Enemy-only elite tier**, `enemyElite/Giant/Titan/Lobber/Spawner.pre`. |
 
 * **The Lobber** is `Ranged` with `ShotKind 1` = the slow SPLASH shell `enemyLob.pre`

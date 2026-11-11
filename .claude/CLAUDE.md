@@ -398,7 +398,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | [RendererVK](../Docs/Context/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, **frame order**, source layout, debug names, the graphics-queue mutex, VR. **Read it first; the topic files below hold the features** |
 | ↳ [FrameUbo](../Docs/Context/RendererVK/FrameUbo.md) | **The frame UBO (generated GLSL) + the tweak locks that bake it into the shaders**, push blocks |
 | ↳ [Scene](../Docs/Context/RendererVK/Scene.md) | Per-frame instance flow, scene objects (single meshes, the sky draw, tree records, tint), texture + mesh streaming, mesh LODs, draw-list compaction |
-| ↳ [Lighting](../Docs/Context/RendererVK/Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, the sun cycle (time of day), long-range sun shadows, aerial perspective |
+| ↳ [Lighting](../Docs/Context/RendererVK/Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, the sun cycle (time of day), beam lights, long-range sun shadows, aerial perspective |
 | ↳ [Clouds](../Docs/Context/RendererVK/Clouds.md) | Volumetric clouds |
 | ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
 | ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
@@ -465,7 +465,9 @@ Network/Scene` children, plus the game components `Component GameUnit/GameStruct
 
 `Component Render` requires `ObjectContainer <name>` plus `Node <path>`,
 `Type StaticMesh|SkinnedMesh` (skinned adds a nested `Rig <name>`), plus `Position` / `Rotation` /
-`Scale`, and optionally `Color r g b` for the per-entity tint.
+`Scale`, and optionally `Color r g b` for the per-entity tint, with `Emissive <strength>` to make that tint GLOW (only on
+a node of a container with `PipelineIdx UnlitOpaque`; see Emissive in
+[`Docs/Context/RendererVK/Scene.md`](../Docs/Context/RendererVK/Scene.md)).
 
 `Component HumanoidAnimator` is a rigid-part model inside ONE entity plus its walk, with no `.anm` /
 `.apl`: `Bone <name>` blocks — a transform and an optional `Component Render`, authored like an

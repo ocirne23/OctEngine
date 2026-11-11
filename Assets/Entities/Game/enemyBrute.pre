@@ -15,18 +15,13 @@ Prefab gameEnemyBrute
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 1.0
-		Reach 4
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName BRUT
 		Color 0.45 0.02 0.12
 		HealthMax 180
-		EnergyMax 80
-		ShieldOutput 1.04
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 2.4
 		AttackInterval 1.5
 		AttackDamage 18

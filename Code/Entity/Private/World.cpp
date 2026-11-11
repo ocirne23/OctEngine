@@ -977,6 +977,8 @@ oc::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const Ass
     info->localTransform = readNodeTransform(renderNode); // mesh offset within the entity
     if (const AssetNode* colorNode = renderNode.find("Color"))
         info->color = glm::clamp(colorNode->asVec3(), 0.0f, 1.0f); // solid tint (see SpawnInfo)
+    if (const AssetNode* emissiveNode = renderNode.find("Emissive"))
+        info->emissive = glm::max(emissiveNode->asFloat(0, 0.0f), 0.0f);
     return info;
 }
 
@@ -996,6 +998,7 @@ void writeRenderSpawnInfo(const RenderComponent::SpawnInfo& info, AssetNode& out
     if (lt.quat != glm::quat(1, 0, 0, 0))  out.set("Rotation", glm::degrees(glm::eulerAngles(lt.quat)));
     if (lt.scale != 1.0f)                  out.set("Scale", lt.scale);
     if (info.color.x >= 0.0f)              out.set("Color", info.color);
+    if (info.emissive > 0.0f)              out.set("Emissive", info.emissive);
 }
 
 const AnimationSet* WorldState::getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc)
@@ -1630,6 +1633,7 @@ void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
         if (const AssetNode* n = unitNode->find("ShotKind"))      info->shotKind = (uint8)glm::clamp(n->asInt(), 0, 255);
         if (const AssetNode* n = unitNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
+        if (const AssetNode* n = unitNode->find("FieldBlocked")) info->fieldBlocked = n->asBool();
         if (const AssetNode* n = unitNode->find("HeightLimit"))   info->heightLimit = n->asFloat(0, info->heightLimit);
         if (const AssetNode* n = unitNode->find("Color"))         info->color = n->asVec3(info->color);
         typeBits |= uint16(1 << EComponentID_GameUnit);

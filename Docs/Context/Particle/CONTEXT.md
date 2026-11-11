@@ -79,7 +79,7 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
   irradiance volume, draw-set binding 10, while "GI/Irradiance volume" is on — see RendererVK) + sun + ambient PLUS
   the scene's punctual lights through the LIGHT GRID (the forward pass's own light-info / grid / table
   buffers, bindings 7..9 of the draw set): each covering light adds its falloff-attenuated colour
-  isotropically (a particle is a scattering speck with no normal; spot cones apply, area and tube lights
+  isotropically (a particle is a scattering speck with no normal; spot cones apply, area and beam lights
   count as points). `EmissiveFloor` blends toward unlit.
 * It is the `"Particles"` scene stage inside "Scene forward", after Force union blend and before
   the far-trees / cloud / fog apply stages (the stage table, `Renderer::buildSceneStages`,

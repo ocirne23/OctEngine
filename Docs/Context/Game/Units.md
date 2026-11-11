@@ -99,7 +99,8 @@ World's root list** (non-units skipped per element) every interval of sim time:
 * **By TELEPORT**: the entity pos is the far truth; the body pose and prev/curr are stomped, and the
   spatial entry is refreshed so the selection query finds it as it approaches.
 * Waypoints advance and the order clears with the full sim's radius rule. A step into rock holds.
-* No combat, bubble, strain or health death check while far.
+* No combat, bubble or strain while far. The daylight burn (the light rules, [Modes.md](Modes.md)) does run, with
+  its death check.
 
 > **THE VOID KILL RUNS BEFORE BOTH SKIPS**, on every unit, in `NpcSystem::service`'s walk: a unit
 > below `voidY` (−3) — fallen through the floor — is killed there, not only inside `updateFar`. A
@@ -200,6 +201,8 @@ bars do not explain. One badge, first hit wins:
 | Badge | When | Colour |
 |---|---|---|
 | **No power cable / No pipeline / No conveyor** | a medium the structure MOVES has no link of that medium — an input that can never arrive, an output nothing takes, or a store nothing reaches | red / orange / amber |
+| **No road** | with carriers on: a building that moves wood or stone touches no road (it replaces the pipeline and conveyor badges), or a House touches none (its workers cannot go out to carry) | amber |
+| **Short of workers** | a production building while its team has more jobs than workers (build houses) | amber |
 | **Pop full** | a barracks whose next unit would exceed its population cap (build houses) | amber |
 
 The media a structure moves: **energy** for everything that burns, banks or makes it (emitters,
@@ -207,7 +210,7 @@ barracks, extractor, fabricator, constructor, medic, turret, generator, solar, b
 generators, fabricators, tanks and a FUEL-node extractor, **minerals** for constructors, silos,
 fabricators and a MINERAL-node extractor (`structureNodeIndex` + `nodeType` pick the extractor's
 side — its buffer capacities do not). **The Base is exempt** from the cable badges: it is the hub,
-self-generates, and starts every match bare.
+and starts every match bare.
 
 The check is STRUCTURAL — it does not gate on current stock. A cabled-but-starved or
 cabled-but-backed-up structure gets NO badge (its bars say that, the red unpowered ring in

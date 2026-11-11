@@ -175,15 +175,20 @@ inline void World::handleContactEvent(const PhysicsWorld::ContactEvent& evt)
 {
     Entity* a = static_cast<Entity*>(evt.userDataA);
     Entity* b = static_cast<Entity*>(evt.userDataB);
+    // A body with NO entity (the terrain collider, a tree, a rock) has null user data: it gets no event, and its
+    // partner gets a null `other`: only the projectile takes that (it spends itself on the ground); the onContact
+    // callback and the script event are skipped.
     auto fire = [&](Entity* target, Entity* other)
     {
-        if (PhysicsComponent* pc = getComponent<PhysicsComponent>(target); pc && pc->onContact)
+        if (!target)
+            return;
+        if (PhysicsComponent* pc = getComponent<PhysicsComponent>(target); other && pc && pc->onContact)
             pc->onContact(*target, *other, evt.begin);
         // Shared game-layer contact behavior (Components/Game/GameProjectileComponent.ixx): a projectile spends itself on first touch and damages an
         // enemy-team victim.
         if (GameProjectileComponent* proj = getComponent<GameProjectileComponent>(target))
-            proj->onContact(*target, *other, evt.begin);
-        if (ScriptComponent* sc = getComponent<ScriptComponent>(target))
+            proj->onContact(*target, other, evt.begin);
+        if (ScriptComponent* sc = other ? getComponent<ScriptComponent>(target) : nullptr) // a script reads `other`
             sc->firePhysicsEvent(*target, other, evt.begin, evt.sensor, evt.contactId);
     };
     fire(a, b);

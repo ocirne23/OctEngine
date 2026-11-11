@@ -18,11 +18,10 @@ import :Structures;
 // Per-type PREFABS - the only consumer is spawnStructure (the names/heights tables live in
 // Structures.cpp behind structureTypeName / spawnHeightOf).
 static constexpr const char* structurePrefabs[] = {
-    "Entities/Game/emitter.pre", "Entities/Game/generator.pre", "Entities/Game/transmitter.pre",
+    "Entities/Game/emitter.pre", "Entities/Game/generator.pre",
     "Entities/Game/extractor.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
     "Entities/Game/solar.pre", "Entities/Game/fabricator.pre", "Entities/Game/bastion.pre",
-    "Entities/Game/lance.pre", "Entities/Game/barracks.pre", "Entities/Game/barracksBrute.pre",
-    "Entities/Game/barracksRunner.pre", "Entities/Game/barracksSpitter.pre", "Entities/Game/wall.pre",
+    "Entities/Game/lance.pre", "Entities/Game/barracks.pre", "Entities/Game/wall.pre",
     "Entities/Game/turret.pre", "Entities/Game/mineralstorage.pre", "Entities/Game/constructor.pre",
     "Entities/Game/base.pre", "Entities/Game/cablePower.pre", "Entities/Game/cablePipe.pre",
     "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre", "Entities/Game/crossing.pre",
@@ -160,7 +159,9 @@ StructureSystem::EGroundFit StructureSystem::groundFit(EStructureType type, cons
         }
     const bool flatPiece = isCableOrCrossing(type); // a slab on the ground, no box to sink
     outY = flatPiece ? center : low; // set before the refusals too: a red ghost still stands on the ground
-    if (high - low > m_settings.maxGroundStep * (flatPiece ? 2.0f : 1.0f))
+    // "Max ground step (m)" 0 = no slope limit (the default): a building stands on its lowest sample and sinks into the
+    // high side.
+    if (m_settings.maxGroundStep > 0.0f && high - low > m_settings.maxGroundStep * (flatPiece ? 2.0f : 1.0f))
         return EGroundFit::Steep;
     if (Globals::physics.isWaterActive() && Globals::physics.sampleWaterHeight(p.x, p.z) > low + 0.05f)
         return EGroundFit::Water;
@@ -188,9 +189,10 @@ const char* StructureSystem::groundFitReason(EGroundFit fit)
 
 bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
 {
-    // A player capsule or a unit standing on the cells blocks the placement: the structure would
-    // spawn inside them and the solver would fling whatever it engulfs. Checked at aim (red ghost)
-    // AND in placeStructure (the MP seam) - actors move between the two.
+    // A UNIT standing on the cells blocks the placement: the structure would spawn inside it and the
+    // solver would fling whatever it engulfs. Checked at aim (red ghost) AND in placeStructure (the MP
+    // seam) - actors move between the two. A PLAYER capsule does not block: the builder stands in most
+    // of its own footprints, and each instance moves its own player out (GameMatch::updatePlayer, buildingAt).
     // Cables/crossings/solars are WALK-THROUGH (their collider ignores bodies), so standing on the
     // cells never blocks them.
     if (isWalkThrough(type))
@@ -200,13 +202,30 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
     bool blocked = false;
     Globals::spatialIndex.forEachInSphere(glm::dvec3(p), half * 1.5f, SpatialLayer_Render, [&](uint64 user)
     {
-        const Entity* entity = reinterpret_cast<const Entity*>(user);
-        if (!hasComponent<GameUnitComponent>(entity)) // units AND player capsules (puppets)
+        Entity* entity = reinterpret_cast<Entity*>(user);
+        const GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
+        if (!unit || unit->puppet) // units only: a player capsule (a puppet) is moved out instead
             return;
         if (glm::abs(entity->pos.x - p.x) < half && glm::abs(entity->pos.z - p.z) < half)
             blocked = true;
     });
     return blocked;
+}
+
+bool StructureSystem::buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm::vec2& outHalf) const
+{
+    const auto it = m_cells.find(cellKey((int)std::floor(pos.x / GridCellSize), (int)std::floor(pos.z / GridCellSize)));
+    if (it == m_cells.end() || it->second.id == 0)
+        return false;
+    const int index = structureIndexById(it->second.id);
+    if (index < 0 || isWalkThrough(m_frame[index].type))
+        return false;
+    const Ref& ref = m_frame[index];
+    if (pos.y > ref.entity->pos.y + spawnHeightOf(ref.type) - 0.3f)
+        return false; // standing ON it
+    outCenter = ref.entity->pos;
+    outHalf = glm::vec2(footprintExtent(ref.type, ref.entity->rot)) * (GridCellSize * 0.5f);
+    return true;
 }
 
 // ---------------------------------------------------------------- spawn/destroy
@@ -329,7 +348,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     const glm::vec3& facing, uint8 team)
 {
     if (!isPlaceableType(type) || (int)team >= GameMaxTeams)
-        return; // the Base only enters through spawnBase; the Connector is retired
+        return; // the Base only enters through spawnBase
     // Orientation FIRST (a crossing's footprint depends on it), then the grid validation.
     // Lance: the AIMED facing from the two-click placement when given, else auto - away from the
     // own Base. Crossings: the facing quantized to an axis (default +X).

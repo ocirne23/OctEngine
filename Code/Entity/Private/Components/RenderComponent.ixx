@@ -25,6 +25,8 @@ export struct RenderComponent
         Transform localTransform;                   // applied on top of the spawn base transform
         glm::vec3 color{ -1.0f };                   // >= 0: solid TINT - the node's materials override
                                                     // to a flat color (authored as `Color r g b`)
+        float emissive = 0.0f;                      // > 0 with a Color: the tint GLOWS at this strength (`Emissive s`).
+                                                    // Only a node of an UNLIT container shows it (see RenderMaterial)
         bool skinned = false;                       // spawn a skinned node (GPU skinning) instead of a static one
         oc::string rigType;                        // skinned only: "Humanoid" / "Generic" (empty = unspecified; informational, not yet consumed)
     };

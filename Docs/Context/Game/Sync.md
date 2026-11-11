@@ -119,4 +119,6 @@ runs the testbed `FreeFlyCameraController` INSTEAD of the follow camera (seeded 
 on the flip via `setPose`, movement enabled), and `updateWindowed` skips `GameCamera::apply` and the
 whole input half (`updateGameInput`: grid hotkeys, hotbar/popup clicks, mode clicks, the RMB move
 order) — LMB-look and WASD belong to the fly camera. The debug draws, labels and HUD keep running; the
-capsule keeps simulating (a standing move order still completes) but takes no new orders.
+capsule keeps simulating (a standing move order still completes) but takes no new orders, and
+`GamePlayer::tickMovement` ignores WASD. **F3 flips the tweak** (`updateWindowed`, viewport focused): on, it also
+sets "Detach focus point", so the scene focus goes with the fly camera; F3 again gives the view back to the player.

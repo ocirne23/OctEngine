@@ -1,19 +1,70 @@
-# Battery: adds energy storage to its cabled grid ("Battery capacity" tweak). Its charge lives on
-# the structure - destroying it loses the stored energy. A squat 2x1x2 m block (CubeHalf).
-# Spawned origin 0.5 above ground.
+# Crystal store (the Battery): adds light storage to its grid ("Battery capacity" tweak). Its charge lives on
+# the structure - destroying it loses the stored light. A 4x4x4 m box (2x2 cells). Spawned origin 2.0 above
+# ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone dais (the root), four bronze corner
+# posts, and one large DIAMOND that floats between them (gems.obj): the light bank of the base, made to show
+# from far. The child pieces are render-only.
 Prefab gameBattery
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node CubeHalf
+		Node CubeQuarter
 		Type StaticMesh
-		Color 1 0.7 0.1
-		Scale 1
+		Color 0.5 0.48 0.44
+		Position 0 -1.525 0
+		Scale 1.9
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 1 0.5 1
+		HalfExtents 2 2 2
 	Component GameStructure
-		MeleeRadius 1
+		MeleeRadius 2
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Crystal
+			Position 0 0.9 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.88 0.5
+				Emissive 3
+				Scale 1.6
+		Entity
+			Name PostPP
+			Position 1.5 -0.3 1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.25
+		Entity
+			Name PostPN
+			Position 1.5 -0.3 -1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.25
+		Entity
+			Name PostNP
+			Position -1.5 -0.3 1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.25
+		Entity
+			Name PostNN
+			Position -1.5 -0.3 -1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 0.25

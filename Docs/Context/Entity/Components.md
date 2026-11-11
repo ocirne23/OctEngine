@@ -170,9 +170,10 @@ The equivalent `Layer Walk` block for CubeGuy is the comment at the top of `Enti
 
 ## `LightComponent` (ID 7)
 
-A **LIST** of lights. `Component Light` with `Light Point/Spot/Area/Tube` children: `Color` /
+A **LIST** of lights. `Component Light` with `Light Point/Spot/Area/Beam` children: `Color` /
 `Intensity` / `Range`, entity-space `Offset` / `Direction`, `Enabled`, plus `ConeAngle` /
-`EdgeSoftness` (Spot), `Width` / `Height` / `Rotation` (Area), `Radius` / `Length` (Tube). Component
+`EdgeSoftness` (Spot), `Width` / `Height` / `Rotation` (Area), `Radius` / `Length` (Beam: a line of light centred on the entity, see Beam lights in
+[`Docs/Context/RendererVK/Lighting.md`](../RendererVK/Lighting.md)). Component
 `Debug true` plus the "Editor/Light debug geometry" tweak draw wireframes. Demo:
 `Entities/Debug/lightRig.pre`.
 
@@ -181,7 +182,7 @@ rides the parallel pass), and spawn/destroy own nothing. Not frozen-gated — pl
 **Range and size are WORLD units, not scaled by the entity.**
 
 > **`Direction` always means where the light POINTS.** The component reconciles the renderer's
-> encoding (`LightFrame`): area lights encode a height-axis plus roll, and `TubeLight` stores FULL
+> encoding (`LightFrame`): area lights encode a height-axis plus roll, and `BeamLight` stores FULL
 > length while the renderer halves it. **Do not "fix" either side alone.**
 
 Script surface: a `Light` DSL struct plus the writable `self.light.lights` sequence and
@@ -240,6 +241,12 @@ body to; there is no per-unit multiplier. A body already over the cap only takes
   shared model has none): `spawn` applies it (Scene, bit 0, has spawned the model by then;
   `RenderMaterial::getOrCreateSolidColor` is safe on workers) and `applyTeamTint` mixes the friendly green onto it, over
   the whole subtree (`tintSubtree`). With no `Color`, each node keeps its own authored Render `Color`.
+* **THE EYES:** `Debug/CubeGuy.pre` has two eye bones, spheres of the `eyes` container (the base shapes with
+  `PipelineIdx UnlitOpaque`: a piece shows its plain colour whatever the light, so it reads as a glow in the dark).
+  `tintSubtree` treats a piece of that container as an EYE (`SpawnInfo::containerName`): it never takes the body's
+  colour - an enemy's keeps its authored colour (red) and its `Emissive` strength (it glows, see Emissive in
+  [`Docs/Context/RendererVK/Scene.md`](../RendererVK/Scene.md)), also in the shadow form where the body is
+  near-black, and a friendly unit's is pale and does not glow.
 * **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, `bubbleRadius`, atomic
   `damage()` / `addLoad()` intake, the three float stores (the game's cable transport moves whole cells in and out
   of them at its tick boundary — see [`Docs/Context/Game/CONTEXT.md`](../Game/CONTEXT.md)), and a machine-state
@@ -265,7 +272,15 @@ every instance, **so replicated units need no type on the wire**), then `Team`, 
 nearest enemy unit or player capsule first, for `AttackDamage` / `PlayerDamage`, else the bitten
 structure for `AttackDamage` — each reported as a `HitRecord` for the game's visual),
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,
-`HeightLimit`, `Color`.
+`FieldBlocked`, `HeightLimit`, `Color`.
+
+**The field push has a gate:** `tickField` banks the push only when `params.fieldPush` (runtime, stamped by `GameMatch`:
+false in the co-op sandbox world) or the prefab's `FieldBlocked true`. The exposure damage and the battery drain do not
+depend on it. **The shadow form:** `params.shadowTeam` (runtime) makes that team's units `solid` only in an opposing
+field (half the iso value up) or in daylight; `setSolid` (from `tickField`) also swaps the subtree's tint to
+near-black. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid, and the turret's target query
+skips it. `params.sunBurnTeam` / `sunDps` (runtime too) drain that team's health in `applyDamageAndHeal` and in
+`updateFar`, which then also runs the death check.
 
 **A unit prefab's shape:** root = `CullMode RootOnly` + Physics + Network + GameUnit (+ Force), and
 `Component Scene` with ONE `Prefab CubeGuy` child that carries the reference-site `Position` /

@@ -116,7 +116,12 @@ public:
         m_worldAnchorDir = dir;
     }
     // The App holds the window in RELATIVE mouse mode while this is true (the third-person mouse look).
-    bool wantsMouseCapture() const { return m_enabled && m_sandboxWorld && !m_player.cameraDetached(); }
+    // Not in the BUILD UI (the cursor is free there, to place anywhere on the screen) - except while the middle
+    // button is held, which turns the camera.
+    bool wantsMouseCapture() const
+    {
+        return m_enabled && m_sandboxWorld && !m_player.cameraDetached() && (!m_buildUi || m_mmbDown);
+    }
 
     bool enabled() const { return m_enabled; }
 
@@ -270,6 +275,8 @@ private:
     GamePlayer m_player;
     GameCamera m_camera;
     ShadowParams m_sandboxShadowParams; // the renderer's "Shadows" values before our preset (restored in ~GameMatch)
+    glm::vec3 m_savedTeamColors[2]{};   // the "Force/Teams" colours before the sandbox world's palette (restored in ~GameMatch)
+    float m_savedBakeHeight = Globals::settings.forceSystem.bakeSampleHeight; // "Force/Bake" "Sample height" before the Base's (tickBeacon)
     StructureSystem m_structures;
     NpcSystem m_npcs;
 
@@ -395,6 +402,22 @@ private:
     // GameUnitComponent's SeedRequest and NavSystem::requestSeedPath.)
     void pruneSelectedUnits();
     bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
+    // THE SANDBOX WORLD'S BUILD UI. Two states: PLAY (the mouse looks, the crosshair aims, no bar) and the BUILD UI
+    // (m_buildUi: the cursor is FREE, every ray leaves through it, the middle button held turns the camera, and the
+    // build bar shows: three page tabs and the page's items, all clickable, with hover cards). Tab opens and closes
+    // it; Q / E arm the previous / next item; X is Delete mode; the number row arms an item; each of them opens it.
+    // Esc steps back (the two-click step, the armed item, the bar). The bar closes when the mode is back at Select.
+    bool m_buildUi = false;
+    bool m_crosshairShown = false;
+    void armPageItem(int category, int selection);
+    void toggleBuildUi();
+    void stepSelection(int direction);
+    void refreshBuildBar();        // the sandbox world's hotbar (refreshBuildHotbar's other half)
+    int buildBarPage() const;      // the page the bar shows: the armed one, else the last used
+    bool m_buildKeyWasDown[4] = {}; // Tab, Q, E, X edges
+    bool m_flyKeyWasDown = false;   // F3 edge (the fly camera)
+    int m_pageSelection[3] = {};    // the last armed item of each page
+    int m_lastPage = 0;
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;
     int m_buildCategory = -1;    // grid hotbar page: -1 = ROOT (categories), else index into the categories
@@ -508,6 +531,42 @@ private:
     float m_matchTime = 0.0f;    // authority sim seconds since the world spawned: the HUD "Time" clock, saved/restored
     float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
     int m_waveIndex = 0;         // waves launched so far
+    // THE LIGHT RULES (the sandbox world): the waves come at night only - the first at dusk, then one every "Night wave
+    // interval (s)" until dawn - sized and gated by the NIGHT number; daylight burns the AI team and scales the solar yield.
+    bool m_night = false;        // the sun is down (the wave clock's edge detector), saved
+    int m_nightIndex = 0;        // nights started so far, saved
+    int m_nightWave = 0;         // waves launched this night (the night's build-up)
+    float m_waveScale = 1.0f;    // x the NEXT wave's budget, rolled ahead (tickWaves: the night's build-up, variation and surges)
+    int waveLevel() const;       // what sizes a wave and gates its recipe, 0-based: the night (sandbox world) or the wave
+    void stampLightRules();      // authority, per frame: the runtime unit / structure params the light rules own
+    float daylight() const;      // 0 = night .. 1 = full day (a smooth step over the sun's height); 1 outside the sandbox world
+    // THE BEACON (the sandbox world, every instance): the Base's power drives the cloud hole - the clouds' VORTEX, centred
+    // on the Base ("Sky/Clouds/Vortex" keeps its shape tweaks) - the night's cloud coverage (the Shroud) and the beam.
+    void tickBeacon(float deltaSec);
+    void restoreBeacon();        // the cloud tweaks back to their values before the beacon took them
+    // THE FOG EFFECTS (the sandbox world, every instance; per-frame fog volumes). A wave's spawn site holds a dark,
+    // faintly glowing fog bank and a column up toward the clouds for "Spawn fog time (s)" (clients get the site with
+    // GWv). Then the fields CLEAR the fog inside them: one clearing volume per field zone, added LAST.
+    struct SpawnFog { glm::vec3 pos{ 0.0f }; float radius = 0.0f; float age = -1.0f; }; // age < 0 = a free slot
+    static constexpr int c_spawnFogSites = 4;
+    SpawnFog m_spawnFog[c_spawnFogSites];
+    int m_spawnFogNext = 0;
+    void addSpawnFog(const glm::vec3& pos, float radius);
+    void tickFogEffects(float deltaSec);
+    // LIGHTNING (tickLightning, every instance, a look only): flashes in the clouds (the clouds' two flash slots), slot 0
+    // may carry an arc to the ground. age < 0 = a free slot.
+    struct Lightning { glm::vec3 pos{}, ground{}; float age = -1.0f, life = 0.0f; bool strike = false, fork = false; uint32 seed = 0; };
+    Lightning m_lightning[2];
+    float m_lightningTimer = 0.0f; // s to the next flash
+    void tickLightning(float deltaSec);
+    bool m_beaconSet = false;
+    float m_beaconPower = 0.0f;  // smoothed 0..1: the Base's field output x its charge
+    float m_beaconNightSec = 0.0f; // seconds of full night so far (0 by day)
+    bool m_beaconLit = false;      // on from the ignite delay at dusk until the shroud is half open at dawn
+    float m_beaconGlow = 0.0f;    // 0..1: the short beam on the Base brightens, before the climb
+    float m_beaconClimb = 0.0f;   // 0..1: the beam's tip on its way from the Base to the cloud base
+    float m_beaconIgnite = 0.0f;   // 0..1: the pierce, after the climb (the hole opens, the beam runs to its full height)
+    struct BeaconSaved { bool vortexEnabled; float centreXKm, centreZKm, strength, spin, coverage, coverageVariation, macroVariation, eyeScale, lightIntensity; glm::vec3 lightColor; } m_beaconSaved{};
     float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):
                                          // each spawned unit spends its type's cost (waveCostOf)
     float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
@@ -597,11 +656,14 @@ inline constexpr float c_coopGroundEdge = 296.0f;    // spawn clamp just inside 
 inline constexpr oc::string_view c_gridKeyLabels[12] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
 // The same slots on the number row (the sandbox world: WASD walk the third-person player).
 inline constexpr oc::string_view c_gridNumberKeyLabels[12] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
+// The sandbox world's BUILD BAR (one row): three page tabs (no key), then nine item slots on the number row.
+inline constexpr int c_buildBarTabs = 3;
+inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 // 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
-inline constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
-    "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
-    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRS-P", "CRS-F", "CRS-M", "HOUS", "MEDC" };
+inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "CAMP", "CRYS",
+    "WOOD", "MIRR", "STNW", "GLNT", "LNC", "BRK", "WALL", "TOWR", "STOR",
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

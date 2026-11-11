@@ -134,10 +134,13 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
             layerScale = u_force_backfaceAlpha; // far / inner surface seen from outside, through the front
         }
     }
-    alpha += contact * 0.25 + geoGlow * 0.1;
+    // The emitter's shell alpha (alphaMult) scales EVERY visible term, also the geometry glow's alpha and the additive
+    // lift: a faint shell (a field that sleeps by day) must be faint as a whole, not only in its base alpha. The
+    // contact term keeps its full weight: it shows where an enemy field presses.
+    alpha += contact * 0.25 + geoGlow * 0.1 * alphaMult;
     alpha = clamp(alpha, 0.0, 1.0) * layerScale;
     // Premultiplied + a slight additive lift so rims / glow bloom over the scene.
-    return vec4(color * alpha + color * 0.15 * layerScale, alpha);
+    return vec4(color * alpha + color * (0.15 * layerScale * alphaMult), alpha);
 }
 
 // Heat gradient for the density debug view: blue -> cyan -> green -> yellow -> red -> white.

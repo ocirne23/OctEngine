@@ -313,8 +313,9 @@ private:
     static float liveOutput(const EmitterInstance& inst) { return inst.output * inst.ramp; }
     // One bubble's light for this frame: eases `light.fade` toward lit (1) / dark (0) and pushes
     // the point light while any fade remains. Worker-safe (own state, a lock-free renderer push).
+    // `shellAlpha` scales the light with the shell: a faint shell throws a faint light.
     void stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
-        float radius, uint32 team, float deltaSec) const;
+        float radius, uint32 team, float deltaSec, float shellAlpha) const;
 
     // Parallel entity spawning: create/destroy of emitters and queries run concurrently from spawn
     // jobs - the free lists and generation counter serialize here. m_emitters is RESERVED to

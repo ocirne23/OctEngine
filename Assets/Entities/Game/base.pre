@@ -1,15 +1,19 @@
-# Base: exists from game start (never placeable). Respawn anchor + passive mineral income; conducts
-# grid links like any structure. Its shield runs on EMITTER RULES (tickPower's hasShieldEmitter
+# Base (the Beacon): exists from game start (never placeable). Respawn anchor + passive mineral income;
+# conducts grid links like any structure. Its shield runs on EMITTER RULES (tickPower's hasShieldEmitter
 # path): it drains the Base's own energy store (feed it power cables) and goes dark when starved;
 # output/reach come from the "Base shield" tweaks, not this file. DAMAGEABLE - health drops to
 # enemy territory/melee/projectiles - but the death sweep never destroys it (no lose condition yet).
+# SHAPE (a placeholder on the 6x6x6 m box; uniform scales of the baseshapes variants): a stone dais (the
+# root), a tower, a bronze crown, the large beacon DIAMOND that floats over it INSIDE the beam (gems.obj;
+# out of the box; the beam starts at the crown, under the diamond) and four standing stones on the dais corners. The child pieces are render-only.
 Prefab gameBase
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.95 0.95 1
+		Color 0.55 0.53 0.5
+		Position 0 -2.25 0
 		Scale 3
 	Component Physics
 		Body Static
@@ -23,3 +27,68 @@ Prefab gameBase
 	Component GameStructure
 		MeleeRadius 3
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Tower
+			Position 0 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.46 0.44 0.42
+				Scale 1.5
+		Entity
+			Name Crown
+			Position 0 1.6 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.6 0.42 0.18
+				Scale 1.8
+		Entity
+			Name Crystal
+			Position 0 4.8 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.92 0.7
+				Emissive 3.5
+				Scale 1.4
+		Entity
+			Name StonePP
+			Position 2.5 -0.8 2.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.4 0.39 0.38
+				Scale 0.35
+		Entity
+			Name StonePN
+			Position 2.5 -0.8 -2.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.4 0.39 0.38
+				Scale 0.35
+		Entity
+			Name StoneNP
+			Position -2.5 -0.8 2.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.4 0.39 0.38
+				Scale 0.35
+		Entity
+			Name StoneNN
+			Position -2.5 -0.8 -2.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.4 0.39 0.38
+				Scale 0.35

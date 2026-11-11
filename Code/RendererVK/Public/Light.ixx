@@ -33,17 +33,21 @@ export struct AreaLight : RendererVKLayout::LightInfo
     }
 };
 
-export struct TubeLight : RendererVKLayout::LightInfo
+// A BEAM: a straight line of light of any length (a lamp tube, or a column kilometres tall). `pos` is its CENTRE.
+// It lights surfaces within `lightRange` of the line, with ONE shadow ray at a fixed point of the line (no jitter, so
+// no noise), and the fog apply draws its glow in the air in closed form (the first RendererState::MAX_BEAM_COLUMNS
+// beams of a frame, no shadow rays). The fog froxels, GI and particles see it as a point at the centre.
+export struct BeamLight : RendererVKLayout::LightInfo
 {
-    TubeLight() = default;
-    TubeLight(const glm::vec3& pos, float lightRange, const glm::vec3& color, float intensity, const glm::vec3& direction, float tubeRadius, float length, float rotation = 0.0f)
+    BeamLight() = default;
+    BeamLight(const glm::vec3& pos, float lightRange, const glm::vec3& color, float intensity, const glm::vec3& direction, float beamRadius, float length)
     {
         this->pos = pos;
-        this->radius = -lightRange; // negative marks this as a tube light
+        this->radius = -lightRange; // negative marks this as a beam light
         this->color = color * intensity;
-        this->width = tubeRadius;
-        this->direction = glm::normalize(direction) * length; // full length encoded in the direction's magnitude; doTubeLight halves it for the half-extent
-        this->rotation = rotation;
+        this->width = beamRadius;
+        this->direction = glm::normalize(direction) * length; // full length encoded in the direction's magnitude; doBeamLight halves it for the half-extent
+        this->rotation = 0.0f;
     }
 };
 

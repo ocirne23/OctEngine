@@ -103,7 +103,7 @@ calls `reloadShaders()`.
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):
   * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds (point/spot sphere,
-    spot cone sector, area front-half box, tube capsule) → its cull record; every 32^3 grid the box covers is claimed
+    spot cone sector, area front-half box, beam capsule) → its cull record; every 32^3 grid the box covers is claimed
     in a lock-free CPU hash table (the same `getPositionHash` as the shaders, bit for bit; bump-allocated slots, CAS on
     the table entry, a slot that loses the race for a grid stays DEAD with `cellSize 0`), the grid's distance-LOD cell
     size is picked at the claim, the grid's cell/large count is bumped (`atomic_ref`), and one (slot, light) touch is

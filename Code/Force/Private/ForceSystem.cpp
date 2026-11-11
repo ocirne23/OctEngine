@@ -555,7 +555,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         // The bubble light: lit while this emitter projects its OWN bubble (Own / Leaving); a
         // Joining or Merged member fades out as its group's light fades in.
         stepBubbleLight(renderer, inst.light, inst.bubbleRadius > 0.0f && inst.group == 0,
-            inst.bubbleCenter, inst.bubbleRadius, inst.team, deltaSec);
+            inst.bubbleCenter, inst.bubbleRadius, inst.team, deltaSec, inst.shellAlpha);
         if (!inst.rendererSlot.isValid())
         {
             churn.acquire.push_back(emitterIdx); // minted AND uploaded serially below
@@ -624,7 +624,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         MergeGroup& group = m_groups[g];
         if (group.generation == 0)
             continue;
-        stepBubbleLight(renderer, group.light, group.coverRadius > 0.0f, group.center, group.coverRadius, group.team, deltaSec);
+        stepBubbleLight(renderer, group.light, group.coverRadius > 0.0f, group.center, group.coverRadius, group.team, deltaSec, group.shellAlpha);
         if (!group.rendererSlot.isValid())
             continue;
         // The group sphere: focus 0.5 / distribution 0.5 / width 1, axis up, centred on `center`
@@ -701,7 +701,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
 // against other bubbles only exists in the field evaluation - this is the authoring view of
 // reach/focus/distribution, not the equilibrium surface.
 void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
-    float radius, uint32 team, float deltaSec) const
+    float radius, uint32 team, float deltaSec, float shellAlpha) const
 {
     const ForceSystemSettings& s = m_settings;
     if (!s.bubbleLight || s.bubbleLightIntensity <= 0.0f)
@@ -730,7 +730,7 @@ void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool l
     // dome and above the mesh for every bubble size, the player's capsule included.
     const glm::vec3 lightPos = light.center + glm::vec3(0.0f, light.radius * s.bubbleLightHeight, 0.0f);
     renderer.addLightInfo(PointLight(lightPos, light.radius * s.bubbleLightRange, color,
-        s.bubbleLightIntensity * light.radius * light.radius * f));
+        s.bubbleLightIntensity * light.radius * light.radius * f * glm::clamp(shellAlpha, 0.0f, 1.0f)));
 }
 
 void ForceSystem::debugDrawEmitter(Renderer& renderer, const EmitterInstance& inst) const

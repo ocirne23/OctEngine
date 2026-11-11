@@ -1,15 +1,19 @@
-# Conveyor segment: one 2 m grid cell of the MINERAL medium. Physical + damageable, but
-# players/units walk OVER it: Layer Cable collides only with Projectile. The hub renders always;
-# the four arm children are enabled by StructureSystem::updateArms toward connected neighbours.
-# Cylinder2 = a 2-high cylinder with the origin at its center; arm scale 0.28 keeps the pieces
-# slim. Spawned origin 0.25 above ground.
+# Road segment (the conveyor medium): one 2 m grid cell of ROAD. The carriers walk it with wood and stone
+# (StructureSystem::tickCarriers). Physical + damageable, but players/units walk OVER it: Layer Cable collides
+# only with Projectile. Spawned origin 0.25 above ground.
+# SHAPE (Models/roads.obj, cobblestones 5 cm high, their base 1 cm over the ground): the centre patch of stones
+# (the hub, always shown) and four strips of stones from the patch to the cell edges (the arm children, enabled by
+# StructureSystem::updateArms toward connected neighbours). So a road end, a straight piece, a corner, a T and a
+# crossing each get their shape, and two neighbour cells' strips meet in one joint on the cell edge. The strips are
+# centred meshes moved to +-0.83: no rotation is authored.
 Prefab gameCableConveyor
 	Component Render
-		ObjectContainer baseshapes
-		Node Cylinder2
+		ObjectContainer roads
+		Node RoadHub
 		Type StaticMesh
-		Color 0.35 0.5 1
-		Scale 0.3
+		Color 0.56 0.53 0.48
+		Position 0 -0.24 0
+		Scale 1
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -23,44 +27,40 @@ Prefab gameCableConveyor
 		Entity
 			Name ArmPX
 			Enabled false
-			Position 0.5 0 0
-			Rotation 0 0 90
+			Position 0.83 -0.24 0
 			Component Render
-				ObjectContainer baseshapes
-				Node Cylinder2
+				ObjectContainer roads
+				Node RoadArmX
 				Type StaticMesh
-				Color 0.35 0.5 1
-				Scale 0.28
+				Color 0.56 0.53 0.48
+				Scale 1
 		Entity
 			Name ArmNX
 			Enabled false
-			Position -0.5 0 0
-			Rotation 0 0 90
+			Position -0.83 -0.24 0
 			Component Render
-				ObjectContainer baseshapes
-				Node Cylinder2
+				ObjectContainer roads
+				Node RoadArmX
 				Type StaticMesh
-				Color 0.35 0.5 1
-				Scale 0.28
+				Color 0.56 0.53 0.48
+				Scale 1
 		Entity
 			Name ArmPZ
 			Enabled false
-			Position 0 0 0.5
-			Rotation 90 0 0
+			Position 0 -0.24 0.83
 			Component Render
-				ObjectContainer baseshapes
-				Node Cylinder2
+				ObjectContainer roads
+				Node RoadArmZ
 				Type StaticMesh
-				Color 0.35 0.5 1
-				Scale 0.28
+				Color 0.56 0.53 0.48
+				Scale 1
 		Entity
 			Name ArmNZ
 			Enabled false
-			Position 0 0 -0.5
-			Rotation 90 0 0
+			Position 0 -0.24 -0.83
 			Component Render
-				ObjectContainer baseshapes
-				Node Cylinder2
+				ObjectContainer roads
+				Node RoadArmZ
 				Type StaticMesh
-				Color 0.35 0.5 1
-				Scale 0.28
+				Color 0.56 0.53 0.48
+				Scale 1

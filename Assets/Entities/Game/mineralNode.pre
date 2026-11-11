@@ -1,9 +1,51 @@
-# Mineral resource node: captured by player proximity, accrues the Minerals stock while owned.
-# Spawned origin 0.8 above ground.
+# Mineral resource node (stone and ore): an extractor on it digs Minerals. Spawned origin 0.8 above ground.
+# SHAPE (a placeholder; uniform scales): a rock outcrop - three tilted boulders (the root is the largest) with
+# two lumps of rusty ore in it. The child pieces are render-only.
 Prefab gameMineralNode
 	Component Render
 		ObjectContainer baseshapes
-		Node Sphere
+		Node Cube
 		Type StaticMesh
-		Color 0.25 0.45 1
-		Scale 0.8
+		Color 0.45 0.44 0.42
+		Position 0 -0.25 0
+		Rotation 12 30 8
+		Scale 0.75
+	Component Scene
+		Entity
+			Name BoulderA
+			Position 0.95 -0.45 0.4
+			Rotation 20 65 5
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.38 0.37 0.36
+				Scale 0.5
+		Entity
+			Name BoulderB
+			Position -0.75 -0.5 -0.6
+			Rotation 5 20 25
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.48 0.45
+				Scale 0.42
+		Entity
+			Name OreA
+			Position 0.45 0.35 -0.45
+			Component Render
+				ObjectContainer baseshapes
+				Node Sphere
+				Type StaticMesh
+				Color 0.72 0.4 0.18
+				Scale 0.22
+		Entity
+			Name OreB
+			Position -0.5 0.3 0.4
+			Component Render
+				ObjectContainer baseshapes
+				Node Sphere
+				Type StaticMesh
+				Color 0.65 0.36 0.16
+				Scale 0.17

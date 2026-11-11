@@ -26,7 +26,7 @@ StructureSystem::ETransportRole StructureSystem::transportRoleOf(EStructureType 
         return R::Consumer;                                                                 // shield costs no draw
     case 1: // fuel
         if (t == EStructureType::Extractor) return R::Producer;
-        if (t == EStructureType::FuelTank) return R::Storage;
+        if (t == EStructureType::FuelTank || t == EStructureType::MineralSilo) return R::Storage; // the Storehouse banks wood too
         return R::Consumer;
     default: // minerals
         if (t == EStructureType::Extractor || t == EStructureType::Fabricator) return R::Producer;
@@ -76,6 +76,9 @@ void StructureSystem::transportInject(const TransportRun& run)
             if (!c || c->blueprint)
                 continue;
             const int m = slot.medium;
+            if (m != 0 ? m_settings.carriers : m_settings.lightBeams)
+                continue; // wood and stone go by carrier (Carriers.cpp), light on beams (Light.cpp): their ports
+                          // offer and ask nothing
             const float cap = c->capacity[m];
             if (cap <= 0.0f)
                 continue;

@@ -1,14 +1,17 @@
 # Barracks: spawns friendly NPC units up to a per-barracks alive limit; each spawn spends
 # "Barracks spawn energy" from its internal store, so unit production needs a cable feed.
-# Spawned origin 1.2 above ground.
+# On a 6x6x6 m box. Spawned origin 3.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone hall (the root), a timber
+# upper storey, a dark stepped roof and a staff crystal on its peak. The child pieces are render-only.
 Prefab gameBarracks
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeHalf
 		Type StaticMesh
-		Color 0.2 0.8 0.7
-		Scale 3
+		Color 0.52 0.5 0.46
+		Position 0 -1.55 0
+		Scale 2.9
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -17,3 +20,32 @@ Prefab gameBarracks
 	Component GameStructure
 		MeleeRadius 3
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Upper
+			Position 0 1.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeHalf
+				Type StaticMesh
+				Color 0.42 0.3 0.18
+				Scale 2.2
+		Entity
+			Name Roof
+			Position 0 2.45 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.2 0.16
+				Scale 1.4
+		Entity
+			Name Crystal
+			Position 0 3.15 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.85 0.45
+				Emissive 2.5
+				Scale 0.25

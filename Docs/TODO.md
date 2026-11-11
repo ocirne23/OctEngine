@@ -349,7 +349,7 @@ See [Audio](Context/Audio/CONTEXT.md).
 See [Particle](Context/Particle/CONTEXT.md).
 
 * Ocean spray uses only the first emitter (no look selection in the producer).
-* Lit particles treat area and tube lights as point lights.
+* Lit particles treat area and beam lights as point lights.
 * `DECAL_FLAG_LIT` only approximates sun + GI.
 * A "retired N non-finite particles" log means an upstream NaN that is still a bug.
 * A rare race in `getEffectDesc` loads a `.pfx` twice.

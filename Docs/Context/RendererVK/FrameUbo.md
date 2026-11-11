@@ -57,7 +57,7 @@ and its place stay: neither says live or lockable.
   default is above 0 has a min above 0**, and its lambda floors at that min - the GPU has no "0 = off / unlimited" branch
   for it. Explicit toggles (bools, mode enums) keep their branches.
   No GPU `normalize` / `max(u_x, eps)` / bound on a UBO or push value; a wrong value may hard-crash the GPU.
-* **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count): source `UboPresent`, registered
+* **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count, the frame's beam lights): source `UboPresent`, registered
   together (contiguous), skipped by `evaluate()`; present() runs `evaluatePresent()` and uploads that byte range alone
   (`presentBegin` / `presentSize`) after the begin-frame upload.
 * **Push constants** keep what sizes, offsets or gates a dispatch (extents, view index, `mbEnabled`, buffer

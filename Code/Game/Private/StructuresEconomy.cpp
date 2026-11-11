@@ -96,13 +96,16 @@ void StructureSystem::applyStructureTint(const Ref& s)
     const auto material = RenderMaterial::getOrCreateSolidColor(color);
     rc->node.setMaterialOverride(material);
     // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along -
-    // this is also what turns them blueprint-gray and back.
-    if (isCableOrCrossing(s.type))
-        if (const SceneComponent* sc = getComponent<SceneComponent>(s.entity))
-            for (const EntityPtr& child : sc->children)
-                if (RenderComponent* crc = getComponent<RenderComponent>(child.get());
-                    crc && crc->node.isValid())
-                    crc->node.setMaterialOverride(material);
+    // this is also what turns them blueprint-gray and back. A BUILDING's child pieces (its crystal, roof, posts)
+    // are gray as a blueprint and take their OWN authored colour once built.
+    if (const SceneComponent* sc = getComponent<SceneComponent>(s.entity))
+        for (const EntityPtr& child : sc->children)
+            if (RenderComponent* crc = getComponent<RenderComponent>(child.get()); crc && crc->node.isValid())
+            {
+                const RenderComponent::SpawnInfo* info = getRenderSpawnInfo(child.get());
+                const bool own = !isCableOrCrossing(s.type) && !s.state->blueprint && info && info->color.x >= 0.0f;
+                crc->node.setMaterialOverride(own ? RenderMaterial::getOrCreateSolidColor(info->color, info->emissive) : material);
+            }
 }
 
 float StructureSystem::investMaterials(const Ref& s, float amount)
@@ -183,16 +186,32 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
 
 // ---------------------------------------------------------------- production + sweeps
 
+void StructureSystem::updateStaffing()
+{
+    for (int t = 0; t < GameMaxTeams; ++t)
+        m_workers[t] = m_jobs[t] = 0;
+    for (const Ref& ref : m_frame)
+    {
+        if (ref.state->blueprint || ref.state->team >= GameMaxTeams)
+            continue;
+        if (ref.type == EStructureType::Base)
+            m_workers[ref.state->team] += glm::max(m_settings.baseWorkers, 0);
+        else if (ref.type == EStructureType::House)
+            m_workers[ref.state->team] += glm::max(m_settings.houseWorkers, 0);
+        m_jobs[ref.state->team] += glm::max(workersNeeded(ref.type), 0);
+    }
+}
+
 void StructureSystem::tickProduction(float deltaSec)
 {
     ProfileScope scope("Structures production", EProfileCategory::Game);
     const float dt = glm::max(deltaSec, 1e-6f);
+    updateStaffing();
+    // LIGHT runs the fields and the machines of defence; PRODUCTION (the extractor, the fabricator, the constructor,
+    // the generator) draws none: it runs on workers.
     const auto consumerDraw = [&](EStructureType type) {
         return type == EStructureType::Emitter ? m_settings.emitterEnergyPerSec
-             : type == EStructureType::Extractor ? m_settings.extractorEnergyPerSec
-             : type == EStructureType::Constructor ? m_settings.extractorEnergyPerSec // powered while building
-             : type == EStructureType::MedicStation ? m_settings.medicEnergyPerSec
-             : type == EStructureType::Fabricator ? m_settings.fabricatorEnergyPerSec : 0.0f;
+             : type == EStructureType::MedicStation ? m_settings.medicEnergyPerSec : 0.0f;
     };
 
     m_genRateTotal = 0.0f;
@@ -215,39 +234,32 @@ void StructureSystem::tickProduction(float deltaSec)
 
         // ---- income: powered extractors fill their OWN buffer/tank (full = production stalls),
         // the Base trickles minerals into its bank, fabricators convert (energy+fuel -> minerals).
-        if (ref.type == EStructureType::Extractor && s.powered && ref.nodeIndex >= 0
+        const float staff = staffing(s.team < GameMaxTeams ? (uint8)s.team : (uint8)0); // the team's workers / jobs
+        if (ref.type == EStructureType::Extractor && ref.nodeIndex >= 0
             && ref.nodeIndex < (int)m_nodes.size())
         {
             if (m_nodes[ref.nodeIndex].type == ENodeType::Fuel)
-                s.store[1] = glm::min(s.store[1] + m_settings.fuelRate * dt, s.capacity[1]);
+                s.store[1] = glm::min(s.store[1] + m_settings.fuelRate * staff * dt, s.capacity[1]);
             else
-                s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * dt, s.capacity[2]);
+                s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * staff * dt, s.capacity[2]);
         }
-        else if (ref.type == EStructureType::Fabricator && s.powered)
-            s.store[2] = glm::min(s.store[2] + m_settings.fabricatorMineralsPerSec * dt, s.capacity[2]);
+        else if (ref.type == EStructureType::Fabricator && s.powered) // powered = it paid its wood last tick
+            s.store[2] = glm::min(s.store[2] + m_settings.fabricatorMineralsPerSec * staff * dt, s.capacity[2]);
         else if (ref.type == EStructureType::Base)
             s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * m_settings.baseIncomeMult * dt, s.capacity[2]);
 
         // ---- producers: generators burn their OWN tank into their OWN buffer (full buffer =
-        // export-limited = no fuel burn), solar trickles for free. The Base self-generates the
-        // same way into its own store - a baseline its shield draw eats from; sieges outpace it.
-        if (ref.type == EStructureType::Base && m_settings.baseEnergyGenPerSec > 0.0f)
+        // export-limited = no fuel burn), solar trickles for free. (The Base's own generation is with its field, below.)
+        if (ref.type == EStructureType::Solar)
         {
-            const float add = glm::min(m_settings.baseEnergyGenPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
+            const float add = glm::min(m_settings.solarEnergyPerSec * m_settings.solarDaylight * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
             s.store[0] += add;
             if (dt > 1e-9f) // paused (sim dt 0): 0/0 would put a NaN into the HUD's gen rate
                 m_genRateTotal += add / dt;
         }
-        else if (ref.type == EStructureType::Solar)
-        {
-            const float add = glm::min(m_settings.solarEnergyPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
-            s.store[0] += add;
-            if (dt > 1e-9f)
-                m_genRateTotal += add / dt;
-        }
         else if (ref.type == EStructureType::Generator && m_settings.genEnergyPerSec > 0.0f)
         {
-            float want = glm::min(m_settings.genEnergyPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
+            float want = glm::min(m_settings.genEnergyPerSec * staff * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
             if (want > 0.0f)
             {
                 const float fuelNeeded = m_settings.fuelBurnRate * want / m_settings.genEnergyPerSec;
@@ -270,12 +282,24 @@ void StructureSystem::tickProduction(float deltaSec)
         {
             ForceComponent* fc = getComponent<ForceComponent>(ref.entity);
             const float pressure = fc ? fc->emitter.getPressure() : 0.0f;
-            // THE BASE'S SHIELD IS FREE - no per-second draw, no pressure surcharge: the Base is a
-            // storage building (it banks energy for the grid and self-generates a trickle). Only
-            // the enemy siege load still drains it, so a pressed Base can still go dark.
-            const bool freeShield = ref.type == EStructureType::Base;
-            const float draw = (freeShield ? 0.0f : emitterDrawOf(ref.type)
-                    + pressure * (1.0f + m_settings.pressureDrawTension * pressure) * m_settings.emitterPressureDraw)
+            // THE BASE GENERATES EXACTLY ITS FIELD'S STANDING DRAW (and pays no pressure surcharge): its idle field costs
+            // nothing, and it has no light to give away. The enemy siege load still drains its store, so a pressed Base
+            // can go dark; dark, it draws nothing and that same generation refills it to the restart charge.
+            const bool isBase = ref.type == EStructureType::Base;
+            // A FIELD SLEEPS BY DAY: its standing draw follows the darkness (fieldNight), and is whole again the
+            // moment a demon is on it (pressure, or the units' drain). Asleep it draws nothing and its shell is faint.
+            const bool engaged = s.emitter.unitLoad > 0.0f || pressure > 0.01f;
+            const float awake = engaged ? 1.0f : glm::clamp(m_settings.fieldNight, 0.0f, 1.0f);
+            const float standing = emitterDrawOf(ref.type) * awake;
+            if (isBase)
+            {
+                const float add = glm::min(standing * dt, glm::max(s.capacity[0] - s.store[0], 0.0f) + (s.emitter.down ? 0.0f : standing * dt));
+                s.store[0] += add;
+                if (dt > 1e-9f)
+                    m_genRateTotal += add / dt;
+            }
+            const float draw = standing
+                + (isBase ? 0.0f : pressure * (1.0f + m_settings.pressureDrawTension * pressure) * m_settings.emitterPressureDraw)
                 + s.emitter.unitLoad; // enemy units/shots leaning on the bubble
             s.emitter.unitLoad = 0.0f;
             totalDemand += draw;
@@ -303,15 +327,22 @@ void StructureSystem::tickProduction(float deltaSec)
                 // NO sentinel: a dark emitter's field is fully gone.
                 fc->emitter.setOutput(emitterOutputOf(ref.type) * s.emitter.outputFrac);
                 fc->emitter.setReach(emitterReachOf(ref.type));
+                fc->emitter.setShellAlpha(emitterShellAlpha(s.capacity[0] > 0.0f ? s.store[0] / s.capacity[0] : 0.0f,
+                    s.structureId, m_settings.emitterWarnCharge) * glm::mix(m_settings.fieldDayAlpha, 1.0f, awake));
             }
             continue;
         }
         const float draw = consumerDraw(ref.type);
-        if (draw <= 0.0f)
+        if (draw <= 0.0f && ref.type != EStructureType::Fabricator)
+        {
+            // Nothing to pay: a production building (it runs on workers) counts as working.
+            if (workersNeeded(ref.type) > 0)
+                s.powered = true;
             continue;
+        }
         totalDemand += draw;
         // Fabricators burn fuel alongside energy (piped into their own tank) - both must be there.
-        const float fuelDraw = ref.type == EStructureType::Fabricator ? m_settings.fabricatorFuelPerSec : 0.0f;
+        const float fuelDraw = ref.type == EStructureType::Fabricator ? m_settings.fabricatorFuelPerSec * staff : 0.0f;
         s.powered = s.store[0] >= draw * dt - 1e-4f && s.store[1] >= fuelDraw * dt - 1e-4f;
         if (s.powered)
         {
@@ -384,7 +415,7 @@ void StructureSystem::tickConstructors(float deltaSec)
         GameStructureComponent& s = *ref.state;
         if (s.blueprint || ref.type != EStructureType::Constructor || !s.powered || s.store[2] <= 0.0f)
             continue;
-        const float budget = glm::min(m_settings.constructorBuildRate * deltaSec, s.store[2]);
+        const float budget = glm::min(m_settings.constructorBuildRate * staffing((uint8)s.team) * deltaSec, s.store[2]);
         s.store[2] -= fundNearbyBlueprint(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, budget, true);
     }
 }
@@ -438,8 +469,7 @@ void StructureSystem::drawDebug() const
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), m_settings.constructorRange, constructorRing, 40);
         if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered)
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), medicHealRadius(), medicRing, 40);
-        if ((hasShieldEmitter(s.type) || s.type == EStructureType::Extractor
-            || s.type == EStructureType::Constructor || s.type == EStructureType::MedicStation
+        if ((hasShieldEmitter(s.type) || s.type == EStructureType::MedicStation
             || s.type == EStructureType::Fabricator) && !s.state->powered && !s.state->blueprint)
             drawCircle(ground + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, unpoweredColor, 16);
     }

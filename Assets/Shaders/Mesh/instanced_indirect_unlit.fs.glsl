@@ -52,7 +52,16 @@ void main()
     // Alpha mask: discard fragments below the cutoff (stored in material.opacity).
     if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
         discard;
-    out_color = vec4(diffuseSample.xyz, min(diffuseSample.a, material.opacity));
+    if (alphaMode == ALPHA_MODE_EMISSIVE)
+    {
+        // EMISSIVE (a solid colour with a strength, RenderMaterial::getOrCreateSolidColor): the colour x the strength
+        // in material.opacity - HDR, so the bloom takes it. A cheap facet term keeps a faceted shape readable with no
+        // lighting: full where the surface faces the eye, 55 % at a grazing angle.
+        const float facing = abs(dot(normalize(in_normalV.xyz), normalize(u_viewPos - in_posU.xyz)));
+        out_color = vec4(diffuseSample.xyz * (material.opacity * (0.55 + 0.45 * facing)), 1.0);
+    }
+    else
+        out_color = vec4(diffuseSample.xyz, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT
     out_motion = motionVector(in_prevWorldDelta);
 #endif

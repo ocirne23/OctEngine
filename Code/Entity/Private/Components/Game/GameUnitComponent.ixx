@@ -72,6 +72,7 @@ export struct GameUnitComponent
         float fireInterval = 3.0f;
         uint8 shotKind = 0;           // 0 direct, 1 splash lob
         bool alwaysDisplayHealth = false;
+        bool fieldBlocked = false;    // an enemy field pushes this unit even where params.fieldPush is off
         float heightLimit = 0.0f;     // 0 = params.heightLimit, > 0 = own ceiling, < 0 = NONE (flying)
         glm::vec3 color{ -1.0f };     // x >= 0: the unit's colour on EVERY render node of its subtree (a shared model prefab has none)
     };
@@ -87,6 +88,7 @@ export struct GameUnitComponent
     float standoffRange = 16.0f, fireInterval = 3.0f;
     uint8 shotKind = 0;
     bool alwaysDisplayHealth = false;
+    bool fieldBlocked = false;
     float heightLimit = 0.0f;
     float effectiveHeightLimit() const // also read by GamePlayer for the capsule's puppet
     {
@@ -149,6 +151,17 @@ export struct GameUnitComponent
     float pendingHeal = 0.0f;
     static void applyTeamTint(Entity& entity); // main thread; idempotent (spawn + replicated team)
     uint8 tintState = 0; // 0 authored, 1 friendly green, 2 authored (restored after a re-team)
+    // SHADOW FORM (params.shadowTeam): a unit of that team is SOLID only in an opposing field or in daylight. While not
+    // solid it takes no direct damage (its inbox is dropped) and turrets do not pick it. Written by its own tickField,
+    // read by other entities' ticks (a stale read is one tick old).
+    bool solid = true;
+    // THE SLOW TEAM (params.slowTeam): its units walk at slowMult x their MoveSpeed, and at fieldSlowMult x that while
+    // they stand in an opposing field (inField, set by tickField) - a field does not push them, it holds them back.
+    bool inField = false;
+    float speedScale() const
+    {
+        return (int)team != params.slowTeam ? 1.0f : params.slowMult * (inField ? params.fieldSlowMult : 1.0f);
+    }
     const char* getShortName() const { return m_shortName.c_str(); }
 
 private:
@@ -188,6 +201,7 @@ private:
     glm::vec2 steerHeading(Tick& t, glm::vec2 goalDir, const Nav::TeamField& raster);
     void tickField(Tick& t);         // shield battery + push (emitter readbacks), or the baked-field stand-in
     void applyPush(Tick& t);
+    void setSolid(Tick& t, float opposing, float iso); // the shadow form's state + its dark tint, from tickField
 
     oc::string m_shortName = "UNIT";
     float m_retargetTimer = 0.0f;

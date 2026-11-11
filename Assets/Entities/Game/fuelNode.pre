@@ -1,9 +1,54 @@
-# Fuel resource node: captured by player proximity, accrues the Fuel stock while owned (generators
-# burn it). Cone shape distinguishes it from the mineral sphere. Spawned origin 0.8 above ground.
+# Fuel resource node (wood): an extractor on it gathers Fuel (the hearths burn it). Spawned origin 0.8 above
+# ground.
+# SHAPE (a placeholder; uniform scales): a stack of five logs lying along Z - three on the ground (the root is
+# the middle one) and two on top. The child pieces are render-only.
 Prefab gameFuelNode
 	Component Render
 		ObjectContainer baseshapes
-		Node Cone
+		Node Cylinder2
 		Type StaticMesh
-		Color 1 0.55 0.15
-		Scale 0.8
+		Color 0.42 0.28 0.15
+		Position 0 -0.45 0
+		Rotation 90 0 0
+		Scale 0.35
+	Component Scene
+		Entity
+			Name LogL
+			Position -0.72 -0.45 0.05
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.36 0.24 0.13
+				Scale 0.35
+		Entity
+			Name LogR
+			Position 0.72 -0.45 -0.05
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.46 0.31 0.17
+				Scale 0.35
+		Entity
+			Name LogTopL
+			Position -0.36 0.16 0
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.4 0.27 0.14
+				Scale 0.35
+		Entity
+			Name LogTopR
+			Position 0.36 0.16 0.06
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.44 0.3 0.16
+				Scale 0.35

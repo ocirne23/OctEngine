@@ -13,7 +13,7 @@ const char* lightTypeToken(ELightType type)
     {
     case ELightType::Spot: return "Spot";
     case ELightType::Area: return "Area";
-    case ELightType::Tube: return "Tube";
+    case ELightType::Beam: return "Beam";
     default:               return "Point";
     }
 }
@@ -22,7 +22,7 @@ ELightType lightTypeFromToken(oc::string_view token)
 {
     if (token == "Spot") return ELightType::Spot;
     if (token == "Area") return ELightType::Area;
-    if (token == "Tube") return ELightType::Tube;
+    if (token == "Beam") return ELightType::Beam;
     return ELightType::Point;
 }
 
@@ -128,7 +128,7 @@ static void drawLightDebug(Renderer& renderer, const LightComponent::LightDesc& 
         drawWireSphere(renderer, pos, desc.range, dim);
         break;
     }
-    case ELightType::Tube:
+    case ELightType::Beam:
     {
         const glm::vec3 a = pos - axis * (desc.length * 0.5f);
         const glm::vec3 b = pos + axis * (desc.length * 0.5f);
@@ -206,10 +206,10 @@ void LightComponent::update(Entity& entity, Renderer& renderer, const Transform&
             renderer.addLightInfo(AreaLight(frame.pos, desc.range, desc.color, desc.intensity, frame.up,
                 desc.width, desc.height, rollAroundAxis(frame.up, frame.right)));
             break;
-        case ELightType::Tube:
+        case ELightType::Beam:
         {
             // A capsule is radially symmetric, so `rotation` is unused here (the shader never reads it).
-            renderer.addLightInfo(TubeLight(frame.pos, desc.range, desc.color, desc.intensity, frame.axis,
+            renderer.addLightInfo(BeamLight(frame.pos, desc.range, desc.color, desc.intensity, frame.axis,
                 desc.width, desc.length));
             break;
         }
@@ -250,7 +250,7 @@ void writeLightSpawnInfo(const LightComponent::SpawnInfo& info, AssetNode& out)
             lightNode.set("Width", desc.width);
             lightNode.set("Height", desc.height);
         }
-        if (desc.type == ELightType::Tube)
+        if (desc.type == ELightType::Beam)
         {
             lightNode.set("Radius", desc.width);
             lightNode.set("Length", desc.length);
