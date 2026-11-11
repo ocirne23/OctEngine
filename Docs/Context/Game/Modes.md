@@ -366,8 +366,8 @@ They-are-Billions style. `tickWaves` arms the clock ("First wave delay (s)" 40, 
 1. Picks a RANDOM compass direction projected onto the barrier square and stepped 8 m OUTSIDE it —
    **the swarm spawns in the open ring between barrier and ground edge and walks in THROUGH the
    player-only barrier.**
-2. **Sizes the wave in BUDGET POINTS**, not unit counts: "Wave budget" (20) plus "Wave budget growth"
-   (40) per wave, where the growth itself climbs by "Wave growth growth" (5) every wave — wave i =
+2. **Sizes the wave in BUDGET POINTS**, not unit counts: "Wave budget" (60) plus "Wave budget growth"
+   (60) per wave, where the growth itself climbs by "Wave growth growth" (30) every wave — wave i =
    base + growth·i + growthGrowth·i(i−1)/2 (`nextWaveBudget`). Each type spends its "Cost \<type\>"
    tweak, **so a brute-heavy archetype fields far fewer bodies than a swarm flood of the same
    budget.** The "Max enemy units" cap (100000, counting every live unit) converts at the cheapest

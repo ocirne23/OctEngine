@@ -15,9 +15,9 @@ export struct GameMatchSettings
     float waveInterval = 120.0f;
     // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost, so a brute-heavy archetype fields far
     // fewer bodies than a swarm flood of the same budget.
-    int waveBudget = 20;              // points in wave 1
-    float waveBudgetGrowth = 40.0f;   // extra points per subsequent wave
-    float waveGrowthGrowth = 5.0f;    // how much that per-wave growth itself climbs every wave
+    int waveBudget = 60;             // points in wave 1
+    float waveBudgetGrowth = 60.0f;   // extra points per subsequent wave
+    float waveGrowthGrowth = 30.0f;   // how much that per-wave growth itself climbs every wave
     float waveCost[GameUnitTypeCount] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                           15.0f, 100.0f, 500.0f, 30.0f, 40.0f, // Elite, Giant, Titan, Lobber, Spawner
                                           5.0f };                              // Warrior
