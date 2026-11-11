@@ -250,8 +250,9 @@ which is a baked define).
   reflection's side of the sky; NOT centred on R: a grazing reflection's lobe would be half below the horizon, where the
   SH holds the dark ground); the zenith texel is only the GI-off fallback (`u_rt_giStrength` 0, stale SH). The terrain
   WET FILM does the same (`terrain_film.fs.glsl`). The forward set binds the map at **20** (binding **21** is the GI
-  irradiance volume, **22** the cloud shadow map, and the texture array is **23**, still the set's highest binding for
-  the variable count). **Anything that would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map
+  irradiance volume, **22** the cloud shadow map, **23** the near grass cascade, **24** the faction map, and the texture
+  array is **25**: it must stay the set's highest binding, for the variable count - a new binding takes its number and
+  moves it up, in `buildPipelineLayout`, `updateTextureDescriptor`, `record()` and the six `u_textures` declarations). **Anything that would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map
   instead.**
 * **THE GI IRRADIANCE VOLUME** ("GI/Irradiance volume", on by default; "GI/Volume voxels per probe" 1–2, default 2 —
   both in `Globals::settings.gi.grid`). Per frame, right after the trace (inside the GI toggle),
@@ -374,6 +375,10 @@ is the former tube light's (`radius < 0`, `width` = the core radius, `direction`
   distance alone the halo drew a thin dim beam going on past the tip. The core is
   cut to the beam's length, both to the scene depth; a cloud in front dims it by the cloud's transmittance; the fog and the
   far trees do not dim it. No march, no shadow ray. **Only with the fog on** (the cloud apply draws none).
+* **THE TIP FADE** (`BeamLight`'s `tipFade`, m; it rides in the record's `rotation`, which a beam does not use;
+  `u_present_beamFade[i].x`): the glow (core and halo) x a smoothstep over that length toward the end the direction
+  points at, by where the view ray passes the beam - a short beam ends soft. 0 = a hard end (the default). The light
+  on surfaces does not fade.
 * **The frame's first `RendererState::MAX_BEAM_COLUMNS` (32, `BEAM_COLUMNS` in the shader: change both) beams** get a column: `addLightInfo` claims a slot
   (lock-free, reset in the begin-frame job), and they ride the UBO's PRESENT values (`u_present_beamCount` /
   `beamFoot` / `beamAxis` / `beamColor`) - lights are added after the begin-frame build.

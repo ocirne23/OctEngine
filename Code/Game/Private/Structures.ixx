@@ -472,9 +472,14 @@ public:
     // the physics water surface. The colliders exist only near this instance's camera (Terrain/Collision "Radius",
     // Trees/World colliders), which covers the place range around the player.
     void setTerrainGround(bool enabled) { m_terrainGround = enabled; }
+    // THE COARSE GROUND (the sandbox world; the App's terrain height, any distance, a few metres off): what
+    // groundHeightAt returns where its ray finds no collider - a place far from every player. Null = the fallback.
+    using GroundSource = float (*)(float x, float z, float fallback);
+    void setGroundSource(GroundSource source) { m_groundSource = source; }
     bool terrainGround() const { return m_terrainGround; }
     // The terrain height under (x, z); `fallback` where no collider is (always 0 on the flat maps).
-    float groundHeightAt(float x, float z, float fallback = 0.0f) const;
+    // coarse: where the ray finds no collider, the App's coarse terrain height (setGroundSource) before the fallback.
+    float groundHeightAt(float x, float z, float fallback = 0.0f, bool coarse = false) const;
     enum class EGroundFit : uint8 { Ok, NoGround, Steep, Water, Blocked };
     // Can `type` stand at the snapped position? Samples the footprint's corners, edge midpoints and center: every
     // sample must hit the terrain, the highest minus the lowest may not pass "Max ground step (m)" (twice that for the
@@ -754,6 +759,7 @@ private:
     bool m_hasBounds = false;
     oc::vector<glm::vec4> m_terrainBlocked; // co-op rock rects (minX, minZ, maxX, maxZ)
     bool m_terrainGround = false;           // the sandbox world (setTerrainGround)
+    GroundSource m_groundSource = nullptr;  // setGroundSource
     static constexpr float c_nodeHeight = 0.8f; // a resource node entity's center above its ground
 
     int m_workers[GameMaxTeams] = {}; // see staffing()

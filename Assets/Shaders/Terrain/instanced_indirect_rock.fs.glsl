@@ -50,6 +50,8 @@ layout (location = 1) out vec4 out_motion;
 // No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax.
 #include "terrain_splat.inc.glsl"
 #include "cactus.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the rocks and the dead wood take the weaker tint
 
 // The DEAD WOOD surface at this pixel (in_wood: x along the part in base circumferences, yz across it in metres, the
 // bark cover).
@@ -244,5 +246,6 @@ void main()
 
 	// V HERE, not at the top: its registers are then not live across the shadow and the splat.
 	const vec3 V = normalize(u_viewPos - in_pos);
+	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, u_terrain_factionSolidScale);
 	out_color = vec4(computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao), 1.0);
 }

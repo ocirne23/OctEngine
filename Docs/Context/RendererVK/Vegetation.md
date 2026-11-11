@@ -241,7 +241,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
   shadows around the camera, the canopy beyond.
   * Its OWN one-layer `ShadowMap` per frame slot (`grassNearShadowMap`, `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
-    through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 24, the set's highest). Drawn in the primary after
+    through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 25, the set's highest). Drawn in the primary after
     the cascades' pass ("Grass near shadow"). Tried: an extra layer of the sun array - it took the array's size, so
     the 4096 cascades made it 4096 too (4x the fill and clear for the blades).
   * Its matrix (`u_grass_shadowViewProj`, `buildUboGrass`): an ortho box of +-"Near shadow range (m)" (8 m: 0.8 cm
@@ -456,6 +456,9 @@ Desktop only, on by default from "Far start" 4000 m - the far voxel trees draw t
     column's height: spikes over every steep floor step). The lighting taps read the hardware filter at a height above
     the sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly (each tap's NEAREST column's
     floor made the shading jump at every column edge).
+* **The faction look** (the game's faction map, The faction map in [Terrain.md](Terrain.md)): the march tints each
+  lit step's albedo by the map at the step's world x / z (binding 20, written with the set every frame), so the far
+  trees agree with the tinted mesh tiers. Not baked into the colour map: the layer changes without a re-bake.
 * **Storage:** the march's 3D extinction (1/m) `density` + an RGBA8 colour map (2D: one colour per column) + the floors;
   the bake's `accum` (below). At 3000 x 1500 x 16: density 72 MB, accum 72 MB (a slice count whose layer count is 3 costs as much: the driver allocated
   accum's 3 layers at 12 slices as 4), colour 2 x 18 MB, the bake's 2D R32UI maps

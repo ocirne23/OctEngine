@@ -88,7 +88,8 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
 (`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
-`Game:Npc`, `Game:GameCamera` (top-down + the third-person orbit), `Game:PlayerLocomotion` (the camera-locked strafe
+`Game:Npc`, `Game:Faction` (`FactionLayer`: whose land each cell is, see The faction layer in [Modes.md](Modes.md)),
+`Game:GameCamera` (top-down + the third-person orbit), `Game:PlayerLocomotion` (the camera-locked strafe
 of a `ThirdPersonAnimator` body — the co-op player's and App's key C capsule's), `Game:Lobby` (the pre-game LOBBY model, `LobbySystem` — multiplayer,
 or LOCAL: offline, one player, Start launches at once — ready checks, the start countdown, the
 host's team/map picks; the `Lb*` events) and `Game:Chat` (the TEXT CHAT model, `ChatSystem` — the

@@ -28,10 +28,10 @@ namespace Procedural
 		Tweak::onChange(m_settings.friction, this, dirty);
 	}
 
-	void TerrainCollider::update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
+	void TerrainCollider::update(oc::span<const glm::vec3> focusPoints, oc::shared_ptr<const ITerrainSampler> maps, float minRadius)
 	{
 		joinUpdate(); // normally a no-op: main joins it before the post-update kick every frame
-		const bool active = m_settings.enabled && maps != nullptr && Globals::physics.isInitialized();
+		const bool active = m_settings.enabled && maps != nullptr && Globals::physics.isInitialized() && !focusPoints.empty();
 		if (!active)
 		{
 			// Inactive (disabled / terrain off): no profile scope. Clear once on the transition, then
@@ -55,9 +55,11 @@ namespace Procedural
 		m_inactiveIdle = false;
 
 		m_jobMaps = oc::move(maps);
-		m_jobFocus = glm::vec2(focusPos.x, focusPos.z);
+		m_jobFocusCount = glm::min((int)focusPoints.size(), MaxFocus);
+		for (int i = 0; i < m_jobFocusCount; ++i)
+			m_jobFocus[i] = glm::vec2(focusPoints[i].x, focusPoints[i].z);
 		m_jobTileSize = glm::clamp(m_settings.tileSize, 8.0f, 128.0f);
-		m_jobRadius = glm::max(m_settings.radius, m_jobTileSize);
+		m_jobRadius = glm::max(glm::max(m_settings.radius, minRadius), m_jobTileSize);
 		m_jobSpacing = glm::clamp(m_settings.spacing, 0.25f, m_jobTileSize);
 		m_jobFriction = m_settings.friction;
 		Globals::jobSystem.submit([this]() { runUpdate(); },
@@ -89,13 +91,24 @@ namespace Procedural
 
 		const float tileSize = m_jobTileSize;
 		const float radius = m_jobRadius;
-		const glm::vec2 focus = m_jobFocus;
+		const int focusCount = m_jobFocusCount;
 
-		// Distance from the focus to a tile's XZ footprint, per axis (0 inside).
-		const auto tileDist = [&](glm::ivec2 coord) -> glm::vec2
+		// Distance from a focus to a tile's XZ footprint, per axis (0 inside).
+		const auto tileDist = [&](glm::ivec2 coord, const glm::vec2& focus) -> glm::vec2
 		{
 			const glm::vec2 lo = glm::vec2(coord) * tileSize;
 			return glm::max(glm::max(lo - focus, focus - (lo + tileSize)), glm::vec2(0.0f));
+		};
+		// The larger axis distance to the NEAREST focus: a tile is wanted within the radius of any of them.
+		const auto tileReach = [&](glm::ivec2 coord) -> float
+		{
+			float reach = FLT_MAX;
+			for (int i = 0; i < focusCount; ++i)
+			{
+				const glm::vec2 d = tileDist(coord, m_jobFocus[i]);
+				reach = glm::min(reach, glm::max(d.x, d.y));
+			}
+			return reach;
 		};
 
 		// --- Adopt the finished build: create the static body at the tile origin (geometry is
@@ -127,8 +140,7 @@ namespace Procedural
 		// doesn't thrash builds as the focus wanders. A just-adopted stale tile evicts here too.
 		for (auto it = m_tiles.begin(); it != m_tiles.end(); )
 		{
-			const glm::vec2 d = tileDist(it->second.coord);
-			if (glm::max(d.x, d.y) > radius + tileSize * 0.5f)
+			if (tileReach(it->second.coord) > radius + tileSize * 0.5f)
 			{
 				ProfileScope evictScope("Terrain collider evict", EProfileCategory::Procedural);
 				it = m_tiles.erase(it);
@@ -142,28 +154,34 @@ namespace Procedural
 		if (m_buildInFlight)
 			return;
 
-		const int minX = (int)std::floor((focus.x - radius) / tileSize);
-		const int maxX = (int)std::floor((focus.x + radius) / tileSize);
-		const int minZ = (int)std::floor((focus.y - radius) / tileSize);
-		const int maxZ = (int)std::floor((focus.y + radius) / tileSize);
+		// Every focus's own square; the missing tile nearest to ITS focus wins, so each focus gets the ground under it
+		// before any of them gets its rim.
 		glm::ivec2 bestCoord{ 0, 0 };
 		float bestDist2 = FLT_MAX;
-		for (int tz = minZ; tz <= maxZ; ++tz)
+		for (int f = 0; f < focusCount; ++f)
 		{
-			for (int tx = minX; tx <= maxX; ++tx)
+			const glm::vec2 focus = m_jobFocus[f];
+			const int minX = (int)std::floor((focus.x - radius) / tileSize);
+			const int maxX = (int)std::floor((focus.x + radius) / tileSize);
+			const int minZ = (int)std::floor((focus.y - radius) / tileSize);
+			const int maxZ = (int)std::floor((focus.y + radius) / tileSize);
+			for (int tz = minZ; tz <= maxZ; ++tz)
 			{
-				const glm::ivec2 coord(tx, tz);
-				if (oc::contains(m_tiles, tileKey(coord)))
-					continue;
-				const glm::vec2 d = tileDist(coord);
-				if (glm::max(d.x, d.y) > radius) // square scan, disk membership
-					continue;
-				const glm::vec2 toCenter = glm::vec2(coord) * tileSize + tileSize * 0.5f - focus;
-				const float dist2 = glm::dot(toCenter, toCenter);
-				if (dist2 < bestDist2)
+				for (int tx = minX; tx <= maxX; ++tx)
 				{
-					bestDist2 = dist2;
-					bestCoord = coord;
+					const glm::ivec2 coord(tx, tz);
+					if (oc::contains(m_tiles, tileKey(coord)))
+						continue;
+					const glm::vec2 d = tileDist(coord, focus);
+					if (glm::max(d.x, d.y) > radius) // square scan, disk membership
+						continue;
+					const glm::vec2 toCenter = glm::vec2(coord) * tileSize + tileSize * 0.5f - focus;
+					const float dist2 = glm::dot(toCenter, toCenter);
+					if (dist2 < bestDist2)
+					{
+						bestDist2 = dist2;
+						bestCoord = coord;
+					}
 				}
 			}
 		}

@@ -124,7 +124,7 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
 
 // ---------------------------------------------------------------- the sandbox world's ground
 
-float StructureSystem::groundHeightAt(float x, float z, float fallback) const
+float StructureSystem::groundHeightAt(float x, float z, float fallback, bool coarse) const
 {
     if (!m_terrainGround)
         return 0.0f;
@@ -133,7 +133,11 @@ float StructureSystem::groundHeightAt(float x, float z, float fallback) const
     constexpr float c_rayTop = 6000.0f;
     const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(glm::vec3(x, c_rayTop, z),
         glm::vec3(0.0f, -2.0f * c_rayTop, 0.0f), PhysicsLayers::bit("Terrain"));
-    return hit.hit ? hit.point.y : fallback;
+    if (hit.hit)
+        return hit.point.y;
+    // No collider there (it exists only around the players and the Base): the coarse terrain height, for a caller that
+    // takes it (a spawn height - never a building's: its ground must be exact).
+    return coarse && m_groundSource ? m_groundSource(x, z, fallback) : fallback;
 }
 
 StructureSystem::EGroundFit StructureSystem::groundFit(EStructureType type, const glm::vec3& p, const glm::quat& rot,

@@ -16,7 +16,7 @@ first rules — see "The light rules" below. The flat maps keep the abstract rul
 The procedural terrain, trees, rocks and ocean of the sandbox, with the third-person player. `Session::startWorldAndGame`
 switches `Terrain/Enabled` and `Ocean/Enabled` on through overrides (exit-to-menu's `unseedWorld` switches them off) and
 hands the match its **anchor** (`setWorldAnchor(pos, dir)`): by default the sandbox camera's start and direction
-(`--camera` / `Session::START_POS` / `START_DIR`) on the sandbox's own seed ("Terrain/Seed", which the lobby's seed
+(`--camera` / `Session::COOP_START_POS` / `COOP_START_DIR`: the co-op game's own start, apart from the sandbox camera's) on the sandbox's own seed ("Terrain/Seed", which the lobby's seed
 field shows until a preview runs) — the same world and spot as the sandbox; or (0, 0) for a world the local lobby
 seeded (its pick IS the origin). **The whole world streams**: the sandbox's "Terrain/Range (chunks)" ring, and a
 lobby-seeded co-op start gives the ring back its size, lifts the generated bounds and keeps the terrain models
@@ -54,9 +54,17 @@ sandbox world: PLAY and the BUILD UI in [Hotbar.md](Hotbar.md).
 false here, which drops the height ceiling, the void floor and the bite height window. Barracks units spawn 1 m over
 the terrain under their spawn point.
 
-**With "Spawn enemies" on:** waves only (the ambient scatter needs the generated map's depth). A wave enters on a ring
-"Sandbox wave distance (m)" (70) around the Base — inside the collider ring, a body with no terrain under it falls —
-in a disc of at most half that, 1 m over the terrain, and marches to the Base's near face.
+**With "Spawn enemies" on:** waves only (the ambient scatter needs the generated map's depth). **A wave comes down on
+ENEMY LAND** (`queueWave`, the faction layer): out from the Base along a random direction, from "Sandbox wave distance
+(m)" (70, the nearest) on in 8 m steps, at the first point whose value is under neutral (untouched land or the enemy's) and stays
+so for the next step, + 16 m; "Sandbox wave max distance (m)" (400) at the latest. So the demons come from farther
+away as the players' land grows. With the layer off it is the plain ring at the nearest distance. The bodies appear in
+a disc of at most half the nearest distance, 1 m over the terrain, and march to the Base's near face. **THE GROUND FAR
+FROM THE PLAYERS** has three parts: `groundY` takes the collider's exact height where a ray hits, else the COARSE
+GROUND (`GameMatch::setGroundSource`: the App's terrain height from the terrain-data bake, 8 m texels, kilometres
+around the camera), else the Base's height; the far tick keeps a far unit `farLift` over that coarse ground (Units.md);
+and the terrain collider reaches as far from each physics focus as the SIM LOD keeps a body live (the App passes its
+outer radius + the query margin to `TerrainCollider::update`), so a unit that goes live always has a tile under it.
 
 #### The light rules (sandbox world only)
 
@@ -80,6 +88,65 @@ the moment the time is written) is the one input; a day's length is "Sky/Sun cyc
 | Save | `NightIndex`, `Night`, `TimeOfDay` (a load sets the sun cycle's time). |
 
 Outside the sandbox world `stampLightRules` writes the neutral values (push on, no burn, daylight 1).
+
+#### The faction layer (sandbox world only)
+
+`FactionLayer` (`Game:Faction`, Faction.ixx / Faction.cpp), a member of `GameMatch`; `GameMatch::tickFaction`, every
+instance off its own structure mirror, after the lightning. "Game/Faction" tweaks. The design is in
+[`Docs/GDD.md`](../../GDD.md) (Influence: the faction layer).
+
+* **The grid:** 4096 x 4096 cells of "Cell size (m)" (4: a 16 km square), world-fixed, centred on the Base when the
+  Base first exists (snapped to whole cells). One byte a cell: 0 = fully the enemy's, 128 = neutral, 255 = fully the
+  players'. **All land starts at "Start value" (127: one step UNDER neutral - no tint by day, see The night below)**, and the land outside the grid
+  counts as that value (`sample`, and the renderer's `u_terrain_factionOutside`), so the grid's edge does not show. The simulated value is a 16-bit grid, 257 steps a byte step (a byte would stall: a slow step
+  rounds to no change); the bytes are its rounded copy, which `sample(x, z)` / `sampleSide` (-1 .. 1) and the renderer
+  read. 16 M cells x (2 + 1 source + 1 byte) = 64 MB.
+* **Sources** (`setSources`, every frame; a disc, + = the players, - = the enemy): the live Base ("Base radius (m)"),
+  every lit field bubble (`m_fieldZones`, its radius x "Field radius (x bubble)"), a wave's spawn site while its
+  fog stands ("Enemy spawn site radius (m)", the enemy), and every enemy outpost ("Game/Enemy outposts" "Faction
+  radius (m)", the enemy). They are stamped into a signed source field (a byte, -127 .. 127) at the start of
+  each sweep: (1 - d / radius)^2 x the strength, a saturating sum. **Only the cells the last stamp and this one touch
+  are written** (`m_stamped`: the stamped rectangles) - a whole clear of 16 M cells every sweep would be a hitch.
+* **The spread** is a relaxation swept in place over the ACTIVE BOX only - the bounds of the stamped rectangles + 64
+  cells (`c_boxMargin`: room for the bleed), set at each sweep's start - (box rows) x dt / "Sweep time (s)" (2) rows a
+  frame; **a cell at rest is skipped** (no source on it, the same value all around: most of the box):
+  `v += diffusion x (mean of the 4 neighbours - v)`, then under a source `v += |source| x (its side - v) x sweep /
+  "Source time (s)"`. Both rates are clamped, so a long sweep cannot overshoot. **LAND KEEPS ITS VALUE:** there is no
+  return over time (a return to neutral was built first and removed: it made every cell of held land move every
+  sweep). Only a source of the other side takes land back; land outside the box is frozen.
+* **The look:** at the end of each sweep that changed a byte, the cell RECTANGLE those changes lie in goes to
+  `Renderer::setFactionMap` (a new grid sends all of it: 16 MB, once for each image of the renderer's pair); the
+  terrain and what grows on it tint by the map (The faction map in
+  [`Docs/Context/RendererVK/Terrain.md`](../RendererVK/Terrain.md)). "Enabled" off clears the grid and the renderer's map.
+* **The night:** `tickFaction` passes the shroud's night (`shroudNight`, the value the clouds close by in `tickBeacon`)
+  to `Renderer::setFactionNight` every frame. BY DAY only the land the enemy's sources hold (the outposts, the spawn
+  sites) has the enemy's look; BY NIGHT all land UNDER neutral has the full look - the untouched land too, which is why
+  it starts at 127 and not 128. The players' land (128 and over) does not change. The layer's bytes do not move: the
+  step is in the shader, by a live value.
+* **Not in the save and not on the wire:** each instance grows its own copy from its sources. The only game rule that
+  reads the layer is the wave's spawn distance (`queueWave`).
+
+#### The enemy outposts (sandbox world only)
+
+`GameMatch::tickOutposts`, called from `tickFaction` (so "Game/Faction" "Enabled" off stops it too), every instance.
+"Game/Enemy outposts" tweaks. The design is in [`Docs/GDD.md`](../../GDD.md) (Enemy bases and outposts); built so
+far: the ring, the building, the beam and the faction source. **No rule yet:** an outpost has no health, spawns no
+wave and cannot be attacked or claimed.
+
+* **The ring:** "Count" (8) positions on a regular polygon "Distance from the Base (m)" (600) out, turned half a
+  step, made once when the Base exists (`m_outposts`). Every instance derives the same ring from the Base's position;
+  nothing is on the wire or in the save.
+* **The building** is `Entities/Game/enemyOutpost.pre`: a prop (no game component, no `Component Network`), `Global`
+  (it stands outside the SIM LOD), with a static box body and a `Component Force` of team 1 (the AI team): its own
+  field of darkness. **It is spawned LATE:** a site's ground height comes from a ray on the terrain collider, which
+  exists only near a camera, so a site with no building is probed once a second (`groundY`) and gets its building
+  when the ray first hits. Until then the site stands at the Base's height.
+* **The beam:** a violet glow-only column from each site (`Renderer::addBeamColumn`: nothing in the light grid),
+  "Beam height (m)", "Beam radius (m)", "Beam intensity", "Beam halo range (m)", and "Beam top fade" (the share of the
+  height over which the glow fades out toward the top: the beam's tip fade) - 8 of the frame's 32 columns. No
+  vortex in the clouds.
+* **The faction source:** each site pushes the land within "Faction radius (m)" (250) toward the enemy
+  (`tickFaction`), from the moment the ring exists.
 
 #### Lightning (sandbox world only)
 
@@ -138,7 +205,8 @@ structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX**
   at the match start by day, "Shroud coverage" (1) at night (`daylight()`). **The night's deck is uniform:** "Coverage
   variation" and "Macro variation" go from their match-start values by day to 0 at night, so the shroud covers the
   whole sky. A panel edit of those rows does not hold while the beacon runs.
-* **The beam is TWO records:** the tall beam is the glow in the air alone (`Renderer::addBeamColumn`), and a SHORT beam
+* **The beam is TWO records:** the tall beam is the glow in the air alone (`Renderer::addBeamColumn`; its glow fades
+  out toward the top over "Beam top fade" of its CURRENT height, so the tip is soft while it climbs too), and a SHORT beam
   at its foot (30 m, `addLightInfo` with no air column) lights the surfaces - the tall beam with its range took
   gigabytes of the light grid. Both: a `BeamLight` from just over the Base's crown (3.2 m over its centre; the diamond floats inside it) up "Beam height (m)": "Beam light intensity" × power, "Beam
   light range (m)", "Beam radius (m)". It lights the ground around the Base and the fog apply draws its column (Beam

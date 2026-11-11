@@ -225,6 +225,7 @@ GameMatch::~GameMatch()
     m_selectedUnits.clear();
     m_terrainRoot = {}; // co-op rocks + barrier segments (children)
     m_ground = {};      // corridor walls are its children
+    m_outposts.clear(); // the enemy outposts' buildings
     Globals::world.setOnRootEntityRemoved(nullptr); // before the wipe: the callback captures this object
     m_npcs.clear();
 }
@@ -686,6 +687,7 @@ void GameMatch::update(float deltaSec)
     tickBeacon(deltaSec); // every instance: the cloud hole, the Shroud and the beam follow the mirrored Base
     tickFogEffects(deltaSec); // the spawn sites' fog, and the fields' clearings (m_fieldZones, refreshed above)
     tickLightning(deltaSec);  // the night's flashes in the clouds and their arcs
+    tickFaction(deltaSec);    // whose land each cell is: the sources (m_fieldZones, the spawn sites) and the spread
 
     if (m_isClient)
     {

@@ -259,7 +259,7 @@ The FS's step count tapers linearly with the proxy's projected size below "Full-
 
 ### Sampled shell tier
 
-"Sampled tier radius (m)", default 8, min 1 (the tier is always on; no qualifying emitter = no bake dispatch).
+"Sampled tier radius (m)", default 18, min 1 (the tier is always on; no qualifying emitter = no bake dispatch).
 
 Emitters whose **VISIBLE bubble radius** is at or above it march a BAKED FIELD VOLUME instead of the
 analytic candidate loop.
@@ -585,7 +585,7 @@ Registered by `Settings::registerForce` (`Code/Settings/Private/Force.cpp`).
 |---|---|
 | `Force` | Enabled, Iso threshold (0.01), March steps (10), Use grid, Force gain (5), Activate ramp (0.6 s), Emitters + GPU slots (stats) |
 | `Force/Bake` | Enabled, Sample height (1 m), Chunks (stat) |
-| `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (8 m), Volume view margin (10 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha (0), Backface alpha (1), Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
+| `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (18 m), Volume view margin (10 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha (0), Backface alpha (1), Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
 | `Force/Glow` | Contact intensity (0.33), Contact width (0.15), Contact wall alpha (0.5), Geometry distance (0.5 m), **Bubble light** (on), Bubble light intensity (2 × radius²), Bubble light range (2 × radius), Bubble light height (0.8 × radius), Bubble light fade (0.5 s), Bubble light white mix (0.2) |
 | `Force/Pattern` | Scale (0.6 /m), Scroll speed (0.3), Intensity (0.5) |
 | `Force/Teams` | Per-team shell colour |

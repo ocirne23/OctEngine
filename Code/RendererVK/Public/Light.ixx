@@ -40,14 +40,17 @@ export struct AreaLight : RendererVKLayout::LightInfo
 export struct BeamLight : RendererVKLayout::LightInfo
 {
     BeamLight() = default;
-    BeamLight(const glm::vec3& pos, float lightRange, const glm::vec3& color, float intensity, const glm::vec3& direction, float beamRadius, float length)
+    // tipFade (m): the glow in the air fades out over this length toward the END the direction points at (0 = a hard end).
+    // It rides in `rotation`, which a beam does not use; the light on surfaces does not fade.
+    BeamLight(const glm::vec3& pos, float lightRange, const glm::vec3& color, float intensity, const glm::vec3& direction, float beamRadius, float length,
+        float tipFade = 0.0f)
     {
         this->pos = pos;
         this->radius = -lightRange; // negative marks this as a beam light
         this->color = color * intensity;
         this->width = beamRadius;
         this->direction = glm::normalize(direction) * length; // full length encoded in the direction's magnitude; doBeamLight halves it for the half-extent
-        this->rotation = 0.0f;
+        this->rotation = glm::max(tipFade, 0.0f);
     }
 };
 

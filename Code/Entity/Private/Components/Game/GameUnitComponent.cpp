@@ -1102,8 +1102,18 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
             return false;
     }
 
+    // The height: a little over the terrain where the game knows it (the sandbox world's coarse ground) - the collider
+    // exists only around the players, and a unit that kept its spawn height came in over or under the ground.
+    float y = pos.y;
+    if (params.farGround)
+    {
+        constexpr float c_none = -1.0e30f;
+        const float ground = params.farGround(next.x, next.y, c_none);
+        if (ground > c_none * 0.5f)
+            y = ground + params.farLift;
+    }
     // Teleport contract: body pose + pose snap, entity position, spatial entry.
-    const glm::vec3 newPos(next.x, pos.y, next.y);
+    const glm::vec3 newPos(next.x, y, next.y);
     Globals::physics.teleportBody(pc->body, newPos, pc->body.getRotation());
     pc->snapPose(entity, newPos);
     entity.pos = newPos; // a unit is a root: local == world

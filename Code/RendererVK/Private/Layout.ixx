@@ -760,6 +760,11 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_FADE_IN = 1u << 24;
     constexpr uint32 MATERIAL_FLAG_DISTANCE_FADE = 1u << 25;
     constexpr uint32 MATERIAL_FADE_BAND_MASK = 0x3FFFFFu; // bits 0..21
+    // THE FACTION LOOK on LitOpaque (instanced_indirect.fs.glsl): the surface takes the faction map's tint, at the weaker
+    // "Trunk and rock tint" share - the trees' bark. Every flag bit above the fade band is taken, so it is bit 0 of the
+    // band: valid ONLY on a material with no DISTANCE_FADE (the shader tests both; a fade material's band rewrite clears it,
+    // and those draw on LitTree, which tints everything).
+    constexpr uint32 MATERIAL_FLAG_FACTION_TINT = 1u << 0;
     constexpr uint32 makeDistanceFadeFlags(float startMetres, float widthMetres, bool fadeIn)
     {
         const uint32 start = (uint32)(startMetres < 0.0f ? 0.0f : startMetres > 4095.0f ? 4095.0f : startMetres);

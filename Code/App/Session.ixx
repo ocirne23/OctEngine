@@ -146,6 +146,9 @@ export class Session
     // The free-fly camera's start.
     static inline const glm::vec3 START_POS{ -3642.3f, 18.4f, -11091.0f };
     static inline const glm::vec3 START_DIR{ 0.89f, 0.07f, 0.46f };
+    // The co-op game's start in the sandbox world: the player's spawn, and the Base site is found around it.
+    static inline const glm::vec3 COOP_START_POS{ -3498.4f, 8.0f, -10873.1f };
+    static inline const glm::vec3 COOP_START_DIR{ 0.45f, -0.07f, 0.89f };
 
 public:
     Session(const LaunchOptions& options)
@@ -251,14 +254,21 @@ public:
         if (m_game->sandboxWorld())
         {
             // Co-op in the sandbox world: the same terrain + ocean switch as the sandbox (exitToMenu's unseedWorld
-            // turns them off again), on the sandbox's seed ("Terrain/Seed") - and the player starts where the sandbox
-            // camera starts, looking the same way. A world the lobby seeded starts at its pick, which seeding moved
+            // turns them off again), on the sandbox's seed ("Terrain/Seed") - and the player starts at the co-op start
+            // (COOP_START_POS; --camera overrides it). A world the lobby seeded starts at its pick, which seeding moved
             // to the origin.
             TweakRegistry::get().setOverride("Terrain/Enabled=1");
             TweakRegistry::get().setOverride("Ocean/Enabled=1");
-            const glm::vec3 start = m_options.cameraStart ? m_options.cameraStart->first : START_POS;
-            const glm::vec3 dir = m_options.cameraStart ? m_options.cameraStart->second : START_DIR;
+            const glm::vec3 start = m_options.cameraStart ? m_options.cameraStart->first : COOP_START_POS;
+            const glm::vec3 dir = m_options.cameraStart ? m_options.cameraStart->second : COOP_START_DIR;
             m_game->setWorldAnchor(m_worldSeeded ? glm::vec3(0.0f, 30.0f, 0.0f) : start, dir);
+            // The game's coarse ground: the terrain-data bake's CPU copy (8 m texels, kilometres around the camera) - for
+            // the places its ground ray finds no collider (a wave's spawn site, the units of the far tick).
+            m_game->setGroundSource([](float x, float z, float fallback)
+                {
+                    float height;
+                    return Globals::terrain.surfaceHeightAt(x, z, height) ? height : fallback;
+                });
         }
         uint32 mapSeed;
         float mapFill;

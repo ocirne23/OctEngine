@@ -41,7 +41,8 @@ export struct GameMatchSettings
     // with the top-down camera. Read when the match is constructed.
     bool coopSandboxWorld = true;
     bool coopEnemies = true;          // waves + the ambient scatter (off: a peaceful building game)
-    float sandboxWaveDistance = 70.0f; // sandbox world: m from the Base a wave spawns (inside the collider ring)
+    float sandboxWaveDistance = 70.0f; // sandbox world: the NEAREST a wave spawns to the Base (m); it spawns on the first enemy land from there out
+    float sandboxWaveMaxDistance = 400.0f; // ... and the farthest, where the players' land reaches past it
     // THE LIGHT RULES (the sandbox world): the waves come at NIGHT only, daylight burns the demons, and a field does
     // not push them - they walk in and burn.
     float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
@@ -74,6 +75,7 @@ export struct GameMatchSettings
     float beaconCalmSpin = 10.0f;   // deg/min: the vortex's spin with a full Base store
     float beaconPressureSpin = 60.0f; // deg/min: at night with an empty Base store
     float beaconBeamHeight = 80000.0f; // m above the Base
+    float beaconBeamTipFade = 0.5f;    // the share of the beam's height over which its glow fades out toward the top (0 = a hard end)
     float beaconLightIntensity = 1.0f; // the beam light's intensity (the column's glow and the light on the ground), x the power
     float beaconLightRange = 80.0f; // m from the beam it lights surfaces (and its halo in the air ends)
     float beaconBeamRadius = 0.75f;   // m: the column's core
@@ -360,6 +362,11 @@ export struct GameUnitParams
                                    // lock (-1 = none); daylight makes it solid
     // THE PLAYERS' STAFF LIGHT (runtime, GameMatch): a shadow-team unit this near a player is solid too, so a player
     // can always fight what attacks next to it. Per point: x, y, z of the player, then the radius.
+    // THE FAR TICK's ground (runtime, set by the game in the sandbox world; null = a far unit keeps its height): the
+    // terrain height at a point, or the fallback where there is none. A far unit walks farLift over it, so it is over
+    // the true ground when it comes near and its body goes live.
+    float (*farGround)(float x, float z, float fallback) = nullptr;
+    float farLift = 2.5f;
     float lightPoints[8][4]{};
     int lightPointCount = 0;
     // THE FIELD ZONES (runtime, GameMatch, the terrain world): the bubbles of fieldZoneTeam's field buildings as
@@ -415,8 +422,35 @@ export struct GameStructureParams
     float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
 };
 
+// THE FACTION LAYER (Game:Faction, the sandbox world): whose land each cell is, and how that spreads.
+export struct GameFactionSettings
+{
+    bool enabled = true;
+    float cellSize = 4.0f;         // m; x 4096 cells = the grid's extent (16 km). Read when the grid is made
+    // What all land starts as: 0 = the enemy's, 128 = neutral, 255 = the players'. Read when the grid is made. 127 = one step UNDER neutral: no
+    // tint by day, and the NIGHT takes all land under neutral to the full enemy look (Renderer::setFactionNight).
+    int startValue = 127;
+    float sweepSeconds = 2.0f;     // one pass of the spread over the ACTIVE area (around the sources) takes this long
+    float sourceSeconds = 45.0f;   // land at a source's centre goes to its side over about this long
+    float diffusion = 0.02f;       // per second: how fast a cell follows its neighbours (the value bleeds past a source's radius)
+    float baseRadius = 150.0f;     // m: the Base's player source
+    float fieldRadiusScale = 2.0f; // x a field bubble's radius: its player source
+    float enemySiteRadius = 120.0f; // m: the enemy source at a wave's spawn site, while its fog stands
+    // THE ENEMY OUTPOSTS (GameMatch::tickOutposts): a ring of dark beacons around the Base, each an enemy source.
+    bool outpostsEnabled = true;
+    int outpostCount = 8;            // on a regular polygon (8 = the octagon). Read when the ring is made
+    float outpostDistance = 600.0f;  // m from the Base. Read when the ring is made
+    float outpostRadius = 250.0f;    // m: an outpost's enemy source
+    float outpostBeamHeight = 300.0f;    // m
+    float outpostBeamRadius = 0.4f;      // m: the beam's core
+    float outpostBeamTipFade = 0.6f;     // the share of the beam's height over which it fades out toward the top (0 = a hard end)
+    float outpostBeamIntensity = 2.0f;   // the beam's glow in the air
+    float outpostBeamRange = 60.0f;      // m: where the beam's halo ends
+};
+
 export struct GameSettings
 {
+    GameFactionSettings faction;
     GameMatchSettings match;
     GameCameraSettings camera;
     GamePlayerSettings player;

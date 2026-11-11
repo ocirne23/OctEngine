@@ -41,6 +41,8 @@ float16_t g_specularF0 = float16_t(0.04);
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the tree takes the faction look of the land it stands on
 
 // THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES looked up from their sun side: a thin
 // leaf facing AWAY from the sun is still lit through, and its transmission needs its real shadow (the facing reject
@@ -93,7 +95,8 @@ void main()
 		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
 	}
 
-	const f16vec3 materialColor = f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz);
+	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz,
+		leaf ? 1.0 : u_terrain_factionSolidScale); // bark: the weaker tint, as the near bark's (instanced_indirect.fs.glsl)
 
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal into the surface -
 	// reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.

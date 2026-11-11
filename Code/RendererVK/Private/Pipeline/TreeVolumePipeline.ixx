@@ -266,6 +266,8 @@ public:
         vk::Sampler skyMapSampler;
         vk::ImageView cloudShadowView; // the cloud Beer shadow map (GENERAL): the sun on the canopy under clouds
         vk::Sampler cloudShadowSampler;
+        vk::ImageView factionView;     // the game's faction map (SHADER_READ_ONLY): the march tints the far trees by it
+        vk::Sampler factionSampler;
         glm::vec3 cameraPos{ 0.0f };
         float startDistance = 0.0f;   // the march's start (3D, m): "Far start" scaled with the camera's height
                                       // (Renderer::farTreesStart), the billboards' hand-over

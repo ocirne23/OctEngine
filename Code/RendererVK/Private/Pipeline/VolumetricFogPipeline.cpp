@@ -45,7 +45,10 @@ void VolumetricFogPipeline::buildScatterLayout(ComputePipelineLayout& layout)
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 13, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // the inland water map
+    // 15 = the game's faction map: a ping-pong pair like the terrain map (10), refreshed by updateFactionDescriptor.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 15, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
 void VolumetricFogPipeline::buildIntegrateLayout(ComputePipelineLayout& layout)
@@ -105,7 +108,10 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     // 11 = the aerial perspective LUT.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    // 12 = the game's faction map (the far field's tint and extra fog): a ping-pong pair behind a cached CB, like 3.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 12, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     // Eye index (per-eye depth reconstruction + projection; 0 on desktop / left eye).
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
@@ -407,6 +413,20 @@ void VolumetricFogPipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageVi
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     for (uint32 eye = 0; eye < m_applyViewCount; ++eye)
         writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_applySets[applySlot(frameIdx, eye)].getDescriptorSet(), .dstBinding = 3, .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(numWrites, writes.data(), 0, nullptr);
+}
+
+void VolumetricFogPipeline::updateFactionDescriptor(uint32 frameIdx, vk::ImageView factionView, vk::Sampler factionSampler)
+{
+    // The game's faction map: the scatter set (15), then every eye's apply set (12). The same contract as the terrain map.
+    vk::DescriptorImageInfo imageInfo{ .sampler = factionSampler, .imageView = factionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
+    oc::array<vk::WriteDescriptorSet, 1 + MAX_VIEWS> writes{};
+    uint32 numWrites = 0;
+    writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_scatterSets[frameIdx].getDescriptorSet(), .dstBinding = 15, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    for (uint32 eye = 0; eye < m_applyViewCount; ++eye)
+        writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_applySets[applySlot(frameIdx, eye)].getDescriptorSet(), .dstBinding = 12, .descriptorCount = 1,
             .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(numWrites, writes.data(), 0, nullptr);
 }

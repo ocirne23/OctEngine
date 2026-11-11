@@ -45,6 +45,11 @@ layout (binding = 5) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the 
 #define CLOUD_SHADOW_BINDING 8
 #include "cloud_shadow.inc.glsl"
 
+// The game's faction layer: the far field's tint and the extra fog on enemy land, as the froxels'.
+#define FACTION_MAP_BINDING 12
+#define FACTION_NO_HALF
+#include "terrain_faction.inc.glsl"
+
 layout (location = 0) out vec4 out_color;
 
 // View index (0 = centre/desktop, 1 / 2 = eyes) for the per-eye depth reconstruction. The fog volume is built once for
@@ -109,6 +114,9 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     const float visTail = 20000.0; // the tail's taps span this much past the march (the shadow map covers far less)
     float sunW = 0.0;
     float hazeW = 0.0, hazeTau = 0.0; // the shaft haze's sunlit share, and its own optical depth so far
+    // THE FACTION LAYER (the terrain-following march): each sub-segment's fog x its land's density multiplier, and the
+    // ray's fog takes the tint of the side it mostly lies on - the sub-segments' sides, weighted by what each adds.
+    float sideSum = 0.0, shareSum = 0.0;
 
     float tau;
     if (!followsTerrain)
@@ -170,11 +178,16 @@ vec4 volFarField(vec3 dir, float t0, float t1)
                 dens *= mix(1.0, climate.x, wRegion);
                 k *= mix(1.0, fogFalloffFromTemperature(terrainTemperatureAt(climate, 0.5 * (gPrev.y + gNext.y))), wRegion);
             }
+            const float factionSide = terrainFactionSide(u_viewPos.xz + dir.xz * midT);
+            dens += density * terrainFactionFogExtra(factionSide); // added to the regional factor, not multiplied by it
 
             const float seg = volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tPrev - gPrev.x, dir.y - (gNext.x - gPrev.x) / max(len, 1e-3),
                                                             len, k, dens);
             const float vis = volFarSunVis(dir, tPrev, tNext, visJitter);
-            sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
+            const float share = exp(-tau) * (1.0 - exp(-seg));
+            sideSum += share * factionSide;
+            shareSum += share;
+            sunW += share * vis;
             hazeW += volFarHazeStep(dir, tPrev, tNext, tau, hazeTau, vis);
             tau += seg;
             if (tau > tauOpaque)
@@ -215,7 +228,9 @@ vec4 volFarField(vec3 dir, float t0, float t1)
         ambient += ((skyE - groundSunE) * (1.0 - T) + groundSunE * sunW) * (u_rt_giStrength / PI);
     }
 
-    return vec4(u_fog_albedo * (sunLight * (sunW + hazeW) + ambient), T);
+    // Past the march (the tail, a ray with no marched fog): the side of the land outside the map.
+    const vec3 albedo = terrainFactionFogAlbedo(u_fog_albedo, shareSum > 1e-6 ? sideSum / shareSum : u_terrain_factionOutside);
+    return vec4(albedo * (sunLight * (sunW + hazeW) + ambient), T);
 }
 
 // The ray for this pixel from u_rayFromNdc (ubo.inc.glsl), not from a reconstructed position: u_invMvp's float32 error
@@ -368,7 +383,10 @@ vec3 beamColumns(vec3 dir, float tMax, out float tBeam)
         const float fade = max(1.0 - (h2 + s2 * (tp - tc) * (tp - tc) + past * past) / (range * range), 0.0);
         const float qh = sqrt(q2 + past * past);
         const float halo = BEAM_HALO * fade * fade * r * (atan(s * (hb - tc) / qh) - atan(s * (ha - tc) / qh)) / (qh * s);
-        const float glow = core + halo;
+        // THE TIP FADE (u_present_beamFade.x, m; 0 = none): the glow fades out over that length toward the beam's far
+        // end, by where the ray passes the beam - a short beam then ends soft, not as a cut.
+        const float tipFade = u_present_beamFade[i].x;
+        const float glow = (core + halo) * (tipFade > 0.0 ? smoothstep(0.0, tipFade, len - along) : 1.0);
         sum += u_present_beamColor[i].rgb * glow;
         weight += glow;
         tBeam += glow * tp;

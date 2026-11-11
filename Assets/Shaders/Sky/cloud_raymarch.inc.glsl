@@ -347,8 +347,11 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 sumAmbGround += absorbed * exp(-max(alt - u_clouds_mainBottom, 0.0) * u_clouds_invGroundLightDepth);
                 if (u_clouds_vortexEnabled > 0.5 && u_clouds_vortexLight.r + u_clouds_vortexLight.g + u_clouds_vortexLight.b > 0.0)
                 {
-                    const float d = max(length(rel.xz - u_clouds_vortexCentre), u_clouds_vortexEyeRadius);
-                    sumEyeLight += absorbed * (u_clouds_vortexEyeRadius / d) * exp2((u_clouds_vortexEyeRadius - d) * u_clouds_vortexLightFalloff);
+                    // One inversesqrt for both 1 / d and d (no sqrt, no divide).
+                    const vec2 toAxis = rel.xz - u_clouds_vortexCentre;
+                    const float d2 = max(dot(toAxis, toAxis), u_clouds_vortexEyeRadius * u_clouds_vortexEyeRadius);
+                    const float invD = inversesqrt(d2);
+                    sumEyeLight += absorbed * (u_clouds_vortexEyeRadius * invD) * exp2((u_clouds_vortexEyeRadius - d2 * invD) * u_clouds_vortexLightFalloff);
                 }
                 if (u_clouds_flash[0].w + u_clouds_flash[1].w > 0.0)
                 {

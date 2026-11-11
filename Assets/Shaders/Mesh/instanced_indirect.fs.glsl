@@ -35,6 +35,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
 #include "instanced_indirect_lit.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: only a material that asks for it (MATERIAL_FLAG_FACTION_TINT: tree bark)
 
 // THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live (lit FS 72/16 ->
 // 64/48 regs / spill B). The geometric normal also carries the shadow's normal offset (a normal map must not bend the
@@ -84,7 +86,11 @@ void main()
 		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
 	}
 
-	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
+	f16vec3 materialColor = f16vec3(diffuseSample.xyz);
+	// The faction look, for a material that asks for it (the trees' bark): the flag is bit 0, which is the fade band's
+	// on a DISTANCE_FADE material - those draw on LitTree, which tints everything.
+	if ((material.flags & (MATERIAL_FLAG_DISTANCE_FADE | MATERIAL_FLAG_FACTION_TINT)) == MATERIAL_FLAG_FACTION_TINT)
+		materialColor = terrainFactionAlbedo(materialColor, pos.xz, u_terrain_factionSolidScale);
 	// BC5 normal maps store only X/Y, so .z reads 0 and would flip the normal into the surface: reconstruct Z.
 	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], texUv).xyz);
 	f16vec3 tangentNormal;

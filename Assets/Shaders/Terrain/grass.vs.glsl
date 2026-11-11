@@ -23,7 +23,7 @@ layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex 
 layout (binding = 24) uniform sampler2D u_grassNoise;
 #define GRASS_NOISE_SAMPLER u_grassNoise
 #else
-layout (binding = 24) uniform sampler2D u_textures[];
+layout (binding = 25) uniform sampler2D u_textures[];
 #endif
 
 #include "grass.inc.glsl"

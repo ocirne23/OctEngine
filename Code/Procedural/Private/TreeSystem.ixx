@@ -35,6 +35,16 @@ export namespace Procedural
 		void initialize(); // attaches the "Trees" listeners (and TreeWorld's)
 		// Per frame, after the terrain. `maps` places the grove on the terrain (y = 0 without it).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
+		// The tree and rock COLLIDERS' focus points (at most MaxColliderFocus; before update, every frame): a body exists
+		// within "Radius (m)" of any of them. None = the camera. The game passes its players and its Base. Only the trees
+		// of the NEAR chunks (expanded around the camera) can have bodies: far from the camera a focus gets none.
+		static constexpr int MaxColliderFocus = 8;
+		void setColliderFocus(oc::span<const glm::vec3> points)
+		{
+			m_colliderFocusCount = glm::min((int)points.size(), MaxColliderFocus);
+			for (int i = 0; i < m_colliderFocusCount; ++i)
+				m_colliderFocus[i] = glm::vec2(points[i].x, points[i].z);
+		}
 		// Every tree and rock of the terrain ring as records (the ground clutter's forest floor reads them; main thread).
 		const TreeWorld& world() const { return m_world; }
 		// TreeWorld's bookkeeping job: main.cpp kicks it after the last reader of the records this frame (the clutter);
@@ -275,6 +285,8 @@ export namespace Procedural
 		// at most) and destroys those 10 % past it; with the tweak off, all of them. box3d create / destroy serialize on
 		// g_bodyLifecycleMutex (the terrain collider's job may create its tiles meanwhile).
 		void updateColliders(const Camera& camera);
+		glm::vec2 m_colliderFocus[MaxColliderFocus]{}; // setColliderFocus
+		int m_colliderFocusCount = 0;
 
 		TreeSettings& m_settings = Globals::settings.trees; // "Trees" (the buttons are cleared here)
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands

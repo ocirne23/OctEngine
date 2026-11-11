@@ -30,6 +30,8 @@ layout (location = 1) out vec4 out_motion;
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassNearShadow
 #include "clutter.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the flowers take the faction look of the land they grow on
 
 void main()
 {
@@ -86,6 +88,7 @@ void main()
     }
     else
         albedo = clutterUnpackAlbedo(in_look.y, unused);
+    albedo = terrainFactionTint(albedo, in_pos.xz, 1.0); // before the transmission and the lit core, which both take it
 
     const float back = max(-dot(N, L), 0.0);
     const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * u_clutter_flowerTransmission * INV_PI, MEDIUMP_FLT_MAX));

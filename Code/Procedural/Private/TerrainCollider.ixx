@@ -40,7 +40,16 @@ export namespace Procedural
 
 		// Per frame, after TerrainStreamer::update. Kicks the update job. maps == nullptr (terrain
 		// disabled, models still loading) clears every collider.
-		void update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps);
+		// SEVERAL FOCUS POINTS (at most MaxFocus; the rest are dropped): a tile exists within "Radius" of ANY of them. The
+		// game passes its players and its Base, so their ground stays under them while the camera flies somewhere else.
+		// minRadius: the radius is at least this ("Radius" or it, the larger). The game passes the SIM LOD's reach: a body is
+		// live that far from a focus, and a live body with no tile under it falls.
+		static constexpr int MaxFocus = 8;
+		void update(oc::span<const glm::vec3> focusPoints, oc::shared_ptr<const ITerrainSampler> maps, float minRadius = 0.0f);
+		void update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
+		{
+			update(oc::span<const glm::vec3>(&focusPos, 1), oc::move(maps));
+		}
 
 		// Main thread, before kickPostUpdateJobs: the job creates/destroys box3d bodies, and the Sim
 		// batch (the game's nav feed) and the next frame's main-thread physics users read the world.
@@ -72,7 +81,8 @@ export namespace Procedural
 		// snapshot so the job never reads a tweak member.
 		JobCounter m_updateCounter;
 		oc::shared_ptr<const ITerrainSampler> m_jobMaps;
-		glm::vec2 m_jobFocus{ 0.0f, 0.0f };
+		glm::vec2 m_jobFocus[MaxFocus]{};
+		int m_jobFocusCount = 0;
 		float m_jobTileSize = 32.0f;
 		float m_jobRadius = 96.0f;
 		float m_jobSpacing = 1.0f;

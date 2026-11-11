@@ -164,6 +164,14 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Textures", "Parallax fade start (m)", &s.texParallaxFadeStart, 0.0f, 200.0f, 0.5f);
 	Tweak::floatVar("Terrain/Textures", "Parallax fade end (m)", &s.texParallaxFadeEnd, 1.0f, 300.0f, 0.5f);
 	Tweak::intVar("Terrain/Textures", "Parallax steps", &s.texParallaxSteps, 4, 64, 1.0f);
+	// The faction layer's LOOK: in the game's "Game/Faction" group, next to the layer's own rows (Settings.Game).
+	Tweak::color3("Game/Faction", "Enemy land tint", &s.factionEnemyTint, &s.factionEnemyStrength, 0.0f, 20.0f, 0.05f);
+	Tweak::color3("Game/Faction", "Player land tint", &s.factionPlayerTint, &s.factionPlayerStrength, 0.0f, 20.0f, 0.05f);
+	Tweak::floatVar("Game/Faction", "Tint curve", &s.factionTintCurve, 0.1f, 8.0f, 0.05f, {}, ETweakFlags::Runtime); // applied on the CPU, to the map's bytes
+	Tweak::floatVar("Game/Faction", "Tint gain", &s.factionTintGain, 0.0f, 20.0f, 0.05f);
+	Tweak::floatVar("Game/Faction", "Trunk and rock tint", &s.factionSolidScale, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Game/Faction", "Fog tint", &s.factionFogTint, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Game/Faction", "Enemy land fog", &s.factionEnemyFog, 0.0f, 50.0f, 0.05f); // added to the regional fog factor: fog in any climate
 	Tweak::floatVar("Terrain/Textures", "Parallax self-shadow", &s.texParallaxShadow, 0.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/Textures", "Height blend contrast", &s.texHeightBlendContrast, 0.0f, 16.0f, 0.1f);
 	// Tessellation: the ground + overlay subdivide near the camera and displace by the same height

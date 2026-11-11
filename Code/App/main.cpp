@@ -48,7 +48,7 @@ int main(int argc, char* argv[])
     runCommandLineTool(argc, argv);
 
     LaunchOptions options = parseCommandLine(argc, argv);
-    options.sandbox = true;
+    //options.sandbox = true;
     const bool headlessServer = options.headlessServer();
     const bool unattendedRun = options.unattendedRun();
     if (unattendedRun)
@@ -329,7 +329,19 @@ int main(int argc, char* argv[])
         {
             Globals::terrain.setFlowWindAngle(Globals::ocean.swellTravelAngle()); // follows "Sky/Wind" (the next bake takes it)
             Globals::terrain.update(Globals::rendererVK, camera);
-            Globals::terrainCollider.update(camera.position, Globals::terrain.activeClimateMaps());
+            // The colliders' focus: the game's players and Base (they stay on the ground while the camera is detached and
+            // flies away), else the camera.
+            // In the game the terrain tiles reach as far as the SIM LOD keeps a body LIVE around a focus (its outer radius
+            // + the query margin): a unit that walks in from far away goes live there, and it needs ground under it.
+            glm::vec3 physicsFocus[8];
+            int physicsFocusCount = game ? game->physicsFocus(physicsFocus, 8) : 0;
+            const SimLodConfig& simLod = Globals::settings.world.simLod;
+            const float liveRadius = physicsFocusCount > 0 && simLod.enabled ? simLod.radius[2] + simLod.queryMargin : 0.0f;
+            if (physicsFocusCount == 0)
+                physicsFocus[physicsFocusCount++] = camera.position;
+            const oc::span<const glm::vec3> physicsFocusSpan(physicsFocus, (size_t)physicsFocusCount);
+            Globals::terrainCollider.update(physicsFocusSpan, Globals::terrain.activeClimateMaps(), liveRadius);
+            Globals::trees.setColliderFocus(physicsFocusSpan);
             Globals::ocean.update(Globals::rendererVK, camera, Globals::terrain.activeTerrainData(), Globals::terrain.seaLevel());
             Globals::terrain.render(Globals::rendererVK, Globals::ocean); // one walk of the visible hand-over for chunks + sectors; kicks both pushes
             Globals::trees.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());

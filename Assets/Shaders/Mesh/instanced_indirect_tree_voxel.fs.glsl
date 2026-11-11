@@ -48,6 +48,8 @@ layout (depth_less) out float gl_FragDepth;
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the far trees take the faction look of the land they stand on
 
 #include "tree_voxel.inc.glsl"
 
@@ -236,7 +238,8 @@ void main()
 	const float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
 	albedo = max(vec3(luma) + (albedo - vec3(luma)) * u_foliage_voxelSaturation, vec3(0.0)) * u_foliage_voxelBrightness;
 	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
-	const f16vec3 materialColor = f16vec3(leaf ? leafPatchTint(albedo, pos) : albedo);
+	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(albedo, pos) : albedo), pos.xz,
+		leaf ? 1.0 : u_terrain_factionSolidScale);
 	const vec3 Vh = normalize(u_viewPos - pos);
 
 	// LEAVES seen edge-on: N bent toward the viewer until N.V reaches "Foliage min N.V" (the foliage FS's).

@@ -696,7 +696,9 @@ namespace Procedural
 			meshes.densityMax = load.density[v].max;
 		}
 
-		species.ownBarkMaterial = createTreeMaterial(load.bark, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
+		// FACTION_TINT: the near bark draws on LitOpaque (early depth), which tints only a material that asks for it.
+		species.ownBarkMaterial = createTreeMaterial(load.bark, 0.0f, oc::format("TreeBark/{}", name).c_str(),
+			RendererVKLayout::MATERIAL_FLAG_FACTION_TINT);
 		species.barkMaterial = species.ownBarkMaterial.index();
 		if (species.desc.leafType == ETreeLeafType::Cluster)
 		{
@@ -1730,7 +1732,13 @@ namespace Procedural
 		ProfileScope scope("Tree colliders", EProfileCategory::Procedural);
 		const float radius = m_settings.colliderRadius;
 		const float out2 = (radius * 1.1f) * (radius * 1.1f), in2 = radius * radius;
-		const glm::vec2 cam(camera.position.x, camera.position.z);
+		// The focus points (setColliderFocus), or the camera with none. A distance is the one to the NEAREST focus.
+		glm::vec2 focus[MaxColliderFocus];
+		int focusCount = m_colliderFocusCount;
+		for (int i = 0; i < focusCount; ++i)
+			focus[i] = m_colliderFocus[i];
+		if (focusCount == 0)
+			focus[focusCount++] = glm::vec2(camera.position.x, camera.position.z);
 		const float chunkSize = m_expandContext->chunkSize;
 		int32 budget = glm::max(m_settings.collidersPerFrame, 1);
 		const uint64 layer = PhysicsLayers::bit("Vegetation");
@@ -1740,9 +1748,13 @@ namespace Procedural
 			if (chunk.colliders.empty())
 				continue;
 			const glm::vec2 lo = glm::vec2((float)(int32)(uint32)k, (float)(int32)(uint32)(k >> 32)) * chunkSize;
-			const glm::vec2 nearest = glm::clamp(cam, lo - 8.0f, lo + chunkSize + 8.0f); // a rock's centre may sit past the border
-			const glm::vec2 d = nearest - cam;
-			if (glm::dot(d, d) > out2)
+			float chunkDist2 = FLT_MAX;
+			for (int f = 0; f < focusCount; ++f)
+			{
+				const glm::vec2 d = glm::clamp(focus[f], lo - 8.0f, lo + chunkSize + 8.0f) - focus[f]; // a rock's centre may sit past the border
+				chunkDist2 = glm::min(chunkDist2, glm::dot(d, d));
+			}
+			if (chunkDist2 > out2)
 			{
 				if (chunk.liveBodies > 0)
 				{
@@ -1757,8 +1769,12 @@ namespace Procedural
 			for (size_t i = 0; i < chunk.colliders.size(); ++i)
 			{
 				const ExpandCollider& c = chunk.colliders[i];
-				const glm::vec2 e = glm::vec2(c.transform.pos.x, c.transform.pos.z) - cam;
-				const float dist2 = glm::dot(e, e);
+				float dist2 = FLT_MAX;
+				for (int f = 0; f < focusCount; ++f)
+				{
+					const glm::vec2 e = glm::vec2(c.transform.pos.x, c.transform.pos.z) - focus[f];
+					dist2 = glm::min(dist2, glm::dot(e, e));
+				}
 				PhysicsBody& body = chunk.bodies[i];
 				if (body.isValid())
 				{

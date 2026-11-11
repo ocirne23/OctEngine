@@ -164,8 +164,15 @@ render mesh's triangulation, **so bodies rest on the drawn surface.** It is exac
 LOD0 spacing (`chunkSize / lod0Res`: 2 m at the defaults; "Spacing" defaults to 1 m).
 
 It **never touches the render nodes**: a collider only needs the ground near dynamic bodies. Tiles are "Tile size"
-(32 m) and exist only within "Radius" of the focus
-(the camera — thrown bodies start there).
+(32 m) and exist only within "Radius" of a FOCUS POINT. **`update` takes up to `MaxFocus` (8) points**, and a tile is
+wanted within the radius of ANY of them; the build picks the missing tile nearest to ITS focus, so each focus gets the
+ground under it before any gets its rim. The App passes the camera (thrown bodies start there), or in the co-op
+sandbox world the game's `GameMatch::physicsFocus`: every player's body and the Base - their ground stays under them
+while a detached camera flies away. The trees' and rocks' bodies take the same points (`TreeSystem::setColliderFocus`).
+**`minRadius`** (the third argument): the radius is the larger of "Radius" and it. In the game the App passes the SIM
+LOD's outer radius + its query margin (235 m at the defaults): a unit's body is live that far from a focus, and a live
+body with no tile under it falls - with the 96 m of "Radius" alone the units that walked in from far away fell
+between 225 m and 96 m.
 
 Each tile is `sampleGrid`'d and BVH-built on **ONE in-flight job, nearest-first** (`"Terrain collider
 build"`, Low). `createCollisionMesh` is standalone and thread-safe, **which is what lets the build run

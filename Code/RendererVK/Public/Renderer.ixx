@@ -149,6 +149,20 @@ public:
     void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel);
     void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // the fog reverts to the flat height base
 
+    // THE FACTION MAP (the game's faction layer, for the look): size^2 bytes (size = 4096, row-major, z rows of x), 0 = fully the enemy's .. 128 = neutral ..
+    // 255 = fully the players', over a world-FIXED square whose min corner is originXZ and whose cells are cellSize m. Staged ping-pong like the terrain-data
+    // map: live next frame, no GPU sync and no re-record. The terrain ground reads it (terrain_faction.inc.glsl, "Game/Faction" tweaks).
+    // `bytes` is always the WHOLE map; dirty = the cell rectangle (x0, z0, x1, z1, inclusive) that changed since the last call - only that reaches the
+    // GPU - or null for a new map (all of it is sent). outsideValue = the byte the land outside the square counts as (the map's start value).
+    // THE TINT CURVE ("Game/Faction" "Tint curve") is applied HERE, to the bytes on their way to the GPU (a 256-entry table: the side's strength raised to
+    // the curve's power), so no shader pays for it. A curve change makes the next call a new map: pass dirty = null then (factionMapCurveChanged()).
+    void setFactionMap(const uint8* bytes, int size, const glm::vec2& originXZ, float cellSize, uint8 outsideValue, const glm::ivec4* dirty, float curve);
+    bool factionMapCurveChanged(float curve) const; // curve is not the last setFactionMap's: the caller sends the whole map again
+    void clearFactionMap() { m_terrain.getFactionMap().clear(); m_terrain.setFactionNight(0.0f); }
+    // THE NIGHT (0 = day .. 1 = night): all land UNDER neutral (a byte < 128, the land outside the square too) goes to the full enemy side by it; land at
+    // neutral or over keeps its value. A live UBO value (u_terrain_factionNight): no upload, no re-bake.
+    void setFactionNight(float night) { m_terrain.setFactionNight(night); }
+
     // ---- Rivers and lakes,  Main thread. ----
 
     // The river water's NEAR COVERAGE: engine m around the centre view inside which every dense near cell is built - the light ribbons discard their fragments
@@ -305,6 +319,23 @@ inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCam
 inline void Renderer::setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel)
 {
     m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex());
+}
+
+inline void Renderer::setFactionMap(const uint8* bytes, int size, const glm::vec2& originXZ, float cellSize, uint8 outsideValue, const glm::ivec4* dirty,
+    float curve)
+{
+    assert(size == (int)TerrainResources::FACTION_MAP_RES);
+    if (!dirty)
+        m_terrain.getFactionMap().requestFullCopies();
+    const uint8* lut = m_terrain.factionCurveLut(curve);
+    // The user value carried with the flip: the side (-1 .. 1) of the land outside the square, through the same curve.
+    m_terrain.getFactionMap().uploadBytesRect(bytes, dirty ? *dirty : glm::ivec4(0, 0, size - 1, size - 1), originXZ, glm::vec2((float)size * cellSize),
+        ((float)lut[outsideValue] - 128.0f) / 127.0f, m_swapChain.getCurrentFrameIndex(), lut);
+}
+
+inline bool Renderer::factionMapCurveChanged(float curve) const
+{
+    return m_terrain.factionCurveChanged(curve);
 }
 
 inline oc::span<const uint16> Renderer::getOceanDisplacementReadback(uint32& outRes) const

@@ -349,6 +349,7 @@ static oc::string buildLayoutPreamble()
     def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
     def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
     def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");
+    def("MATERIAL_FLAG_FACTION_TINT", MATERIAL_FLAG_FACTION_TINT, "u");
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement
     def("PIPELINE_IDX_TERRAIN_LIT", (uint32)EPipelineIndex::TerrainLit, "u"); // the cull emits the terrain overlay for these
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");

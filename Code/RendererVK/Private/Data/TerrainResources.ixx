@@ -51,7 +51,38 @@ public:
     {
         // RGBA: terrain height, water level, fog thickness, spare.
         m_heightMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, "FogTerrainHeight");
+        m_factionMap.initializeBytes(FACTION_MAP_RES, 1, "FactionMap");
     }
+
+    // ---- The game's FACTION map (Renderer::setFactionMap): R8, world-FIXED, 0 = the enemy's .. 128 neutral .. 255 the players' ----
+    // Its "centre" is the grid's MIN corner (world x / z) and its size the extent (m); size 0 = no map.
+    static constexpr uint32 FACTION_MAP_RES = 4096; // 16 MB an image (the pair + a staging buffer per frame slot)
+    BakedWorldMap& getFactionMap() { return m_factionMap; }
+    const BakedWorldMap& getFactionMap() const { return m_factionMap; }
+    // THE TINT CURVE's table: byte -> byte, the side's strength (|byte - 128| / 127) raised to `power`, the sign kept
+    // (1 = as it is; over 1 = land in the middle leans to neutral and the tint comes in toward the extremes). Rebuilt
+    // when the power changes.
+    const uint8* factionCurveLut(float power)
+    {
+        power = glm::clamp(power, 0.1f, 8.0f);
+        if (power != m_factionCurvePower)
+        {
+            m_factionCurvePower = power;
+            for (int i = 0; i < 256; ++i)
+            {
+                const float side = glm::clamp(((float)i - 128.0f) / 127.0f, -1.0f, 1.0f);
+                const float curved = std::pow(glm::abs(side), power) * (side < 0.0f ? -1.0f : 1.0f);
+                // A byte under neutral STAYS under neutral (127 at the most): the night's rule reads the sign.
+                m_factionCurveLut[i] = (uint8)glm::clamp(128.0f + curved * 127.0f + 0.5f, 0.0f, i < 128 ? 127.0f : 255.0f);
+            }
+        }
+        return m_factionCurveLut.data();
+    }
+    bool factionCurveChanged(float power) const { return glm::clamp(power, 0.1f, 8.0f) != m_factionCurvePower; }
+    float getFactionNight() const { return m_factionNight; }
+    void setFactionNight(float night) { m_factionNight = glm::clamp(night, 0.0f, 1.0f); }
+    uint32 getFactionDescGen(uint32 frameIdx) const { return m_factionDescGen[frameIdx]; }
+    void setFactionDescGen(uint32 frameIdx, uint32 generation) { m_factionDescGen[frameIdx] = generation; }
 
     // ---- The terrain NOISE texture (u_terrain_noiseTex): tileable RGBA8, NOISE_SIZE^2, made once at startup ----
     // R, G: two independent gradient fBms (NOISE_MACRO_CELLS lattice cells across the tile, 4 octaves, stretched to
@@ -130,6 +161,11 @@ private:
 
     BakedWorldMap m_heightMap;
     oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_descGen{};
+    BakedWorldMap m_factionMap;
+    oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_factionDescGen{};
+    oc::array<uint8, 256> m_factionCurveLut{};
+    float m_factionCurvePower = -1.0f; // the power the table holds (-1 = not built)
+    float m_factionNight = 0.0f;       // Renderer::setFactionNight
 
     glm::ivec2 m_wetPrevOrigin = glm::ivec2(0);
     bool m_wetWasEnabled = false; // the window was live last frame (else every texel starts dry)

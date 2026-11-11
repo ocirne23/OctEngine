@@ -32,6 +32,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 #define LIT_NO_RTAO
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassCanopySun (in_terrainVertices: the lit core's binding 14)
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the blades take the ground's faction look
 
 void main()
 {
@@ -62,6 +64,7 @@ void main()
     vec3 albedo = mix(u_grass_rootAlbedo, u_grass_tipAlbedo, t);
     albedo = mix(albedo, u_grass_dryAlbedo * mix(0.75, 1.0, t), in_blade.y);
     albedo *= in_blade.x; // the per-blade variation and the cold darkening (grass.vs.glsl)
+    albedo = terrainFactionTint(albedo, pos.xz, 1.0); // the same rule as the ground under it (terrain_faction.inc.glsl)
     const float ao = mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t));
 
     const vec3 N = normalize(mix(bladeN, in_groundNormal, in_blade.z));

@@ -13,6 +13,7 @@ import Nav;
 import RendererVK; // ShadowParams (the game's shadow preset)
 import Settings;
 import :GameCamera;
+import :Faction;
 import :Player;
 import :Structures;
 import :Npc;
@@ -124,6 +125,17 @@ public:
     }
 
     bool enabled() const { return m_enabled; }
+    // THE PHYSICS FOCUS (the sandbox world): where the terrain / tree / rock colliders must exist - every player's body
+    // (ours and the client twins') and the Base - whatever the camera does ("Detach camera": it flies away, and the
+    // ground must stay under the bodies). Writes at most maxPoints; 0 outside the sandbox world (the App uses the camera).
+    int physicsFocus(glm::vec3* out, int maxPoints) const;
+    // THE COARSE GROUND (the sandbox world): the App's terrain height at any distance, for places with no collider - a
+    // wave's spawn site, and the units that walk in by the far tick (GameUnitParams::farGround: they follow it).
+    void setGroundSource(float (*source)(float x, float z, float fallback))
+    {
+        m_structures.setGroundSource(source);
+        Globals::settings.game.unitParams.farGround = m_sandboxWorld ? source : nullptr;
+    }
 
     // PROFILING SCENARIO (`--scenario <save>`, main calls it once at `--scenario-frame`): loads the
     // save (F10's path when empty), selects EVERY live own-team unit and orders them all to the
@@ -553,6 +565,18 @@ private:
     int m_spawnFogNext = 0;
     void addSpawnFog(const glm::vec3& pos, float radius);
     void tickFogEffects(float deltaSec);
+    // THE FACTION LAYER (tickFaction, every instance off its own structure mirror; the sandbox world): whose land each
+    // cell is. Its sources: the Base and the field bubbles (the players), a wave's spawn site while its fog stands (the enemy).
+    FactionLayer m_faction;
+    oc::vector<FactionLayer::Source> m_factionSources; // kept: refilled every frame
+    void tickFaction(float deltaSec);
+    // THE ENEMY OUTPOSTS (tickOutposts, every instance; the sandbox world): the ring of dark beacons around the Base.
+    // The positions exist from the moment the Base does (the beam and the faction source need no more); the BUILDING
+    // (enemyOutpost.pre) is spawned when the terrain collider reaches its site - only then has the site a ground height.
+    struct EnemyOutpost { glm::vec3 pos{ 0.0f }; EntityPtr entity; };
+    oc::vector<EnemyOutpost> m_outposts;
+    float m_outpostGroundTimer = 0.0f; // s to the next ground probe of the outposts that have no building yet
+    void tickOutposts(float deltaSec, const glm::vec3* basePos);
     // LIGHTNING (tickLightning, every instance, a look only): flashes in the clouds (the clouds' two flash slots), slot 0
     // may carry an arc to the ground. age < 0 = a free slot.
     struct Lightning { glm::vec3 pos{}, ground{}; float age = -1.0f, life = 0.0f; bool strike = false, fork = false; uint32 seed = 0; };
@@ -605,7 +629,9 @@ private:
     void spawnLocalPlayer(); // the authority's own capsule at m_playerStart (+ the server-primary flag)
     void spawnSandboxNodes(); // resource nodes on fitting ground around the Base (+ the GNd broadcast)
     void sendNode(int index); // server: one node (GNd) - the clients' node list, in order
-    float groundY(float x, float z, float fallback) const { return m_structures.groundHeightAt(x, z, fallback); }
+    // The ground for something that only STANDS there (a spawn, a fog bank): the collider's exact height, else the coarse
+    // terrain height, else the fallback.
+    float groundY(float x, float z, float fallback) const { return m_structures.groundHeightAt(x, z, fallback, true); }
     // The "can't build here" HUD line, kept to the frames with a refused ghost.
     void showGroundReason(StructureSystem::EGroundFit fit);
 

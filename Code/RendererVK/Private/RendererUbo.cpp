@@ -218,6 +218,7 @@ void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, 
     // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that carries its world
     // center/sizes - descriptors (refreshed per frame in recordCommandBuffers) and params stay coherent.
     m_terrain.getHeightMap().flipIfPending();
+    m_terrain.getFactionMap().flipIfPending();
     // The world-space foam field: drift over the SIM delta (frozen with the pause, like the waves), levels around the
     // camera (the water nearest the eye is where the detail shows). Once per built frame, in frame order.
     m_oceanSimPipeline.advanceFoamField(m_cameraPos, oc::min((float)Globals::time.getSimDeltaSec(), 0.25f));
@@ -1342,6 +1343,47 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("terrain_mapInvNearSize", [this] { const float s = m_terrain.getHeightMap().getWorldSizes().x; return s > 1.0f ? 1.0f / s : 0.0f; }, UboLive);
         list.add("terrain_mapInvFarSize", [this] { const float s = m_terrain.getHeightMap().getWorldSizes().y; return s > 1.0f ? 1.0f / s : 0.0f; }, UboLive);
         list.add("terrain_mapSeaLevel", [this] { return m_terrain.getHeightMap().getUserParam(); }, UboLive);
+        // THE FACTION MAP (terrain_faction.inc.glsl): its min corner (world x / z), 1 / its extent (0 = no map), and the
+        // look - the gain on the side, and per side the tint's two colours (factionTint below).
+        list.add("terrain_factionOrigin", [this] { return m_terrain.getFactionMap().getCenter(); }, UboLive);
+        list.add("terrain_factionInvSize", [this] { const float s = m_terrain.getFactionMap().getWorldSizes().x; return s > 1.0f ? 1.0f / s : 0.0f; }, UboLive);
+        // The side (-1 .. 1) of the land OUTSIDE the map's square: the map's start value (0 with no map).
+        list.add("terrain_factionOutside", [this]
+            {
+                const auto& map = m_terrain.getFactionMap();
+                return map.getWorldSizes().x > 1.0f ? glm::clamp(map.getUserParam(), -1.0f, 1.0f) : 0.0f;
+            }, UboLive);
+        list.add("terrain_factionNight", [this] { return m_terrain.getFactionNight(); }, UboLive); // Renderer::setFactionNight
+        list.add("terrain_factionGain", [&] { return glm::max(t.factionTintGain, 0.0f); }, t.factionTintGain);
+        // The fog on a side's land (vol_scatter / vol_apply): its share of the tint, and the extra fog on enemy land.
+        list.add("terrain_factionFogTint", [&] { return glm::clamp(t.factionFogTint, 0.0f, 1.0f); }, t.factionFogTint);
+        list.add("terrain_factionEnemyFog", [&] { return glm::max(t.factionEnemyFog, 0.0f); }, t.factionEnemyFog);
+        list.add("terrain_factionSolidScale", [&] { return glm::clamp(t.factionSolidScale, 0.0f, 1.0f); }, t.factionSolidScale);
+        // THE TINT, per side, as the two colours the shader's `albedo x (1 + w keep) + luminance x (w add)` takes. With T =
+        // the picked colour at luminance 1 x the brightness (so brightness 1 keeps every surface as light as it was) and
+        // s = the picked colour's saturation, the full tint is (albedo (1 - s) + luminance s) x T:
+        //   keep = T (1 - s) - 1     what is left of the surface's OWN colour (-1: the shader adds it to 1)
+        //   add  = T s               the picked colour, on the surface's luminance
+        // A pure colour: keep = -1, add = T - the surface's hue is replaced, the same on grass, rock and sand (a multiply
+        // of the albedo showed the tint through the surface's own colour: violet on green-brown ground came out red).
+        // WHITE at brightness 1: keep = 0, add = 0 - no tint, that side's land keeps its own colours.
+        const auto factionTint = [](const glm::vec3& pickedIn, float brightness, bool add)
+        {
+            const glm::vec3 picked = glm::max(pickedIn, glm::vec3(0.0f));
+            const float high = glm::max(picked.x, glm::max(picked.y, picked.z)), low = glm::min(picked.x, glm::min(picked.y, picked.z));
+            const float saturation = high > 1e-5f ? (high - low) / high : 0.0f;
+            const float luminance = glm::max(glm::dot(picked, glm::vec3(0.2126f, 0.7152f, 0.0722f)), 0.05f);
+            const glm::vec3 unit = glm::min(picked * (glm::max(brightness, 0.0f) / luminance), glm::vec3(16.0f));
+            return add ? unit * saturation : unit * (1.0f - saturation) - glm::vec3(1.0f);
+        };
+        list.add("terrain_factionEnemyKeep", [&t, factionTint] { return factionTint(t.factionEnemyTint, t.factionEnemyStrength, false); },
+            t.factionEnemyTint, t.factionEnemyStrength);
+        list.add("terrain_factionEnemyAdd", [&t, factionTint] { return factionTint(t.factionEnemyTint, t.factionEnemyStrength, true); },
+            t.factionEnemyTint, t.factionEnemyStrength);
+        list.add("terrain_factionPlayerKeep", [&t, factionTint] { return factionTint(t.factionPlayerTint, t.factionPlayerStrength, false); },
+            t.factionPlayerTint, t.factionPlayerStrength);
+        list.add("terrain_factionPlayerAdd", [&t, factionTint] { return factionTint(t.factionPlayerTint, t.factionPlayerStrength, true); },
+            t.factionPlayerTint, t.factionPlayerStrength);
         list.add("terrain_seaLevel", [this] { return m_terrain.getParams().z; }, UboLive);   // world Y, live from the streamer
         list.add("terrain_meshRadius", [this] { return m_terrain.getParams().x; }, UboLive); // the streamed mesh's coverage radius (0 = none)
         list.add("terrain_lapseRate", [this] { return m_terrain.getParams().y; }, UboLive);  // C per world metre above sea level (<= 0)
@@ -1950,6 +1992,11 @@ void RendererState::registerUboValues(UboBlock& list)
             {
                 const RendererVKLayout::LightInfo& b = m_beamLights[i];
                 return i < m_beamLightCount ? glm::vec4(b.color, -b.radius) : glm::vec4(0.0f);
+            }, UboPresent);
+        // x = the tip fade: the glow fades out over this length (m) toward the beam's far end (0 = a hard end).
+        list.addArray("present_beamFade", MAX_BEAM_COLUMNS, [this](uint32 i)
+            {
+                return i < m_beamLightCount ? glm::vec4(m_beamLights[i].rotation, 0.0f, 0.0f, 0.0f) : glm::vec4(0.0f);
             }, UboPresent);
     }
 }

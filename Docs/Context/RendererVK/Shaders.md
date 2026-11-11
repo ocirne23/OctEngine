@@ -191,11 +191,12 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 `float16_t -> float` widening).
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants, the tree and foliage FS
-too), tree_volume_march 64/0, grass FS 56/48, grass VS 48/0, clutter / flower FS 64/16, flower VS 70/0 (textured 68/0),
-terrain ground FS 64/32, tessellated ground 64/48, film 56/80, ocean 80/32, river FS 72/16, rock 64/16, sky.fs 56,
-aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0, vol_apply FS 64/16, cloud_march /
-cloud_sky 64/0, cloud_shadow 39/0, cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 128/0, gi_volume_bake 55/0,
-clutter_cull 80/0, decal 53/0, force_union FS 72/48. The driver moves its
+too), voxel tree FS 64/64, tree_volume_march 64/0 (handover 62/0), grass FS 64/0, grass VS 48/0, clutter / flower FS
+64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 56/80, ocean 80/32,
+river FS 72/16, rock 56/64, sky.fs 56, aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+vol_apply FS 64/16, cloud_march 64/0 (64/16 with the vortex on), cloud_sky 64/0, cloud_shadow 39/0 (54/0 with the
+vortex on), cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
+decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.
 
 * **The rules:**

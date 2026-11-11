@@ -1904,6 +1904,16 @@ void RendererState::recordCommandBuffers()
         }
     }
 
+    // The game's faction map (24): the same ping-pong contract as the terrain-data cascades.
+    if (recordScene || m_terrain.getFactionDescGen(frameIdx) != m_terrain.getFactionMap().getGeneration())
+    {
+        m_terrain.setFactionDescGen(frameIdx, m_terrain.getFactionMap().getGeneration());
+        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+            m_staticMeshGraphicsPipeline.updateFactionMapDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_terrain.getFactionMap().getView(), m_terrain.getFactionMap().getSampler());
+        m_volumetricFogPipeline.updateFactionDescriptor(frameIdx, m_terrain.getFactionMap().getView(), m_terrain.getFactionMap().getSampler());
+    }
+
     descriptorScope.stop();
 
     if (recordScene)
@@ -1960,6 +1970,7 @@ void RendererState::recordCommandBuffers()
     // transitions need an execution dependency on those reads, which the StagingManager's fresh-image
     // upload path doesn't emit.
     m_terrain.getHeightMap().recordUpload(commandBuffer);
+    m_terrain.getFactionMap().recordUpload(commandBuffer);
     { // Sync for ubo copy
         vk::MemoryBarrier2 memoryBarrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eCopy,

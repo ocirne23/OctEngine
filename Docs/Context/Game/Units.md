@@ -98,6 +98,10 @@ World's root list** (non-units skipped per element) every interval of sim time:
   descent (geodesic, around rocks).
 * **By TELEPORT**: the entity pos is the far truth; the body pose and prev/curr are stomped, and the
   spatial entry is refreshed so the selection query finds it as it approaches.
+* **The height follows the ground where the game knows it** (`GameUnitParams::farGround`, set in the sandbox world
+  through `GameMatch::setGroundSource`: the App's coarse terrain height): the unit walks `farLift` (2.5 m) over it, so
+  it is over the true ground when it comes near and its body goes live, and drops onto the collider. Without a source
+  (the flat maps) or outside its reach it keeps its height.
 * Waypoints advance and the order clears with the full sim's radius rule. A step into rock holds.
 * No combat, bubble or strain while far. The daylight burn (the light rules, [Modes.md](Modes.md)) does run, with
   its death check.

@@ -69,8 +69,10 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 | Task | Command |
 |---|---|
 | Reconfigure | `cmake -B Build` |
-| Build | `cmake --build Build --config Debug` (also `RelWithDebInfo`, `Release`) |
+| Build | `cmake --build Build --config RelWithDebInfo --target App` (also `Debug`, `Release`) |
 
+* **Claude verifies a change with ONE build: the `App` target in `RelWithDebInfo`.** Build `Debug` only when the task
+  needs asserts or debug-only code (the `ThreadLocalScope` pins, debug checks), and say so.
 * Reconfigure ONLY when files are added or removed — all sources are globbed. **Never edit
   CMakeLists to add files.**
 * Output: `Build/Code/App/<Config>/App.exe`. `FileSystem::initialize()` finds `Assets/` by walking up and makes it the

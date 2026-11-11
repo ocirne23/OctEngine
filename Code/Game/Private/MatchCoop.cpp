@@ -191,6 +191,16 @@ float GameMatch::daylight() const
     return m_sandboxWorld ? glm::smoothstep(-0.05f, 0.15f, Globals::settings.sky.sunHeight()) : 1.0f;
 }
 
+// THE SHROUD's night (0 = day .. 1 = night), from the sun. AT DUSK (the afternoon) it comes in over a sun-height span of
+// 0.2 down to duskFull ("Shroud full at sun height (dusk)"; 0 = the horizon). AT DAWN it goes from sun height 0 to 0.25.
+// Both are 1 under the horizon and 0 at noon, so the switch does not show. The clouds (tickBeacon) and the faction
+// look (tickFaction) follow it.
+static float shroudNight(float duskFull)
+{
+    const SkyParams& sky = Globals::settings.sky;
+    return 1.0f - (sky.timeOfDay >= 12.0f ? glm::smoothstep(duskFull, duskFull + 0.2f, sky.sunHeight()) : glm::smoothstep(0.0f, 0.25f, sky.sunHeight()));
+}
+
 // THE BEACON. The cloud hole is the clouds' vortex: this only places it on the Base and drives its three live values
 // (the strength is a Runtime row, the spin is CPU-only, the coverage and its two variations are Runtime rows), so nothing here re-bakes a
 // shader after the one-time enable. Every instance runs it off its own structure mirror.
@@ -243,13 +253,9 @@ void GameMatch::tickBeacon(float deltaSec)
     const bool alive = !base->blueprint && base->health > 0.0f;
     const float target = alive ? glm::clamp(base->emitter.outputFrac, 0.0f, 1.0f) * glm::mix(0.4f, 1.0f, charge) : 0.0f;
     m_beaconPower += (target - m_beaconPower) * (1.0f - std::exp(-glm::max(deltaSec, 0.0f) / 2.0f));
-    // The SHROUD's night. AT DUSK (the afternoon) the clouds close over a sun-height span of 0.2 down to "Shroud full at
-    // sun height (dusk)" (0 = the horizon, where the night's first wave is due: it waits for the ignition below). AT
-    // DAWN they open from sun height 0 to 0.25. Both are 1 under the horizon and 0 at noon, so the switch does not show.
-    const SkyParams& sky = Globals::settings.sky;
-    const float duskFull = m_settings.shroudDuskSunHeight;
-    const float night = 1.0f - (sky.timeOfDay >= 12.0f ? glm::smoothstep(duskFull, duskFull + 0.2f, sky.sunHeight())
-                                                       : glm::smoothstep(0.0f, 0.25f, sky.sunHeight()));
+    // The SHROUD's night: the clouds close at dusk and open at dawn by it (the night's first wave is due at the horizon:
+    // it waits for the ignition below).
+    const float night = shroudNight(m_settings.shroudDuskSunHeight);
     // THE IGNITION: at dusk the clouds close first, with no hole. "Ignite delay" after the clouds are closed the Beacon turns
     // on, in three steps. THE GLOW ("Beam glow time", m_beaconGlow 0 -> 1): a short beam on the Base brightens. THE CLIMB
     // ("Beam climb time", m_beaconClimb): its tip goes up to the cloud base, slow near the ground and faster in the sky.
@@ -326,7 +332,8 @@ void GameMatch::tickBeacon(float deltaSec)
     const float range = glm::max(m_settings.beaconLightRange, 1.0f);
     const float radius = glm::max(m_settings.beaconBeamRadius, 0.05f);
     const float intensity = m_settings.beaconLightIntensity * beam * glow;
-    Globals::rendererVK.addBeamColumn(BeamLight(foot + up * (height * 0.5f), range, beamColor, intensity, up, radius, height));
+    Globals::rendererVK.addBeamColumn(BeamLight(foot + up * (height * 0.5f), range, beamColor, intensity, up, radius, height,
+        height * glm::clamp(m_settings.beaconBeamTipFade, 0.0f, 1.0f))); // the tip fades at every height: soft while it climbs too
     const float surfaceHeight = glm::min(height, c_surfaceBeamHeight);
     Globals::rendererVK.addLightInfo(BeamLight(foot + up * (surfaceHeight * 0.5f), range, beamColor, intensity, up, radius, surfaceHeight), false);
 }
@@ -388,6 +395,146 @@ void GameMatch::tickFogEffects(float deltaSec)
             clear.albedo = glm::vec3(0.0f);
             clear.emissive = 0.0f;
             Globals::rendererVK.addFogVolume(clear);
+        }
+    }
+}
+
+// THE FACTION LAYER (Game:Faction): made around the Base when it exists; every frame it gets its sources and a slice
+// of its spread. At the end of each sweep the renderer gets the bytes for the look.
+void GameMatch::tickFaction(float deltaSec)
+{
+    const GameFactionSettings& s = Globals::settings.game.faction;
+    if (!m_sandboxWorld || !s.enabled)
+    {
+        if (m_faction.valid())
+        {
+            m_faction.clear();
+            Globals::rendererVK.clearFactionMap();
+        }
+        return;
+    }
+    const StructureSystem::Ref* base = nullptr;
+    for (const StructureSystem::Ref& ref : m_structures.structures()) // the Base is the first structure spawned
+        if (ref.type == EStructureType::Base && ref.state && ref.owner && ref.state->team == 0)
+        {
+            base = &ref;
+            break;
+        }
+    const glm::vec3 basePos = base ? base->owner->pos : glm::vec3(0.0f);
+    tickOutposts(deltaSec, base ? &basePos : nullptr);
+    // BY DAY only the land the enemy's sources hold has the enemy's look; BY NIGHT all land under neutral has it (the
+    // untouched land starts one byte under neutral). The renderer does the step: a live value, no upload.
+    Globals::rendererVK.setFactionNight(shroudNight(m_settings.shroudDuskSunHeight));
+    // The renderer puts "Tint curve" on the bytes on their way to the GPU: its copy holds the curve it was sent with.
+    const float curve = Globals::settings.terrain.factionTintCurve;
+    const auto send = [&](const glm::ivec4* dirty) // dirty null = all of the map (both images of the renderer's pair, over the next two sends)
+    {
+        Globals::rendererVK.setFactionMap(m_faction.bytes(), FactionLayer::Size, m_faction.origin(), m_faction.cellSize(), m_faction.startValue(), dirty, curve);
+    };
+    if (!m_faction.valid())
+    {
+        if (!base)
+            return;
+        m_faction.reset(glm::vec2(base->owner->pos.x, base->owner->pos.z), s.cellSize, (uint8)glm::clamp(s.startValue, 0, 255));
+        send(nullptr);
+        return; // one send a frame: the spread starts next frame
+    }
+    if (Globals::rendererVK.factionMapCurveChanged(curve)) // the tweak moved: send all of it again
+    {
+        send(nullptr);
+        return;
+    }
+    m_factionSources.clear();
+    if (base && !base->state->blueprint && base->state->health > 0.0f)
+        m_factionSources.push_back({ glm::vec2(base->owner->pos.x, base->owner->pos.z), s.baseRadius, 1.0f });
+    for (const glm::vec4& zone : m_fieldZones) // the lit field bubbles (refreshed on the SIM LOD timer)
+        m_factionSources.push_back({ glm::vec2(zone.x, zone.z), zone.w * s.fieldRadiusScale, 1.0f });
+    for (const SpawnFog& site : m_spawnFog) // where a wave came down: enemy land while its fog stands
+        if (site.age >= 0.0f)
+            m_factionSources.push_back({ glm::vec2(site.pos.x, site.pos.z), s.enemySiteRadius, -1.0f });
+    for (const EnemyOutpost& outpost : m_outposts) // the dark beacons
+        m_factionSources.push_back({ glm::vec2(outpost.pos.x, outpost.pos.z), s.outpostRadius, -1.0f });
+    m_faction.setSources(m_factionSources);
+    glm::ivec4 dirty;
+    if (m_faction.tick(deltaSec, dirty)) // a sweep ended and changed bytes: only their rectangle goes to the renderer
+        send(&dirty);
+}
+
+int GameMatch::physicsFocus(glm::vec3* out, int maxPoints) const
+{
+    if (!m_enabled || !m_sandboxWorld)
+        return 0;
+    int count = 0;
+    const auto add = [&](const glm::vec3& pos)
+    {
+        if (count < maxPoints)
+            out[count++] = pos;
+    };
+    add(m_player.bodyPos());
+    for (const auto& [id, twin] : m_clientPlayers)
+        if (twin)
+            add(twin->pos);
+    add(m_basePos); // the waves march to it and fight there, also while every player is away
+    return count;
+}
+
+// THE ENEMY OUTPOSTS: "Count" dark beacons on a regular polygon "Distance from the Base" out (8 = the octagon, turned
+// half a step so none stands due north / east). Every instance makes the same ring from the Base's position. Each is
+// an enemy source of the faction layer (tickFaction) and draws a violet beam (a glow-only column: no light record).
+// Its BUILDING needs the ground's height, and the terrain collider exists only near a camera: a site with no building
+// is probed once a second and gets it when the ray first hits.
+void GameMatch::tickOutposts(float deltaSec, const glm::vec3* basePos)
+{
+    const GameFactionSettings& s = Globals::settings.game.faction;
+    if (!s.outpostsEnabled)
+    {
+        for (EnemyOutpost& outpost : m_outposts)
+            if (outpost.entity)
+                Globals::world.removeRootEntity(outpost.entity.get());
+        m_outposts.clear();
+        return;
+    }
+    if (m_outposts.empty())
+    {
+        if (!basePos)
+            return;
+        const int count = glm::clamp(s.outpostCount, 1, 16);
+        for (int i = 0; i < count; ++i)
+        {
+            const float angle = ((float)i + 0.5f) * glm::two_pi<float>() / (float)count;
+            m_outposts.push_back({ *basePos + glm::vec3(std::cos(angle), 0.0f, std::sin(angle)) * s.outpostDistance, EntityPtr() });
+        }
+        m_outpostGroundTimer = 0.0f;
+    }
+
+    m_outpostGroundTimer -= deltaSec;
+    const bool probe = m_outpostGroundTimer <= 0.0f;
+    if (probe)
+        m_outpostGroundTimer = 1.0f;
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::vec3 violet(0.6f, 0.15f, 1.0f);
+    for (EnemyOutpost& outpost : m_outposts)
+    {
+        if (probe && !outpost.entity)
+        {
+            constexpr float c_noGround = -1.0e30f;
+            const float y = m_structures.groundHeightAt(outpost.pos.x, outpost.pos.z, c_noGround); // the collider's EXACT height only: a building
+            if (y > c_noGround * 0.5f)
+            {
+                outpost.pos.y = y + 3.0f; // the prefab's origin is 3 m over its ground (the Base's box)
+                outpost.entity = Globals::world.spawnAssetFile("Entities/Game/enemyOutpost.pre", Transform(outpost.pos), true);
+                if (outpost.entity)
+                {
+                    outpost.entity->setName("Enemy outpost");
+                    Globals::world.addRootEntity(outpost.entity);
+                }
+            }
+        }
+        if (s.outpostBeamIntensity > 0.0f)
+        {
+            const float height = glm::max(s.outpostBeamHeight, 10.0f);
+            Globals::rendererVK.addBeamColumn(BeamLight(outpost.pos + up * (3.2f + height * 0.5f), glm::max(s.outpostBeamRange, 1.0f), violet,
+                s.outpostBeamIntensity, up, glm::max(s.outpostBeamRadius, 0.05f), height, height * glm::clamp(s.outpostBeamTipFade, 0.0f, 1.0f)));
         }
     }
 }
@@ -650,9 +797,22 @@ void GameMatch::queueWave()
     const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
     if (m_sandboxWorld)
     {
-        // No barrier and no map edge: a ring around the Base, inside the collider ring the player stands in (a body
-        // with no terrain under it would fall).
-        m_waveOrigin = m_basePos + dir * m_settings.sandboxWaveDistance;
+        // No barrier and no map edge: the wave comes down on ENEMY LAND (the faction layer) - out from the Base along
+        // the direction, from "Sandbox wave distance" on, at the first point that is the enemy's and stays so for the
+        // next step, + a margin; "Sandbox wave max distance" at the latest. So the demons come from farther away as
+        // the players' land grows. No layer (it is off): the plain ring at the min distance.
+        float distance = m_settings.sandboxWaveDistance;
+        if (m_faction.valid())
+        {
+            constexpr float c_step = 8.0f, c_margin = 16.0f;
+            constexpr uint8 c_enemyLand = FactionLayer::Neutral - 1; // under neutral: the untouched land (the start value) and the enemy's
+            const float maxDistance = glm::max(m_settings.sandboxWaveMaxDistance, distance);
+            const auto enemyAt = [&](float d) { return m_faction.sample(m_basePos.x + dir.x * d, m_basePos.z + dir.z * d) <= c_enemyLand; };
+            while (distance < maxDistance && !(enemyAt(distance) && enemyAt(distance + c_step)))
+                distance += c_step;
+            distance = glm::min(distance + c_margin, maxDistance);
+        }
+        m_waveOrigin = m_basePos + dir * distance;
         m_waveDest = m_basePos + dir * 6.0f;
     }
     else

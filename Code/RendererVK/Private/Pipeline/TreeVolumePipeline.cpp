@@ -364,6 +364,7 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(16, vk::DescriptorType::eStorageImage));         // the max-floor grid (back)
     for (uint32 c = 1; c < 4; ++c)
         b.push_back(binding(16 + c, vk::DescriptorType::eCombinedImageSampler)); // density, R = channel c (swizzled views)
+    b.push_back(binding(20, vk::DescriptorType::eCombinedImageSampler)); // the game's faction map (terrain_faction.inc.glsl)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = m_marchBlock.size() });
 }
 
@@ -1696,7 +1697,7 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
     pc.set(m_marchPush.startDistance, params.startDistance); // scaled with the camera's height (Renderer::farTreesStart)
     pc.set(m_marchPush.fullSize, glm::uvec2(m_width, m_height));
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 20> updates{
+    oc::array<DescriptorSetUpdateInfo, 21> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -1723,6 +1724,8 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
         DescriptorSetUpdateInfo{ .binding = 17, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[0]) } },
         DescriptorSetUpdateInfo{ .binding = 18, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[1]) } },
         DescriptorSetUpdateInfo{ .binding = 19, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumChannelViews[2]) } },
+        DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.factionSampler, .imageView = params.factionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
     };
     writeSet(set, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, march.getPipeline());

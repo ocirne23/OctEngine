@@ -33,10 +33,22 @@ public:
 
     // channels: 1 = R32F, 2 = RG32F, 4 = RGBA32F (interleaved floats per texel in upload()).
     void initialize(uint32 resolution, uint32 numLayers, uint32 channels, const char* debugName);
+    // The 8-BIT form: ONE R8 unorm channel, world-FIXED maps included (the faction map) - uploadBytes() feeds it.
+    void initializeBytes(uint32 resolution, uint32 numLayers, const char* debugName);
+    void uploadBytes(oc::span<const uint8> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx);
+    // A PARTIAL upload of the 8-bit form (one layer): `image` is the WHOLE image (resolution^2 bytes), rect the texels
+    // that changed since the last call (x0, y0, x1, y1, inclusive). Only a rectangle is staged and copied - this call's
+    // rect joined with the last call's, because the image it lands in (the inactive one of the pair) missed that one.
+    // The first two calls after initialize copy the whole image (each image of the pair once).
+    // lut (256 bytes, optional): every staged byte goes through it - a curve on the values, paid on the CPU for the
+    // copied rectangle only, never in a shader.
+    void uploadBytesRect(const uint8* image, const glm::ivec4& rect, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx,
+        const uint8* lut = nullptr);
 
     // worldSizes = world meters covered per layer; userParam = one baked value carried with the flip
     // (the fog map's terrain sea level). texels are layer-major, resolution^2 * channels floats each.
     void upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx);
+    void requestFullCopies() { m_fullCopiesLeft = 2; m_lastRect = glm::ivec4(0, 0, -1, -1); } // the next two uploadBytesRect calls copy the whole image again (a new map)
     void recordUpload(CommandBuffer& commandBuffer); // no-op unless an upload is pending
     void flipIfPending();
     void clear() { m_worldSizes = glm::vec2(0.0f); } // consumers' 1/size params drop to 0; images sit unused
@@ -54,6 +66,8 @@ private:
     uint32 m_resolution = 0;
     uint32 m_numLayers = 0;
     uint32 m_channels = 1;
+    uint32 m_texelBytes = sizeof(float); // per texel: channels x 4 (float), or 1 (the 8-bit form)
+    void create(vk::Format format, const char* debugName);
 
     vk::Image m_image[2]{};
     VmaAllocation m_memory[2]{};
@@ -63,6 +77,11 @@ private:
     Sampler m_sampler;
 
     int m_uploadSlot = -1; // staging slot holding a not-yet-recorded upload (-1 = none)
+    // uploadBytesRect: the texel rectangle the pending upload copies (x0, y0, x1, y1; x1 < x0 = the whole image, the
+    // other uploads), the last call's own rectangle, and how many whole-image copies are still owed.
+    glm::ivec4 m_copyRect{ 0, 0, -1, -1 };
+    glm::ivec4 m_lastRect{ 0, 0, -1, -1 };
+    uint32 m_fullCopiesLeft = 2;
     uint32 m_active = 0;
     uint32 m_generation = 1;
     bool m_flipPending = false;

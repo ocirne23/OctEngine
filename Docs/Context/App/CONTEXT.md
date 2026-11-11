@@ -223,8 +223,8 @@ is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` a
 switched ON through tweak OVERRIDES (applied at once) and switched off again in `exitToMenu`, so every
 other mode keeps its own default of off. A sandbox SERVER also spawns `Entities/Debug/networkTest.pre`.
 **Co-op in the sandbox world** (`GameMatch::sandboxWorld()`, the default) throws the same two overrides right after the
-match is constructed and hands it the anchor (`setWorldAnchor(pos, dir)`: `--camera` or `START_POS` / `START_DIR`,
-(0, 0) when seeded) - the player starts where the sandbox camera starts.
+match is constructed and hands it the anchor (`setWorldAnchor(pos, dir)`: `--camera` or `COOP_START_POS` /
+`COOP_START_DIR`, (0, 0) when seeded) - the co-op game has its own start, apart from the sandbox camera's.
 
 ## Events (server-authoritative, reliable)
 

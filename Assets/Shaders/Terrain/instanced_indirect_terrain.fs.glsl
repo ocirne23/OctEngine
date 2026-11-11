@@ -42,6 +42,8 @@ layout (location = 1) out vec4 out_motion;
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
 #include "grass.inc.glsl" // the canopy shading of the ground under the grass (grassGroundCanopy)
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the ground's look by whose land it is
 
 // Terrain field debug view: set a mode, F5. Draws the baked data map instead of shading it.
 //   1 = temperature  heat ramp -25..+50 C, 5 C contours; MAGENTA = freezing line, CYAN + darkened fill = the live
@@ -289,6 +291,9 @@ void main()
 	const float reliefSunGate = mix(1.0, smoothstep(0.0, 0.1, dot(geoN, u_sunDirection.xyz)), reliefStrength);
 	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
 #endif
+
+	// The faction look: before the blade light and the lit core, which both take the albedo.
+	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz);
 
 	// The grass canopy: the ground's sun only (the water film keeps its own) and its ambient.
 	// V HERE, not at the top: its 3 registers are then not live across the shadow, the layers and the splat.

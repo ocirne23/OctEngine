@@ -34,6 +34,8 @@ layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
 #include "grass.inc.glsl"   // grassNearShadow, grassValueNoise (in_terrainVertices: the lit core's binding 14)
 #include "clutter.inc.glsl"
 #include "cactus.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the clutter takes the faction look of the land it lies on
 
 // The spots on a mushroom cap: jittered cells in mesh space, a spot near each cell's centre.
 float clutterSpots(vec3 p, float amount)
@@ -181,5 +183,6 @@ void main()
     ao *= 1.0 - u_clutter_contactDarkening * (1.0 - smoothstep(0.0, band, in_fields.y));
 
     const vec3 V = normalize(-in_relPos); // in_relPos = pos - camera, exact near the camera
-    out_color = vec4(computeLitColor(in_pos, V, N, f16vec3(albedo), float16_t(max(roughness, 0.05)), float16_t(0.0), float16_t(ao)), 1.0);
+    out_color = vec4(computeLitColor(in_pos, V, N, terrainFactionAlbedo(f16vec3(albedo), in_pos.xz), float16_t(max(roughness, 0.05)), float16_t(0.0),
+        float16_t(ao)), 1.0);
 }

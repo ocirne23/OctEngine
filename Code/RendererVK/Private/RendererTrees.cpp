@@ -684,6 +684,8 @@ void RendererState::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, c
         .skyMapSampler = m_giProbePipeline.getSkyMapSampler(),
         .cloudShadowView = m_cloudPipeline.getShadowView(),
         .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
+        .factionView = m_terrain.getFactionMap().getView(),
+        .factionSampler = m_terrain.getFactionMap().getSampler(),
         .cameraPos = m_cameraPos,
         .startDistance = farTreesStart(),
         .sources = oc::span<const TreeVolumePipeline::Source>(sources.data(), sources.size()),

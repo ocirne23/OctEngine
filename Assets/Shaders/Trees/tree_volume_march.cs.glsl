@@ -21,6 +21,9 @@
 #include "leaf_look.inc.glsl" // leafTransmitColor: the far transmission's colour, as the near leaves'
 #define CLOUD_SHADOW_BINDING 11
 #include "cloud_shadow.inc.glsl"
+#define FACTION_MAP_BINDING 20
+#define FACTION_NO_HALF
+#include "terrain_faction.inc.glsl" // the game's faction layer: the far trees take the faction look of their land
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
@@ -509,7 +512,11 @@ void marchAt(ivec2 px)
                 const vec4 baked = colourAt(uv);
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709).
-                const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale;
+                // The faction look, at the step's own place (the colour map is baked: the layer changes between bakes), the
+                // weaker share on a rock column.
+                const vec3 albedo = terrainFactionTint(
+                    max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale,
+                    p.xz, mix(1.0, u_terrain_factionSolidScale, rock));
                 const float hNorm = h * (1.0 / pc_vol_height);
 
                 // The volume's NORMAL = -grad(density), by forward differences over half a cell (horizontal) / one slice

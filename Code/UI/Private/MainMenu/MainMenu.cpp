@@ -265,8 +265,8 @@ void MainMenu::renderMain()
 	const ImVec2 buttonSize(width, 42.0f);
 	if (ImGui::Button("Play co-op (PvE)", buttonSize))
 		start(MainMenuAction::EType::StartCoop);
-	if (ImGui::Button("Play PvP", buttonSize))
-		start(MainMenuAction::EType::StartPvp);
+	//if (ImGui::Button("Play PvP", buttonSize))
+	//	start(MainMenuAction::EType::StartPvp);
 	if (ImGui::Button("Sandbox (engine testbed)", buttonSize))
 		start(MainMenuAction::EType::StartSandbox);
 

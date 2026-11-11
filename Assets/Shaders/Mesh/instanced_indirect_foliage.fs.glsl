@@ -40,6 +40,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #include "tree_wind.inc.glsl" // the billboard waves (treeWindBillboardUv)
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
+#define FACTION_MAP_BINDING 24
+#include "terrain_faction.inc.glsl" // the game's faction layer: the foliage takes the faction look of the land it stands on
 
 // One flat geometric normal stands for a whole clump, so rejecting by it darkened the entire card whenever the sun was
 // behind it. Shadow it from the card's sun side instead (the bias follows the geometric normal, flipped toward the sun)
@@ -232,7 +234,8 @@ void main()
 	}
 
 	// The crown's colour PATCHES as on the mesh leaves (the crossfade keeps them).
-	const f16vec3 materialColor = f16vec3((material.flags & MATERIAL_FLAG_LEAF) != 0u ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz);
+	const f16vec3 materialColor = terrainFactionAlbedo(
+		f16vec3((material.flags & MATERIAL_FLAG_LEAF) != 0u ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz);
 	// BC5 normal maps store only X/Y, so .z reads 0 and would flip the normal into the surface: reconstruct Z. The
 	// billboards' CROWN layout (TreeImpostor bakeBillboards): A = the baked crown interior.
 	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));

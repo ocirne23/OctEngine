@@ -24,6 +24,68 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
   beach paints over the waterline whatever the climate, and snow paints over everything else, ground
   AND rock. The contract is on `TerrainSplatMaterial` / `TerrainSplatCounts` (TerrainResources.ixx).
+* **THE FACTION MAP** (`Renderer::setFactionMap` / `clearFactionMap`; `TerrainResources::getFactionMap`): the game's
+  faction layer as ONE R8 texture, `FACTION_MAP_RES` (4096) square (16 MB an image: the pair + a staging buffer per
+  frame slot), over a world-FIXED square - 0 = fully the enemy's,
+  128 = neutral, 255 = fully the players'. A `BakedWorldMap` in its 8-BIT form (`initializeBytes`: the
+  same ping-pong pair, staging per frame slot and `recordUpload` / `flipIfPending` as the terrain-data map, so a new
+  copy needs no GPU sync and no re-record). **The upload is PARTIAL** (`uploadBytesRect`): the game passes the cell
+  rectangle a sweep changed, and only that rectangle JOINED WITH THE LAST CALL'S is staged and copied - the image it
+  lands in is the inactive one, which missed the last call - with the image's contents kept (the copy's barrier leaves
+  from SHADER_READ_ONLY, not UNDEFINED). A new map (`dirty` null) copies the whole image, once for each image of the
+  pair (`requestFullCopies`). Its "centre" is the square's MIN corner and its size the extent; size 0 = no map
+  (`u_terrain_factionOrigin` / `u_terrain_factionInvSize`, live). The land OUTSIDE the square counts as the map's start
+  value (`u_terrain_factionOutside`, the map's user value: the side -1 .. 1), so the square's edge does not show.
+  **THE NIGHT** (`Renderer::setFactionNight`, `u_terrain_factionNight`, live, 0 .. 1): `terrainFactionSide` takes every
+  side UNDER 0 (the outside value too) toward -1 by it - `side - night x (1 + side)` - so by night all land under
+  neutral has the full enemy tint and fog, and land at neutral or over keeps its value. The game starts untouched land
+  at byte 127 for this, and the curve table keeps a byte under 128 at 127 at the most (a power over 1 would round it to
+  neutral and lose the sign). The forward set binds it at **24**
+  (UPDATE_AFTER_BIND, rewritten per frame slot on a new generation). **Its readers are the fragment shaders of what grows on the land**
+  (`terrain_faction.inc.glsl`, each with `FACTION_MAP_BINDING 24`): the terrain ground
+  (`instanced_indirect_terrain.fs.glsl`; its tint comes after its far-grass layer, so the far grass has it too), the
+  grass blades (`grass.fs.glsl`), the clutter and the flowers (`clutter.fs.glsl`, `clutter_flower.fs.glsl`), and the
+  trees and bushes at every tier (`instanced_indirect_tree.fs.glsl`, `instanced_indirect_foliage.fs.glsl`,
+  `instanced_indirect_tree_voxel.fs.glsl`). Each applies the same rule to its own albedo at the FRAGMENT's world x / z,
+  before its transmitted light and the lit core, so everything on a piece of land agrees. **BARK AND ROCK take a
+  weaker tint** (x "Trunk and rock tint", `u_terrain_factionSolidScale`): the rocks and dead wood
+  (`instanced_indirect_rock.fs.glsl`), the bark on the tree tiers (not a leaf material), and **the NEAR bark, which
+  draws on LitOpaque for its early depth** - the regular lit FS (`instanced_indirect.fs.glsl`) tints only a material
+  with `MATERIAL_FLAG_FACTION_TINT`, which `TreeSystem` sets on the bark materials. That flag is bit 0 of the fade
+  band (every bit above the band is taken): valid only with no `DISTANCE_FADE`, and the shader tests both. Without it
+  the near bark was untinted and its crossfade copies (LitTree) tinted: the trunks flickered across the fade band.
+  **THE FAR-TREE VOLUME reads it too**, in its march (`tree_volume_march.cs.glsl`, binding 20 of the march set, with
+  `FACTION_NO_HALF`: the include's `vec3` form `terrainFactionTint`): the step's albedo is tinted at the step's own
+  world x / z, AFTER the baked colour map - the layer changes between bakes - with the weaker share by the column's
+  rock fraction. **THE FOG reads it** (`VolumetricFogPipeline`: binding 15 of the scatter
+  set and 12 of each apply set, UPDATE_AFTER_BIND, `updateFactionDescriptor` beside the forward set's write; both
+  shaders include it with `FACTION_NO_HALF`): a froxel's height fog x (the regional factor + `terrainFactionFogExtra`:
+  "Enemy land fog" x the enemy side - ADDED to the climate's fog thickness, so enemy land holds fog in a dry region
+  too; as a multiplier on it the fog came only where the climate already had some) and its albedo through `terrainFactionFogAlbedo` (the tint x "Fog
+  tint"); the FAR FIELD's terrain-following march does the same per sub-segment, and tints the ray's fog by the
+  sub-segments' sides weighted by what each adds (a ray with no marched fog takes the side outside the map). Not
+  tinted: the shaft haze, the underwater fog, the fog volumes, the flat (no terrain map) far field.
+  **Not readers:** every other regular mesh, the water:
+  `terrainFactionSide(xz)` = -1 .. 0 .. 1 (0 outside the square), and `terrainFactionAlbedo` changes the albedo before
+  the lit core - the albedo is multiplied by its side's tint ("Game/Faction" - the look's rows are `TerrainSettings` values, registered in the game's group - "Enemy land tint" violet, "Player
+  land tint" gold; the row's intensity is the tint's BRIGHTNESS, over 1 because a ground texture's grey is dark), by
+  the side x "Tint gain" (2 = the full tint from half-held land on). **THE TINT CURVE is on the CPU** ("Game/Faction" "Tint curve", a power; `TerrainResources::factionCurveLut`, a
+  256-byte table): `setFactionMap(..., curve)` puts every byte through it on its way into the staging buffer
+  (`uploadBytesRect`'s `lut`) - the side's strength (0..1) raised to the power, the sign kept: over 1, land in the
+  middle leans to neutral and the tint comes in toward the extremes. So the GPU's copy holds CURVED values and no
+  shader pays for the curve; the game's own bytes stay as they are. A changed curve needs the whole map again:
+  `factionMapCurveChanged(curve)` tells the game, which then sends with `dirty` null.
+  **The shader's rule:** `albedo x (1 + w keep) + luminance(albedo) x
+  (w add)` - one dot and two multiply-adds; the surface keeps its light and dark and takes the picked colour as its
+  hue, THE SAME ON EVERY SURFACE. **`keep` and `add` are made on the CPU** (`factionTint` in `RendererUbo.cpp`, per
+  side: `u_terrain_factionEnemyKeep` / `...Add`, `...PlayerKeep` / `...Add`): with T = the picked colour at luminance 1
+  x the brightness (brightness 1 keeps a surface as light as it was) and s = the colour's saturation, keep = T (1 - s)
+  - 1 and add = T s. A pure colour replaces the hue whole; a pale one keeps more of the surface's own colour; WHITE at
+  brightness 1 gives keep = add = 0: no tint, that side's land keeps its own colours. **Tried and dropped - any plain
+  MULTIPLY of the albedo:** it shows the tint through the surface's own colour (a violet tint on green-brown ground
+  came out RED: the ground has little blue to multiply), and dividing the tint by a reference ground albedo on the CPU
+  only fixed surfaces of that one colour. A consistent hue needs the surface's luminance, which is the one dot. The game side is The
+  faction layer in [`Docs/Context/Game/Modes.md`](../Game/Modes.md).
 * **The beach also paints a river's BED**: `TerrainFields::river` (the river influence, 1 in a channel, 0 past its
   floodplain) over `TERRAIN_RIVER_BED_START..FULL` (0..1: the whole floodplain band), max'd with the shore band. It
   comes from the TERRAIN VERTEX (`TerrainVertex`, "The terrain vertex" below): the terrain VS passes `out_river`

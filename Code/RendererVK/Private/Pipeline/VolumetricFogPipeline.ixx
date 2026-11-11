@@ -89,6 +89,7 @@ public:
     // valleys and clears the peaks; the far field marches the same ground past the volume. Covers the whole
     // pipeline in one call - keep it that way, or a set added later gets missed.
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
+    void updateFactionDescriptor(uint32 frameIdx, vk::ImageView factionView, vk::Sampler factionSampler); // the game's faction map (scatter 15, apply 12)
 
 private:
     struct ImageSet

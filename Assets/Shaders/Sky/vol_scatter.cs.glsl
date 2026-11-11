@@ -88,6 +88,11 @@ float riverWaterAt(vec2 worldXZ)
 #define CLOUD_SHADOW_BINDING 13
 #include "cloud_shadow.inc.glsl"
 
+// The game's faction layer: the fog's tint and the extra fog on enemy land.
+#define FACTION_MAP_BINDING 15
+#define FACTION_NO_HALF
+#include "terrain_faction.inc.glsl"
+
 // Light grid (read) + giSquareFalloff/giSunShadow from the shared lighting helpers.
 #define GRID_DATA_NAME  in_gridData
 #define GRID_TABLE_NAME in_gridTable
@@ -276,7 +281,9 @@ void main()
     const float tScale = 1.0 / dot(dir, u_viewForward);
     const float yA = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z) / float(VOL_FROXEL_Z)) * tScale);
     const float yB = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z + 1) / float(VOL_FROXEL_Z)) * tScale);
-    const float heightDensity = u_fog_density * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
+    // The game's faction layer: enemy land holds more fog, and the fog takes its land's tint (terrain_faction.inc.glsl).
+    const float factionSide = terrainFactionSide(worldPos.xz);
+    const float heightDensity = u_fog_density * heightFogMean(yA, yB, heightBase, heightFalloff) * (regionMul + terrainFactionFogExtra(factionSide));
 
     // Underwater: everything below the LOCAL water surface is ALWAYS fogged at the global density x "Fog/Underwater
     // density" (the height profile and region shape only the fog ABOVE it), whatever the local climate. The boundary is
@@ -315,7 +322,7 @@ void main()
     float density = max(heightDensity, underDensity) * noiseMul;
 
     // Underwater the medium is water: the albedo blends toward the water's in-scatter colour by the submerged fraction.
-    vec3 albedoWeighted = mix(u_fog_albedo, inland ? u_river_scatterColor : u_ocean_scatterColor, underFrac) * density;
+    vec3 albedoWeighted = mix(terrainFactionFogAlbedo(u_fog_albedo, factionSide), inland ? u_river_scatterColor : u_ocean_scatterColor, underFrac) * density;
     vec3 emissive = vec3(0.0);
 
     for (uint v = 0u; v < in_numFogVolumes; ++v)

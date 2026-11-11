@@ -92,6 +92,7 @@ public:
     void updateCloudShadowDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView shadowView, vk::Sampler shadowSampler);
     // Points the terrain-data cascade binding (19) at the active ping-pong image (refreshed per frame).
     void updateTerrainHeightDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView terrainView, vk::Sampler terrainSampler);
+    void updateFactionMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView factionView, vk::Sampler factionSampler);
     // Points the terrain wetness clipmap binding (18) at the wetness image (GENERAL layout).
     void updateTerrainWetnessDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView wetView, vk::Sampler wetSampler);
     void update(uint32 frameIdx, oc::vector<ObjectContainer*>& objectContainers);

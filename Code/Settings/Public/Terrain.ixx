@@ -172,6 +172,19 @@ export struct TerrainSettings
 	int   texParallaxSteps = 24;
 	float texParallaxShadow = 1.0f;       // relief self-shadow strength (0 = off)
 	float texHeightBlendContrast = 3.0f;  // 0 = linear layer blend
+	// THE FACTION LOOK (terrain_faction.inc.glsl): the ground's albedo follows the game's faction map (Renderer::setFactionMap).
+	// The colour the land of a side takes - its hue on every surface, which keeps its own light and dark - and its
+	// brightness (1 = as light as the land was). A pale colour keeps more of the land's own colour; WHITE at brightness 1
+	// is no tint. The CPU folds these into the shader's two colours a side (RendererUbo.cpp, factionTint).
+	glm::vec3 factionEnemyTint = glm::vec3(0.6f, 0.06f, 1.0f);   // violet
+	float factionEnemyStrength = 0.5f;                          // its brightness
+	glm::vec3 factionPlayerTint = glm::vec3(1.0f, 0.62f, 0.06f); // gold
+	float factionPlayerStrength = 2.0f;
+	float factionTintCurve = 2.0f; // the power on the side's strength (0..1): 1 = linear; over 1 = land in the middle leans to neutral, the tint comes in toward the extremes
+	float factionTintGain = 1.0f; // x the side (-1..1) before the clamp: 2 = the full tint from half-held land on
+	float factionFogTint = 0.7f; // the share of the tint the FOG over a side's land takes (0 = the fog keeps its colour)
+	float factionEnemyFog = 1.0f; // extra fog on enemy land, ADDED to the regional fog factor: 1 = one full "Fog/Density" more, in any climate (0 = none)
+	float factionSolidScale = 0.45f; // the share of the tint that bark and rock take (the ground, grass and leaves take 1)
 	bool  texTessEnabled = true;
 	int   texTessMaxFactor = 8;
 	float texTessTargetPx = 7.0f;

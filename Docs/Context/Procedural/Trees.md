@@ -858,7 +858,9 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   ROCK its LOD chain's LAST level as a MESH (`m_rockColliderMeshes`: one BVH per variant, built by `spawnWorld` from
   `RockSystem::WorldVariant::collisionPositions` / `Indices` - TreeSystem's own copy, so RockSystem may free its meshes
   first). Layer "Vegetation". `updateColliders` (main, at the end of `updateWorld`) creates the bodies within the radius
-  of the camera (horizontal; at most `Bodies per frame`) and destroys those 10 % past it; a chunk wholly past it drops
+  of the NEAREST FOCUS POINT (`setColliderFocus`, up to 8 a frame: the App passes the terrain collider's points - the
+  co-op game's players and Base; none = the camera) (horizontal; at most `Bodies per frame`) and destroys those 10 %
+  past it; a chunk wholly past it drops
   all of its bodies, a chunk leaving the near radius takes them along, and the tweak off drops every body. Only the near
   chunks' trees ever have one - millions of records, a few hundred bodies. box3d create / destroy serialize on
   `g_bodyLifecycleMutex`: the terrain collider's update job may create its tiles at the same time. `destroyTreeSet`

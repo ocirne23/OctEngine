@@ -42,6 +42,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::boolean("Game/Coop", "Sandbox world", &s.coopSandboxWorld);
     Tweak::boolean("Game/Coop", "Spawn enemies", &s.coopEnemies);
     Tweak::floatVar("Game/Coop", "Sandbox wave distance (m)", &s.sandboxWaveDistance, 20.0f, 90.0f, 1.0f);
+    Tweak::floatVar("Game/Coop", "Sandbox wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Start time of day (h)", &s.startTimeOfDay, -1.0f, 24.0f, 0.25f);
     Tweak::floatVar("Game/Coop", "Night wave interval (s)", &s.nightWaveInterval, 5.0f, 600.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Wave size multiplier", &s.waveSizeMult, 0.0f, 20.0f, 0.05f);
@@ -73,6 +74,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Beacon", "Calm spin (deg/min)", &s.beaconCalmSpin, 0.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Beacon", "Pressure spin (deg/min)", &s.beaconPressureSpin, 0.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Beacon", "Beam height (m)", &s.beaconBeamHeight, 50.0f, 80000.0f, 50.0f);
+    Tweak::floatVar("Game/Beacon", "Beam top fade", &s.beaconBeamTipFade, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Beacon", "Beam light intensity", &s.beaconLightIntensity, 0.0f, 1000.0f, 0.1f);
     Tweak::floatVar("Game/Beacon", "Beam light range (m)", &s.beaconLightRange, 1.0f, 150.0f, 1.0f); // the light grid's memory grows with range^3
     Tweak::floatVar("Game/Beacon", "Beam radius (m)", &s.beaconBeamRadius, 0.05f, 20.0f, 0.05f);
@@ -360,9 +362,32 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     Tweak::intVar("Game/Sim LOD/Stats", "Far ticked", &s.farTicked, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
 }
 
+static void registerFaction(GameFactionSettings& s)
+{
+    Tweak::boolean("Game/Faction", "Enabled", &s.enabled);
+    Tweak::floatVar("Game/Faction", "Cell size (m)", &s.cellSize, 1.0f, 32.0f, 0.5f); // read when the grid is made (the match start)
+    Tweak::floatVar("Game/Faction", "Sweep time (s)", &s.sweepSeconds, 0.05f, 30.0f, 0.05f);
+    Tweak::floatVar("Game/Faction", "Source time (s)", &s.sourceSeconds, 0.5f, 3600.0f, 0.5f);
+    Tweak::floatVar("Game/Faction", "Diffusion (1/s)", &s.diffusion, 0.0f, 1.0f, 0.001f);
+    Tweak::intVar("Game/Faction", "Start value (0 enemy, 128 neutral, 255 player)", &s.startValue, 0, 255, 1); // read when the grid is made
+    Tweak::floatVar("Game/Faction", "Base radius (m)", &s.baseRadius, 0.0f, 2000.0f, 5.0f);
+    Tweak::floatVar("Game/Faction", "Field radius (x bubble)", &s.fieldRadiusScale, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Faction", "Enemy spawn site radius (m)", &s.enemySiteRadius, 0.0f, 2000.0f, 5.0f);
+    Tweak::boolean("Game/Enemy outposts", "Enabled", &s.outpostsEnabled);
+    Tweak::intVar("Game/Enemy outposts", "Count", &s.outpostCount, 1, 16, 1);                                 // read when the ring is made
+    Tweak::floatVar("Game/Enemy outposts", "Distance from the Base (m)", &s.outpostDistance, 50.0f, 7500.0f, 10.0f); // read when the ring is made
+    Tweak::floatVar("Game/Enemy outposts", "Faction radius (m)", &s.outpostRadius, 0.0f, 2000.0f, 5.0f);
+    Tweak::floatVar("Game/Enemy outposts", "Beam height (m)", &s.outpostBeamHeight, 10.0f, 80000.0f, 10.0f);
+    Tweak::floatVar("Game/Enemy outposts", "Beam radius (m)", &s.outpostBeamRadius, 0.05f, 20.0f, 0.05f);
+    Tweak::floatVar("Game/Enemy outposts", "Beam top fade", &s.outpostBeamTipFade, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Enemy outposts", "Beam intensity", &s.outpostBeamIntensity, 0.0f, 1000.0f, 0.1f);
+    Tweak::floatVar("Game/Enemy outposts", "Beam halo range (m)", &s.outpostBeamRange, 1.0f, 500.0f, 1.0f);
+}
+
 void Settings::registerGame(GameSettings& s)
 {
     registerMatch(s.match);
+    registerFaction(s.faction);
     registerCamera(s.camera);
     registerPlayer(s.player);
     registerStructures(s.structures, s.structureParams);
