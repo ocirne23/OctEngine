@@ -54,7 +54,7 @@ export struct GameMatchSettings
     float sunlightDps = 20.0f;        // health/s a demon loses in full daylight
     bool fieldsBlockDemons = false;   // on = the fields push every demon, as on the flat maps
     bool demonShadowForm = true;      // a demon outside a player field (and outside daylight) takes no direct damage
-    float staffLightRadius = 10.0f;   // m around a player in which a demon is solid (0 = the fields alone)
+    float staffLightRadius = 0.0f;  // m around a player in which a demon is solid (0 = the fields alone)
     // The fields do not push a demon, so the demons are slower: everywhere, and more inside a player field.
     float demonSpeed = 0.7f;          // x every demon's MoveSpeed
     float demonFieldSpeed = 0.5f;     // x that again inside a player field
@@ -132,7 +132,8 @@ export struct GameCameraSettings
     float thirdMinDistance = 1.5f;
     float thirdMaxDistance = 20.0f;
     float thirdSensitivity = 0.0025f; // radians per mouse count
-    float thirdEyeHeight = 0.55f;     // m above the capsule center: the orbit pivot
+    float thirdMinHeight = 1.0f;      // m: the eye stays this far over the ground under it (0 = off)
+    float thirdEyeHeight = 1.4f;  // m above the capsule center: the orbit pivot
 };
 
 // GamePlayer: movement, health and the shield battery.

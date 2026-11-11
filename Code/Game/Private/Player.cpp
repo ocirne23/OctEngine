@@ -55,8 +55,9 @@ void GamePlayer::clientAdopt(const glm::vec3& respawnPos)
         if (!net || !net->state || net->authority() != ENetAuthority::LocalOwner
             || net->state->transferredOwnership)
             continue;
-        if (!getComponent<PhysicsComponent>(root.get()) || !getComponent<ForceComponent>(root.get()))
-            continue; // our player is the owned capsule WITH a shield
+        const GameUnitComponent* unit = getComponent<GameUnitComponent>(root.get());
+        if (!getComponent<PhysicsComponent>(root.get()) || !unit || !unit->puppet)
+            continue; // our player is the owned capsule with a PUPPET unit component (the player prefabs)
         const GamePlayerSettings& s = Globals::settings.game.player;
         m_entity = root;
         m_spawnPos = respawnPos;
@@ -228,22 +229,27 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     const GamePlayerSettings& s = Globals::settings.game.player;
     PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     ForceComponent* fc = m_entity ? getComponent<ForceComponent>(m_entity.get()) : nullptr;
-    if (!pc || !pc->body.isValid() || !fc)
+    if (!pc || !pc->body.isValid())
         return;
 
-    const float pressure = fc->emitter.getPressure();
+    // THE FIELD IS OPTIONAL: a capsule with no ForceComponent (the player prefabs author none) has no bubble - no
+    // pressure, no push-out, no cover and no squish damage. The battery stays: it pays for the sprint and absorbs hits.
+    const float pressure = fc ? fc->emitter.getPressure() : 0.0f;
     m_lastPressure = pressure;
 
     const glm::vec3 bodyPos = pc->body.getPosition();
     // Territory at the body from the CPU pressure bake (no GPU query slot): the strongest team's
     // field there, normalized to Output units, is the cover density.
-    const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(bodyPos, m_team);
-    const float density = territory.field / glm::max(fc->emitter.getCenterDensityFactor(), 1e-3f);
+    float density = 0.0f, coverSurplus = 0.0f;
+    if (fc)
+    {
+        const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(bodyPos, m_team);
+        density = territory.field / glm::max(fc->emitter.getCenterDensityFactor(), 1e-3f);
+        const float currentOutput = m_shieldCollapsed ? 0.01f : s.shieldMaxOutput;
+        coverSurplus = territory.valid && territory.inside && territory.owningTeam == m_team
+            ? glm::max(0.0f, density - currentOutput) : 0.0f;
+    }
     m_lastDensity = density;
-
-    const float currentOutput = m_shieldCollapsed ? 0.01f : s.shieldMaxOutput;
-    const float coverSurplus = territory.valid && territory.inside && territory.owningTeam == m_team
-        ? glm::max(0.0f, density - currentOutput) : 0.0f;
     float drainMult = glm::clamp(1.0f - coverSurplus * s.coverDrainReduction, 0.0f, 1.0f);
 
     const bool inGrace = m_graceTimer > 0.0f;
@@ -261,15 +267,18 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_shieldCollapsed = true;
     else if (m_shieldCollapsed && m_energy >= glm::min(s.rebootEnergy, s.energyMax))
         m_shieldCollapsed = false;
-    fc->emitter.setOutput(m_shieldCollapsed ? 0.01f : s.shieldMaxOutput);
+    if (fc)
+    {
+        fc->emitter.setOutput(m_shieldCollapsed ? 0.01f : s.shieldMaxOutput);
 
-    // Physical push-out, INDEPENDENT of the shield state: getAppliedForce scales with the
-    // emitter's own output, so it is normalized by the output that produced the readback (the
-    // oldest history entry, matching the ~2-frame latency - dividing by the CURRENT output would
-    // spike ~150x on the collapse frame). A collapsed shield pushes exactly like a full one.
-    const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
-    if (glm::dot(force, force) > 1e-8f)
-        pc->body.applyImpulse(force * deltaSec * s.shieldPushGain * pressure * tension * drainMult);
+        // Physical push-out, INDEPENDENT of the shield state: getAppliedForce scales with the
+        // emitter's own output, so it is normalized by the output that produced the readback (the
+        // oldest history entry, matching the ~2-frame latency - dividing by the CURRENT output would
+        // spike ~150x on the collapse frame). A collapsed shield pushes exactly like a full one.
+        const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
+        if (glm::dot(force, force) > 1e-8f)
+            pc->body.applyImpulse(force * deltaSec * s.shieldPushGain * pressure * tension * drainMult);
+    }
     m_outputHistory[0] = m_outputHistory[1];
     m_outputHistory[1] = m_outputHistory[2];
     m_outputHistory[2] = m_shieldCollapsed ? 0.01f : s.shieldMaxOutput;
@@ -278,7 +287,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     // Exposure scales with how far the shield squished below "Damage radius": 1% under = 1% of
     // the drain rate, fully collapsed (radius 0) = the full rate - grazing contact only stings.
     const float exposure = glm::clamp(1.0f - shieldRadius() / glm::max(s.damageRadius, 1e-3f), 0.0f, 1.0f);
-    if (!inGrace && coverSurplus <= 0.0f && exposure > 0.0f && pressure > iso)
+    if (fc && !inGrace && coverSurplus <= 0.0f && exposure > 0.0f && pressure > iso)
         m_health -= s.healthDrainRate * exposure * deltaSec;
     if (bodyPos.y < m_killFloor)
         m_health = 0.0f; // fell out of the world - respawn below

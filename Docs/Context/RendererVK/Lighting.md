@@ -369,7 +369,9 @@ is the former tube light's (`radius < 0`, `width` = the core radius, `direction`
   squared distance to the line is a quadratic, and two profiles integrate exactly over it - a tight core
   `r^3 / (d^2 + r^2)^2` and a weak halo `r / (d^2 + r^2)` (`BEAM_HALO`) that ends at the light's range. **The halo's ends are ROUND:** its
   fade takes the distance to the beam as a capsule (from the point where the ray passes the beam to the SEGMENT), and
-  its ray part reaches the range past each end plane; cut on the end planes it showed a flat bottom and top. The core is
+  its ray part reaches the range past each end plane; cut on the end planes it showed a flat bottom and top. Past an
+  end the profile's own distance is the capsule's too (`qh`: + the distance past the end, squared) - with the line's
+  distance alone the halo drew a thin dim beam going on past the tip. The core is
   cut to the beam's length, both to the scene depth; a cloud in front dims it by the cloud's transmittance; the fog and the
   far trees do not dim it. No march, no shadow ray. **Only with the fog on** (the cloud apply draws none).
 * **The frame's first `RendererState::MAX_BEAM_COLUMNS` (32, `BEAM_COLUMNS` in the shader: change both) beams** get a column: `addLightInfo` claims a slot

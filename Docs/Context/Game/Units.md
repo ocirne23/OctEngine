@@ -147,7 +147,10 @@ follows the ghost trail. **No lane splat while braking.**
 
 ## Player
 
-`Entities/Game/player.pre` = playerCapsule plus a `Component Force` shield.
+`Entities/Game/player.pre` / `playerCoop.pre` = playerCapsule. **THE PLAYER CARRIES NO FIELD:** the prefabs author
+no `Component Force`, and `GamePlayer` runs without one (`tickShieldAndHealth`: no pressure, no push-out, no cover, no
+squish damage; `clientAdopt` finds the capsule by its PUPPET `GameUnitComponent`). The BATTERY stays: it pays for the
+sprint and absorbs hits. The shield rules below apply only to a capsule that does author a `Component Force`.
 
 * **MOUSE-ONLY movement** — RTS right-click move orders on the testbed's velocity-steering model,
   LShift sprint, Space jump off a ground raycast. **NO WASD** (those keys are grid hotkeys), and

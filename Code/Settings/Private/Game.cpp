@@ -122,7 +122,8 @@ static void registerCamera(GameCameraSettings& s)
     Tweak::floatVar("Game/Camera", "Third person min distance", &s.thirdMinDistance, 0.5f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Camera", "Third person max distance", &s.thirdMaxDistance, 2.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Camera", "Mouse sensitivity", &s.thirdSensitivity, 0.0002f, 0.02f, 0.0001f);
-    Tweak::floatVar("Game/Camera", "Third person eye height", &s.thirdEyeHeight, 0.0f, 2.0f, 0.05f);
+    Tweak::floatVar("Game/Camera", "Third person min height", &s.thirdMinHeight, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Camera", "Third person eye height", &s.thirdEyeHeight, 0.0f, 6.0f, 0.05f);
 }
 
 static void registerPlayer(GamePlayerSettings& s)

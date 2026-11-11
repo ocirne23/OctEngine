@@ -48,7 +48,17 @@ public:
         const glm::vec3 pivot = targetPos + glm::vec3(0.0f, s.thirdEyeHeight, 0.0f);
         const glm::vec3 back = -dir * s.thirdDistance;
         const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(pivot, back, PhysicsLayers::All, ignoreBody);
-        const glm::vec3 eye = pivot + (hit.hit ? back * glm::max(hit.fraction - 0.1f, 0.0f) : back);
+        glm::vec3 eye = pivot + (hit.hit ? back * glm::max(hit.fraction - 0.1f, 0.0f) : back);
+        // THE MIN HEIGHT over the ground ("Third person min height"): a ray down from just over the eye; the eye lifts to
+        // that far over what it hits (the terrain, or a roof it stands on), so a low orbit does not skim the ground.
+        if (s.thirdMinHeight > 0.0f)
+        {
+            constexpr float c_probeUp = 1.5f;
+            const glm::vec3 down(0.0f, -(c_probeUp + s.thirdMinHeight), 0.0f);
+            const PhysicsWorld::RayHit ground = Globals::physics.castRayClosest(eye + glm::vec3(0.0f, c_probeUp, 0.0f), down, PhysicsLayers::All, ignoreBody);
+            if (ground.hit)
+                eye.y = glm::max(eye.y, eye.y + c_probeUp + down.y * ground.fraction + s.thirdMinHeight);
+        }
         camera.position = eye;
         camera.viewMatrix = glm::lookAt(eye, eye + dir, glm::vec3(0.0f, 1.0f, 0.0f));
         // The sandbox's clip planes: the view reaches the horizon like the fly camera's (the top-down camera keeps

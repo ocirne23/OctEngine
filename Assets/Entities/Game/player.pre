@@ -25,12 +25,8 @@ Prefab player
 		LockRotation true
 		Density 120
 		Friction 0.3
-	Component Force
-		Output 1.5
-		Reach 3
-		Direction 0 1 0
-	# Large soft fill light carried by the player, on top of the shield's own bubble light
-	# (ForceSystem::stepBubbleLight). Range is world metres (not entity-scaled); the offset is
+	# No Component Force: the player carries no field (GamePlayer runs without one).
+	# Large soft fill light carried by the player. Range is world metres (not entity-scaled); the offset is
 	# entity space (x0.4), so it sits ~1 m up, around chest height.
 	Component Light
 		Light Point

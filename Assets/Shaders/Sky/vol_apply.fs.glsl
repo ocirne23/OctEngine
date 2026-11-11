@@ -360,11 +360,14 @@ vec3 beamColumns(vec3 dir, float tMax, out float tBeam)
         // Halo: the integral of r / (q2 + x^2), faded out to the range by the distance to the beam as a CAPSULE - from the
         // point where the ray passes the beam to the SEGMENT, not the line - so the glow ends ROUND at the foot and the
         // tip. Cut on the end planes it showed a flat bottom and top.
+        // PAST an end the profile's own distance is the capsule's too (qh: + past^2). With the line's distance alone, a
+        // ray that passed the line beyond the tip still got the profile's peak: a thin dim beam going on past the tip.
         const float tp = clamp(tc, ha, hb);
         const float along = wa + tp * da;
         const float past = max(max(-along, along - len), 0.0);
         const float fade = max(1.0 - (h2 + s2 * (tp - tc) * (tp - tc) + past * past) / (range * range), 0.0);
-        const float halo = BEAM_HALO * fade * fade * r * (atan(s * (hb - tc) / q) - atan(s * (ha - tc) / q)) / (q * s);
+        const float qh = sqrt(q2 + past * past);
+        const float halo = BEAM_HALO * fade * fade * r * (atan(s * (hb - tc) / qh) - atan(s * (ha - tc) / qh)) / (qh * s);
         const float glow = core + halo;
         sum += u_present_beamColor[i].rgb * glow;
         weight += glow;
