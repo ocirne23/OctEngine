@@ -7,7 +7,7 @@ import Core.Transform;
 import File;
 import Settings; // GameStructureParams (Settings.Game) + Globals::settings
 
-// Authority only (clients early-out of update). Cross-entity writes are the atomic damage()/addLoad().
+// Authority only (clients early-out of update; a Searchlight also aims on a client, for its cone). Cross-entity writes are the atomic damage()/addLoad().
 // The cable transport moves resources in whole cells; the game's StructureSystem owns that, this
 // component only holds the float stores it reserves from / adds into at its tick boundary.
 export struct GameStructureComponent
@@ -66,7 +66,12 @@ export struct GameStructureComponent
     };
     // The union's active variant, game-stamped from the structure's type. Cross-variant reads are
     // bugs (the NetEntityState role-union pattern); all variants are trivially destructible.
-    enum class EMachineKind : uint8 { None, Barracks, Turret, Medic };
+    struct SearchlightData
+    {
+        float yaw;  // the cone's heading on the map (rad; direction = cos, 0, sin). Turned by update toward the nearest enemy
+        uint8 lit;  // an enemy is in range and the store pays: the game publishes the cone (StructureSystem::publishSearchlights)
+    };
+    enum class EMachineKind : uint8 { None, Barracks, Turret, Medic, Searchlight };
     EMachineKind machineKind = EMachineKind::None;
 
     struct TurretFireRequest // a strike that already landed: from the muzzle to the victim
@@ -89,6 +94,7 @@ export struct GameStructureComponent
     {
         BarracksData barracks{};
         TurretData turret;
+        SearchlightData searchlight;
         EmitterData emitter;
     };
 

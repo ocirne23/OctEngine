@@ -24,11 +24,11 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
-    0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 2.0f, 1.5f };
+    2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+    0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f }; // (the Wall and the Gate: 3 m tall)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -150,6 +150,13 @@ oc::string StructureSystem::describeType(EStructureType type) const
         banks(p.turretShotEnergy, "light per shot");
         line(oc::format("{:g} damage every {:g} s", p.turretDamage, p.turretFireInterval));
         range(p.turretRange);
+        break;
+    case EStructureType::Searchlight:
+        desc = "Turns a cone of light on the nearest demon. Every demon in the cone is solid, as in a lantern field, and burns. It is dark while no demon is in range.";
+        in(p.searchlightEnergyPerSec, "light", " while it shines");
+        line(oc::format("{:g} damage/s to each demon in the cone", p.searchlightDps));
+        line(oc::format("Cone {:g} degrees wide", p.searchlightHalfAngleDeg * 2.0f));
+        range(p.searchlightRange);
         break;
     case EStructureType::MedicStation:
         desc = "Heals own units and players standing in its radius.";
@@ -392,6 +399,7 @@ void StructureSystem::stampTuning(const Ref& s)
     else
         c.machineKind = s.type == EStructureType::Turret ? GameStructureComponent::EMachineKind::Turret
                       : s.type == EStructureType::MedicStation ? GameStructureComponent::EMachineKind::Medic
+                      : s.type == EStructureType::Searchlight ? GameStructureComponent::EMachineKind::Searchlight
                       : GameStructureComponent::EMachineKind::None;
 }
 
@@ -587,6 +595,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     tickCarriers(deltaSec); // wood and stone: the walkers on the road
     tickLight(deltaSec);    // light: the beams between the buildings and their hubs
     drawLightLinks();       // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
+    publishSearchlights();  // the same rule: its spot lights are light records
     // The transport: inject the due runs' supply/demand and kick the job - it overlaps present
     // and the next frame's front, joined at the top of the next tick.
     m_transportTime += deltaSec;
@@ -627,6 +636,7 @@ void StructureSystem::tickMirror(float deltaSec)
         }
         drawLightLinks();
     }
+    publishSearchlights(); // the cones: aimed by the mirrored components themselves (see GameStructureComponent::update)
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it - the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)

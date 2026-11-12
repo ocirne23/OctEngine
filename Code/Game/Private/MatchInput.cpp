@@ -63,6 +63,7 @@ static constexpr EStructureType c_combatItems[] = {
     EStructureType::Wall,
     EStructureType::Gate,
     EStructureType::Turret,
+    EStructureType::Searchlight,
     EStructureType::Barracks,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
@@ -313,6 +314,7 @@ void GameMatch::setMode(EPlayerMode mode)
     if (m_mode == mode)
         return;
     m_mode = mode;
+    m_boxSelectBlocked = m_lmbDown; // a press that changed the mode (a demolish click) is not the start of a box select
     m_selectedId = 0;
     m_lanceAiming = false;
     m_wallPlacing = false;
@@ -918,6 +920,8 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (aim.type == EStructureType::Lens) // how far it reaches the next lens / a store, and feeds what uses light
             drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.lensRange(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 64);
     }
+    if (aim.type == EStructureType::Searchlight) // how far its cone reaches
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), Globals::settings.game.structureParams.searchlightRange, color, 48);
     if (aim.type == EStructureType::House) // show how far it links to a barracks
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
     if (aim.type == EStructureType::MedicStation) // show the heal reach
@@ -935,6 +939,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         }
         probe.wanted = true;
         m_frameYield = aim.yield < 0.0f ? -1 : (int)glm::round(aim.yield * 100.0f);
+        m_yieldGhostPos = aim.pos;
         const glm::vec3 hue = aim.yield < 0.0f ? glm::vec3(0.6f) : glm::mix(glm::vec3(1.0f, 0.4f, 0.3f), glm::vec3(0.4f, 1.0f, 0.5f), aim.yield);
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.harvestRadius(), packColor(hue), 64);
     }
@@ -998,7 +1003,12 @@ void GameMatch::updateUnitSelection(const Camera& camera)
         out = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
         return true;
     };
-    if (m_lmbDown && glm::distance(m_lmbDownPos, m_mousePos) > c_dragPx)
+    if (m_boxSelectBlocked) // the held press belongs to another mode: no box, and its release selects nothing
+    {
+        m_boxSelectBlocked = m_lmbDown && !m_lmbReleased;
+        m_lmbReleased = false;
+    }
+    else if (m_lmbDown && glm::distance(m_lmbDownPos, m_mousePos) > c_dragPx)
     {
         // Live box: the four screen corners projected onto the ground.
         const glm::vec2 a = m_lmbDownPos, b = m_mousePos;

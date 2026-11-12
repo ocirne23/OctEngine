@@ -200,6 +200,7 @@ GameMatch::~GameMatch()
     Globals::settings.game.unitParams.sunBurnTeam = -1;
     Globals::settings.game.unitParams.shadowTeam = -1;
     Globals::settings.game.unitParams.lightPointCount = 0;
+    Globals::settings.game.unitParams.lightConeCount = 0;
     Globals::settings.game.unitParams.slowTeam = -1;
     Globals::settings.game.unitParams.fieldZoneCount = 0;
     if (m_sandboxWorld)
@@ -662,6 +663,7 @@ void GameMatch::update(float deltaSec)
         tickBaseHealing(deltaSec);
         tickMedicHealing(deltaSec); // own player only on a client (units heal on the server)
         m_structures.tickMirror(deltaSec);
+        m_npcs.drawBeamLights(); // HERE, not in the windowed pass: a light record added before the begin-frame job is reset by it
         submitNavFeed(deltaSec); // obstacles only: the local player's move-order goal field
         submitWorldLabels(deltaSec);
         return;
@@ -673,6 +675,7 @@ void GameMatch::update(float deltaSec)
     m_matchTime += deltaSec; // the HUD clock: authority sim time (a pause stops the sim delta)
     stampLightRules();
     m_structures.tickAuthority(playerPos, deltaSec);
+    m_npcs.drawBeamLights(); // HERE, not in the windowed pass: a light record added before the begin-frame job is reset by it
     tickBaseHealing(deltaSec);
     tickMedicHealing(deltaSec);
     // The ambient wander is a POST-UPDATE job: it only writes idle units' order fields and reads
@@ -1258,7 +1261,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         updateGameInput(camera);
 
     m_structures.drawDebug();
-    m_npcs.drawBeams(deltaSec); // turret lightning strikes
+    m_npcs.drawBeams(deltaSec); // ages the strikes, draws the melee hit lines (the turret's light: drawBeamLights, in update)
     if (m_coop && !m_sandboxWorld)
         drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)

@@ -27,7 +27,8 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre", "Entities/Game/crossing.pre",
     "Entities/Game/crossing.pre", "Entities/Game/house.pre",   // the three crossings share one
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
-    "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre" };
+    "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
+    "Entities/Game/searchlight.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement

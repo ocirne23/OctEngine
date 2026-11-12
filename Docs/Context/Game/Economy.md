@@ -32,7 +32,7 @@ staffing. Neither needs energy: only workers (below).
 * **The placement carries the REQUESTER's yield** (`queuePlaceRequest`, GqP): the authority may be too far from the
   place to hold its records. It only clamps the value (a co-op trust, like the client's ground height).
 * **Shown:** the ghost draws its harvest radius, hued from red (little) to green (full), and the HUD line "Yield" gives
-  the percent; a selected yard's label has a "Yield" line; `drawDebug` rings every built yard's radius.
+  the percent, which a world label over the ghost repeats with a bar (`updateLabels`, from `m_shownYield` / `m_yieldGhostPos`); a selected yard's label has a "Yield" line; `drawDebug` rings every built yard's radius.
 
 ### Light on beams
 
@@ -44,7 +44,7 @@ links (`Light.cpp`). No link is authored, saved or sent: every instance derives 
 |---|---|
 | Hubs | The Crystal stores (Battery), the Beacon (Base) and the Lenses: the STORAGE role of the energy medium (`transportRoleOf`). |
 | A producer's beam | A Mirror (Solar) links to the nearest hub within "Mirror beam range (m)" (60) that it has a clear line to; a Hearth (Generator) to the nearest within "Hub reach (m)". It empties its buffer into the hub at "Beam rate" (20/s). |
-| A hub's feed | Every CONSUMER (fields, the turret, the barracks, the medic station) links to the nearest hub within "Hub reach (m)" (30) with a clear line, and fills from it at "Feed rate" (10/s). **THE LIGHT BALANCE** (defaults; the default sun cycle gives a Mirror ~780 s of full daylight and keeps a field awake ~640 s a night; all with enough storage between): an Emitter draws 1 light/s awake, a Bastion 3. **4 Mirrors carry 1 Emitter through the night, 12 a Bastion** ("Solar energy/s" 0.21: 4 x 0.21 x 780 = 655). **1 Hearth, burning day and night, carries 1 Emitter, 3 a Bastion** ("Gen energy/s" 0.45: 0.45 x 1440 = 648). **ONE full Crystal store ("Battery capacity" 1500) runs TWO Emitters through one night** (1280, plus room for the pressure draw). A change of the sun cycle's speed or latitude moves all of these. **The barracks and the turret keep their METERED intake** (their store is the build / reload bar). The Beacon keeps a quarter of its store for its own field. |
+| A hub's feed | Every CONSUMER (fields, the turret, the barracks, the medic station) links to the nearest hub within "Hub reach (m)" (30) with a clear line, and fills from it at "Feed rate" (10/s). **THE LIGHT BALANCE** (defaults; the default sun cycle gives a Mirror ~780 s of full daylight and keeps a field awake ~640 s a night; all with enough storage between): an Emitter draws 0.75 light/s awake (480 a night), a Bastion 2 (1280 a night). **3 Mirrors carry 1 Emitter through the night, 8 a Bastion** ("Solar energy/s" 0.21: 3 x 0.21 x 780 = 491). **1 Hearth, burning day and night, carries 1 Emitter, 2 a Bastion** ("Gen energy/s" 0.45: 0.45 x 1440 = 648). **ONE full Crystal store ("Battery capacity" 1500) runs TWO Emitters through one night** (960, plus room for the pressure draw). A change of the sun cycle's speed or latitude moves all of these. **The barracks and the turret keep their METERED intake** (their store is the build / reload bar). The Beacon keeps a quarter of its store for its own field. |
 | Hub to hub | A hub links to the nearest OTHER hub within "Hub link range (m)" (60); the two level their fill fractions at "Share rate" (10/s). So stores chain a network over the land. |
 | **The Lens** | A RELAY (`lens.pre`, 1×1, a 3 m post; the Works page): a hub with a small store ("Lens buffer" 40). Nothing is aimed: **it links to the NEAREST hub within "Lens range (m)" (32) with a clear line - but not to a hub that links to IT already** (that pair is joined). Every structure has one link, so without that rule a lens between a store and the next lens would link back to the store, and the chain would end there. `rebuildLightLinks` runs the lenses in a second pass, so each sees the links of the others (and of the lenses before it). **A line of lenses 32 m apart, or less, is a chain.** A link with a lens at an end is never longer than the lens range, whatever the other end's own range (a store's 60 m link range, a mirror's beam range). The link levels the two fill fractions like any hub pair, at "Beam rate" (not the share rate), so light goes both ways: from a far mirror field to the base, or from the base to a far outpost. As a hub, a lens also takes the mirrors' and hearths' light and feeds the consumers in its reach. The ghost shows the lens range. Like a Crystal store, a lens never shows the light badges: the end of a chain has no link of its own (the others link to it). |
 | Which hub | **The nearest USEFUL hub in range with a clear line, else the nearest one** (`rebuildLightLinks`). Useful: for a consumer a hub with light to give (over the Beacon's reserve), for a producer a hub with room. So a turret or a barracks next to a full Crystal store does not stay dark because an empty hub is nearer (the Beacon at its reserve, a lens with nothing behind it), and a mirror does not beam into a full store. The links are derived again about once a second, so a link follows the light. Hub to hub: the nearest. |
@@ -293,7 +293,7 @@ Every placement aligns to a
 | Footprint | Types |
 |---|---|
 | 1×1 (cables included; the Bridge is one) | Emitter, Lance, Wall, Gate, Lens, Constructor |
-| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation |
+| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Searchlight, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation |
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 
@@ -302,7 +302,8 @@ Every placement aligns to a
 > Prefab `Scale` / `HalfExtents` = footprint half, so boxes fill their cells.
 
 **Heights** use the baseshapes variants — `CubeHalf` / `CubeQuarter` / `Pillar2` / `Pillar3` are the
-2 m cube at 0.5× / 0.25× / 2× / 3× height, origin centred: Wall and Mineral silo `Pillar2`, Battery
+2 m cube at 0.5× / 0.25× / 2× / 3× height, origin centred: Mineral silo `Pillar2`, the Wall and the Gate two overlapping `Cube`s (3 m tall: no 3 m piece exists and
+a scale is uniform), Battery
 `CubeHalf`, Solar `CubeQuarter`. `structureSpawnHeights` is each prefab's box HALF height, **so
 everything sits flush.**
 
@@ -342,7 +343,7 @@ sea. Each prefab carries what is under the surface, since `Scale` is uniform and
   water, a step a capsule walks up. A render-only pier of three stacked pieces reaches 11 m under the deck. The
   carriers walk the path between the cells' entity heights, so they go up and down smoothly between road and deck.
   **A bank more than a step above the water has no ramp**: the road ends on the bank, the deck is at the water.
-* **Gate** (`gate.pre`, 1×1, a drag line; the Defence page): a wall segment whose top is a wall's height (4 m) over the
+* **Gate** (`gate.pre`, 1×1, a drag line; the Defence page): a wall segment whose top is a wall's height (3 m) over the
   surface, with a foot of two pieces down to 12 m under it; the collider covers all of it. `Layer Gate`,
   `CollidesWith Default Projectile`: **the PLAYERS (layer Player) walk through it, every unit does not** (the layers
   cannot tell teams: own units are stopped too, and an enemy PLAYER passes). Nav takes it as a wall (`isBreachable`).

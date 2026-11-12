@@ -103,12 +103,12 @@ private:
 
 public:
     // STRIKE VISUALS - pure visuals here (the components already landed the damage):
-    //   Turret   - the hitscan lightning: a jagged bundle over "Turret beam lifetime", plus a
+    //   Turret   - the hitscan strike: a column of light (a BeamLight) over "Turret beam lifetime", plus a
     //              muzzle flash.
     //   MeleeHit - a unit's swing: a plain line striker -> victim over "Melee hit lifetime".
     // (No impact flash: the VICTIM lights itself on its health drop - GameUnitComponent's hurt
     // light - on every role, which also covers shells and force-field exposure.)
-    // A turret beam also carries its MUZZLE FLASH: drawBeams pushes one point light at `from`
+    // A turret beam also carries its MUZZLE FLASH: drawBeamLights pushes one point light at `from`
     // per Turret beam every frame, fading with the beam (per-frame light records, so nothing is
     // owned and no second list is kept). The server broadcasts this frame's new beams (GLt) so
     // clients add the same ones - melee hits capped per frame (c_maxHitBroadcast), turret
@@ -124,7 +124,8 @@ public:
     };
     void addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind);
     oc::span<const Beam> newBeams() const { return m_newBeams; } // added since the last service()
-    void drawBeams(float deltaSec); // ages + draws beams (and the turret muzzle lights) - main thread, every windowed frame
+    void drawBeams(float deltaSec); // ages the beams + draws the melee hit lines - main thread, every windowed frame
+    void drawBeamLights() const;    // the turret strikes' column of light + muzzle flash (light records: from GameMatch::update)
 private:
     static constexpr size_t c_maxHitBroadcast = 64;  // melee hit beams relayed to clients per service()
 

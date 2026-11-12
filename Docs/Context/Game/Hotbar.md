@@ -42,7 +42,7 @@ page and mode slots get a one-liner instead.
 |---|---|---|
 | Q / W | **CMBT / PROD** | the category's items, in order (slots 0–8) |
 | A / S / D | **CBL-P / CBL-F / CBL-M** — the cables arm straight from the root (a hidden `c_cableCategory`, still drawn as the root page: `isRootPage`) | items 4–6 |
-| X (slot 9) | **DEL** — toggles Delete mode: one demolish, then straight back to Select | **DEL** (category pages cap at 9 items so X stays Delete) |
+| X (slot 9) | **DEL** — toggles Delete mode: one demolish, then straight back to Select (the held press starts no box select: `m_boxSelectBlocked`, set by `setMode`) | **DEL** (category pages cap at 9 items so X stays Delete) |
 | C (slot 10) | **CNCL** — leaves Delete mode / disarms a cable, back to Select | **CNCL** — straight back to Select |
 | V (slot 11) | — | — |
 
@@ -84,7 +84,22 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
 
 ### Q — Combat
 
-**Emitter · Bastion · Lance · Wall · Gate · Turret · Barracks** (the Bridge is with the Road, on the Logistics page)
+**Emitter · Bastion · Lance · Wall · Gate · Turret · Searchlight · Barracks** (the Bridge is with the Road, on the Logistics page)
+
+* **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (26 m), a
+  shadow too. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed
+  cones burn twice as fast. It shines only while an enemy is in range, and only then draws "Searchlight light/s" (1)
+  from its store (the internal buffer, fed over its light link like any consumer).
+  > **Who does what.** `GameStructureComponent::update` (`EMachineKind::Searchlight`) AIMS: nearest enemy by flat
+  > distance, the yaw turns at "Searchlight turn speed (deg/s)", `lit` = a target and a paying store. It runs on a
+  > client too (aim only, from the mirrored units and the mirrored store), so nothing of it is on the wire.
+  > `StructureSystem::publishSearchlights` (every instance, each frame, next to `drawLightLinks`) writes the lit ones
+  > into `GameUnitParams::lightCones` (max 32: lamp x z, range, direction, cos of the half angle, team) and adds one
+  > `SpotLight` each ("Searchlight brightness"), which starts 1 m in front of the lamp gem (from inside the mesh it
+  > shadows itself). Tried a beam column for a shaft in the air, dropped because a column is a cylinder and did not
+  > read as the cone. **The units do the rest:** `GameUnitComponent::setSolid` tests the cones as FLAT wedges on the
+  > map (the ground's height does not count) - in one, the unit is solid and burns. A unit on the far tick is not
+  > tested.
 
 * **Bastion** — a big, hungry anchor bubble. **Lance** — a focused cone; **TWO-CLICK placement**: the
   first click anchors, the second aims the facing.
@@ -96,12 +111,15 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
   > costs (1+cost)× the walking distance, so enemies route through a wall rather than take a longer
   > detour, walk into it and bite it down. **Blueprint walls and every other building stay
   > impassable.**
-* **Turret** — HITSCAN lightning. The component picks the nearest enemy unit in "Turret range" (18 m)
-  and lands "Turret damage" (25) on it; **it never misses.** The strike is a BUNDLE of jagged debug
-  lines fading over "Turret beam lifetime" 0.5 s (`NpcSystem::addBeam` / `drawBeams`), broadcast to
-  clients as GLt, plus a muzzle FLASH.
-  > **BEAMS AND FLASHES** (`NpcSystem`): a beam has a kind — `Turret` (the lightning) or `MeleeHit`
-  > (a unit's swing, see Targets ([Units.md](Units.md))). **The muzzle FLASH is not a separate record:** `drawBeams`
+* **Turret** — a HITSCAN column of light. The component picks the nearest enemy unit in "Turret range" (18 m)
+  and lands "Turret damage" (12.5) on it; **it never misses.** The strike is a COLUMN OF LIGHT from the muzzle to the
+  victim: a `BeamLight` ("Turret beam glow", "Turret beam radius (m)") that fades and thins over "Turret beam
+  lifetime" 0.5 s, broadcast to clients as GLt, plus a muzzle FLASH. The fog apply draws the column (one of the
+  frame's beam columns): with the fog off only its light on surfaces shows. `NpcSystem::drawBeams` (the windowed
+  pass) ages the beams; **`drawBeamLights` adds the light records, from `GameMatch::update`: a light record added in
+  the windowed pass is before the renderer's begin-frame job, which resets it.**
+  > **BEAMS AND FLASHES** (`NpcSystem`): a beam has a kind — `Turret` (the column of light) or `MeleeHit`
+  > (a unit's swing, see Targets ([Units.md](Units.md))). **The muzzle FLASH is not a separate record:** `drawBeamLights`
   > pushes one point light at every live Turret beam's `from` (`addLightInfo` with a `PointLight`, a per-frame
   > record) with the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash
   > intensity" — so it lives and dies with the bolt. GLt carries the kind byte; melee hit beams
@@ -116,10 +134,11 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
   > GameUnitComponent notes). The shield/emitter GLOW is the Force system's bubble light
   > ("Force/Glow/Bubble light …" tweaks): one light per bubble, sized by the bubble radius.
   > **THE ENERGY STORE IS THE RELOAD BAR** (the barracks rule; there is no fire timer):
-  > `stampTuning` sets its energy capacity to "Turret shot energy" (**2 — keep it a WHOLE number:
-  > the transport delivers whole cells and a consumer asks for `floor(capacity − store)`, so 1.5
-  > stalls one cell short**) and its transport slot meters its intake to shotEnergy / "Turret fire
-  > interval" (1.2 s), so a fed turret fires at exactly the authored cadence, a starved one fires
+  > `stampTuning` sets its energy capacity to "Turret shot energy" (0.5: light on beams fills it in
+  > fractions. **With "Light beams" off it must be a WHOLE number: the cable transport delivers whole cells and a
+  > consumer asks for `floor(capacity − store)`, so 0.5 never fills and 1.5 stalls one cell short**) and its intake
+  > is metered to shotEnergy / "Turret fire
+  > interval" (0.6 s), so a fed turret fires at exactly the authored cadence, a starved one fires
   > slower, and a full turret with no target holds its charge and fires the instant one appears. Its
   > bar is progress-green and always shown.
 * **Barracks** — ONE type, 3×3; its owner picks the unit type it makes. See below.

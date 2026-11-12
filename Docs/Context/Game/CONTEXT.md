@@ -52,6 +52,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Mineral silo / Fuel tank | Storehouse (STOR) / Woodshed (WOOD) |
 | Constructor / Medic station | Builder's hut (BUIL) / Healer's hut (HEAL) |
 | Bridge / Gate / Lens | Bridge (BRDG) / Gate (GATE) / Lens (LENS) |
+| Searchlight | Searchlight (SRCH) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
@@ -255,7 +256,7 @@ blueprint / stores / route — **cable segments are ordinary Structure entries, 
 plus the map inputs and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
 clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds to it) and
 `MatchTime` (the HUD clock), so a load resumes the escalation; the sandbox world adds `NightIndex` / `Night` /
-`TimeOfDay` (the light rules, [Modes.md](Modes.md)). **Shots are NOT saved**; projectiles
+`TimeOfDay` / `NightWave` / `WaveScale` (the light rules and the night's build-up, [Modes.md](Modes.md)). **Shots are NOT saved**; projectiles
 are transient and a load clears them.
 
 **A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, Yield (a Lumberyard's / Quarry's),

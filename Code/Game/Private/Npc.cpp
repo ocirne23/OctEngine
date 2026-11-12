@@ -155,59 +155,48 @@ void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind ki
 
 void NpcSystem::drawBeams(float deltaSec)
 {
-    // TURRET: a BUNDLE of jagged lines per strike (re-jittered every frame = flicker), fading
-    // over the lifetime: a bright dense CORE of tightly packed strands plus wider, dimmer forks
-    // around it - debug lines are 1 px, so thickness comes from count. Plus the MUZZLE FLASH:
-    // one point light at the muzzle, fading with the bolt.
-    // MELEE HIT: one line striker -> victim, plus one faint strand beside it, fading.
-    constexpr int c_segments = 8;
-    constexpr int c_coreStrands = 6;  // spread 0.12 m: reads as one thick bolt
-    constexpr int c_forkStrands = 4;  // spread 0.9 m: the crackle around it
-    constexpr float c_muzzleRange = 8.0f;
-    constexpr float c_muzzleIntensity = 200.0f;
-    const glm::vec3 muzzleColor(0.7f, 0.85f, 1.0f);
+    // Ages every beam, and draws the MELEE HIT: one line striker -> victim, plus one faint strand beside it, fading.
+    // The turret's column is LIGHT RECORDS: drawBeamLights adds them, later in the frame.
     for (Beam& b : m_beams)
     {
         b.ttl -= deltaSec;
         const float fade = glm::clamp(b.ttl / glm::max(b.life, 1e-3f), 0.0f, 1.0f);
-        if (b.kind == EBeamKind::MeleeHit)
-        {
-            const glm::vec3 lift(0.0f, 0.5f, 0.0f); // out of the ground, through the bodies' middles
-            Globals::rendererVK.addDebugLine(b.from + lift, b.to + lift,
-                packColor(glm::vec3(1.0f, 0.8f, 0.45f) * (0.25f + 0.75f * fade)));
-            Globals::rendererVK.addDebugLine(b.from + lift, b.to + lift + glm::vec3(0.0f, 0.15f, 0.0f),
-                packColor(glm::vec3(1.0f, 0.5f, 0.2f) * (0.15f + 0.5f * fade)));
+        if (b.kind != EBeamKind::MeleeHit)
             continue;
-        }
-        if (fade > 0.0f)
-            Globals::rendererVK.addLightInfo(PointLight(b.from, c_muzzleRange, muzzleColor,
-                c_muzzleIntensity * Globals::settings.game.npc.flashIntensity * fade));
-        const glm::vec3 axis = b.to - b.from;
-        glm::vec3 side = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
-        if (glm::dot(side, side) < 1e-4f)
-            side = glm::vec3(1.0f, 0.0f, 0.0f);
-        side = glm::normalize(side);
-        const glm::vec3 up = glm::normalize(glm::cross(side, glm::normalize(axis)));
-        const auto strand = [&](float spread, const glm::vec3& tint)
-        {
-            const uint32 color = packColor(tint * (0.35f + 0.65f * fade));
-            glm::vec3 prev = b.from;
-            for (int i = 1; i <= c_segments; ++i)
-            {
-                const float t = (float)i / c_segments;
-                glm::vec3 p = b.from + axis * t;
-                if (i < c_segments) // the ends stay anchored on the muzzle and the victim
-                    p += side * glm::linearRand(-spread, spread) + up * glm::linearRand(-spread, spread);
-                Globals::rendererVK.addDebugLine(prev, p, color);
-                prev = p;
-            }
-        };
-        for (int k = 0; k < c_coreStrands; ++k)
-            strand(0.12f, glm::vec3(0.8f, 0.95f, 1.0f));
-        for (int k = 0; k < c_forkStrands; ++k)
-            strand(0.9f, glm::vec3(0.45f, 0.75f, 1.0f));
+        const glm::vec3 lift(0.0f, 0.5f, 0.0f); // out of the ground, through the bodies' middles
+        Globals::rendererVK.addDebugLine(b.from + lift, b.to + lift,
+            packColor(glm::vec3(1.0f, 0.8f, 0.45f) * (0.25f + 0.75f * fade)));
+        Globals::rendererVK.addDebugLine(b.from + lift, b.to + lift + glm::vec3(0.0f, 0.15f, 0.0f),
+            packColor(glm::vec3(1.0f, 0.5f, 0.2f) * (0.15f + 0.5f * fade)));
     }
     oc::erase_if(m_beams, [](const Beam& b) { return b.ttl <= 0.0f; });
+}
+
+// THE TURRET STRIKES' LIGHT: a COLUMN OF LIGHT from the muzzle to the victim - a BeamLight (the Beacon's beam in small):
+// a glowing column in the air that lights what is around it, fading and thinning over the lifetime - plus the MUZZLE
+// FLASH, one point light at the muzzle, fading with it. The fog apply draws the column (one of the frame's
+// RendererState::MAX_BEAM_COLUMNS; with the fog off only its light on surfaces shows).
+// CALLED FROM GameMatch::update, not from the windowed input pass: a light record added before the renderer's
+// begin-frame job is reset by it (the same rule as StructureSystem::drawLightLinks).
+void NpcSystem::drawBeamLights() const
+{
+    constexpr float c_columnRange = 6.0f; // m around the column that it lights
+    constexpr float c_muzzleRange = 8.0f;
+    constexpr float c_muzzleIntensity = 200.0f;
+    const glm::vec3 color(0.7f, 0.85f, 1.0f);
+    const GameNpcSettings& npc = Globals::settings.game.npc;
+    for (const Beam& b : m_beams)
+    {
+        const float fade = glm::clamp(b.ttl / glm::max(b.life, 1e-3f), 0.0f, 1.0f);
+        if (b.kind != EBeamKind::Turret || fade <= 0.0f)
+            continue;
+        Globals::rendererVK.addLightInfo(PointLight(b.from, c_muzzleRange, color, c_muzzleIntensity * npc.flashIntensity * fade));
+        const glm::vec3 axis = b.to - b.from;
+        const float length = glm::length(axis);
+        if (length > 0.5f && npc.beamGlow > 0.0f)
+            Globals::rendererVK.addLightInfo(BeamLight(b.from + axis * 0.5f, c_columnRange, color, npc.beamGlow * fade, axis,
+                glm::max(npc.beamRadius * (0.4f + 0.6f * fade), 0.02f), length));
+    }
 }
 
 static float barracksSpawnRadius()

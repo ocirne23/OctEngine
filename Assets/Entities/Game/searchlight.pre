@@ -1,0 +1,75 @@
+# Searchlight: turns a cone of light on the nearest enemy unit in range. Every enemy in the cone is solid (as in a
+# lantern field) and burns. It draws light only while it shines ("Searchlight light/s").
+# Spawned origin 2.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a dark IRON MAST on a foot (the root) - a thin post
+# of two pieces (1.8 m each, overlapping by 0.1 m), a lamp deck turned 45 degrees, a warm yellow lamp 5.4 m over the
+# ground and a roof over it. It reads against the Light tower's pale stone obelisk with its blue crystal. The child
+# pieces are render-only; the collider is the 4x4x4 m box. The cone itself is a spot light the game adds each frame
+# from the lamp (keep the `Lamp` height in step with c_searchlightLamp in Game/Private/Light.cpp). The deck and the
+# roof are narrow on purpose: the light starts 1 m in front of the lamp and must clear them.
+Prefab gameSearchlight
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeHalf
+		Type StaticMesh
+		Color 0.22 0.23 0.27
+		Position 0 -1.3 0
+		Scale 1.4
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 2 2 2
+	Component GameStructure
+		AlwaysShowResources true
+		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Post
+			Position 0 0.3 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.3 0.3 0.34
+				Scale 0.3
+		Entity
+			Name Post2
+			Position 0 2.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.3 0.3 0.34
+				Scale 0.3
+		Entity
+			Name Deck
+			Position 0 2.9 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.22 0.23 0.27
+				Rotation 0 45 0
+				Scale 0.5
+		Entity
+			Name Lamp
+			Position 0 3.4 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.93 0.75
+				Emissive 4
+				Scale 0.55
+		Entity
+			Name Roof
+			Position 0 4.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.22 0.23 0.27
+				Rotation 0 45 0
+				Scale 0.5

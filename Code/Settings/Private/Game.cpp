@@ -177,7 +177,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
     // Solar 5, Fabricator 6, Bastion 7, Lance 8, Barracks 9, Wall 10, Turret 11, MineralSilo 12, Constructor 13, Base 14,
     // CablePower 15, CablePipe 16, CableConveyor 17, CrossingPower 18, CrossingPipe 19, CrossingConveyor 20, House 21,
-    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26.
+    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26, Searchlight 27.
+    Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[27], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Lens cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Lumberyard cost", &s.costs[2], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Quarry cost", &s.costs[23], 0.0f, 500.0f, 1.0f);
@@ -238,7 +239,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &s.genEnergyPerSec, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s", &s.emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s @ pressure 1", &s.emitterPressureDraw, 0.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Base energy capacity", &s.baseEnergyCapacity, 10.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Base energy capacity", &s.baseEnergyCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Base shield energy/s", &s.baseShieldEnergyPerSec, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Base shield output", &s.baseShieldOutput, 0.1f, 8.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Base shield reach", &s.baseShieldReach, 2.0f, 200.0f, 0.5f);
@@ -306,8 +307,13 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Friendlies", "Turret damage", &sp.turretDamage, 0.0f, 500.0f, 1.0f);
-}
+    Tweak::floatVar("Game/Friendlies", "Turret damage", &sp.turretDamage, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight range", &sp.searchlightRange, 4.0f, 80.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight cone half angle (deg)", &sp.searchlightHalfAngleDeg, 2.0f, 80.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight damage/s", &sp.searchlightDps, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight light/s", &sp.searchlightEnergyPerSec, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight turn speed (deg/s)", &sp.searchlightTurnDegPerSec, 5.0f, 720.0f, 5.0f);
+    Tweak::floatVar("Game/Friendlies", "Searchlight brightness", &sp.searchlightIntensity, 0.0f, 50000.0f, 50.0f);}
 
 static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
 {
@@ -358,6 +364,8 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     Tweak::floatVar("Game/Nav", "Lane width (m)", &s.laneWidth, 0.0f, 12.0f, 0.5f);
     Tweak::floatVar("Game/Nav", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Friendlies", "Turret beam lifetime", &s.beamLifetime, 0.02f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Friendlies", "Turret beam glow", &s.beamGlow, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Turret beam radius (m)", &s.beamRadius, 0.02f, 5.0f, 0.01f);
     Tweak::floatVar("Game/Combat", "Melee hit lifetime", &s.hitLifetime, 0.02f, 2.0f, 0.01f);
     Tweak::floatVar("Game/Combat", "Muzzle flash intensity", &s.flashIntensity, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Combat", "Hurt light intensity", &up.hurtLightIntensity, 0.0f, 500.0f, 1.0f);

@@ -317,6 +317,7 @@ public:
         // (The Lumberyard, the Quarry, the Fabricator and the Constructor hold no light: production runs on WORKERS, see staffing.)
         case EStructureType::Solar:
         case EStructureType::MedicStation:
+        case EStructureType::Searchlight:
         case EStructureType::Turret:      return m_settings.internalBuffer;
         case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
                                                        // stamped per instance (= its unit's cost, the build bar)
@@ -414,6 +415,7 @@ public:
         case EStructureType::Battery:
         case EStructureType::Bastion:
         case EStructureType::Turret:
+        case EStructureType::Searchlight:
         case EStructureType::Solar:
         case EStructureType::Lumberyard:
         case EStructureType::Quarry:
@@ -563,6 +565,9 @@ private:
     void rebuildLightLinks();
     void tickLight(float deltaSec);
     void drawLightLinks() const;
+    // THE SEARCHLIGHTS (every instance, each frame): the shining ones' cones into GameUnitParams::lightCones (the
+    // units' reveal + burn) and one SpotLight each. The aim and the draw are the component's (EMachineKind::Searchlight).
+    void publishSearchlights() const;
     bool lightLineClear(const Ref& from, const Ref& to) const;
     glm::vec3 beamPointOf(const Ref& ref) const; // a beam's end on a building: the centre of its crystal
     float m_lightLinkTimer = 0.0f;

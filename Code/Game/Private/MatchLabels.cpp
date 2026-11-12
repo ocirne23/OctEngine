@@ -56,7 +56,7 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     // ENERGY: burnt by the emitters/machines/turrets, banked by batteries, made by gen + solar.
     const bool energy = hasShieldEmitter(type) || isBarracksType(type) // (production runs on workers: no light)
         || type == EStructureType::MedicStation
-        || type == EStructureType::Turret || type == EStructureType::Generator
+        || type == EStructureType::Turret || type == EStructureType::Searchlight || type == EStructureType::Generator
         || type == EStructureType::Solar || type == EStructureType::Battery || type == EStructureType::Lens;
     // FUEL: burnt by generators and fabricators, banked by tanks, made by the lumberyards.
     const bool fuel = type == EStructureType::Generator || type == EStructureType::Fabricator
@@ -400,6 +400,24 @@ void GameMatch::buildWorldLabels()
         if (!u->puppet && label.barMax <= 0.0f)
             continue;
         labels.push_back(oc::move(label));
+    }
+    // A Lumberyard / Quarry GHOST: the yield it would have here, over the ghost (the HUD's "Yield" line says the same).
+    if (m_shownYield != -2)
+    {
+        HudWorldLabel label;
+        if (camera.worldToScreen(viewport, m_yieldGhostPos + glm::vec3(0.0f, 5.0f, 0.0f), label.screenPos) && onScreen(label.screenPos))
+        {
+            if (m_shownYield < 0)
+                label.title = "Yield ...";
+            else
+            {
+                label.title = oc::format("Yield {} %", m_shownYield);
+                label.barValue = (float)m_shownYield;
+                label.barMax = 100.0f;
+                label.barColor = glm::mix(glm::vec3(1.0f, 0.4f, 0.3f), glm::vec3(0.4f, 1.0f, 0.5f), (float)m_shownYield * 0.01f);
+            }
+            labels.push_back(oc::move(label));
+        }
     }
     Globals::gameHud.swapWorldLabels(labels);
     Globals::gameHud.swapPopup(popup);

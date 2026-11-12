@@ -16,6 +16,8 @@ namespace
     constexpr float c_linkPeriod = 1.0f;   // seconds between two derivations (they cast the line-of-sight rays)
     constexpr float c_beamLift = 1.0f;     // a beam ends this far over a building's top
     constexpr float c_baseReserve = 0.25f; // the share of its store the Beacon keeps for its own field
+    constexpr float c_searchlightLamp = 3.4f; // the Searchlight's lamp over its origin (the `Lamp` child of searchlight.pre)
+    constexpr float c_searchlightLampClear = 1.0f; // m along the cone's axis from the lamp's centre to the light: clear of the gem
 
     bool isLightHub(EStructureType t) { return t == EStructureType::Battery || t == EStructureType::Base || t == EStructureType::Lens; }
 
@@ -30,10 +32,11 @@ namespace
         case EStructureType::Battery:  return 0.9f;
         case EStructureType::Emitter:  return 1.85f;
         case EStructureType::Bastion:  return 3.5f;
-        case EStructureType::Turret:   return 1.7f;
+        case EStructureType::Turret:   return 3.6f;
         case EStructureType::Solar:    return 1.16f;
         case EStructureType::Barracks: return 3.15f;
         case EStructureType::Lens:     return 2.2f;
+        case EStructureType::Searchlight: return c_searchlightLamp;
         default:                       return -1.0f;
         }
     }
@@ -202,6 +205,49 @@ void StructureSystem::tickLight(float deltaSec)
             moved = glm::abs(move);
         }
     }
+}
+
+// The shining searchlights, each frame on every instance: their cones for the units (GameUnitParams::lightCones - a unit
+// in one is solid and burns, GameUnitComponent::setSolid) and a SpotLight each. The unit test is FLAT (a wedge on the
+// map), so the ground's height under the cone does not count; the drawn light leans down a little to reach the ground.
+void StructureSystem::publishSearchlights() const
+{
+    const GameStructureParams& params = Globals::settings.game.structureParams;
+    GameUnitParams& unit = Globals::settings.game.unitParams;
+    const float halfAngle = glm::radians(glm::clamp(params.searchlightHalfAngleDeg, 1.0f, 85.0f));
+    const float cosHalf = std::cos(halfAngle);
+    int count = 0;
+    for (const Ref& ref : m_frame)
+    {
+        if (ref.type != EStructureType::Searchlight || ref.state->blueprint
+            || ref.state->machineKind != GameStructureComponent::EMachineKind::Searchlight || !ref.state->searchlight.lit)
+            continue;
+        const float yaw = ref.state->searchlight.yaw;
+        const glm::vec2 dir(std::cos(yaw), std::sin(yaw));
+        const glm::vec3 lamp = ref.entity->pos + glm::vec3(0.0f, c_searchlightLamp, 0.0f);
+        if (count < GameUnitParams::MaxLightCones)
+        {
+            float* cone = unit.lightCones[count++];
+            cone[0] = lamp.x;
+            cone[1] = lamp.z;
+            cone[2] = params.searchlightRange;
+            cone[3] = dir.x;
+            cone[4] = dir.y;
+            cone[5] = cosHalf;
+            cone[6] = (float)ref.state->team;
+        }
+        // The lamp stands ~5.4 m over the ground: the axis leans down so the cone's far end is on the ground.
+        const float lean = (spawnHeightOf(ref.type) + c_searchlightLamp) / glm::max(params.searchlightRange, 1.0f);
+        const glm::vec3 axis = glm::normalize(glm::vec3(dir.x, -lean, dir.y));
+        const glm::vec3 color(1.0f, 0.93f, 0.75f);
+        // The light starts IN FRONT of the lamp gem, not at its centre: from inside the mesh every shadow ray hits the
+        // gem itself and the cone is dark.
+        const glm::vec3 source = lamp + axis * c_searchlightLampClear;
+        Globals::rendererVK.addLightInfo(SpotLight(source, params.searchlightRange * 1.15f, color, params.searchlightIntensity, axis, halfAngle, 0.15f));
+        // (No beam column for a shaft in the air: a column is a cylinder, and it did not read as this cone.)
+    }
+    unit.lightConeCount = count;
+    unit.lightConeDps = params.searchlightDps;
 }
 
 // The beams: a link shows ONLY WHILE IT MOVES LIGHT (a producer with light in its buffer, a consumer that is not

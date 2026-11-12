@@ -1,26 +1,37 @@
-# Wall segment: a 2x4x2 m physical barrier (Pillar2) - no field, no power, just mass and health.
+# Wall segment: a 2x3x2 m physical barrier - no field, no power, just mass and health.
 # Placed as a drag LINE (segments every 2 m along the path). Enemy units gnaw through it or
-# go around; a cheap way to shape their approach. Spawned origin 2.0 above ground.
-# SHAPE: cut stone with a darker capstone (ONE child piece: a wall line is many segments).
+# go around; a cheap way to shape their approach. Spawned origin 1.5 above ground.
+# SHAPE: cut stone with a darker capstone. The baseshapes have no 3 m piece and a scale is uniform, so the body is two
+# 2 m cubes that overlap: the root's (1.5 m under the origin to 0.5 over it) and `Upper` (to 1.5 over it).
 Prefab gameWall
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Pillar2
+		Node Cube
 		Type StaticMesh
 		Color 0.5 0.48 0.44
+		Position 0 -0.5 0
 		Scale 1
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 1 2 1
+		HalfExtents 1 1.5 1
 	Component GameStructure
 		MeleeRadius 1
 	Component Scene
 		Entity
+			Name Upper
+			Position 0 0.5 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.48 0.44
+				Scale 1
+		Entity
 			Name Cap
-			Position 0 1.76 0
+			Position 0 1.26 0
 			Component Render
 				ObjectContainer baseshapes
 				Node CubeQuarter

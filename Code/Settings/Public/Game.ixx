@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 27;
+export constexpr int GameStructureTypeCount = 28;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -196,6 +196,7 @@ export struct GameStructureSettings
         3.0f,   // Bridge (per segment)
         8.0f,   // Gate (per segment)
         40.0f,  // Lens
+        60.0f,  // Searchlight
     };
     float startMinerals = 200.0f;
     // THE HARVEST (the Lumberyard and the Quarry): a yard's YIELD (0..1) is what stands within harvestRadius of it
@@ -248,7 +249,7 @@ export struct GameStructureSettings
     float lanceBuffer = 100.0f;
     float generatorBuffer = 10.0f;
     // THE CRYSTAL STORE: one full store runs TWO field generators through one night. A night is ~640 s (the sun cycle
-    // at 60x, the default latitude and day), a generator draws 1 light/s awake: 2 x 640 = 1280, plus room for the extra
+    // at 60x, the default latitude and day), a generator draws 0.75 light/s awake: 2 x 480 = 960, plus room for the extra
     // draw under pressure. Filled by day: a Mirror makes ~780 light in one day, so two Mirrors fill one store.
     float batteryCapacity = 1500.0f;
     float generatorFuelTank = 10.0f;
@@ -258,9 +259,10 @@ export struct GameStructureSettings
     float medicEnergyPerSec = 1.5f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
     // THE LIGHT BALANCE (the default sun cycle: a day gives a Mirror ~780 s of full daylight, a night keeps a field
-    // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 1 light/s awake, a Great lantern 3.
-    //   4 Mirrors carry 1 Lantern through the night:  4 x 0.21 x 780 = 655 >= 640.  12 Mirrors: 1 Great lantern.
-    //   1 Hearth, burning day and night (1440 s), carries 1 Lantern:  0.45 x 1440 = 648 >= 640.  3 Hearths: 1 Great.
+    // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 0.75 light/s awake (480 a night), a
+    // Great lantern 2 (1280 a night).
+    //   3 Mirrors carry 1 Lantern through the night:  3 x 0.21 x 780 = 491 >= 480.  8 Mirrors: 1 Great lantern.
+    //   1 Hearth, burning day and night (1440 s), carries 1 Lantern:  0.45 x 1440 = 648 >= 480.  2 Hearths: 1 Great.
     float genEnergyPerSec = 0.45f;    // the Hearth: an early, inefficient source (1 wood/s for this much light)
     float solarEnergyPerSec = 0.21f;
     float solarDaylight = 1.0f;       // runtime (GameMatch): x the solar yield - the daylight in the sandbox world, else 1
@@ -269,15 +271,15 @@ export struct GameStructureSettings
     float fabricatorFuelPerSec = 1.0f;
     float fabricatorEnergyPerSec = 1.0f;
     float pressureDrawTension = 1.5f;
-    float emitterEnergyPerSec = 1.0f;
+    float emitterEnergyPerSec = 0.75f;
     float emitterOutput = 1.2f;
     float emitterReach = 54.0f;
     // The Base's shield: it pays for itself from the Base's own energy store.
-    float baseEnergyCapacity = 100.0f;
+    float baseEnergyCapacity = 1500.0f; // the same as one Crystal store
     float baseShieldEnergyPerSec = 1.5f; // the field's standing draw AND the Base's own generation: its idle field is free
     float baseShieldOutput = 2.4f;
     float baseShieldReach = 54.0f;
-    float bastionEnergyPerSec = 3.0f; // 3 Lanterns' worth (see THE LIGHT BALANCE)
+    float bastionEnergyPerSec = 2.0f; // (see THE LIGHT BALANCE)
     float bastionOutput = 2.6f;
     float bastionReach = 90.0f;
     float lanceEnergyPerSec = 3.0f;
@@ -329,9 +331,11 @@ export struct GameNpcSettings
     float laneWidth = 3.0f;           // metres PAINTED (0 = one cell)
     float spitterShotSpeed = 18.0f;
     float lobberShotSpeed = 14.0f;    // ShotKind 1: the slow splash shell
-    float beamLifetime = 0.5f;        // turret lightning
+    float beamLifetime = 0.5f;        // the turret's column of light: seconds from full to gone
+    float beamGlow = 3.4f;          // its glow at the moment of the shot
+    float beamRadius = 0.3f;          // m: its core at the moment of the shot (it thins as it fades)
     float hitLifetime = 0.25f;        // melee hit line + its flash
-    float flashIntensity = 1.0f;      // multiplier on the turret muzzle light's peak
+    float flashIntensity = 1.0f;    // multiplier on the turret muzzle light's peak
 };
 
 // The shared unit-sim baseline (GameUnitComponent::params refers to Globals::settings.game.unitParams). localTeam,
@@ -344,7 +348,7 @@ export struct GameUnitParams
     float fieldDpsMult = 1.0f;
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe
-    float emitterDrainMult = 0.25f;
+    float emitterDrainMult = 0.175f;
     float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
     float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
@@ -380,6 +384,13 @@ export struct GameUnitParams
     float farLift = 2.5f;
     float lightPoints[8][4]{};
     int lightPointCount = 0;
+    // THE SEARCHLIGHT CONES (runtime, StructureSystem::publishSearchlights): the shining searchlights as FLAT wedges on
+    // the map - x, z of the lamp, the range, the unit direction (x, z), the cosine of the half angle, the owner's team.
+    // A unit of another team in one is solid (as in a field) and loses lightConeDps health/s per cone.
+    static constexpr int MaxLightCones = 32;
+    float lightCones[MaxLightCones][7]{};
+    int lightConeCount = 0;
+    float lightConeDps = 0.0f;
     // THE FIELD ZONES (runtime, GameMatch, the terrain world): the bubbles of fieldZoneTeam's field buildings as
     // spheres (x, y, z, radius). A unit of another team inside one, measured FLAT on the map, is in the field
     // whatever the force bake's height slice reads (GameUnitComponent::tickField).
@@ -425,10 +436,19 @@ export struct GameStructureParams
 {
     float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
     float turretRange = 18.0f;
-    float turretFireInterval = 1.2f;
-    float turretShotEnergy = 2.0f; // keep a WHOLE number: the cable transport delivers whole cells
-                                   // into a store of this capacity, so 1.5 stalled one cell short
-    float turretDamage = 25.0f;
+    float turretFireInterval = 0.6f;
+    float turretShotEnergy = 0.5f; // light on beams fills the store in fractions. WITH "Light beams" OFF (the cell flow on
+                                   // power cables) it must be a WHOLE number: the transport delivers whole cells into a
+                                   // store of this capacity, so 0.5 never fills and 1.5 stalls one cell short
+    float turretDamage = 12.5f;
+    // THE SEARCHLIGHT: a cone of light that turns to the nearest demon in range. Every demon in the cone is solid and
+    // burns (GameUnitParams::lightCones); it draws light only while it shines.
+    float searchlightRange = 26.0f;
+    float searchlightHalfAngleDeg = 16.0f;
+    float searchlightDps = 3.2f;           // health/s to EACH unit in the cone
+    float searchlightEnergyPerSec = 1.0f;   // while it shines
+    float searchlightTurnDegPerSec = 30.0f;
+    float searchlightIntensity = 2500.0f;   // the spot light on the ground and the demons
     float medicRange = 12.0f;
     float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
 };

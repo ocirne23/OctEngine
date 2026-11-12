@@ -44,6 +44,9 @@ void GameMatch::saveGame()
             root.set("NightIndex", oc::to_string(m_nightIndex));
             root.set("Night", m_night);
             root.set("TimeOfDay", Globals::settings.sky.timeOfDay);
+            // The night's build-up: the waves launched this night and the size rolled for the next one ("Next wave power").
+            root.set("NightWave", oc::to_string(m_nightWave));
+            root.set("WaveScale", m_waveScale);
         }
         root.set("MatchTime", m_matchTime); // the HUD clock (sim seconds since the world spawned)
         saveTrickle(root); // the wave/ambient spawns still queued (a save mid-wave loses nothing)
@@ -124,6 +127,10 @@ void GameMatch::loadGame(oc::string_view path)
             m_night = n->asBool();
         if (const AssetNode* n = root.find("TimeOfDay"))
             Globals::settings.sky.timeOfDay = glm::clamp(n->asFloat(), 0.0f, 23.99f);
+        if (const AssetNode* n = root.find("NightWave"))
+            m_nightWave = glm::max(n->asInt(), 0);
+        if (const AssetNode* n = root.find("WaveScale"))
+            m_waveScale = glm::max(n->asFloat(), 0.0f);
     }
     if (const AssetNode* n = root.find("MatchTime"))
         m_matchTime = glm::max(n->asFloat(), 0.0f);

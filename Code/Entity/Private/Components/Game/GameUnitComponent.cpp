@@ -910,6 +910,36 @@ void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
         const glm::vec3 d = t.pos - glm::vec3(light[0], light[1], light[2]);
         now = glm::dot(d, d) < light[3] * light[3];
     }
+    // THE SEARCHLIGHT CONES of another team (flat wedges, see GameUnitParams::lightCones): in one, the unit is solid as
+    // in a field, and it burns - once per cone, so two crossed cones burn twice as fast. Every tickField path ends in
+    // one setSolid call, so this is once a tick.
+    {
+        int cones = 0;
+        uint32 coneTeam = 0;
+        for (int i = 0; i < glm::min(params.lightConeCount, (int)GameUnitParams::MaxLightCones); ++i)
+        {
+            const float* cone = params.lightCones[i];
+            if ((uint32)cone[6] == team)
+                continue;
+            const glm::vec2 d(t.pos.x - cone[0], t.pos.z - cone[1]);
+            const float distSq = glm::dot(d, d);
+            if (distSq > cone[2] * cone[2])
+                continue;
+            // Inside the wedge: the angle to the axis is under the half angle (dot >= cos x distance); the lamp's own
+            // foot (under 1.5 m) always counts.
+            if (distSq < 2.25f || d.x * cone[3] + d.y * cone[4] >= cone[5] * std::sqrt(distSq))
+            {
+                ++cones;
+                coneTeam = (uint32)cone[6];
+            }
+        }
+        if (cones > 0)
+        {
+            now = true;
+            health = glm::max(0.0f, health - params.lightConeDps * (float)cones * t.deltaSec);
+            noteHurtTeam(coneTeam);
+        }
+    }
     if (now == solid)
         return;
     solid = now;

@@ -217,6 +217,7 @@ private:
     HarvestProbe m_harvestProbe;
     int m_frameYield = -2; // this frame's harvest ghost: percent, -1 = surveying, -2 = no such ghost
     int m_shownYield = -2; // what the HUD's "Yield" line shows
+    glm::vec3 m_yieldGhostPos{ 0.0f }; // where that ghost stands: the labels pass writes the same yield over it
     void showYield(int percent);
     // The sandbox world's ground test on a snapped position (always true on the flat maps): p.y = the stand height.
     bool fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) const;
@@ -424,6 +425,7 @@ private:
     glm::vec2 m_lmbDownPos{ 0.0f };
     bool m_lmbDown = false;
     bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
+    bool m_boxSelectBlocked = false; // the held LMB press changed the mode (setMode): updateUnitSelection ignores it to its release
     void updateUnitSelection(const Camera& camera);
     bool orderSelectedUnits(const glm::vec3& target, bool freshOrder); // true = a lane plan was queued (fresh order + a raster to plan over; the A* runs on a job)
     bool moveOrderAt(const glm::vec3& worldPos, bool includePlayer = true); // THE RMB move order: player (unless CTRL: units only) + selected units walk there (fresh order, lane seeded); returns orderSelectedUnits'
@@ -710,7 +712,7 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "LNC", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

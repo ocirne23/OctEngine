@@ -1,8 +1,10 @@
-# Turret (a light tower): strikes the nearest SOLID enemy unit in range; each shot spends
+# Turret (a light tower): strikes the nearest SOLID enemy unit in range with a column of light; each shot spends
 # "Turret shot energy" from its internal store - defense output rides the supply network.
 # Spawned origin 2.0 above ground.
-# SHAPE (a placeholder inside the 4x4x4 m box; uniform scales of the baseshapes variants): a stone foot
-# (the root), a timber post and a pale staff crystal at its head. The child pieces are render-only.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone OBELISK - a wide foot (the root), a thick
+# lower shaft and a thin upper one, each with a bronze collar, and a cold blue crystal at the tip, 5.6 m over the
+# ground. The child pieces are render-only; the collider is the 4x4x4 m box. Keep the `Head` height in step with
+# beamHeightOf(Turret) in Game/Private/Light.cpp and c_turretMuzzle in GameStructureComponent.cpp.
 Prefab gameTurret
 	Global true
 	Component Render
@@ -22,21 +24,49 @@ Prefab gameTurret
 		MeleeRadius 2
 	Component Scene
 		Entity
-			Name Post
-			Position 0 0.3 0
+			Name Shaft
+			Position 0 0.35 0
 			Component Render
 				ObjectContainer baseshapes
 				Node Pillar3
 				Type StaticMesh
-				Color 0.36 0.25 0.15
-				Scale 0.3
+				Color 0.62 0.6 0.56
+				Scale 0.45
+		Entity
+			Name Collar
+			Position 0 1.7 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.55 0.38 0.16
+				Scale 0.56
+		Entity
+			Name Spire
+			Position 0 2.4 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.62 0.6 0.56
+				Scale 0.27
+		Entity
+			Name Crown
+			Position 0 3.2 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.55 0.38 0.16
+				Rotation 0 45 0
+				Scale 0.36
 		Entity
 			Name Head
-			Position 0 1.7 0
+			Position 0 3.6 0
 			Component Render
 				ObjectContainer gemsGlow
 				Node Diamond
 				Type StaticMesh
-				Color 0.85 0.95 1
-				Emissive 2.5
+				Color 0.6 0.85 1
+				Emissive 3.5
 				Scale 0.4

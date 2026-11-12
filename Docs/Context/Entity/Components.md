@@ -253,7 +253,9 @@ body to; there is no per-unit multiplier. A body already over the cap only takes
   UNION. Its flag bitfields are MAIN-THREAD-ONLY (a bitfield write is a read-modify-write of the byte).
 * **`GameProjectileComponent`** — team-tagged lifetime, deflection and contact damage.
 
-**Contract:** `update()` simulates only when NOT a network client (mirrors write state on clients).
+**Contract:** `update()` simulates only when NOT a network client (mirrors write state on clients). One exception:
+a Searchlight structure (`EMachineKind::Searchlight`) also AIMS on a client - its yaw and `lit` are derived on every
+instance, never sent.
 Cross-entity writes are atomic CAS; cross-entity lookup is spatial queries — **no entity lists**;
 physics writes ride the body-command queue.
 
@@ -278,7 +280,9 @@ structure for `AttackDamage` — each reported as a `HitRecord` for the game's v
 false in the co-op sandbox world) or the prefab's `FieldBlocked true`. The exposure damage and the battery drain do not
 depend on it. **The shadow form:** `params.shadowTeam` (runtime) makes that team's units `solid` only in an opposing
 field (half the iso value up) or in daylight; `setSolid` (from `tickField`) also swaps the subtree's tint to
-near-black. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid, and the turret's target query
+near-black. **A searchlight cone does the same and burns:** `setSolid` also tests `params.lightCones` (runtime, the
+game's shining Searchlights as flat wedges, each with its team) - a unit of another team in one is solid and loses
+`lightConeDps` health/s per cone. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid, and the turret's target query
 skips it. `params.sunBurnTeam` / `sunDps` (runtime too) drain that team's health in `applyDamageAndHeal` and in
 `updateFar`, which then also runs the death check.
 

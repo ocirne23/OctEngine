@@ -7,6 +7,7 @@ import :Entity;
 import Force;
 import Spatial;
 
+static constexpr float c_turretMuzzle = 3.6f; // the turret's crystal over its origin (the `Head` child of turret.pre): a strike starts here
 static std::mutex g_structureEventMutex;
 static oc::vector<uint32> g_spawnRequests;
 static oc::vector<GameStructureComponent::TurretFireRequest> g_turretFire;
@@ -52,10 +53,11 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
 
 void GameStructureComponent::update(Entity& entity, float deltaSec)
 {
-    if (Globals::networkManager.role() == ENetRole::Client)
+    const bool client = Globals::networkManager.role() == ENetRole::Client;
+    if (client && machineKind != EMachineKind::Searchlight)
         return;
     // Any OTHER team's bubble over the point drains health - a blueprint under it un-builds.
-    if (!invulnerable)
+    if (!invulnerable && !client)
     {
         const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(entity.pos, team);
         if (territory.valid && territory.inside && territory.owningTeam != (uint32)team)
@@ -96,6 +98,46 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             u->heal(amount);
         });
     }
+    else if (machineKind == EMachineKind::Searchlight)
+    {
+        // The cone turns to the nearest enemy in range (a shadow too: the cone is what makes it solid) and shines while
+        // the store pays. The damage and the reveal are the UNITS' (GameUnitParams::lightCones, published by the game
+        // from yaw + lit), so this runs on a client too: the same aim from the mirrored units, no draw.
+        entity.setProfiled();
+        SearchlightData& sl = searchlight;
+        const glm::vec3 pos = entity.pos;
+        const float range = params.searchlightRange;
+        bool found = false;
+        float bestDistSq = range * range;
+        glm::vec2 toTarget(0.0f);
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), range, SpatialLayer_Render, [&](uint64 user)
+        {
+            Entity* other = reinterpret_cast<Entity*>(user);
+            const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
+            if (!u || u->puppet || u->team == team || !u->alive())
+                return;
+            const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+            if (glm::dot(d, d) < bestDistSq)
+            {
+                bestDistSq = glm::dot(d, d);
+                toTarget = d;
+                found = true;
+            }
+        });
+        if (found && bestDistSq > 1e-4f)
+        {
+            const float want = std::atan2(toTarget.y, toTarget.x);
+            float diff = want - sl.yaw;
+            diff -= glm::two_pi<float>() * glm::round(diff / glm::two_pi<float>()); // the short way round
+            const float step = glm::radians(params.searchlightTurnDegPerSec) * deltaSec;
+            sl.yaw += glm::clamp(diff, -step, step);
+        }
+        const float cost = params.searchlightEnergyPerSec * deltaSec;
+        const bool pays = client ? store[0] > 0.01f : store[0] >= cost;
+        sl.lit = found && pays ? 1 : 0;
+        if (sl.lit && !client)
+            store[0] -= cost;
+    }
     else if (machineKind == EMachineKind::Turret)
     {
         entity.setProfiled();
@@ -125,7 +167,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
                 if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
                     victim->damage(params.turretDamage, team);
                 const std::lock_guard<std::mutex> lock(g_structureEventMutex);
-                g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, 1.0f, 0.0f),
+                g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, c_turretMuzzle, 0.0f),
                     target->pos, team });
             }
         }
