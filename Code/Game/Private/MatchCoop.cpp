@@ -26,15 +26,23 @@ namespace
         const char* name;
         int minWave; // first wave index this recipe can roll (m_waveIndex is 1-based at roll time)
         struct { ENpcType type; float weight; } mix[5]; // weight 0 = unused slot
+        // THE FIRST NIGHT (the sandbox world, where the recipes unlock by night): the wave of that night (0-based)
+        // from which this recipe can roll already, under its minWave; -1 = not before its minWave. So the first
+        // night is not swarm after swarm: its first wave is the plain swarm, and the light mixes come in after it.
+        int firstNight = -1;
     };
     // The ELITE tier (Elite/Giant/Titan/Lobber) enters at wave 7 and dominates from ~10 on: the
     // Lobber's splash shells punish packed defences, the Giant/Titan soak turret fire, and the
     // budget growth is what lets a late wave afford a Titan next to its escort.
     constexpr WaveArchetype c_waveArchetypes[] = {
         { "swarm",           1, { { ENpcType::Swarm, 1.0f } } },
-        { "swarm + runners", 2, { { ENpcType::Swarm, 0.75f }, { ENpcType::Runner, 0.25f } } },
-        { "grunt push",      2, { { ENpcType::Grunt, 0.65f }, { ENpcType::Swarm, 0.35f } } },
-        { "runner rush",     3, { { ENpcType::Runner, 1.0f } } },
+        { "swarm + runners", 2, { { ENpcType::Swarm, 0.75f }, { ENpcType::Runner, 0.25f } }, 1 },
+        { "grunt push",      2, { { ENpcType::Grunt, 0.65f }, { ENpcType::Swarm, 0.35f } }, 1 },
+        { "skirmish",        2, { { ENpcType::Swarm, 0.5f }, { ENpcType::Runner, 0.25f },
+                                  { ENpcType::Grunt, 0.25f } }, 2 },
+        { "runner rush",     3, { { ENpcType::Runner, 1.0f } }, 3 },
+        { "spitter probe",   3, { { ENpcType::Spitter, 0.15f }, { ENpcType::Swarm, 0.85f } } }, // no spitter on the first night
+        { "warrior scouts",  3, { { ENpcType::Warrior, 0.2f }, { ENpcType::Swarm, 0.8f } }, 4 },
         { "warrior line",    4, { { ENpcType::Warrior, 0.4f }, { ENpcType::Grunt, 0.3f },
                                   { ENpcType::Swarm, 0.3f } } },
         { "shield wall",     6, { { ENpcType::Warrior, 0.6f }, { ENpcType::Spitter, 0.15f },
@@ -379,6 +387,16 @@ void GameMatch::tickFogEffects(float deltaSec)
         column.halfExtents = glm::vec3(site.radius * 0.45f, height * 0.5f, site.radius * 0.45f);
         column.edgeSoftness = 1.0f;
         Globals::rendererVK.addFogVolume(column);
+        // THE SIGNAL: a red beam through the column, from the ground to the cloud base, that pulses - a beam's glow is
+        // not dimmed by the fog or the distance (vol_apply), so the players see from the Base where a wave comes down.
+        // Red, to tell it from an outpost's steady violet beam. One of the frame's beam columns.
+        if (m_settings.spawnBeamGlow > 0.0f)
+        {
+            const float pulse = 0.65f + 0.35f * std::sin(site.age * 4.0f);
+            Globals::rendererVK.addBeamColumn(BeamLight(site.pos + up * (height * 0.5f), glm::max(site.radius * 1.5f, 20.0f),
+                glm::vec3(1.0f, 0.16f, 0.2f), m_settings.spawnBeamGlow * fade * pulse, up, glm::max(m_settings.spawnBeamRadius, 0.05f),
+                height, height * 0.3f));
+        }
     }
     // The fields clear the fog: AFTER the sites above (a clearing volume removes what the list holds before it).
     if (m_settings.fieldFogClear > 0.0f)
@@ -741,11 +759,37 @@ int GameMatch::aiAliveCount() const
 // The NEXT wave's budget in points, before the "Max enemy units" cap: base + growth per wave so
 // far, where the growth itself climbs by "Wave growth growth" every wave -
 // base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)) for the 0-based wave index i.
+// THE SANDBOX WORLD: a night's BASE power is the AVERAGE wave power of the night before it. A night's waves are
+// base x (1 + ramp x k) x (surge ? size : 1) for its k-th wave (tickWaves; the random variation averages to 1), so
+// the average of a night is base x nightAverageScale(), and night n (0-based) has the base
+// "Wave budget" x nightAverageScale()^n - a closed form: no night's power is kept.
 float GameMatch::nextWaveBudget() const
 {
     const float wave = (float)waveLevel();
+    if (m_sandboxWorld)
+        return glm::min((float)m_settings.waveBudget * std::pow(nightAverageScale(), wave), 1e7f) * m_waveScale * m_settings.waveSizeMult;
     return ((float)m_settings.waveBudget + m_settings.waveBudgetGrowth * wave + m_settings.waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f)
         * m_waveScale * m_settings.waveSizeMult; // the night's build-up (tickWaves; 1 outside the sandbox world) x the user's knob
+}
+
+// The mean of a night's wave scales (1 + ramp x k, x the surge size on every Nth wave) over the waves a night HAS: the
+// first at dusk, then one per "Night wave interval (s)" for the night's length - from the sun cycle's latitude, day
+// of year and speed, so a longer night or a shorter interval (more waves, a higher ramp reached) raises it.
+float GameMatch::nightAverageScale() const
+{
+    const auto& sky = Globals::settings.sky;
+    const float decl = glm::radians(23.44f) * std::sin(glm::two_pi<float>() * (284.0f + sky.dayOfYear) / 365.0f); // as SkyParams::cycleSunDirection
+    const float cosSunset = glm::clamp(-std::tan(glm::radians(sky.latitude)) * std::tan(decl), -1.0f, 1.0f); // the hour angle of the sunset
+    const float nightHours = 24.0f - 2.0f * glm::degrees(std::acos(cosSunset)) / 15.0f;
+    const float nightSeconds = nightHours * 3600.0f / glm::max(sky.sunCycleSpeed, 0.01f);
+    const int waves = glm::clamp((int)(nightSeconds / glm::max(m_settings.nightWaveInterval, 1.0f)) + 1, 1, 512);
+    float sum = 0.0f;
+    for (int k = 0; k < waves; ++k)
+    {
+        const bool surge = m_settings.nightSurgeEvery > 0 && (k + 1) % m_settings.nightSurgeEvery == 0;
+        sum += (1.0f + m_settings.nightWaveRamp * (float)k) * (surge ? m_settings.nightSurgeSize : 1.0f);
+    }
+    return sum / (float)waves;
 }
 
 // The wave blob's radius for `budget` points of the CURRENT mix. Area - not radius - scales with
@@ -827,9 +871,16 @@ void GameMatch::queueWave()
     int eligible[c_numWaveArchetypes];
     int numEligible = 0;
     const int level = m_sandboxWorld ? m_nightIndex : m_waveIndex; // 1-based: the recipes unlock by night there
+    // The first night also rolls the recipes that name a wave of it (WaveArchetype::firstNight). m_nightWave is the
+    // waves launched this night BEFORE this one (tickWaves counts it up after the queue).
+    const bool firstNight = m_sandboxWorld && m_nightIndex == 1;
     for (int i = 0; i < c_numWaveArchetypes; ++i)
-        if (level >= c_waveArchetypes[i].minWave && (i != m_lastArchetype || numEligible == 0))
+    {
+        const WaveArchetype& arch = c_waveArchetypes[i];
+        const bool unlocked = level >= arch.minWave || (firstNight && arch.firstNight >= 0 && m_nightWave >= arch.firstNight);
+        if (unlocked && (i != m_lastArchetype || numEligible == 0))
             eligible[numEligible++] = i;
+    }
     if (numEligible > 1 && eligible[0] == m_lastArchetype) // slot 0 was only a can't-be-empty seed
     {
         eligible[0] = eligible[numEligible - 1];

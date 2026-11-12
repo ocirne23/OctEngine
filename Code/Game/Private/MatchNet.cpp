@@ -192,7 +192,7 @@ void GameMatch::sendStats()
     {
         const int i = indices[k];
         writer.write<uint32>(m_structures.structureId(i));
-        writer.write<uint8>(frac8(m_structures.structureHealth(i), m_structures.structureHealthMax()));
+        writer.write<uint8>(frac8(m_structures.structureHealth(i), m_structures.structureHealthMaxOf(i)));
         writer.write<uint8>(frac8(m_structures.structureCharge(i), m_structures.structureCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureFuel(i), m_structures.structureFuelCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMinerals(i), m_structures.structureMineralCapacity(i)));
@@ -202,7 +202,8 @@ void GameMatch::sendStats()
             : frac8(m_structures.structureOutputFrac(i), 1.0f));
         writer.write<uint8>(frac8(m_structures.structureFlowUtil(i), 1.0f));
         writer.write<uint8>((uint8)((m_structures.structurePowered(i) ? 1u : 0u)
-            | (m_structures.structureBlueprint(i) ? 2u : 0u))); // status bits (health IS progress)
+            | (m_structures.structureBlueprint(i) ? 2u : 0u)    // status bits (health IS progress)
+            | (m_structures.structureRubble(i) ? 4u : 0u)));    // rubble: a destroyed building, to build up again
     }
     Globals::networkManager.fireNetworkEvent("GSt", writer.data());
 
@@ -403,7 +404,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
                 if (!reader.overflowed())
                     m_structures.mirrorStructureState(id, health / 255.0f, charge / 255.0f,
                         fuelFrac / 255.0f, mineralFrac / 255.0f, output / 255.0f, util / 255.0f,
-                        (status & 1u) != 0, (status & 2u) != 0);
+                        (status & 1u) != 0, (status & 2u) != 0, (status & 4u) != 0);
             }
             if (!reader.overflowed())
                 m_structures.mirrorTotals(minerals, fuel, energy, cap, gen, use);

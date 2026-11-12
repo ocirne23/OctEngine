@@ -890,7 +890,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     {
         // Cables/crossings/solars are WALK-THROUGH: no nav obstacle (units path straight over
         // them) and never a NavSource (enemies do not march at power lines).
-        if (isWalkThrough(s.type))
+        if (isWalkThrough(s.type) || s.state->rubble) // rubble is walked over too, and it is no target
             continue;
         const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
@@ -1261,7 +1261,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     else
         updateGameInput(camera);
 
-    m_structures.drawDebug();
+    m_structures.drawDebug(m_mode == EPlayerMode::Build || m_buildUi, armedType());
     m_npcs.drawBeams(deltaSec); // ages the strikes, draws the melee hit lines (the turret's light: drawBeamLights, in update)
     if (m_coop && !m_sandboxWorld)
         drawCoopBarrier(); // the edge fence's pulsing energy lines
@@ -1322,6 +1322,10 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // The world labels are built on a JOB kicked at the end of the game tick (submitWorldLabels):
     // this frame's final camera and viewport are captured here for it.
     m_labelsCamera = camera;
+    {
+        const int hover = hoveredStructure(camera); // here, on the main thread: the job only reads the id
+        m_labelsHoverId = hover >= 0 ? m_structures.structureId(hover) : 0;
+    }
     m_labelsViewport = Globals::ui.getViewportRect();
     m_labelsCameraValid = true;
     {

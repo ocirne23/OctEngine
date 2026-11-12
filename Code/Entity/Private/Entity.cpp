@@ -233,7 +233,7 @@ void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Trans
     }
     else if (cullPassMask != EntityCullPass_Own && cullMode != EEntityCullMode::None)
         passMask = cullPassMask;
-    if (render && passMask != 0)
+    if (render && passMask != 0 && render->node.getPassMask() != 0) // a node pass mask of 0 = its owner HID the mesh (RenderNode::setPassMask)
         renderer.renderNode(render->node, passMask);
 
     if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets))

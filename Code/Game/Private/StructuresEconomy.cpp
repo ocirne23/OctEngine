@@ -5,7 +5,9 @@ import Core.glm;
 import Core.Log;
 import Entity;
 import Force;
+import Physics;
 import RendererVK;
+import Spatial;
 import :Structures;
 
 // THE ECONOMY TICKS + materials (see Structures.ixx): production (income, fuel burn, consumer
@@ -14,6 +16,7 @@ import :Structures;
 // price builds a blueprint and repairs a damaged structure), the tint, and the debug draw.
 
 static constexpr glm::vec3 c_blueprintColor(0.45f, 0.55f, 0.7f); // ghost tint until built
+static constexpr glm::vec3 c_rubbleColor(0.1f, 0.085f, 0.075f);  // rubble: burnt dark until it is built again
 
 // ---------------------------------------------------------------- combat/economy helpers
 
@@ -83,7 +86,7 @@ void StructureSystem::applyStructureTint(const Ref& s)
     RenderComponent* rc = getComponent<RenderComponent>(s.entity);
     if (!rc || !rc->node.isValid())
         return;
-    glm::vec3 color = c_blueprintColor;
+    glm::vec3 color = s.state->rubble ? c_rubbleColor : c_blueprintColor;
     if (!s.state->blueprint)
     {
         color = glm::vec3(1.0f); // fallback: authored tint missing
@@ -108,8 +111,33 @@ void StructureSystem::applyStructureTint(const Ref& s)
             }
 }
 
+// RUBBLE IS NOT BUILT UP UNDER ATTACK: a living enemy unit within "Rubble safe radius (m)" of it (flat, on the map)
+// blocks every way to build it - the Builder's hut, the workers and the players all pay through investMaterials,
+// and the searches for work skip it (blueprintNeed, fundNearbyBlueprint).
+bool StructureSystem::rubbleBlocked(const Ref& s) const
+{
+    if (!s.state->rubble || m_settings.rubbleSafeRadius <= 0.0f)
+        return false;
+    const float radius = m_settings.rubbleSafeRadius;
+    const glm::vec3 pos = s.entity->pos;
+    const uint32 team = s.state->team;
+    bool enemy = false;
+    Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), radius, SpatialLayer_Render, [&](uint64 user)
+    {
+        Entity* other = reinterpret_cast<Entity*>(user);
+        const GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+        if (enemy || !unit || unit->puppet || unit->team == team || !unit->alive())
+            return;
+        const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+        enemy = glm::dot(d, d) <= radius * radius;
+    });
+    return enemy;
+}
+
 float StructureSystem::investMaterials(const Ref& s, float amount)
 {
+    if (rubbleBlocked(s))
+        return 0.0f;
     // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp - the same price builds a
     // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
     // against the COMPONENT's healthMax (cables are softer than buildings).
@@ -124,6 +152,8 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
     if (s.state->blueprint && s.state->health >= healthMax - 1e-3f)
     {
         s.state->blueprint = false;
+        if (s.state->rubble) // built again: solid, and a target again
+            setRubble(s, false);
         applyStructureTint(s); // back to the authored color
         m_linksDirty = true;   // a finished cable segment starts conducting
         Log::info(oc::string(structureTypeName(s.type)) + " constructed");
@@ -171,7 +201,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
         // The Base is never a blueprint, but it IS repairable now that it takes damage.
         const bool wantsMaterials = s.state->blueprint
             || (includeRepairs && s.state->health < s.state->healthMax - 1e-3f);
-        if (!wantsMaterials)
+        if (!wantsMaterials || rubbleBlocked(s)) // (rubble with an enemy near takes nothing: the next one gets the stone)
             continue;
         const float dist = glm::distance(glm::vec2(s.entity->pos.x, s.entity->pos.z), glm::vec2(pos.x, pos.z));
         if (dist < bestDist)
@@ -395,9 +425,64 @@ void StructureSystem::tickDamage(float)
             ++i;
             continue;
         }
+        // RUBBLE: a BUILT building the enemy destroys stays as rubble - a blueprint again (inert: no production, no
+        // field, no light link, no walkers), at the health "Rubble rebuild cost (x)" leaves to pay, with its stores
+        // lost. The builders, the workers and the players build it up like any blueprint. A blueprint that never
+        // stood, and a road or conduit piece (their state mirrors outside GSt), are removed as before.
+        if (!s.state->blueprint && !isCableOrCrossing(s.type) && m_settings.rubbleCost > 0.0f)
+        {
+            Log::info(oc::string(structureTypeName(s.type)) + " destroyed: rubble");
+            GameStructureComponent& c = *s.state;
+            c.blueprint = true;
+            c.health = glm::max(c.healthMax * (1.0f - glm::clamp(m_settings.rubbleCost, 0.0f, 1.0f)), 1.0f);
+            c.store[0] = c.store[1] = c.store[2] = 0.0f;
+            c.powered = false;
+            setRubble(s, true);
+            m_linksDirty = true; // what it joined is no longer joined
+            ++i;
+            continue;
+        }
         Log::info(oc::string(structureTypeName(s.type)) + " destroyed");
         destroyStructureAt(i);
     }
+}
+
+// The rubble flag and what follows from it on every instance: the COLLIDER - rubble is walked over (a body-command:
+// off the broadphase and the solver, pose kept), or the enemy could neither bite it nor pass it - and THE LOOK: the
+// building's own meshes are hidden (the root's node pass mask to 0, its child pieces disabled) and a rubble PILE
+// stands on its ground point - rubble1.pre for a 1x1 tile building, rubble2.pre for a 2x2 one, the same at scale 1.5
+// for a 3x3 one. The pile is a root entity of its own, owned by the roster entry.
+void StructureSystem::setRubble(const Ref& s, bool rubble)
+{
+    s.state->rubble = rubble ? 1 : 0;
+    applyStructureTint(s);
+    if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(s.entity))
+        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(rubble ? 0.0f : 1.0f));
+    RenderComponent* rc = getComponent<RenderComponent>(s.entity);
+    if (rubble && !s.rubbleVisual)
+    {
+        if (rc && rc->node.isValid())
+        {
+            s.rubbleSavedPassMask = rc->node.getPassMask();
+            rc->node.setPassMask(0);
+        }
+        const int cells = footprintCellsOf(s.type);
+        const glm::vec3 ground = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f);
+        s.rubbleVisual = Globals::world.spawnAssetFile(cells <= 1 ? "Entities/Game/rubble1.pre" : "Entities/Game/rubble2.pre",
+            Transform(ground, cells >= 3 ? 1.5f : 1.0f, s.entity->rot), true);
+        if (s.rubbleVisual)
+            Globals::world.addRootEntity(s.rubbleVisual);
+    }
+    else if (!rubble && s.rubbleVisual)
+    {
+        if (rc && rc->node.isValid())
+            rc->node.setPassMask(s.rubbleSavedPassMask);
+        Globals::world.removeRootEntity(s.rubbleVisual.get());
+        s.rubbleVisual = EntityPtr();
+    }
+    if (const SceneComponent* scene = getComponent<SceneComponent>(s.entity))
+        for (const EntityPtr& child : scene->children)
+            child->setEnabled(!rubble);
 }
 
 void StructureSystem::tickConstructors(float deltaSec)
@@ -417,7 +502,10 @@ void StructureSystem::tickConstructors(float deltaSec)
 
 // ---------------------------------------------------------------- debug draw
 
-void StructureSystem::drawDebug() const
+// buildMode: the player's build UI is open - the builders' and the towers' ranges show. armed: the type on the ghost
+// (Count = none) - the harvest ranges of the built yards show only while a yard of THAT kind is on the ghost, and
+// the light hubs' link ranges only while a type that uses light is.
+void StructureSystem::drawDebug(bool buildMode, EStructureType armed) const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
     // SATURATED segments: a red pulsing ring over every segment whose ~2 s average throughput
@@ -450,23 +538,49 @@ void StructureSystem::drawDebug() const
             ? glm::vec3(0.2f, 0.4f, 1.0f) : glm::vec3(1.0f, 0.6f, 0.15f);
         drawCircle(glm::vec3(node.pos.x, node.pos.y - c_nodeHeight + 0.3f, node.pos.z), 3.0f, packColor(base), 24);
     }
-    // The harvest range of the built yards: green = a lumberyard, grey = a quarry, dimmer with a lower yield.
+    // The harvest range of the built yards of the kind on the ghost (where a new one would share with them): green =
+    // a lumberyard, grey = a quarry, dimmer with a lower yield.
     for (const Ref& s : m_frame)
-        if (isHarvestType(s.type) && !s.state->blueprint)
+        if (isHarvestType(s.type) && s.type == armed && !s.state->blueprint)
             drawCircle(s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type) - 0.3f, 0.0f), m_settings.harvestRadius,
                 packColor((s.type == EStructureType::Lumberyard ? glm::vec3(0.35f, 0.8f, 0.3f) : glm::vec3(0.7f, 0.7f, 0.75f))
                     * glm::mix(0.35f, 0.8f, s.yield)), 48);
 
-    // Constructor build/repair reach (amber), medic heal reach (green) + red rings on unpowered
-    // consumers.
+    // THE LIGHT HUBS' LINK RANGE, while a type that uses light is on the ghost: a gold ring around each built Crystal
+    // store, the Beacon and each Lens, at the distance the armed type links over (the same choice as
+    // rebuildLightLinks: a Lens end is never longer than "Lens range"). Inside a ring the new building gets a link,
+    // if the line between the two crystals is clear.
+    if (m_settings.lightBeams && armed != EStructureType::Count && !isCableOrCrossing(armed) && energyCapacityOf(armed) > 0.0f)
+    {
+        const float own = armed == EStructureType::Lens ? m_settings.lensRange
+            : armed == EStructureType::Solar ? m_settings.mirrorBeamRange
+            : transportRoleOf(armed, 0) == ETransportRole::Storage ? m_settings.lightHubLinkRange : m_settings.lightHubReach;
+        const uint32 hubRing = packColor(glm::vec3(1.0f, 0.85f, 0.4f) * 0.7f);
+        for (const Ref& s : m_frame)
+        {
+            const bool hub = s.type == EStructureType::Battery || s.type == EStructureType::Base || s.type == EStructureType::Lens;
+            if (!hub || s.state->blueprint)
+                continue;
+            const float range = s.type == EStructureType::Lens ? glm::min(own, m_settings.lensRange) : own;
+            drawCircle(s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type) - 0.35f, 0.0f), range, hubRing, 64);
+        }
+    }
+
+    // In build mode only: constructor build/repair reach (amber), light tower and searchlight range (pale blue).
+    // Always: medic heal reach (green) + red rings on unpowered consumers.
     const uint32 constructorRing = packColor(glm::vec3(1.0f, 0.75f, 0.45f) * 0.6f);
+    const uint32 towerRing = packColor(glm::vec3(0.6f, 0.8f, 1.0f) * 0.5f);
     const uint32 medicRing = packColor(glm::vec3(0.4f, 1.0f, 0.5f) * 0.6f);
     const uint32 unpoweredColor = packColor(glm::vec3(1.0f, 0.25f, 0.2f));
+    const GameStructureParams& params = Globals::settings.game.structureParams;
     for (const Ref& s : m_frame)
     {
         const glm::vec3 ground = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f);
-        if (s.type == EStructureType::Constructor && !s.state->blueprint)
+        if (buildMode && s.type == EStructureType::Constructor && !s.state->blueprint)
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), m_settings.constructorRange, constructorRing, 40);
+        if (buildMode && (s.type == EStructureType::Turret || s.type == EStructureType::Searchlight) && !s.state->blueprint)
+            drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f),
+                s.type == EStructureType::Turret ? params.turretRange : params.searchlightRange, towerRing, 40);
         if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered)
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), medicHealRadius(), medicRing, 40);
         if ((hasShieldEmitter(s.type) || s.type == EStructureType::MedicStation

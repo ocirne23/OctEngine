@@ -36,6 +36,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Ambient wander base bias", &s.ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &s.ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
     Tweak::floatVar("HUD", "Label max distance", &s.labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
+    Tweak::floatVar("HUD", "Building bar distance (m)", &s.labelBarDistance, 0.0f, 2000.0f, 5.0f, {}, ETweakFlags::None);
     Tweak::floatVar("Game/Nav", "Nav unit source reach", &s.navUnitSourceReach, 8.0f, 400.0f, 4.0f);
     Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &s.focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);
@@ -59,6 +60,8 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Fog", "Spawn fog density (1/m)", &s.spawnFogDensity, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Game/Fog", "Spawn fog glow", &s.spawnFogGlow, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Fog", "Spawn fog time (s)", &s.spawnFogSeconds, 1.0f, 600.0f, 1.0f);
+    Tweak::floatVar("Game/Fog", "Spawn signal beam glow", &s.spawnBeamGlow, 0.0f, 200.0f, 0.25f);
+    Tweak::floatVar("Game/Fog", "Spawn signal beam radius (m)", &s.spawnBeamRadius, 0.05f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Fog", "Field fog clearing", &s.fieldFogClear, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Game/Beacon", "Enabled", &s.beaconEnabled);
     Tweak::floatVar("Game/Beacon", "Shroud coverage", &s.shroudCoverage, 0.0f, 1.0f, 0.01f);
@@ -120,9 +123,9 @@ static void registerCamera(GameCameraSettings& s)
     Tweak::floatVar("Game/Camera", "Yaw speed (deg/s)", &s.yawSpeed, 30.0f, 360.0f, 1.0f);
     Tweak::floatVar("Game/Camera", "Drag sensitivity", &s.dragSensitivity, 0.05f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Camera", "Aim height", &s.aimHeight, 0.0f, 4.0f, 0.05f);
-    Tweak::floatVar("Game/Camera", "Third person distance", &s.thirdDistance, 1.0f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Camera", "Third person distance", &s.thirdDistance, 1.0f, 120.0f, 0.1f);
     Tweak::floatVar("Game/Camera", "Third person min distance", &s.thirdMinDistance, 0.5f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Camera", "Third person max distance", &s.thirdMaxDistance, 2.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Camera", "Third person max distance", &s.thirdMaxDistance, 2.0f, 120.0f, 0.5f);
     Tweak::floatVar("Game/Camera", "Mouse sensitivity", &s.thirdSensitivity, 0.0002f, 0.02f, 0.0001f);
     Tweak::floatVar("Game/Camera", "Third person min height", &s.thirdMinHeight, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Camera", "Third person eye height", &s.thirdEyeHeight, 0.0f, 6.0f, 0.05f);
@@ -201,7 +204,17 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Power crossing cost", &s.costs[18], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Pipe crossing cost", &s.costs[19], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Conveyor crossing cost", &s.costs[20], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Cable health max", &s.cableHealthMax, 1.0f, 500.0f, 1.0f);
+    {
+        // Health per type, in EStructureType order (the player-facing names where the game has one).
+        static constexpr const char* c_healthNames[GameStructureTypeCount] = { "Lantern health", "Hearth health", "Lumberyard health",
+            "Crystal store health", "Woodshed health", "Mirror health", "Stoneworks health", "Great lantern health", "Lance health",
+            "Barracks health", "Wall health", "Light tower health", "Storehouse health", "Builder's hut health", "Beacon health",
+            "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
+            "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
+            "Lens health", "Searchlight health" };
+        for (int i = 0; i < GameStructureTypeCount; ++i)
+            Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
+    }
     Tweak::boolean("Game/Light", "Beams", &s.lightBeams);
     Tweak::floatVar("Game/Light", "Mirror beam range (m)", &s.mirrorBeamRange, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Hub reach (m)", &s.lightHubReach, 5.0f, 200.0f, 1.0f);
@@ -278,7 +291,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Structures", "Emitter restart charge", &s.emitterRestartCharge, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Low charge warning (fill)", &s.emitterWarnCharge, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Structures", "Sleeping field alpha", &s.fieldDayAlpha, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Game/Structures", "Health max", &s.structureHealthMax, 10.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Structures", "Rubble rebuild cost (x)", &s.rubbleCost, 0.0f, 1.0f, 0.05f);
+    Tweak::floatVar("Game/Structures", "Rubble safe radius (m)", &s.rubbleSafeRadius, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Structures", "Damage/s in enemy field", &sp.fieldDamageRate, 0.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Population", "Base workers", &s.baseWorkers, 0, 200, 1);
     Tweak::intVar("Game/Population", "House workers", &s.houseWorkers, 0, 200, 1);

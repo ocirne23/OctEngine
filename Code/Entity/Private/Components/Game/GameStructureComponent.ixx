@@ -37,6 +37,9 @@ export struct GameStructureComponent
     uint8 powered : 1 = 0;        // consumers: last production tick's draw was paid
     uint8 alwaysDisplayHealth : 1 = 0;
     uint8 alwaysShowResources : 1 = 0;
+    // RUBBLE (game-stamped, with `blueprint`): what is left of a building the enemy destroyed. It takes no damage and
+    // no unit bites it; materials build it up again like any blueprint (the game clears the flag when it is built).
+    uint8 rubble : 1 = 0;
     float health = 100.0f, healthMax = 100.0f;
     float meleeRadius = 1.0f;
     float bubbleRadius = 0.0f; // active emitters, game-stamped (main-write, worker-read): shield-less

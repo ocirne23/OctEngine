@@ -1,0 +1,4 @@
+# The rubble piles of destroyed buildings (Models/rubble.obj): `Rubble1` for a 1x1 tile building, `Rubble2` for a
+# 2x2 one. Entities/Game/rubble1.pre and rubble2.pre draw them.
+ObjectContainer rubble
+	Path "Models/rubble.obj"

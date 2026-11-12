@@ -533,7 +533,7 @@ void GameUnitComponent::tickCombat(Tick& t)
                 strain = sc;
             }
             t.inEnemyBubble |= sc->strainable && d < sc->bubbleRadius;
-            if (!sc->invulnerable && sc->alive() && d - sc->meleeRadius < biteDist)
+            if (!sc->invulnerable && !sc->rubble && sc->alive() && d - sc->meleeRadius < biteDist)
             {
                 biteDist = d - sc->meleeRadius;
                 bite = sc;

@@ -32,6 +32,7 @@ export struct GameMatchSettings
     float ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
     float ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
     float labelMaxDistance = 120.0f;  // world labels beyond this are not built
+    float labelBarDistance = 45.0f;   // m from the CAMERA: a building farther than this shows no bars (health / build, stores); its badge stays
     // Unit nav sources are culled to units with ANOTHER team's unit/player within this reach.
     float navUnitSourceReach = 64.0f;
     // A non-AI unit farther than this from every SIM LOD focus seeds a new cluster focus.
@@ -100,6 +101,8 @@ export struct GameMatchSettings
     float spawnFogDensity = 0.05f;    // 1/m: the bank's extinction at a spawn site (0 = no spawn fog)
     float spawnFogGlow = 0.6f;        // its own glow (the night gives fog no light)
     float spawnFogSeconds = 40.0f;    // how long a site holds its fog
+    float spawnBeamGlow = 6.0f;       // the red signal beam at a spawn site, from the ground to the clouds (0 = none)
+    float spawnBeamRadius = 1.5f;     // m: its core
     float fieldFogClear = 1.0f;       // 0..1: the share of the fog a field removes inside its bubble (0 = off)
     // Map generation inputs, read once at generation on the AUTHORITY (the lobby writes them too).
     int mapSeed = 0;                  // 0 = random each run
@@ -132,7 +135,7 @@ export struct GameCameraSettings
     // The THIRD-PERSON camera (co-op in the sandbox world): mouse look, the wheel zooms `thirdDistance`.
     float thirdDistance = 4.0f;
     float thirdMinDistance = 1.5f;
-    float thirdMaxDistance = 20.0f;
+    float thirdMaxDistance = 40.0f;
     float thirdSensitivity = 0.0025f; // radians per mouse count
     float thirdMinHeight = 1.0f;      // m: the eye stays this far over the ground under it (0 = off)
     float thirdEyeHeight = 1.4f;  // m above the capsule center: the orbit pivot
@@ -198,6 +201,43 @@ export struct GameStructureSettings
         40.0f,  // Lens
         60.0f,  // Searchlight
     };
+    // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
+    // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
+    // bites for 6, a Brute for 18, a Giant for 56, a Titan for 140, and an enemy field burns 6 health/s.
+    float health[GameStructureTypeCount] = {
+        200.0f,  // Emitter (the Lantern)
+        200.0f,  // Generator (the Hearth)
+        200.0f,  // Lumberyard
+        250.0f,  // Battery (the Crystal store)
+        200.0f,  // FuelTank
+        100.0f,  // Solar (the Mirror): a thin slab
+        250.0f,  // Fabricator
+        400.0f,  // Bastion (the Great lantern)
+        250.0f,  // Lance
+        400.0f,  // Barracks
+        500.0f,  // Wall: made to be bitten
+        300.0f,  // Turret (the Light tower)
+        250.0f,  // MineralSilo (the Storehouse)
+        200.0f,  // Constructor
+        1000.0f, // Base (the Beacon)
+        40.0f,   // CablePower
+        40.0f,   // CablePipe
+        40.0f,   // CableConveyor (the Road)
+        60.0f,   // CrossingPower
+        60.0f,   // CrossingPipe
+        60.0f,   // CrossingConveyor
+        150.0f,  // House
+        200.0f,  // MedicStation
+        200.0f,  // Quarry
+        150.0f,  // Bridge
+        400.0f,  // Gate: a wall of wood
+        100.0f,  // Lens
+        250.0f,  // Searchlight
+    };
+    // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
+    // rubble: a destroyed building is gone).
+    float rubbleCost = 0.5f;
+    float rubbleSafeRadius = 30.0f; // m: rubble is not built up while a living enemy unit is this near (0 = always)
     float startMinerals = 200.0f;
     // THE HARVEST (the Lumberyard and the Quarry): a yard's YIELD (0..1) is what stands within harvestRadius of it
     // against the "full" amount - trees for the Lumberyard, the rocks' summed size (m) for the Quarry; on the flat maps
@@ -239,22 +279,21 @@ export struct GameStructureSettings
     float lightBeamGlowRange = 8.0f;  // m
     // THE CARRIERS: wood and stone move by walkers on the road (the conveyor segments), not as cells on the cables.
     bool carriers = true;             // off = the old cell flow on pipelines and conveyors
-    float carrierLoad = 5.0f;         // goods a walker carries
+    float carrierLoad = 10.0f;        // goods a walker carries
     float carrierSpeed = 3.5f;        // m/s
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
-    float cableHealthMax = 40.0f;     // segments/crossings are softer than buildings
-    float internalBuffer = 10.0f;
+    float internalBuffer = 30.0f;     // several walker loads: a walker only delivers where its whole load fits
     float emitterBuffer = 50.0f;      // the shield emitters' energy stores (their pressure draw spikes)
     float bastionBuffer = 150.0f;
     float lanceBuffer = 100.0f;
-    float generatorBuffer = 10.0f;
+    float generatorBuffer = 30.0f;
     // THE CRYSTAL STORE: one full store runs TWO field generators through one night. A night is ~640 s (the sun cycle
     // at 60x, the default latitude and day), a generator draws 0.75 light/s awake: 2 x 480 = 960, plus room for the extra
     // draw under pressure. Filled by day: a Mirror makes ~780 light in one day, so two Mirrors fill one store.
     float batteryCapacity = 1500.0f;
-    float generatorFuelTank = 10.0f;
-    float fuelTankCapacity = 200.0f;
-    float mineralSiloCapacity = 200.0f;
+    float generatorFuelTank = 30.0f;
+    float fuelTankCapacity = 500.0f;    // wood: the Storehouse's (and the Woodshed's)
+    float mineralSiloCapacity = 500.0f; // stone: the Storehouse's
     float mineralBaseCapacity = 200.0f;
     float medicEnergyPerSec = 1.5f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
@@ -295,7 +334,6 @@ export struct GameStructureSettings
     // every other mode, where a field never sleeps.
     float fieldNight = 1.0f;
     float fieldDayAlpha = 0.15f;      // x the shell alpha of a sleeping field (the shell's glow and its light follow it)
-    float structureHealthMax = 100.0f;
     float constructorRange = 27.0f;
     float constructorBuildRate = 4.0f;
     float waypointRadius = 3.0f;
@@ -471,7 +509,7 @@ export struct GameFactionSettings
     bool outpostsEnabled = true;
     int outpostCount = 8;            // on a regular polygon (8 = the octagon). Read when the ring is made
     float outpostDistance = 600.0f;  // m from the Base. Read when the ring is made
-    float outpostRadius = 250.0f;    // m: an outpost's enemy source
+    float outpostRadius = 350.0f;  // m: an outpost's enemy source
     float outpostBeamHeight = 300.0f;    // m
     float outpostBeamRadius = 0.4f;      // m: the beam's core
     float outpostBeamTipFade = 0.6f;     // the share of the beam's height over which it fades out toward the top (0 = a hard end)

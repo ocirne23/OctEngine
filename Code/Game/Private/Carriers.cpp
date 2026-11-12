@@ -75,21 +75,61 @@ bool StructureSystem::touchesRoad(int index) const
 // Does `targetIdx` take `good` from `sourceIdx`? Its role in that medium decides (transportRoleOf): a consumer while
 // it has room (and, for a storage's carrier, only while it is under half full: a storage does not top up a consumer
 // that a producer already feeds), a storage while it has room. Never a producer, a blueprint or another team.
-bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, bool& isConsumer) const
+float StructureSystem::blueprintNeed(const Ref& ref) const
+{
+    const GameStructureComponent& s = *ref.state;
+    if (!s.blueprint || !isPlaceableType(ref.type) || rubbleBlocked(ref)) // (rubble with an enemy near: no trip to it)
+        return 0.0f;
+    const float healthMax = glm::max(s.healthMax, 1e-3f); // investMaterials' price: the type's cost over its health
+    return glm::max((healthMax - s.health) * glm::max(m_settings.costs[(int)ref.type], 0.01f) / healthMax - ref.buildIncoming, 0.0f);
+}
+
+// The stone a DAMAGED built structure needs to be whole again, less what the walkers already carry to it. A blueprint
+// (rubble too) is build work, not a repair.
+float StructureSystem::repairNeed(const Ref& ref) const
+{
+    const GameStructureComponent& s = *ref.state;
+    if (s.blueprint || (!isPlaceableType(ref.type) && ref.type != EStructureType::Base))
+        return 0.0f;
+    const float healthMax = glm::max(s.healthMax, 1e-3f);
+    return glm::max((healthMax - s.health) * glm::max(m_settings.costs[(int)ref.type], 0.01f) / healthMax - ref.buildIncoming, 0.0f);
+}
+
+bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, int work, bool& isConsumer) const
 {
     if (targetIdx == sourceIdx)
         return false;
     const Ref& target = m_frame[targetIdx];
     const GameStructureComponent& t = *target.state;
-    if (t.blueprint || t.team != m_frame[sourceIdx].state->team || isCableOrCrossing(target.type) || t.capacity[good] <= 0.0f)
+    if (t.team != m_frame[sourceIdx].state->team)
+        return false;
+    // WORK (ECarrierWork): a BLUEPRINT at the road takes STONE until it is built - a building, and a piece of the
+    // road itself (the search looks at what every road cell touches, so the blueprint piece at the end of a built
+    // road is found); a DAMAGED structure at the road takes stone until it is whole.
+    if (work != CarrierWork_Goods || t.blueprint)
+    {
+        isConsumer = true;
+        if (good != 2)
+            return false;
+        if (work == CarrierWork_Build)
+            return t.blueprint && blueprintNeed(target) > 0.01f;
+        return work == CarrierWork_Repair && repairNeed(target) > 0.25f; // (never a blueprint: repairNeed is 0 there)
+    }
+    if (isCableOrCrossing(target.type) || t.capacity[good] <= 0.0f)
         return false;
     const ETransportRole role = transportRoleOf(target.type, good);
     if (role == ETransportRole::Producer)
         return false;
     isConsumer = role == ETransportRole::Consumer;
+    // ONLY WHERE THE LOAD FITS IN FULL: the load the source would send (a full one, or all of a smaller store) against
+    // the target's room, less what other walkers already carry to it. A hearth that misses one wood is no target for
+    // five: the walker would bring four back. (A target smaller than a load takes what its whole store holds.)
+    const float load = glm::min(glm::max(m_settings.carrierLoad, 1.0f), m_frame[sourceIdx].state->store[good]);
+    const float fit = glm::min(load, t.capacity[good]);
+    const bool fits = fit > 0.0f && t.capacity[good] - t.store[good] - target.goodsIncoming[good] >= fit - 1e-3f;
     if (consumersOnly)
-        return isConsumer && t.store[good] < t.capacity[good] * 0.5f;
-    return t.capacity[good] - t.store[good] >= 1.0f;
+        return isConsumer && fits && t.store[good] < t.capacity[good] * 0.5f;
+    return fits;
 }
 
 int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const
@@ -159,7 +199,7 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
     return found;
 }
 
-int StructureSystem::findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly,
+int StructureSystem::findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, int work,
     oc::vector<glm::vec3>& outPath) const
 {
     // THE NEAREST TAKER wins, a storage as much as a consumer (the search ends at the first one, and it goes out by
@@ -168,7 +208,7 @@ int StructureSystem::findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2
     return roadSearch(fromStructure, fromCell, [&](int index)
     {
         bool isConsumer = false;
-        return carrierAccepts(sourceIdx, index, good, consumersOnly, isConsumer) ? 2 : 0;
+        return carrierAccepts(sourceIdx, index, good, consumersOnly, work, isConsumer) ? 2 : 0;
     }, outPath);
 }
 
@@ -187,6 +227,13 @@ bool StructureSystem::carrierSendGood(int index, int good, bool& consumersOnly) 
     return role == ETransportRole::Storage && s.store[good] >= loadSize;
 }
 
+// Stone a walker can take to a blueprint: any store of it but a consumer's own buffer.
+bool StructureSystem::carrierHoldsStone(int index) const
+{
+    const Ref& ref = m_frame[index];
+    return ref.state->capacity[2] > 0.0f && ref.state->store[2] > 0.01f && transportRoleOf(ref.type, 2) != ETransportRole::Consumer;
+}
+
 int StructureSystem::carrierJobTier(int index, uint8 team) const
 {
     const Ref& ref = m_frame[index];
@@ -195,6 +242,8 @@ int StructureSystem::carrierJobTier(int index, uint8 team) const
         return 0;
     if (ref.sendReady && ref.walkersIdle == 0)
         return 2;
+    if ((ref.buildReady || ref.repairReady) && ref.walkersIdle == 0) // stone for a blueprint or a repair: only when no load waits anywhere
+        return 1;
     if (ref.walkers == 0)
         for (int good = 1; good <= 2; ++good)
             if (s.capacity[good] > 0.0f && transportRoleOf(ref.type, good) == ETransportRole::Producer)
@@ -207,18 +256,45 @@ int StructureSystem::carrierJobTier(int index, uint8 team) const
 void StructureSystem::carrierHousePass()
 {
     oc::vector<glm::vec3> scratch;
+    bool blueprintWaits[GameMaxTeams] = {}; // a team with no blueprint to build needs no search for one
+    bool repairWaits[GameMaxTeams] = {};    // the same for a damaged structure
+    for (const Ref& ref : m_frame)
+        if (ref.state->team < GameMaxTeams)
+        {
+            blueprintWaits[ref.state->team] |= blueprintNeed(ref) > 0.01f;
+            repairWaits[ref.state->team] |= repairNeed(ref) > 0.25f;
+        }
+    bool buildFound[GameMaxTeams] = {};
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         Ref& ref = m_frame[i];
         ref.sendReady = false;
+        ref.buildReady = false;
+        ref.repairReady = false;
         if (isCableOrCrossing(ref.type) || ref.state->blueprint)
             continue;
         for (int good = 1; good <= 2 && !ref.sendReady; ++good)
         {
             bool consumersOnly = false;
             if (carrierSendGood(i, good, consumersOnly))
-                ref.sendReady = !consumersOnly || findRoadTarget(i, i, glm::ivec2(0), good, true, scratch) >= 0;
+                ref.sendReady = !consumersOnly || findRoadTarget(i, i, glm::ivec2(0), good, true, CarrierWork_Goods, scratch) >= 0;
         }
+        // BUILD WORK: a building that holds stone (a store, the Beacon, a quarry) with a blueprint on its road.
+        if (!ref.sendReady && ref.state->team < GameMaxTeams && blueprintWaits[ref.state->team] && carrierHoldsStone(i))
+        {
+            ref.buildReady = findRoadTarget(i, i, glm::ivec2(0), 2, false, CarrierWork_Build, scratch) >= 0;
+            buildFound[ref.state->team] |= ref.buildReady;
+        }
+    }
+    // REPAIR WORK, the LAST of all: only while the team has no build work on any road (it shares the build work's job
+    // tier, so this gate is what puts it behind).
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        Ref& ref = m_frame[i];
+        if (isCableOrCrossing(ref.type) || ref.state->blueprint || ref.sendReady || ref.state->team >= GameMaxTeams
+            || !repairWaits[ref.state->team] || buildFound[ref.state->team] || !carrierHoldsStone(i))
+            continue;
+        ref.repairReady = findRoadTarget(i, i, glm::ivec2(0), 2, false, CarrierWork_Repair, scratch) >= 0;
     }
 
     int freeLeft[GameMaxTeams];
@@ -282,7 +358,11 @@ void StructureSystem::tickCarriers(float deltaSec)
 
     // The roster's view of the walkers, counted fresh: a removed building takes its walkers along.
     for (Ref& ref : m_frame)
+    {
         ref.walkers = ref.walkersIdle = ref.waitRank = ref.homeWalkers = 0;
+        ref.buildIncoming = 0.0f;
+        ref.goodsIncoming[1] = ref.goodsIncoming[2] = 0.0f;
+    }
     for (int& count : m_carrierCount)
         count = 0;
     for (size_t k = 0; k < m_walkers.size(); ++k)
@@ -303,6 +383,14 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (w.state == Walker_ToJob || w.state == Walker_Waiting)
                 ++m_frame[job].walkersIdle;
         }
+        if (w.state == Walker_Delivering) // a load on its way: a blueprint needs that much less stone, a building has that much less room
+            if (const int target = structureIndexById(w.targetId); target >= 0)
+            {
+                if (w.work != CarrierWork_Goods)
+                    m_frame[target].buildIncoming += w.load;
+                else
+                    m_frame[target].goodsIncoming[w.good] += w.load;
+            }
     }
     if (!m_settings.carriers)
         return;
@@ -404,12 +492,14 @@ void StructureSystem::tickCarriers(float deltaSec)
                     if (!carrierSendGood(job, good, consumersOnly))
                         continue;
                     oc::vector<glm::vec3> path;
-                    const int target = findRoadTarget(job, -1, hereCell, good, consumersOnly, path);
+                    const int target = findRoadTarget(job, -1, hereCell, good, consumersOnly, CarrierWork_Goods, path);
                     if (target < 0 || path.empty())
                         continue;
-                    w.load = glm::min(loadSize, s.store[good]);
+                    w.load = glm::min(glm::min(loadSize, s.store[good]), m_frame[target].state->capacity[good]); // it fits in full (carrierAccepts)
                     s.store[good] -= w.load;
+                    m_frame[target].goodsIncoming[good] += w.load;
                     w.good = (uint8)good;
+                    w.work = CarrierWork_Goods;
                     w.targetId = m_frame[target].state->structureId;
                     w.path = oc::move(path);
                     w.along = 0.0f;
@@ -417,6 +507,31 @@ void StructureSystem::tickCarriers(float deltaSec)
                     w.state = Walker_Delivering;
                     if (jobRef.walkersIdle > 0)
                         --jobRef.walkersIdle;
+                }
+                // NO OTHER LOAD: BUILD. A load of stone from this building to the nearest blueprint on its road (what
+                // that one does not need goes on to the next one, and the rest comes back - see the delivery).
+                // THEN, with nothing to build on this road: REPAIR - the same trip to the nearest damaged structure.
+                for (const uint8 work : { (uint8)CarrierWork_Build, (uint8)CarrierWork_Repair })
+                {
+                    if (w.state != Walker_Waiting || !carrierHoldsStone(job))
+                        break;
+                    oc::vector<glm::vec3> path;
+                    const int target = findRoadTarget(job, -1, hereCell, 2, false, work, path);
+                    if (target >= 0 && !path.empty())
+                    {
+                        w.load = glm::min(loadSize, s.store[2]);
+                        s.store[2] -= w.load;
+                        m_frame[target].buildIncoming += w.load;
+                        w.good = 2;
+                        w.work = work;
+                        w.targetId = m_frame[target].state->structureId;
+                        w.path = oc::move(path);
+                        w.along = 0.0f;
+                        w.idle = 0.0f;
+                        w.state = Walker_Delivering;
+                        if (jobRef.walkersIdle > 0)
+                            --jobRef.walkersIdle;
+                    }
                 }
                 if (w.state != Walker_Waiting)
                     continue;
@@ -471,17 +586,57 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.idle = 0.0f;
             break;
         case Walker_Delivering: // at the target: unload what fits, then walk the same road back
-            if (const int target = structureIndexById(w.targetId); target >= 0 && !m_frame[target].state->blueprint)
+        {
+            const bool built = w.work != CarrierWork_Goods; // the load is stone for a blueprint or a repair
+            if (const int target = structureIndexById(w.targetId); target >= 0)
             {
-                GameStructureComponent& t = *m_frame[target].state;
-                const float give = glm::clamp(t.capacity[w.good] - t.store[w.good], 0.0f, w.load);
-                t.store[w.good] += give;
-                w.load -= give;
+                if (built)
+                {
+                    // BUILD / REPAIR: the stone goes into the structure (health is a blueprint's progress; full =
+                    // built or whole). What is left goes to the NEXT one of the same work from here - a piece of
+                    // road that was just built is road for that search, so one walker lays a painted road piece by
+                    // piece.
+                    w.load -= investMaterials(m_frame[target], w.load);
+                }
+                else if (m_frame[target].state->blueprint)
+                {
+                    // goods for a building that is rubble now: nothing is unloaded, the load goes back
+                }
+                else
+                {
+                    GameStructureComponent& t = *m_frame[target].state;
+                    const float give = glm::clamp(t.capacity[w.good] - t.store[w.good], 0.0f, w.load);
+                    t.store[w.good] += give;
+                    w.load -= give;
+                }
+            }
+            if (built)
+            {
+                oc::vector<glm::vec3> path;
+                if (w.load > 0.01f)
+                    if (const int next = findRoadTarget(home, -1, hereCell, 2, false, w.work, path); next >= 0 && !path.empty())
+                    {
+                        m_frame[next].buildIncoming += w.load; // it keeps its whole load: the next one takes what it needs
+                        w.targetId = m_frame[next].state->structureId;
+                        w.path = oc::move(path);
+                        w.along = 0.0f;
+                        break; // still delivering
+                    }
+                // Back to the pickup BY ROAD FROM HERE: after a chain the last leg does not lead there.
+                path.clear();
+                if (job >= 0 && roadSearch(-1, hereCell, [&](int index) { return index == job ? 2 : 0; }, path) >= 0 && !path.empty())
+                {
+                    w.path = oc::move(path);
+                    w.along = 0.0f;
+                    w.state = Walker_Returning;
+                    break;
+                }
             }
             oc::reverse(w.path.begin(), w.path.end());
             w.along = 0.0f;
             w.state = Walker_Returning;
             break;
+        }
         case Walker_Returning: // at the pickup again: what the target did not take goes back into the store
             if (job >= 0)
             {
@@ -490,6 +645,7 @@ void StructureSystem::tickCarriers(float deltaSec)
                 ++m_frame[job].walkersIdle;
             }
             w.load = 0.0f;
+            w.work = CarrierWork_Goods;
             w.state = Walker_Waiting;
             w.wait = 0.0f;
             w.idle = 0.0f;

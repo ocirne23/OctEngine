@@ -234,8 +234,8 @@ bool StructureSystem::buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm
     const int index = structureIndexById(it->second.id);
     // (A Gate is not a building here: the players walk through it - its collider is not on their layer - so a player
     // inside one must not be moved out.)
-    if (index < 0 || isWalkThrough(m_frame[index].type) || m_frame[index].type == EStructureType::Gate)
-        return false;
+    if (index < 0 || isWalkThrough(m_frame[index].type) || m_frame[index].type == EStructureType::Gate || m_frame[index].state->rubble)
+        return false; // (rubble is walked over too: its collider is off)
     const Ref& ref = m_frame[index];
     if (pos.y > ref.entity->pos.y + spawnHeightOf(ref.type) - 0.3f)
         return false; // standing ON it
@@ -264,7 +264,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     Globals::world.addRootEntity(entity);
     state->structureId = id;
     state->team = team;
-    const float healthMax = isCableOrCrossing(type) ? m_settings.cableHealthMax : m_settings.structureHealthMax;
+    const float healthMax = healthMaxOf(type);
     state->healthMax = healthMax;
     state->blueprint = !built;
     state->health = built ? healthMax : 1.0f; // health IS the build progress
@@ -304,6 +304,8 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
 {
     const Ref s = m_frame[index]; // owning copy: the entity stays alive through the bookkeeping
     const uint32 id = s.state->structureId;
+    if (s.rubbleVisual) // its rubble pile goes with it
+        Globals::world.removeRootEntity(s.rubbleVisual.get());
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     m_frame.erase(m_frame.begin() + index);

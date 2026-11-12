@@ -13,7 +13,9 @@ key and click (the sandbox world's crosshair aim never reaches the hotbar, so th
 Clicks over the hotbar never reach the world.
 
 Every caption is a 3–5 char SHORTHAND from `c_structureShortNames`, indexed by `EStructureType` —
-**the SAME table the world tag over a building uses, so a slot and the thing it builds read
+**the SAME table the world tag over a building uses (shown only on the building under the aim, `m_labelsHoverId`,
+and on the selected one; the badges show on all, the bars only within "Building bar distance (m)" (45) of the
+CAMERA or on the selected one), so a slot and the thing it builds read
 identically.** A build slot's count is `affordableCount`.
 
 **HOVER CARDS.** Every slot carries a `HudSlot::tooltip` — `'\n'`-separated lines the overlay draws

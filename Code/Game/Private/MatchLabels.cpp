@@ -198,7 +198,10 @@ void GameMatch::buildWorldLabels()
             continue;
         if (!camera.worldToScreen(viewport, anchor, label.screenPos) || !onScreen(label.screenPos))
             continue;
-        label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
+        // The NAME shows only on the structure under the aim (and on the selected one, which overrides it with the
+        // full name): a base of dozens of buildings is otherwise a wall of tags. The bars and the badges still show.
+        if (m_structures.structureId(i) == m_labelsHoverId)
+            label.title = m_structures.structureRubble(i) ? "RUBBLE" : c_structureShortNames[(int)type];
         if (const char* warning = m_structures.structureWarning(i)) // the cached problem bubble
         {
             label.warning = warning;
@@ -282,6 +285,8 @@ void GameMatch::buildWorldLabels()
         {
             label.emphasized = true;
             label.title = structureTypeName(type);
+            if (m_structures.structureRubble(i))
+                label.title += " (rubble)";
             char info[192];
             int len = snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
             if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
@@ -341,6 +346,12 @@ void GameMatch::buildWorldLabels()
                 }
             }
         }
+        // FAR FROM THE CAMERA ("Building bar distance (m)") a building shows no bars - health / build progress and the
+        // stores are too small to read there and fill the view. The selected one keeps them; a badge stays.
+        if (i != selected && glm::distance(anchor, camera.position) > m_settings.labelBarDistance)
+            label.barMax = label.bar2Max = label.bar3Max = 0.0f;
+        if (label.title.empty() && label.warning.empty() && label.barMax <= 0.0f && label.bar2Max <= 0.0f && label.bar3Max <= 0.0f)
+            continue; // nothing to show
         labels.push_back(oc::move(label));
     }
     // Units + players: own team green, enemy teams red. Only VISIBLE ones are fetched - an

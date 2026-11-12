@@ -238,6 +238,14 @@ int GameMatch::hoveredStructure(const Camera& camera) const
     return m_structures.findConnectableNear(aimPos, 4.0f);
 }
 
+EStructureType GameMatch::armedType() const
+{
+    if (m_mode != EPlayerMode::Build || m_buildCategory < 0 || m_buildSelection < 0)
+        return EStructureType::Count;
+    const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
+    return m_buildSelection < (int)items.size() ? items[m_buildSelection] : EStructureType::Count;
+}
+
 // ---- the hotbar and the modes ----
 
 // The hotbar page for the current state: ROOT (Select/Delete: categories + Delete on X) or the

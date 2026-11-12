@@ -1,0 +1,9 @@
+# The rubble pile of a destroyed 2x2 tile building (a 3x3 one draws it at scale 1.5): a render-only entity the game
+# puts on the building's ground point while the building is rubble (StructureSystem::setRubble). Its origin is on the
+# ground.
+Prefab gameRubble2
+	Component Render
+		ObjectContainer rubble
+		Node Rubble2
+		Type StaticMesh
+		Color 0.2 0.18 0.16

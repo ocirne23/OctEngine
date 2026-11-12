@@ -48,13 +48,15 @@ void StructureSystem::mirrorRemove(uint32 id)
 }
 
 void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float chargeFrac,
-    float fuelFrac, float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint)
+    float fuelFrac, float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble)
 {
     const int index = structureIndexById(id);
     if (index < 0)
         return;
     const Ref& ref = m_frame[index];
     GameStructureComponent& s = *ref.state;
+    if ((s.rubble != 0) != rubble) // destroyed to rubble, or built up again: the tint and the collider follow
+        setRubble(ref, rubble);
     if (s.blueprint != blueprint)
     {
         s.blueprint = blueprint; // completion (or a fresh ghost) - swap the tint to match
@@ -127,6 +129,8 @@ void StructureSystem::saveTo(AssetNode& root) const
             n.set("Team", oc::to_string((int)s.state->team));
         if (s.state->blueprint)
             n.set("Blueprint", true); // bitfield -> the bool overload
+        if (s.state->rubble)
+            n.set("Rubble", true);
         if (s.state->health < s.state->healthMax - 1e-3f)
             n.set("Health", s.state->health);
         if (s.state->store[0] > 1e-3f)
@@ -201,6 +205,8 @@ void StructureSystem::loadFrom(const AssetNode& root)
         if (index < 0)
             continue;
         GameStructureComponent& s = *m_frame[index].state;
+        if (blueprint && n->find("Rubble") && n->find("Rubble")->asBool())
+            setRubble(m_frame[index], true);
         s.health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : s.healthMax,
             1.0f, s.healthMax);
         s.store[0] = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, s.capacity[0]);

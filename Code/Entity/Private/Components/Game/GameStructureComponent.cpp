@@ -176,7 +176,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
 
 void GameStructureComponent::damage(float amount)
 {
-    if (invulnerable || amount <= 0.0f)
+    if (invulnerable || rubble || amount <= 0.0f)
         return;
     atomicSubClamped(health, amount);
 }

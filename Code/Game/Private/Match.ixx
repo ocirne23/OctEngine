@@ -251,6 +251,8 @@ private:
     // Shared RMB handling (both modes): barracks route on ground (linking is the CONN tool now).
     void updateRightClickActions(const Camera& camera, bool rmbEdge);
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
+    EStructureType armedType() const; // the type on the build ghost; Count = nothing armed
+    uint32 m_labelsHoverId = 0; // the structure under the aim this frame (0 = none): only it and the selected one show their name
     void setMode(EPlayerMode mode);
     // Health bars + selected info over structures/units: a JOB (submitWorldLabels at the end of the
     // game tick, joined by main before the widget pass is queued - see the definition).
@@ -634,6 +636,7 @@ private:
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Waves are sized in BUDGET POINTS ("Game/Coop" settings), each type at its own cost.
     float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
+    float nightAverageScale() const;  // the sandbox world: a night's average wave power over its base (the next night's base grows by it)
     float waveCostOf(ENpcType t) const { return glm::max(m_settings.waveCost[(int)t], 0.1f); }
     // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" -
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.

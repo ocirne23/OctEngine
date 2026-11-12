@@ -160,7 +160,8 @@ not frozen / paused:  [sim step] GameUnit → GameStructure → GameProjectile �
   → RenderComponent::place, then the culling tail: refresh the SpatialIndex entry (RootOnly root:
     cached subtree bounds; else the node bounds; no node: the entity position, radius 0),
     push the RenderNode under the pass mask (own getPassMask when Spatial culling mode >= Cull,
-    or the mask inherited from a RootOnly ancestor — see CullMode)
+    or the mask inherited from a RootOnly ancestor — see CullMode). A node whose OWN pass mask is 0
+    (`RenderNode::setPassMask(0)`: its owner hid the mesh, e.g. a building that is rubble) is not pushed)
   → HumanoidAnimator::place → Audio → Particle (not frozen) → Force → Light → emit children
 ```
 

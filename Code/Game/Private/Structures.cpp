@@ -360,7 +360,7 @@ void StructureSystem::linkHouses()
 void StructureSystem::stampTuning(const Ref& s)
 {
     GameStructureComponent& c = *s.state;
-    c.healthMax = isCableOrCrossing(s.type) ? m_settings.cableHealthMax : m_settings.structureHealthMax;
+    c.healthMax = healthMaxOf(s.type);
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
@@ -412,7 +412,11 @@ void StructureSystem::clear()
     m_byId.clear();
     joinTransport(); // the job holds component pointers: joined before any entity dies
     for (const Ref& s : roster)
+    {
         Globals::world.removeRootEntity(s.entity);
+        if (s.rubbleVisual)
+            Globals::world.removeRootEntity(s.rubbleVisual.get());
+    }
     for (const Walker& walker : m_walkers)
         if (walker.entity)
             Globals::world.removeRootEntity(walker.entity.get());

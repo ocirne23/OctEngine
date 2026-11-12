@@ -49,7 +49,7 @@ staffing. Neither needs energy: only workers (below).
   place to hold its records. It only clamps the value (a co-op trust, like the client's ground height), and replaces
   it by its own share (`resolveHarvestYields`) when it holds the records.
 * **Shown:** the ghost draws its harvest radius, hued from red (little) to green (full), and the HUD line "Yield" gives
-  the percent, which a world label over the ghost repeats with a bar (`updateLabels`, from `m_shownYield` / `m_yieldGhostPos`); a selected yard's label has a "Yield" line; `drawDebug` rings every built yard's radius.
+  the percent, which a world label over the ghost repeats with a bar (`updateLabels`, from `m_shownYield` / `m_yieldGhostPos`); a selected yard's label has a "Yield" line; `drawDebug` rings the radius of the built yards of the kind ON THE GHOST only (its `armed` input: a Quarry ghost shows the quarries, a Lumberyard ghost the lumberyards).
 
 ### Light on beams
 
@@ -66,6 +66,7 @@ links (`Light.cpp`). No link is authored, saved or sent: every instance derives 
 | **The Lens** | A RELAY (`lens.pre`, 1×1, a 3 m post; the Works page): a hub with a small store ("Lens buffer" 40). Nothing is aimed: **it links to the NEAREST hub within "Lens range (m)" (32) with a clear line - but not to a hub that links to IT already** (that pair is joined). Every structure has one link, so without that rule a lens between a store and the next lens would link back to the store, and the chain would end there. `rebuildLightLinks` runs the lenses in a second pass, so each sees the links of the others (and of the lenses before it). **A line of lenses 32 m apart, or less, is a chain.** A link with a lens at an end is never longer than the lens range, whatever the other end's own range (a store's 60 m link range, a mirror's beam range). The link levels the two fill fractions like any hub pair, at "Beam rate" (not the share rate), so light goes both ways: from a far mirror field to the base, or from the base to a far outpost. As a hub, a lens also takes the mirrors' and hearths' light and feeds the consumers in its reach. The ghost shows the lens range. Like a Crystal store, a lens never shows the light badges: the end of a chain has no link of its own (the others link to it). |
 | Which hub | **The nearest USEFUL hub in range with a clear line, else the nearest one** (`rebuildLightLinks`). Useful: for a consumer a hub with light to give (over the Beacon's reserve), for a producer a hub with room. So a turret or a barracks next to a full Crystal store does not stay dark because an empty hub is nearer (the Beacon at its reserve, a lens with nothing behind it), and a mirror does not beam into a full store. The links are derived again about once a second, so a link follows the light. Hub to hub: the nearest. |
 | A beam's ends | `beamPointOf`: the CENTRE OF THE BUILDING'S CRYSTAL (`beamHeightOf` in Light.cpp, per type; keep it in step with the `Crystal` child of the .pre files); a building with no crystal: 1 m over its top. |
+| Shown while building | With a type that uses light on the ghost, `drawDebug` (its `armed` input) rings each built hub in gold at the distance that type links over: the same range choice as `rebuildLightLinks`, a Lens end never longer than "Lens range". |
 | A clear line | `lightLineClear`: one physics ray between the two beam points against the Terrain and Vegetation layers. Buildings and units do not block. |
 | When | `rebuildLightLinks` about once a second, and at once when the roster size changes (`tickLight` on the authority, `tickMirror` on a client: the beams and the badges). `tickLight` (authority, after the carriers) moves the light. |
 | Drawn | `drawLightLinks`, called from `tickAuthority` / `tickMirror` (**never from `drawDebug`: that runs before the begin-frame job, which resets the frame's light records**): **a link shows only while it MOVES light** - `Ref::lightFlow` above 0.02 light/s, the link's MEASURED flow, smoothed over ~1/3 s in `tickLight` (a store that is topped up every tick never looks busy, so the stores cannot say it); on a mirror it is an estimate from what the building makes or draws - as a `BeamLight` between the two crystals ("Beam glow", "Beam radius (m)", "Beam glow range (m)"; **the glow is × flow / "Beam full flow (light/s)" (5), and the radius goes from half to full with it**, so a beam shows how much light it carries): the Beacon's beam in small. No line is drawn. The 14 moving links nearest the camera get one (the renderer draws 16 columns a frame, and the Beacon's beam takes one at night). With the fog off no beam shows. |
@@ -112,11 +113,13 @@ pipeline is off the hotbar; the conveyor is the **Road**.
 | The look | `cableConveyor.pre` + `Models/roads.obj` (hand-written): cobblestones, 5 cm high with a bevel, a road 1.2 m wide. The hub is the centre patch of stones (`RoadHub`); each of the four arm children is a strip of stones from the patch to the cell edge (`RoadArmX` / `RoadArmZ`, centred meshes moved to ±0.83, no rotation), shown toward what the segment joins. So an end, a straight, a corner, a T and a crossing each get their shape, and two neighbour cells' strips meet in one joint on the cell edge. |
 | The road | BUILT `CableConveyor` segments and `CrossingConveyor` pieces (`roadAt`: the cell's occupant or the cable under a crossing). A blueprint is no road. |
 | Who walks | A walker (`m_walkers`, a `Walker`) is one FREE WORKER of its team: workers - production jobs (see Population). It comes out of a House or the Beacon that touches a road (`touchesRoad`), at most "House workers" / "Base workers" per building. The HUD's "Workers" reads `jobs + walkers / workers`. |
-| The job | A TRANSPORT JOB is a building that SENDS goods (`carrierSendGood`, by `transportRoleOf`): a PRODUCER sends when its store holds a load ("Load", 5) or half its capacity; a STORAGE (Storehouse, Base) sends a load only to a CONSUMER that is under half full. A walker goes to the job's road cell (the PICKUP) and STAYS: load, deliver, come back, wait there. |
-| Who gets a walker | `carrierJobTier`: 2 = the building has a load to send (`Ref::sendReady`) and no walker waits at it or is on its way (so a long road gets MORE walkers, up to "Max walkers per building" 6); 1 = a producer with no walker at all. `roadSearch` takes the nearest tier 2, else the nearest tier 1. |
+| The job | A TRANSPORT JOB is a building that SENDS goods (`carrierSendGood`, by `transportRoleOf`): a PRODUCER sends when its store holds a load ("Load", 10) or half its capacity; a STORAGE (Storehouse, Base) sends a load only to a CONSUMER that is under half full. A walker goes to the job's road cell (the PICKUP) and STAYS: load, deliver, come back, wait there. |
+| Who gets a walker | `carrierJobTier`: 2 = the building has a load to send (`Ref::sendReady`) and no walker waits at it or is on its way (so a long road gets MORE walkers, up to "Max walkers per building" 6); 1 = a producer with no walker at all, or build work (below). `roadSearch` takes the nearest tier 2, else the nearest tier 1. |
 | The ~1 s pass | `carrierHousePass`: derives `sendReady` (a storage: only with a hungry consumer on its road), then every house sends ONE worker per pass while a job wants one and the team has a free worker. When production takes the worker (free < walkers), the house DISMISSES walkers, the waiting ones first: a dismissed walker goes home when it is next idle. |
 | Waiting | The first walker in line at a pickup (`Ref::waitRank`) loads; it looks for a load about once a second. A walker BEHIND another one looks for other work on its road network (tier 1 or 2). The first in line leaves only for a waiting load elsewhere (tier 2) and only after 8 s idle. After 20 s idle a walker goes home, except the one walker of a producer. |
-| Where to | `findRoadTarget` = `roadSearch` with the takers as the goal: ONE breadth-first search over the road cells from the walker's cell (4096 cells at most). **The first TAKER with room that a road cell touches wins - a storage as much as a consumer**, so a load stops at the nearest storehouse and that storehouse's own carriers feed the consumers farther on (a consumer first, whatever the distance, sent every load past a near storehouse to a far one). Same team, built. The result is also the walking path (cell centres). |
+| Where to | `findRoadTarget` = `roadSearch` with the takers as the goal: ONE breadth-first search over the road cells from the walker's cell (4096 cells at most). **The first TAKER with room that a road cell touches wins - a storage as much as a consumer**, so a load stops at the nearest storehouse and that storehouse's own carriers feed the consumers farther on (a consumer first, whatever the distance, sent every load past a near storehouse to a far one). Same team, built. **A taker counts only when the WHOLE load fits** (`carrierAccepts`): the load the source would send against the taker's room, less what other walkers already carry to it (`Ref::goodsIncoming`, counted fresh each tick) - a hearth that misses one wood is no target for a full load. That is why the buffers hold several loads ("Internal buffer", "Generator fuel tank", "Generator buffer": 30). The result is also the walking path (cell centres). |
+| BUILD WORK | **A walker with no other load BUILDS**: it carries stone to the BLUEPRINTS on the road - buildings, and pieces of the road itself. `blueprintNeed` = the stone a blueprint still needs (`investMaterials`' price) less what the walkers already carry to it (`Ref::buildIncoming`, counted fresh each tick). The pass sets `Ref::buildReady` on a building that holds stone and is no consumer (`carrierHoldsStone`: a store, the Beacon, a quarry) with a blueprint on its road; that is tier 1 in `carrierJobTier`, so a waiting LOAD (tier 2) always gets the walker first. At the pickup the first in line tries the loads, and only then takes a load of stone to the nearest blueprint (`findRoadTarget` with `blueprints`: `carrierAccepts` then takes ONLY blueprints, never one otherwise). At the blueprint it calls `investMaterials`; what is left goes on to the NEXT blueprint from there (a road piece that was just built is road for that search, so one walker lays a painted road piece by piece), and the rest goes back to the pickup by a new search from there. A blueprint is found only when a BUILT road cell touches it: the first piece next to a building is the player's or the Builder's hut's. |
+| REPAIR WORK | **The last work of all**: the same trip, to a DAMAGED built structure at the road (`repairNeed` over 0.25 stone; `ECarrierWork`: Goods, Build, Repair - `Walker::work` says what a load is for). `Ref::repairReady` is set only while the team has NO build work on any road (it shares the build work's tier 1, so that gate puts it behind), and at the pickup a walker tries the loads, then a blueprint, then a repair. The delivery is `investMaterials` again, and what is left goes on to the next damaged structure. |
 | The trip | The load leaves the store at departure. The walker goes at "Walk speed (m/s)" (3.5), unloads what fits, walks the same path back to the pickup, and puts the rest back into the job's store. |
 | The walker | `carrier.pre`: render-only, `Global true`, no physics and no unit sim; the tick writes its `pos` / `rot` (it faces its walking direction: an entity's forward is -Z) and shows its LOAD (the prefab's second child, held in front of the body) only while it carries one. Removed when it arrives home, when its house is gone, or when no road leads home. The per-building counters (`Ref::walkers`, `walkersIdle`, `homeWalkers`) are counted from `m_walkers` at the top of every tick, so a removed building needs no bookkeeping. |
 | Badge | "No road": a building that moves wood or stone and touches no road (`attachedMask` bit 2), or a House that touches none (its workers cannot go out). |
@@ -260,9 +263,12 @@ throughput sits at or above 90 % of its out-rate (clients read the mirrored GCf 
 the same rings) — plus the node rings, the built yards' harvest radius, the constructor / medic reach rings and a red ring on every
 unpowered consumer.
 
-Segments are full structures: a blueprint phase (**NON-conductive until built**), health ("Cable
-health max" 40 — **`healthMax` is per-COMPONENT**, so `investMaterials` heals against
-`state->healthMax`), territory drain, projectile damage (`Layer Cable, CollidesWith Projectile` plus
+Segments are full structures: a blueprint phase (**NON-conductive until built**), health (40; a crossing 60 —
+**every type has its own health**: `GameStructureSettings::health`, indexed by `EStructureType`, the "Game/Health"
+tweaks, through `StructureSystem::healthMaxOf`: the Beacon 1000, a Wall 500, a Gate / Great lantern / Barracks 400,
+a Light tower 300, most buildings 200-250, a House / Bridge 150, a Mirror / Lens 100. `stampTuning` stamps it into
+the component's `healthMax` each tick, and `investMaterials` heals against that, so the build and repair price is
+the type's cost whatever its health), territory drain, projectile damage (`Layer Cable, CollidesWith Projectile` plus
 `Layer Projectile` on the shot prefabs; everyone else's Default/All masks are untouched, so players
 and units walk straight through), and death-sweep destruction that re-derives the run broken.
 
@@ -279,6 +285,23 @@ income or flows; links pre-wire but carry nothing).
 > (`investMaterials`), and full health = built. The bar is blue while blueprint, and **damage
 > literally undoes construction.** The SAME price repairs damaged built structures.
 
+> **RUBBLE.** A BUILT building that the enemy destroys is not removed: `tickDamage` makes it RUBBLE - a blueprint
+> again (inert: no production, no field, no light link, no walkers) with `GameStructureComponent::rubble` set, its
+> stores lost, at the health that leaves "Rubble rebuild cost (x)" (0.5) of its cost to pay; 0 = no rubble. Everything
+> that builds a blueprint builds it up again (the Builder's hut, the workers on the road, a player), and
+> `investMaterials` clears the flag when it is built. `StructureSystem::setRubble` is the one seam for the flag: THE
+> LOOK - the building's own meshes are hidden (the root node's pass mask to 0, which `EntityState::updateSelf` skips;
+> the child pieces disabled) and a rubble PILE stands on its ground point (`rubble1.pre` for a 1x1 tile building,
+> `rubble2.pre` for a 2x2 one, the same at scale 1.5 for a 3x3 one; `Models/rubble.obj`, hand-written; a root entity
+> owned by `Ref::rubbleVisual`) - and the COLLIDER off (a `SetEnabled` body command) - **rubble is walked over and is no target**, or a
+> wall's rubble would block the enemy for ever: `damage()` ignores it, the units' bite probe skips it, and it is no
+> Nav obstacle, no Nav source and no building for `buildingAt`. Its cells stay taken (Delete mode removes it). It
+> **Rubble is not built up under attack** (`rubbleBlocked`): a living enemy unit within "Rubble safe radius (m)" (30,
+> flat on the map) blocks every way to build it - `investMaterials` takes nothing, and `blueprintNeed` and
+> `fundNearbyBlueprint` skip it, so no worker walks to it and the stone goes to the next blueprint. It
+> rides GSt's status byte (bit 4) and the save key `Rubble`. A blueprint that never stood, and a cable or crossing
+> piece (outside GSt), are removed as before; the Base never dies.
+
 **Cheat:** "Game/Construction/Free instant build" (a Synced checkbox — **the server's value rules all
 players**) skips the blueprint phase.
 
@@ -291,7 +314,8 @@ players**) skips the blueprint phase.
   nearby BLUEPRINTS only within "Player build radius" (6 m) at "Player build rate" (8/s), all
   "Game/Construction" tweaks.
 * **The CONSTRUCTOR structure** (Production hotbar; conveyor-fed mineral stock plus powered; amber
-  range ring in `drawDebug`), which funds the nearest own-team blueprint **OR damaged structure**
+  range ring in `drawDebug`, in build mode only - its `buildMode` input, which also rings the Light towers' and the
+  Searchlights' ranges), which funds the nearest own-team blueprint **OR damaged structure**
   within "Constructor range" (27 m) at "Constructor build rate" (4/s). With nothing to build or
   repair it idles.
 

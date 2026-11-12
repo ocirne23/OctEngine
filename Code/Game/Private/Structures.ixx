@@ -43,6 +43,11 @@ public:
         EStructureType type = EStructureType::Emitter;
         float yield = 1.0f; // Lumberyard / Quarry: its share of the full rate (harvestYield at placement, then resolveHarvestYields)
         bool harvestDirty = false; // a yard of its kind came or went: resolveHarvestYields shares its cluster again
+        // RUBBLE (setRubble): the pile that shows in place of the building's own meshes (rubble1.pre / rubble2.pre, a
+        // root entity of its own), and the pass mask the building's root mesh had before it was hidden. Mutable: the
+        // roster hands out const Refs, and this is a visual.
+        mutable EntityPtr rubbleVisual;
+        mutable uint32 rubbleSavedPassMask = 0;
         // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
         // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
@@ -64,6 +69,10 @@ public:
         uint8 waitRank = 0;     // scratch of the walker loop: the waiting walkers seen so far (the first one loads)
         uint8 homeWalkers = 0;  // House / Beacon: its workers that are out on the road
         bool sendReady = false; // it has a load to send now (a storage: and a consumer on its road wants it)
+        bool buildReady = false; // it holds stone, and a blueprint on its road wants it (the ~1 s pass): work for a walker with no other
+        bool repairReady = false; // the same for a damaged structure on its road, and only while the team has no build work
+        float goodsIncoming[3] = {}; // per store index: the goods the walkers carry toward it now (counted fresh every tickCarriers)
+        float buildIncoming = 0.0f; // a blueprint: the stone the walkers carry toward it now (counted fresh every tickCarriers)
         // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store or the
         // Beacon) this structure sends its light to (a producer), takes it from (a consumer) or shares with (another
         // hub). 0 = none. lightBlocked: a hub is in range but nothing has a clear line to it.
@@ -90,7 +99,7 @@ public:
         float yield, uint8 team, bool built);
     void mirrorRemove(uint32 id);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
-        float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint);
+        float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble);
     // Cable/crossing BLUEPRINTS only (GCb): health = build progress, over the segment's own
     // healthMax. The built flip still arrives through the GPl re-send.
     void mirrorCableProgress(uint32 id, float healthFrac);
@@ -258,10 +267,14 @@ public:
     glm::vec3 structureLabelAnchor(int index) const;
     EStructureType structureType(int index) const { return m_frame[index].type; }
     float structureHealth(int index) const { return m_frame[index].state->health; }
-    float structureHealthMax() const { return m_settings.structureHealthMax; }
-    float structureHealthMaxOf(int index) const { return m_frame[index].state->healthMax; } // cables are softer
+    float healthMaxOf(EStructureType t) const { return glm::max(m_settings.health[(int)t], 1.0f); } // "Game/Health": one value per type
+    float structureHealthMaxOf(int index) const { return m_frame[index].state->healthMax; }
     uint8 structureTeam(int index) const { return (uint8)m_frame[index].state->team; }
     bool structureBlueprint(int index) const { return m_frame[index].state->blueprint; }
+    // RUBBLE: a built building the enemy destroyed (tickDamage) - a blueprint again, dark, walked over, no target.
+    bool structureRubble(int index) const { return m_frame[index].state->rubble; }
+    void setRubble(const Ref& s, bool rubble); // the flag + its tint + its collider (off while rubble)
+    bool rubbleBlocked(const Ref& s) const;    // rubble with a living enemy unit in "Rubble safe radius (m)": nothing builds it up
     bool structurePowered(int index) const { return m_frame[index].state->powered; }
 
     uint32 randomTargetStructureId(const glm::vec3& nearPos, uint8 attackerTeam) const;
@@ -284,7 +297,7 @@ public:
     }
 
     void tickAuthority(const glm::vec3& playerPos, float deltaSec);
-    void drawDebug() const;
+    void drawDebug(bool buildMode, EStructureType armed) const; // see the definition for the two inputs
 
     // ---- THE HARVEST (the Lumberyard and the Quarry) ----
     // A yard stands anywhere; what is within "Harvest radius" of it sets its YIELD (0..1, a share of the full rate),
@@ -606,6 +619,7 @@ private:
         uint32 targetId = 0;         // the building the load goes to
         uint8 good = 1;              // the store index it carries: 1 = wood, 2 = stone
         uint8 state = 0;             // EWalkerState (Carriers.cpp)
+        uint8 work = 0;              // ECarrierWork: what its load is for
         bool dismissed = false;      // its worker is needed elsewhere: it walks home when it is next idle
     };
     oc::vector<Walker> m_walkers;
@@ -615,15 +629,25 @@ private:
     void carrierHousePass();
     bool roadAt(int cx, int cz, float& outY) const;
     bool touchesRoad(int index) const;
-    bool carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, bool& isConsumer) const;
+    // WHAT A LOAD IS FOR, in the order a walker takes work: Goods = the buildings that take goods (never a blueprint);
+    // Build = ONLY the blueprints that still need stone (blueprintNeed; rubble too) - the walkers BUILD along the road,
+    // the road's own pieces too; Repair = ONLY the damaged built structures (repairNeed), the last work of all.
+    enum ECarrierWork : uint8 { CarrierWork_Goods, CarrierWork_Build, CarrierWork_Repair };
+    bool carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, int work, bool& isConsumer) const;
+    // The stone a blueprint still needs to be built / a damaged structure to be whole, less what the walkers already
+    // carry to it.
+    float blueprintNeed(const Ref& ref) const;
+    float repairNeed(const Ref& ref) const;
     // ONE breadth-first search over the road cells, from a structure's footprint (fromStructure >= 0) or from one road
     // cell. goal(roster index) of every building a visited cell touches: 2 = take it (the search ends), 1 = keep the
     // first such as the fallback, 0 = no. Returns the roster index (-1 = none) and the walking path to its road cell.
     int roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const;
     // Where a load of `good` from sourceIdx goes: the NEAREST taker by road, a consumer or a storage alike.
-    int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, oc::vector<glm::vec3>& outPath) const;
+    int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, int work,
+        oc::vector<glm::vec3>& outPath) const;
     bool carrierSendGood(int index, int good, bool& consumersOnly) const; // does it have a load of `good` to send?
-    int carrierJobTier(int index, uint8 team) const;                      // roadSearch goal: 2 = a load waits for a walker, 1 = a producer with no walker
+    bool carrierHoldsStone(int index) const;                              // stone a walker can take to a blueprint
+    int carrierJobTier(int index, uint8 team) const;                      // roadSearch goal: 2 = a load waits for a walker, 1 = a producer with no walker, or stone for a blueprint
 
     // ---- CELL OCCUPANCY + DERIVED LINKS ----
     // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a
