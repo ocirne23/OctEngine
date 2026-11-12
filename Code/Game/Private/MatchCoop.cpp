@@ -133,7 +133,31 @@ void GameMatch::tickWaves(float deltaSec)
     if (m_sandboxWorld) // the light rules: demons come out at night only
     {
         const bool night = Globals::settings.sky.sunHeight() < 0.0f;
-        if (night != m_night)
+        // A HAND-SET time of day (the "Time of day (h)" tweak, m_timeOfDayEdited) is not a day that passed: THE DAY
+        // NUMBER STAYS (the HUD's "Day N" / "Night N": m_nightIndex + 1 by day, m_nightIndex at night). So a jump from
+        // day N into the night makes it night N (the count goes up, as at a dusk), and a jump from night N back into
+        // the day makes it day N again (the count goes DOWN by one - a dawn would have made it day N + 1). The wave
+        // level (waveLevel: the day number - 1) is then the same on both sides of the jump, and so is the wave power.
+        const bool edited = m_timeOfDayEdited;
+        m_timeOfDayEdited = false;
+        if (night != m_night && edited)
+        {
+            m_night = night;
+            if (night)
+            {
+                ++m_nightIndex;
+                if (m_nightWave == 0)
+                    m_waveTimer = 0.0f; // the night's first wave, as at a dusk
+            }
+            else
+            {
+                m_nightIndex = glm::max(m_nightIndex - 1, 0);
+                m_wavePendingBudget = 0.0f; // nothing more comes out in daylight
+                m_nightWave = 0;
+                rollNextWave(); // the same night's first wave again
+            }
+        }
+        else if (night != m_night)
         {
             m_night = night;
             if (night)

@@ -573,6 +573,7 @@ private:
     // THE LIGHT RULES (the sandbox world): the waves come at night only - the first at dusk, then one every "Night wave
     // interval (s)" until dawn - sized and gated by the NIGHT number; daylight burns the AI team and scales the solar yield.
     bool m_night = false;        // the sun is down (the wave clock's edge detector), saved
+    bool m_timeOfDayEdited = false; // the "Time of day (h)" tweak was set by hand since the last tickWaves (a Tweak::onChange listener): no night is counted for it
     int m_nightIndex = 0;        // nights started so far, saved
     int m_nightWave = 0;         // waves launched this night (the night's build-up)
     float m_waveScale = 1.0f;    // x the NEXT wave's budget, rolled ahead (tickWaves: the night's build-up, variation and surges)

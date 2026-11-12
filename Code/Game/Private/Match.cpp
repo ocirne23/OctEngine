@@ -47,6 +47,9 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     if (m_sandboxWorld)
         m_player.setKillFloor(-1000.0f);
     Globals::gameHud.setCrosshair(m_sandboxWorld);
+    // A time of day set BY HAND is no day that passed (tickWaves). The sun cycle writes the value directly, which
+    // fires no listener: only the tweak panel (and a tweak override) does.
+    Tweak::onChange(Globals::settings.sky.timeOfDay, this, [this] { m_timeOfDayEdited = true; });
 
     // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
     // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
@@ -211,8 +214,9 @@ GameMatch::~GameMatch()
     Globals::gameHud.setCrosshair(false);
     Globals::gameHud.removeCounter("Sun");
     Globals::gameHud.removeCounter("Can't build");
-    // The tweaks are global settings (registered once at startup): nothing registered on this
-    // object. StructureSystem drops its own listeners in its dtor.
+    // The tweaks are global settings (registered once at startup). This object's one listener (the time of day):
+    Tweak::removeListeners(this);
+    // StructureSystem drops its own listeners in its dtor.
     applyPause(false); // a shared pause must not outlive the match (exit-to-menu mid-pause)
     Globals::navSystem.clear(); // waits on in-flight builds before the world goes
     // The WHOLE World is wiped below (NpcSystem::clear): every holder drops its EntityPtrs FIRST,

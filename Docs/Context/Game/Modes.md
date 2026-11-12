@@ -82,6 +82,7 @@ the moment the time is written) is the one input; a day's length is "Sky/Sun cyc
 | Solar | `GameStructureSettings::solarDaylight` (the same daylight) scales the solar yield: nothing at night. |
 | Palette | The ctor writes "Force/Teams" team 0 (warm gold) and team 1 (violet); `~GameMatch` restores them. |
 | HUD | "Sun": `Day N  hh:mm` / `Night N  hh:mm`. "Next wave (s)" shows at night only. |
+| A hand-set time | The "Time of day (h)" tweak set by hand counts NO night: a `Tweak::onChange` listener (GameMatch) sets `m_timeOfDayEdited`, and `tickWaves` then takes the sun's new state over and KEEPS THE DAY NUMBER (the HUD's "Day N" / "Night N" = `m_nightIndex` + 1 by day, `m_nightIndex` at night): from day N into the night it is night N (`m_nightIndex` + 1, as at a dusk), from night N back into the day it is day N again (`m_nightIndex` - 1; a dawn would make it day N + 1). `waveLevel()` is then the same on both sides, and so is the wave power. The sun cycle writes the value directly, which fires no listener. |
 | Save | `NightIndex`, `Night`, `TimeOfDay` (a load sets the sun cycle's time), `NightWave` (the waves launched this night) and `WaveScale` (the size rolled for the next wave). |
 
 Outside the sandbox world `stampLightRules` writes the neutral values (push on, no burn, daylight 1).
