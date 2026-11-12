@@ -10,7 +10,32 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Count };
+
+// LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
+// walk through: its collider is Layer Gate, which leaves the Player layer out).
+export constexpr bool isLineType(EStructureType t)
+{
+    return t == EStructureType::Wall || t == EStructureType::Gate;
+}
+// STANDS ON WATER: where water lies over the terrain, the water SURFACE is the ground the structure stands on
+// (StructureSystem::groundFit), and its prefab reaches down to the bed. Every other type refuses water.
+export constexpr bool standsOnWater(EStructureType t)
+{
+    return t == EStructureType::Bridge || t == EStructureType::Gate;
+}
+// BREACHABLE by the units' flow field (Nav "Wall breach cost"): they walk into it and chew it down.
+export constexpr bool isBreachable(EStructureType t)
+{
+    return t == EStructureType::Wall || t == EStructureType::Gate;
+}
+
+// THE HARVEST: a Lumberyard makes fuel (wood) from the trees around it, a Quarry minerals (stone) from the rocks. Each
+// stands anywhere; its YIELD is what its radius holds (StructureSystem::harvestYield).
+export constexpr bool isHarvestType(EStructureType t)
+{
+    return t == EStructureType::Lumberyard || t == EStructureType::Quarry;
+}
 
 // Placeable = anything a player may build. The Base only enters through spawnBase.
 export constexpr bool isPlaceableType(EStructureType t)
@@ -25,8 +50,11 @@ export constexpr bool isPlaceableType(EStructureType t)
 export constexpr bool isCableType(EStructureType t)
 {
     return t == EStructureType::CablePower || t == EStructureType::CablePipe
-        || t == EStructureType::CableConveyor;
+        || t == EStructureType::CableConveyor || t == EStructureType::Bridge;
 }
+// THE BRIDGE IS A ROAD SEGMENT (a cable of the conveyor medium, cableMediumOf) that stands on water: it joins the
+// road's runs, the carriers walk it, and it paints like a road. Unlike the other cable pieces its collider is real
+// (bodies stand on the deck).
 export constexpr bool isCrossingType(EStructureType t)
 {
     return t == EStructureType::CrossingPower || t == EStructureType::CrossingPipe
@@ -37,7 +65,7 @@ export constexpr bool isCableOrCrossing(EStructureType t)
     return isCableType(t) || isCrossingType(t);
 }
 // WALK-THROUGH structures: players and units pass over them (the prefab's collider is Layer Cable,
-// projectiles only), so they are no nav obstacle, never block a placement by a standing actor,
+// projectiles only - or, the Bridge, a deck they stand on), so they are no nav obstacle, never block a placement by a standing actor,
 // and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab.
 export constexpr bool isWalkThrough(EStructureType t)
 {
@@ -47,7 +75,7 @@ export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 mine
 {
     return t == EStructureType::CablePower ? 0
          : t == EStructureType::CablePipe ? 1
-         : t == EStructureType::CableConveyor ? 2 : -1;
+         : t == EStructureType::CableConveyor || t == EStructureType::Bridge ? 2 : -1;
 }
 export constexpr int crossingMediumOf(EStructureType t) // same scale; -1 = not a crossing
 {

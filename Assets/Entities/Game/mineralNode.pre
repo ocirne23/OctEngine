@@ -1,4 +1,5 @@
-# Mineral resource node (stone and ore): an extractor on it digs Minerals. Spawned origin 0.8 above ground.
+# Mineral resource node (stone and ore; the flat maps): a Quarry with it in its harvest radius has a full yield.
+# Spawned origin 0.8 above ground.
 # SHAPE (a placeholder; uniform scales): a rock outcrop - three tilted boulders (the root is the largest) with
 # two lumps of rusty ore in it. The child pieces are render-only.
 Prefab gameMineralNode

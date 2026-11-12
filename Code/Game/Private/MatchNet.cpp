@@ -89,9 +89,6 @@ void GameMatch::onClientJoined(uint32 clientId)
     // no replay - each client derives them locally from the mirrored cable segments.
     if (m_isServer && m_coopMap.built)
         sendMapSeed(); // co-op inputs or the PvP arena - the joiner's terrain + nodes
-    if (m_isServer && m_sandboxWorld)
-        for (int i = 0; i < m_structures.nodeCount(); ++i)
-            sendNode(i); // the sandbox world's nodes, in order
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -136,7 +133,7 @@ void GameMatch::sendStructurePlaced(int index)
     writer.write<float>(pos.z);
     writer.write<float>(facing.x);
     writer.write<float>(facing.y);
-    writer.write<int16>((int16)m_structures.structureNodeIndex(index));
+    writer.write<uint16>((uint16)glm::round(m_structures.structureYield(index) * 65535.0f)); // a Lumberyard's / Quarry's
     writer.write<uint8>(m_structures.structureTeam(index));
     writer.write<uint8>(m_structures.structureBlueprint(index) ? 0u : 1u); // built flag (Base replay)
     Globals::networkManager.fireNetworkEvent("GPl", writer.data());
@@ -258,11 +255,11 @@ void GameMatch::sendStats()
 
 // ---- the request seams (local queue on the authority, Gq* events from a client; the SAME server-side validation either way) ----
 
-void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing)
+void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, float yield, const glm::vec3& facing)
 {
     if (!m_isClient)
     {
-        m_structures.queuePlaceRequest(type, pos, nodeIndex, facing, (uint8)m_team);
+        m_structures.queuePlaceRequest(type, pos, yield, facing, (uint8)m_team);
         return;
     }
     uint8 buffer[32];
@@ -270,7 +267,7 @@ void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, int node
     writer.write<uint8>((uint8)type);
     writer.write<float>(pos.x);
     writer.write<float>(pos.z);
-    writer.write<int16>((int16)nodeIndex);
+    writer.write<uint16>((uint16)glm::round(glm::clamp(yield, 0.0f, 1.0f) * 65535.0f)); // this instance's survey (a Lumberyard / Quarry)
     writer.write<float>(facing.x);
     writer.write<float>(facing.z);
     writer.write<float>(pos.y);
@@ -373,12 +370,12 @@ void GameMatch::handleNetEvent(oc::string_view name)
             const uint8 type = reader.read<uint8>();
             const float x = reader.read<float>(), y = reader.read<float>(), z = reader.read<float>();
             const float fx = reader.read<float>(), fz = reader.read<float>();
-            const int16 nodeIndex = reader.read<int16>();
+            const uint16 yield = reader.read<uint16>();
             const uint8 team = reader.read<uint8>();
             const uint8 built = reader.read<uint8>();
             if (!reader.overflowed())
                 m_structures.mirrorPlace(id, (EStructureType)type, glm::vec3(x, y, z), glm::vec2(fx, fz),
-                    nodeIndex, team, built != 0);
+                    (float)yield / 65535.0f, team, built != 0);
         }
         else if (name == "GRm")
         {
@@ -522,16 +519,6 @@ void GameMatch::handleNetEvent(oc::string_view name)
                     rebuildCoopMap(seed, fill, (int)lanes);
             }
         }
-        else if (name == "GNd")
-        {
-            // The sandbox world's resource nodes, one per event in the server's order (join replays repeat them -
-            // only the next index appends, so extractor node indices agree with the server's).
-            const uint16 index = reader.read<uint16>();
-            const float x = reader.read<float>(), y = reader.read<float>(), z = reader.read<float>();
-            const uint8 type = reader.read<uint8>();
-            if (!reader.overflowed() && m_sandboxWorld && index == (uint16)m_structures.nodeCount() && type <= (uint8)ENodeType::Fuel)
-                m_structures.spawnNode(x, z, (ENodeType)type, y);
-        }
         // (shield/materials state rides the entity snapshot's game blob now - no GSh event)
         return;
     }
@@ -553,11 +540,11 @@ void GameMatch::handleNetEvent(oc::string_view name)
     {
         const uint8 type = reader.read<uint8>();
         const float x = reader.read<float>(), z = reader.read<float>();
-        const int16 nodeIndex = reader.read<int16>();
+        const uint16 yield = reader.read<uint16>(); // the client's harvest survey (a Lumberyard / Quarry, see placeStructure)
         const float fx = reader.read<float>(), fz = reader.read<float>();
         const float y = reader.read<float>(); // the client's ground height (the sandbox world, see placeStructure)
         if (!reader.overflowed() && isPlaceableType((EStructureType)type) && std::isfinite(y))
-            m_structures.queuePlaceRequest((EStructureType)type, glm::vec3(x, y, z), nodeIndex,
+            m_structures.queuePlaceRequest((EStructureType)type, glm::vec3(x, y, z), (float)yield / 65535.0f,
                 glm::vec3(fx, 0.0f, fz), requestTeam(sender));
     }
     else if (name == "GqD")

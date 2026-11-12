@@ -208,15 +208,14 @@ bars do not explain. One badge, first hit wins:
 | Badge | When | Colour |
 |---|---|---|
 | **No power cable / No pipeline / No conveyor** | a medium the structure MOVES has no link of that medium — an input that can never arrive, an output nothing takes, or a store nothing reaches | red / orange / amber |
-| **No road** | with carriers on: a building that moves wood or stone touches no road (it replaces the pipeline and conveyor badges), or a House touches none (its workers cannot go out to carry) | amber |
+| **No road** | with carriers on: a building that moves wood or stone touches no built road piece (`structureOnRoad`, the carriers' own test - not the conveyor attach bit, which only a building that holds minerals gets; it replaces the pipeline and conveyor badges), or a House touches none (its workers cannot go out to carry) | amber |
 | **Short of workers** | a production building while its team has more jobs than workers (build houses) | amber |
 | **Pop full** | a barracks whose next unit would exceed its population cap (build houses) | amber |
 
 The media a structure moves: **energy** for everything that burns, banks or makes it (emitters,
-barracks, extractor, fabricator, constructor, medic, turret, generator, solar, battery), **fuel** for
-generators, fabricators, tanks and a FUEL-node extractor, **minerals** for constructors, silos,
-fabricators and a MINERAL-node extractor (`structureNodeIndex` + `nodeType` pick the extractor's
-side — its buffer capacities do not). **The Base is exempt** from the cable badges: it is the hub,
+barracks, medic, turret, generator, solar, battery), **fuel** for
+generators, fabricators, tanks and the Lumberyard, **minerals** for constructors, silos,
+fabricators and the Quarry. **The Base is exempt** from the cable badges: it is the hub,
 and starts every match bare.
 
 The check is STRUCTURAL — it does not gate on current stock. A cabled-but-starved or

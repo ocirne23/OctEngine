@@ -14,7 +14,7 @@ import :Structures;
 // ---------------------------------------------------------------- mirrors
 
 void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos,
-    const glm::vec2& facingXZ, int nodeIndex, uint8 team, bool built)
+    const glm::vec2& facingXZ, float yield, uint8 team, bool built)
 {
     if ((int)type >= (int)EStructureType::Count || (int)team >= GameMaxTeams)
         return; // garbage
@@ -37,7 +37,7 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
         const glm::vec2 dir = glm::normalize(facingXZ);
         rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
-    spawnStructure(id, type, pos, rot, team, built, nodeIndex); // client components never damage-sim
+    spawnStructure(id, type, pos, rot, team, built, yield); // client components never damage-sim
 }
 
 void StructureSystem::mirrorRemove(uint32 id)
@@ -108,7 +108,7 @@ void StructureSystem::saveTo(AssetNode& root) const
 {
     // ONLY NON-DEFAULT VALUES are written (a base is hundreds of cable segments): every optional
     // key below has a load fallback that restores the same state when it is missing - full
-    // health, empty stores, built, no facing, no node, team 0, a dark emitter, the Grunt barracks,
+    // health, empty stores, built, no facing, a full yield, team 0, a dark emitter, the Grunt barracks,
     // no fill. Id, Type and Position are the keys every structure carries. A BLUEPRINT's health is
     // its build progress, always below max, so it is always written (the fallback is "full").
     for (const Ref& s : m_frame)
@@ -121,8 +121,8 @@ void StructureSystem::saveTo(AssetNode& root) const
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         if (glm::dot(glm::vec2(forward.x, forward.z), glm::vec2(forward.x, forward.z)) > 1e-4f)
             n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
-        if (s.nodeIndex >= 0)
-            n.set("NodeIndex", oc::to_string(s.nodeIndex));
+        if (s.yield < 1.0f)
+            n.set("Yield", s.yield);
         if (s.state->team != 0)
             n.set("Team", oc::to_string((int)s.state->team));
         if (s.state->blueprint)
@@ -176,7 +176,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
     refresh();
     clearAllStructures();
     // THE FALLBACKS BELOW ARE THE SAVE'S DEFAULTS: saveTo omits every key whose value the
-    // fallback restores (full health, empty stores, built, no facing, no node, team 0, a dark
+    // fallback restores (full health, empty stores, built, no facing, a full yield, team 0, a dark
     // emitter, unit type 0, no fill), so a missing key is the common case, not an old save. Keep
     // the two in step.
     for (const AssetNode* n : root.findAll("Structure"))
@@ -194,10 +194,10 @@ void StructureSystem::loadFrom(const AssetNode& root)
             const glm::vec2 dir = glm::normalize(glm::vec2(facing.x, facing.z));
             rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
         }
-        const int nodeIndex = n->find("NodeIndex") ? n->find("NodeIndex")->asInt() : -1;
+        const float yield = n->find("Yield") ? n->find("Yield")->asFloat() : 1.0f;
         const uint8 team = (uint8)glm::clamp(n->find("Team") ? n->find("Team")->asInt() : 0, 0, GameMaxTeams - 1);
         const bool blueprint = n->find("Blueprint") ? n->find("Blueprint")->asBool() : false;
-        const int index = spawnStructure(id, (EStructureType)typeInt, pos, rot, team, !blueprint, nodeIndex);
+        const int index = spawnStructure(id, (EStructureType)typeInt, pos, rot, team, !blueprint, yield);
         if (index < 0)
             continue;
         GameStructureComponent& s = *m_frame[index].state;

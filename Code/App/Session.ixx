@@ -269,6 +269,12 @@ public:
                     float height;
                     return Globals::terrain.surfaceHeightAt(x, z, height) ? height : fallback;
                 });
+            // The harvest: the trees and the rocks a lumberyard / quarry would work (the tree world's records; main.cpp
+            // calls GameMatch::surveyHarvest where they are readable).
+            m_game->setHarvestSource([](float x, float z, float radius, float& wood, float& stone)
+                {
+                    return Globals::trees.surveyHarvest(glm::vec2(x, z), radius, wood, stone);
+                });
         }
         uint32 mapSeed;
         float mapFill;

@@ -347,6 +347,8 @@ int main(int argc, char* argv[])
             Globals::trees.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::rocks.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::clutter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps()); // after trees: it reads their records
+            if (game)
+                game->surveyHarvest(); // the lumberyard / quarry ghost's yield: reads the tree records, so before the kick below
             Globals::trees.kickWorldUpdate(); // after the clutter, the last reader of the tree records; the next trees.update joins it
             Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);

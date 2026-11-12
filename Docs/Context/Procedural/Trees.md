@@ -685,7 +685,10 @@ before its `Enabled` check: it runs with the preview off.
 * **THE BOOKKEEPING JOB** (`"TreeWorld update"`, Normal, `m_updateCounter`): merging the pumps' results, the ring
   rescan (a walk of every chunk + the (2R+1)² ring) and the next upload pick run OFF main. main.cpp kicks it
   (`TreeSystem::kickWorldUpdate`) right after `clutter.update` - the LAST reader of the records this frame
-  (`cpuRecords`) - and the next `TreeWorld::update` joins it first, **so nothing reads the chunks while it runs**. It
+  (`cpuRecords`) - and the next `TreeWorld::update` joins it first, **so nothing reads the chunks while it runs**.
+  (The game's harvest survey reads them in the same window, right before the kick: `TreeSystem::surveyHarvest` - the
+  trees and the rocks' summed size within a circle, by `FloorType::harvest`; no answer when the CPU does not hold a
+  chunk the circle touches.) It
   queues `m_pendingRemoves` (handles of the chunks that left the ring) and `m_pendingUploads` (picked chunk keys).
 * **THE POOL JOB** (`"TreeWorld pool"`, Normal, `m_poolCounter`): the next `update` kicks it - the record POOL's
   removes and adds (`applyGpu`), then `updateTreeRecords`. The pool takes one thread at a time between beginFrame and

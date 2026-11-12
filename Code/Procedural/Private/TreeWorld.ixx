@@ -121,8 +121,14 @@ export namespace Procedural
 			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m)
 			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
 			RockFootprint footprint;  // rock / wood: its capsule x the record's scale (along the record's yaw, hash 104)
+			uint8 harvest = 0;        // surveyHarvest: 0 = nothing (a bush, a cactus), 1 = wood (a tree, dead wood), 2 = stone (a rock)
 		};
 		const oc::vector<FloorType>& floorTypes() const { return m_floorTypes; }
+		// THE HARVEST SURVEY (the game's lumberyard and quarry): what stands within `radius` of a point. wood = the trees
+		// (dead wood counts half), stone = the rocks' summed size (m, each rock's longest axis). Main thread, between
+		// update and kickUpdate (as cpuRecords). false = the CPU does not hold every chunk the circle touches (too far
+		// from the camera, or not generated yet): no answer. Disabled = true with nothing.
+		bool surveyHarvest(glm::vec2 centre, float radius, float& wood, float& stone) const;
 		// The keep radius is at least this (the expansion's near radius needs the records).
 		void requireKeepRadius(int chunks)
 		{

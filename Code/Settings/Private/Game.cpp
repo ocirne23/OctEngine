@@ -165,17 +165,24 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Construction", "Max ground step (m)", &s.maxGroundStep, 0.0f, 4.0f, 0.05f); // 0 = no limit
     Tweak::floatVar("Game/Structures", "Pressure draw tension", &s.pressureDrawTension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Start minerals", &s.startMinerals, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Extractor snap radius", &s.extractorSnapRadius, 1.0f, 20.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Minerals/s per node", &s.mineralRate, 0.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fuel/s per node", &s.fuelRate, 0.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Harvest radius", &s.harvestRadius, 4.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Trees for full lumberyard yield", &s.harvestTreesFull, 1.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Rock (m) for full quarry yield", &s.harvestStoneFull, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Harvest minimum yield", &s.harvestMinYield, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Economy", "Quarry minerals/s", &s.mineralRate, 0.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Lumberyard fuel/s", &s.fuelRate, 0.0f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Base income mult", &s.baseIncomeMult, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Emitter cost", &s.costs[0], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Generator cost", &s.costs[1], 0.0f, 500.0f, 1.0f);
-    // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Extractor 2, Battery 3, FuelTank 4,
+    // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
     // Solar 5, Fabricator 6, Bastion 7, Lance 8, Barracks 9, Wall 10, Turret 11, MineralSilo 12, Constructor 13, Base 14,
     // CablePower 15, CablePipe 16, CableConveyor 17, CrossingPower 18, CrossingPipe 19, CrossingConveyor 20, House 21,
-    // MedicStation 22.
-    Tweak::floatVar("Game/Economy", "Extractor cost", &s.costs[2], 0.0f, 500.0f, 1.0f);
+    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26.
+    Tweak::floatVar("Game/Economy", "Lens cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Lumberyard cost", &s.costs[2], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Quarry cost", &s.costs[23], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Bridge cost (per segment)", &s.costs[24], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Gate cost (per segment)", &s.costs[25], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Battery cost", &s.costs[3], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Fuel tank cost", &s.costs[4], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Solar cost", &s.costs[5], 0.0f, 500.0f, 1.0f);
@@ -198,6 +205,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Light", "Mirror beam range (m)", &s.mirrorBeamRange, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Hub reach (m)", &s.lightHubReach, 5.0f, 200.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Hub link range (m)", &s.lightHubLinkRange, 5.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Light", "Lens range (m)", &s.lensRange, 4.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Light", "Lens buffer", &s.lensBuffer, 1.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Beam rate (light/s)", &s.lightBeamRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Feed rate (light/s)", &s.lightFeedRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Share rate (light/s)", &s.lightShareRate, 0.5f, 500.0f, 0.5f);
@@ -233,7 +242,6 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Base shield energy/s", &s.baseShieldEnergyPerSec, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Base shield output", &s.baseShieldOutput, 0.1f, 8.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Base shield reach", &s.baseShieldReach, 2.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Extractor energy/s", &s.extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Battery capacity", &s.batteryCapacity, 10.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Game/Economy", "Internal buffer", &s.internalBuffer, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Emitter buffer", &s.emitterBuffer, 1.0f, 500.0f, 1.0f);
@@ -273,7 +281,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Structures", "Damage/s in enemy field", &sp.fieldDamageRate, 0.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Population", "Base workers", &s.baseWorkers, 0, 200, 1);
     Tweak::intVar("Game/Population", "House workers", &s.houseWorkers, 0, 200, 1);
-    Tweak::intVar("Game/Population", "Workers: extractor", &s.workersExtractor, 0, 50, 1);
+    Tweak::intVar("Game/Population", "Workers: lumberyard, quarry", &s.workersHarvest, 0, 50, 1);
     Tweak::intVar("Game/Population", "Workers: fabricator", &s.workersFabricator, 0, 50, 1);
     Tweak::intVar("Game/Population", "Workers: constructor", &s.workersConstructor, 0, 50, 1);
     Tweak::intVar("Game/Population", "Workers: generator", &s.workersGenerator, 0, 50, 1);

@@ -1,0 +1,17 @@
+# Quarry: makes minerals (stone) from the rocks within the harvest radius around it. It stands anywhere: its yield
+# is fixed at placement. No field, no light use.
+Prefab gameQuarry
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.6 0.6 0.65
+		Scale 2
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 2 2 2
+	Component GameStructure
+		MeleeRadius 2

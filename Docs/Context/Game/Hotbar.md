@@ -84,13 +84,15 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
 
 ### Q — Combat
 
-**Emitter · Bastion · Lance · Wall · Turret · Barracks · House**
+**Emitter · Bastion · Lance · Wall · Gate · Turret · Barracks** (the Bridge is with the Road, on the Logistics page)
 
 * **Bastion** — a big, hungry anchor bubble. **Lance** — a focused cone; **TWO-CLICK placement**: the
   first click anchors, the second aims the facing.
 * **Wall** — a DRAG line of square segments every 2 m (`c_wallSegmentSpacing`): the press anchors, the
-  release places. Per-segment cost, `c_wallMaxSegments` 16.
-  > **A BUILT wall is fed to Nav as a BREACHABLE obstacle** at "Wall breach cost" (10) — one 2 m cell
+  release places. Per-segment cost, `c_wallMaxSegments` 16. **The Gate places the same way**
+  (`isLineType`) and stands on water (ON WATER in [Economy.md](Economy.md)): a wall the players walk
+  through. (The Bridge is a road piece: it paints like the road.)
+  > **A BUILT wall (or gate, `isBreachable`) is fed to Nav as a BREACHABLE obstacle** at "Wall breach cost" (10) — one 2 m cell
   > costs (1+cost)× the walking distance, so enemies route through a wall rather than take a longer
   > detour, walk into it and bite it down. **Blueprint walls and every other building stay
   > impassable.**
@@ -164,7 +166,7 @@ line chain with circles for the own team.
 
 ### W — Production
 
-**Generator · Solar · Extractor · Fabricator · Constructor · Battery · Mineral silo · Fuel tank ·
+**Generator · Solar · Lens (a light relay - Light on beams in [Economy.md](Economy.md)) · Lumberyard · Quarry · Fabricator · Constructor · Battery · Mineral silo · Fuel tank ·
 Medic station**
 
 Solar is a free trickle with no fuel (a flat `CubeQuarter` slab; in the sandbox world its yield follows the daylight,
@@ -213,7 +215,7 @@ One placement burst caps at `c_cableMaxSegments` 32 cells.
 They exist from game start only (`spawnBase`; `isPlaceableType` keeps the Base off placement), one per team.
 
 * Respawn anchor.
-* A passive trickle of Minerals at "Base income mult" (0.25) of an extractor.
+* A passive trickle of Minerals at "Base income mult" (0.25) of a full-yield Quarry.
 * MINERAL + ENERGY storage, **no fuel**: spawned with a full energy store and "Start minerals"; power cables attach.
 * **Its SHIELD runs on EMITTER RULES, and the Base GENERATES EXACTLY THE FIELD'S STANDING DRAW** —
   `hasShieldEmitter` includes Base in the production tick, `strainable`, mirror and save: unit siege drain,

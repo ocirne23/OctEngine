@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 23;
+export constexpr int GameStructureTypeCount = 27;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -171,7 +171,7 @@ export struct GameStructureSettings
     float costs[GameStructureTypeCount] = { // indexed by EStructureType
         30.0f,  // Emitter
         40.0f,  // Generator
-        25.0f,  // Extractor
+        25.0f,  // Lumberyard
         40.0f,  // Battery
         30.0f,  // FuelTank
         40.0f,  // Solar
@@ -192,11 +192,21 @@ export struct GameStructureSettings
         6.0f,   // CrossingConveyor
         40.0f,  // House
         50.0f,  // MedicStation
+        25.0f,  // Quarry
+        3.0f,   // Bridge (per segment)
+        8.0f,   // Gate (per segment)
+        40.0f,  // Lens
     };
     float startMinerals = 200.0f;
-    float extractorSnapRadius = 6.0f;
-    float mineralRate = 2.0f;
-    float fuelRate = 1.0f;
+    // THE HARVEST (the Lumberyard and the Quarry): a yard's YIELD (0..1) is what stands within harvestRadius of it
+    // against the "full" amount - trees for the Lumberyard, the rocks' summed size (m) for the Quarry; on the flat maps
+    // one resource node of its kind in the radius is a full yield. Never under harvestMinYield.
+    float harvestRadius = 32.0f;
+    float harvestTreesFull = 12.0f;
+    float harvestStoneFull = 12.0f;
+    float harvestMinYield = 0.1f;
+    float mineralRate = 2.0f; // the Quarry at full yield (and the Base's trickle, x baseIncomeMult)
+    float fuelRate = 1.0f;    // the Lumberyard at full yield
     float baseIncomeMult = 0.25f;
     float placeRange = 30.0f;
     float cableThroughput[3] = { 20.0f, 4.0f, 4.0f }; // by MEDIUM (energy, fuel, minerals): a segment's OUT-RATE in cells/s
@@ -215,6 +225,8 @@ export struct GameStructureSettings
     float mirrorBeamRange = 60.0f;    // m: a Mirror reaches a hub this far away
     float lightHubReach = 30.0f;      // m: a hub feeds the consumers this near (and a Hearth reaches a hub this far)
     float lightHubLinkRange = 60.0f;  // m: two hubs this near share their light
+    float lensRange = 32.0f;        // m: a Lens sends its beam to a hub (or another Lens) this far away
+    float lensBuffer = 40.0f;         // the light a Lens holds: what is on its way through it
     float lightBeamRate = 20.0f;      // light/s a producer sends
     float lightFeedRate = 10.0f;      // light/s a consumer takes (the barracks and the turret keep their own intake)
     float lightShareRate = 10.0f;     // light/s between two hubs
@@ -256,7 +268,6 @@ export struct GameStructureSettings
     float fabricatorMineralsPerSec = 0.5f;
     float fabricatorFuelPerSec = 1.0f;
     float fabricatorEnergyPerSec = 1.0f;
-    float extractorEnergyPerSec = 1.0f;
     float pressureDrawTension = 1.5f;
     float emitterEnergyPerSec = 1.0f;
     float emitterOutput = 1.2f;
@@ -298,7 +309,7 @@ export struct GameStructureSettings
     // production building asks for its workers; short of workers, all production of the team slows by workers / jobs.
     int baseWorkers = 6;
     int houseWorkers = 4;
-    int workersExtractor = 2;
+    int workersHarvest = 2; // a Lumberyard, a Quarry
     int workersFabricator = 3;
     int workersConstructor = 2;
     int workersGenerator = 1;

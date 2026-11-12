@@ -1,0 +1,52 @@
+# Gate segment: a wall segment (2x4x2 m, Pillar2) that the PLAYERS walk through - Layer Gate collides with Default
+# (the units) and Projectile, not with Player (both masks must hold the other's layer for a collision). Placed as a
+# drag LINE like the wall. It stands on WATER too: there its origin is 2.0 above the water surface
+# (StructureSystem::groundFit), so its top is a wall's height over the water, and the FOOT below reaches 12 m under
+# the surface (two render pieces; the collider covers them). On land the foot is in the ground.
+# SHAPE: dark wood with an iron cap, to tell it from the stone wall.
+Prefab gameGate
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Pillar2
+		Type StaticMesh
+		Color 0.42 0.28 0.14
+		Scale 1
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Gate
+		CollidesWith Default Projectile
+		Shape Box
+		HalfExtents 1 8 1
+		Offset 0 -6 0
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name Cap
+			Position 0 1.76 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.2 0.2 0.22
+				Scale 1.04
+		Entity
+			Name Foot1
+			Position 0 -5 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.24 0.12
+				Scale 1
+		Entity
+			Name Foot2
+			Position 0 -11 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.24 0.12
+				Scale 1

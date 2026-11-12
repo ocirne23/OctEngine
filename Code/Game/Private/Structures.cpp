@@ -20,15 +20,15 @@ import :Structures;
 
 // The PLAYER-FACING names are the setting's (Docs/GDD.md): light, wood and stone for energy, fuel and minerals. The
 // code, the tweaks and the save keys keep the old words.
-static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Work camp",
+static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberyard",
     "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 1.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
-    0.25f, 1.5f, 1.0f };
+    0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 2.0f, 1.5f };
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -89,14 +89,20 @@ oc::string StructureSystem::describeType(EStructureType type) const
         out_(m_settings.solarEnergyPerSec, "light", " in full daylight");
         range(m_settings.mirrorBeamRange);
         break;
-    case EStructureType::Extractor:
-        desc = "Works the resource node under it: a quarry on rock, a lumber camp on logs. Needs no light.";
-        line(oc::format("Needs {} workers", m_settings.workersExtractor));
-        out_(m_settings.mineralRate, "stone", " on a rock node");
-        out_(m_settings.fuelRate, "wood", " on a wood node");
+    case EStructureType::Lumberyard:
+        desc = "Fells the trees around it. It stands anywhere: the more trees in its range, the more wood it makes. Needs no light.";
+        line(oc::format("Needs {} workers", m_settings.workersHarvest));
+        out_(m_settings.fuelRate, "wood", oc::format(" with {:g} trees in range", m_settings.harvestTreesFull).c_str());
+        range(m_settings.harvestRadius);
+        break;
+    case EStructureType::Quarry:
+        desc = "Breaks the rocks and boulders around it. It stands anywhere: the more rock in its range, the more stone it makes. Needs no light.";
+        line(oc::format("Needs {} workers", m_settings.workersHarvest));
+        out_(m_settings.mineralRate, "stone", " with a lot of rock in range");
+        range(m_settings.harvestRadius);
         break;
     case EStructureType::Fabricator:
-        desc = "Makes cut stone with wood, where no rock node is near. Needs no light.";
+        desc = "Makes cut stone with wood, where no rock is near. Needs no light.";
         line(oc::format("Needs {} workers", m_settings.workersFabricator));
         in(m_settings.fabricatorFuelPerSec, "wood");
         out_(m_settings.fabricatorMineralsPerSec, "stone");
@@ -112,8 +118,13 @@ oc::string StructureSystem::describeType(EStructureType type) const
         banks(m_settings.batteryCapacity, "light");
         range(m_settings.lightHubReach);
         break;
+    case EStructureType::Lens:
+        desc = "Passes light on. It shares light with the crystal store, the Beacon or the next lens near it, and the mirrors, hearths and stores around it link to it: a line of lenses carries light over a distance, both ways. Each beam needs a clear line.";
+        banks(m_settings.lensBuffer, "light on its way");
+        range(m_settings.lensRange);
+        break;
     case EStructureType::FuelTank:
-        desc = "Holds the wood the lumber camps send in.";
+        desc = "Holds the wood the lumberyards send in.";
         banks(m_settings.fuelTankCapacity, "wood");
         break;
     case EStructureType::MineralSilo:
@@ -148,6 +159,14 @@ oc::string StructureSystem::describeType(EStructureType type) const
         break;
     case EStructureType::Wall:
         desc = "Cut stone. It stops solid demons: they chew through it instead of walking around. Needs no light.";
+        break;
+    case EStructureType::Gate:
+        desc = "A wall that you walk through. It stops solid demons like a wall, and it stands in water too: across a river it reaches from the bed to a wall's height over the surface. Needs no light.";
+        line("Place it: hold and drag a line.");
+        break;
+    case EStructureType::Bridge:
+        desc = "A road on a deck, over a river, a lake or the sea: it lies just over the water surface, on piers down to the bed. It joins the road, and the workers walk it. A road painted over water becomes a bridge by itself.";
+        line("Paint it: hold and drag.");
         break;
     case EStructureType::CablePower:
     case EStructureType::CablePipe:
@@ -289,7 +308,7 @@ StructureSystem::~StructureSystem()
 void StructureSystem::refresh()
 {
     ProfileScope scope("Structures refresh", EProfileCategory::Game);
-    // The roster is maintained at the spawn/remove seams (no world query - type, node and id index
+    // The roster is maintained at the spawn/remove seams (no world query - type, yield and id index
     // were recorded at spawnStructure); only the live tuning re-stamps per frame so tweaks apply.
     linkHouses(); // house counts feed the barracks' population cap stamped below
     for (const Ref& s : m_frame)
@@ -424,31 +443,39 @@ void StructureSystem::spawnNode(float x, float z, ENodeType type, float groundY)
 
 void StructureSystem::clearNodes()
 {
-    // Co-op map regeneration only (a new seed re-places the whole set). Structures referencing a
-    // node by index are cleared by the caller around this - every nodeIndex access elsewhere is
-    // bound-checked, so a brief count mismatch cannot read out of range.
+    // Map regeneration only (a new seed re-places the whole set).
     for (Node& n : m_nodes)
         if (n.entity)
             Globals::world.removeRootEntity(n.entity.get());
     m_nodes.clear();
 }
 
-int StructureSystem::findFreeNodeNear(const glm::vec3& groundPos, float maxDist) const
+bool StructureSystem::harvestYield(EStructureType type, const glm::vec3& groundPos, float& outYield) const
 {
-    int best = -1;
-    float bestDistSq = maxDist * maxDist;
-    for (int i = 0; i < (int)m_nodes.size(); ++i)
+    outYield = 1.0f;
+    if (!isHarvestType(type))
+        return true;
+    const bool lumber = type == EStructureType::Lumberyard;
+    const float radius = m_settings.harvestRadius;
+    float yield = 0.0f;
+    // The flat maps' deposits: one node of the yard's kind in the radius is a full yield.
+    for (const Node& n : m_nodes)
     {
-        if (m_nodes[i].extracted)
-            continue;
-        const glm::vec2 d = glm::vec2(m_nodes[i].pos.x, m_nodes[i].pos.z) - glm::vec2(groundPos.x, groundPos.z);
-        if (glm::dot(d, d) <= bestDistSq)
-        {
-            bestDistSq = glm::dot(d, d);
-            best = i;
-        }
+        const glm::vec2 d = glm::vec2(n.pos.x, n.pos.z) - glm::vec2(groundPos.x, groundPos.z);
+        if ((n.type == ENodeType::Fuel) == lumber && glm::dot(d, d) <= radius * radius)
+            yield = 1.0f;
     }
-    return best;
+    // The sandbox world: the trees and the rocks that stand there.
+    if (m_harvestSource)
+    {
+        float wood = 0.0f, stone = 0.0f;
+        if (!m_harvestSource(groundPos.x, groundPos.z, radius, wood, stone))
+            return false;
+        yield = glm::max(yield, lumber ? wood / glm::max(m_settings.harvestTreesFull, 1.0f)
+                                       : stone / glm::max(m_settings.harvestStoneFull, 1.0f));
+    }
+    outYield = glm::clamp(yield, glm::clamp(m_settings.harvestMinYield, 0.0f, 1.0f), 1.0f);
+    return true;
 }
 
 int StructureSystem::findConnectableNear(const glm::vec3& pos, float maxDist) const
@@ -470,10 +497,10 @@ int StructureSystem::findConnectableNear(const glm::vec3& pos, float maxDist) co
 
 // ---------------------------------------------------------------- requests
 
-void StructureSystem::queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
+void StructureSystem::queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, float yield,
     const glm::vec3& facing, uint8 team)
 {
-    m_requests.push_back(PlaceRequest{ type, groundPos, facing, nodeIndex, team });
+    m_requests.push_back(PlaceRequest{ type, groundPos, facing, yield, team });
 }
 
 void StructureSystem::queueDemolishRequest(uint32 id, uint8 team)
@@ -505,7 +532,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     refresh(); // the frame view every request/tick below works on
     ProfileScope requestScope("Structure requests", EProfileCategory::Game);
     for (const PlaceRequest& req : m_requests)
-        placeStructure(req.type, req.pos, req.nodeIndex, req.facing, req.team);
+        placeStructure(req.type, req.pos, req.yield, req.facing, req.team);
     m_requests.clear();
     for (const auto& [id, team] : m_demolishRequests)
         applyDemolishRequest(id, team);

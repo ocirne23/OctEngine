@@ -17,7 +17,7 @@ namespace
     constexpr float c_beamLift = 1.0f;     // a beam ends this far over a building's top
     constexpr float c_baseReserve = 0.25f; // the share of its store the Beacon keeps for its own field
 
-    bool isLightHub(EStructureType t) { return t == EStructureType::Battery || t == EStructureType::Base; }
+    bool isLightHub(EStructureType t) { return t == EStructureType::Battery || t == EStructureType::Base || t == EStructureType::Lens; }
 
     // Where a building's beam starts and ends: the CENTRE OF ITS CRYSTAL, as its prefab places it over the entity's
     // origin (keep these in step with the `Crystal` child of the .pre files). A building with no crystal: a little
@@ -33,6 +33,7 @@ namespace
         case EStructureType::Turret:   return 1.7f;
         case EStructureType::Solar:    return 1.16f;
         case EStructureType::Barracks: return 3.15f;
+        case EStructureType::Lens:     return 2.2f;
         default:                       return -1.0f;
         }
     }
@@ -57,37 +58,77 @@ void StructureSystem::rebuildLightLinks()
 {
     oc::small_vector<int, 32> hubs;
     for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        m_frame[i].lightId = 0;
+        m_frame[i].lightBlocked = false;
         if (isLightHub(m_frame[i].type) && !m_frame[i].state->blueprint)
             hubs.push_back(i);
+    }
+    // Two passes: everything but the lenses, then THE LENSES. A lens is a RELAY: a hub with a small store that links
+    // to the nearest hub within "Lens range" - but not to one that links to IT already (that pair is joined). Each
+    // structure has one link, so without this rule a lens between a store and the next lens would link back to the
+    // store that links to it, and the chain would end there. The lenses come last, so they see the others' links;
+    // a later lens also sees the earlier lenses' links.
+    for (int pass = 0; pass < 2; ++pass)
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         Ref& ref = m_frame[i];
-        ref.lightId = 0;
-        ref.lightBlocked = false;
+        const bool lens = ref.type == EStructureType::Lens;
+        if (lens != (pass == 1))
+            continue;
         if (ref.state->blueprint || isCableOrCrossing(ref.type) || ref.state->capacity[0] <= 0.0f)
             continue;
         const ETransportRole role = transportRoleOf(ref.type, 0);
-        const float range = ref.type == EStructureType::Solar ? m_settings.mirrorBeamRange
+        const float range = lens ? m_settings.lensRange : ref.type == EStructureType::Solar ? m_settings.mirrorBeamRange
             : role == ETransportRole::Storage ? m_settings.lightHubLinkRange : m_settings.lightHubReach;
-        // The nearest hub in range with a clear line. The ray is cast only for a hub nearer than the best so far.
-        int best = -1;
-        float bestDist = range;
+        const uint32 ownId = ref.state->structureId;
+        // The nearest USEFUL hub in range with a clear line, else the nearest one. Useful: for a CONSUMER a hub that
+        // has light to give (over the Beacon's reserve), for a PRODUCER one with room. The nearest hub alone left a
+        // turret or a barracks dark next to a full Crystal store whenever an empty hub stood nearer (the Beacon down
+        // at its reserve, a lens with nothing behind it), and a mirror beaming into a full store. The links are
+        // derived again about once a second, so a link follows the light. Two hubs: the nearest. The ray is cast only
+        // for a hub that can be better than the best so far.
+        const auto useful = [&](const Ref& hub)
+        {
+            const GameStructureComponent& hs = *hub.state;
+            if (role == ETransportRole::Consumer)
+                return hs.store[0] - (hub.type == EStructureType::Base ? hs.capacity[0] * c_baseReserve : 0.0f) > 1.0f;
+            if (role == ETransportRole::Producer)
+                return hs.capacity[0] - hs.store[0] > 1.0f;
+            return true;
+        };
+        int best = -1, bestUseful = -1;
+        float bestDist = range, bestUsefulDist = range;
         for (const int h : hubs)
         {
             const Ref& hub = m_frame[h];
-            if (h == i || hub.state->team != ref.state->team)
+            if (h == i || hub.state->team != ref.state->team || (lens && hub.lightId == ownId))
                 continue;
             const float dist = glm::distance(glm::vec2(hub.entity->pos.x, hub.entity->pos.z), glm::vec2(ref.entity->pos.x, ref.entity->pos.z));
-            if (dist > bestDist)
+            // A link with a lens at an end is no longer than the lens reaches, whatever the other end's own range is.
+            if (hub.type == EStructureType::Lens && dist > m_settings.lensRange)
+                continue;
+            const bool good = useful(hub);
+            if (dist > bestDist && !(good && dist <= bestUsefulDist))
                 continue;
             if (!lightLineClear(ref, hub))
             {
                 ref.lightBlocked = true;
                 continue;
             }
-            best = h;
-            bestDist = dist;
+            if (dist <= bestDist)
+            {
+                best = h;
+                bestDist = dist;
+            }
+            if (good && dist <= bestUsefulDist)
+            {
+                bestUseful = h;
+                bestUsefulDist = dist;
+            }
         }
+        if (bestUseful >= 0)
+            best = bestUseful;
         if (best >= 0)
         {
             ref.lightId = m_frame[best].state->structureId;
@@ -151,7 +192,11 @@ void StructureSystem::tickLight(float deltaSec)
         else if (s.capacity[0] > 0.0f && hub.capacity[0] > 0.0f) // two hubs: toward equal fill fractions
         {
             const float diff = hub.store[0] / hub.capacity[0] - s.store[0] / s.capacity[0]; // > 0: the other hub is fuller
-            const float move = glm::clamp(diff * glm::min(s.capacity[0], hub.capacity[0]) * 0.5f, -m_settings.lightShareRate * deltaSec, m_settings.lightShareRate * deltaSec);
+            // A link with a Lens at an end is a BEAM: it moves light at the beam rate (a relay must keep up with what the
+            // producers send into it).
+            const float rate = (ref.type == EStructureType::Lens || m_frame[hubIndex].type == EStructureType::Lens
+                ? m_settings.lightBeamRate : m_settings.lightShareRate) * deltaSec;
+            const float move = glm::clamp(diff * glm::min(s.capacity[0], hub.capacity[0]) * 0.5f, -rate, rate);
             hub.store[0] -= move;
             s.store[0] += move;
             moved = glm::abs(move);

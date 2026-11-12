@@ -1,5 +1,5 @@
 # Fabricator: converts energy into Minerals ("Fabricator energy/s" in, "Fabricator minerals/s"
-# out while powered) - build currency without map control, at an energy premium over extractors.
+# out while powered) - build currency without map control, at an energy premium over quarries.
 # Spawned origin 1.0 above ground.
 Prefab gameFabricator
 	Global true

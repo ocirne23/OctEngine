@@ -135,12 +135,11 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
 
 float StructureSystem::takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount)
 {
-    // Silos, the Base, AND mineral extractors: a player standing at a fresh dig site can courier
-    // its buffer by hand before any conveyor exists (a fuel extractor's mineral store stays 0, so
-    // including the type unconditionally is safe).
+    // Silos, the Base, AND the quarries: a player standing at a fresh dig site can courier
+    // its buffer by hand before any conveyor exists.
     const auto holdsMinerals = [](EStructureType t) {
         return t == EStructureType::MineralSilo || t == EStructureType::Base
-            || t == EStructureType::Extractor; };
+            || t == EStructureType::Quarry; };
     float taken = 0.0f;
     for (const Ref& s : m_frame)
     {
@@ -207,7 +206,7 @@ void StructureSystem::tickProduction(float deltaSec)
     ProfileScope scope("Structures production", EProfileCategory::Game);
     const float dt = glm::max(deltaSec, 1e-6f);
     updateStaffing();
-    // LIGHT runs the fields and the machines of defence; PRODUCTION (the extractor, the fabricator, the constructor,
+    // LIGHT runs the fields and the machines of defence; PRODUCTION (the lumberyard, the quarry, the fabricator, the constructor,
     // the generator) draws none: it runs on workers.
     const auto consumerDraw = [&](EStructureType type) {
         return type == EStructureType::Emitter ? m_settings.emitterEnergyPerSec
@@ -232,17 +231,13 @@ void StructureSystem::tickProduction(float deltaSec)
             continue;
         }
 
-        // ---- income: powered extractors fill their OWN buffer/tank (full = production stalls),
-        // the Base trickles minerals into its bank, fabricators convert (energy+fuel -> minerals).
+        // ---- income: the lumberyards and the quarries fill their OWN buffer (full = production stalls) at their
+        // yield's share of the full rate, the Base trickles minerals into its bank, fabricators convert (fuel -> minerals).
         const float staff = staffing(s.team < GameMaxTeams ? (uint8)s.team : (uint8)0); // the team's workers / jobs
-        if (ref.type == EStructureType::Extractor && ref.nodeIndex >= 0
-            && ref.nodeIndex < (int)m_nodes.size())
-        {
-            if (m_nodes[ref.nodeIndex].type == ENodeType::Fuel)
-                s.store[1] = glm::min(s.store[1] + m_settings.fuelRate * staff * dt, s.capacity[1]);
-            else
-                s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * staff * dt, s.capacity[2]);
-        }
+        if (ref.type == EStructureType::Lumberyard)
+            s.store[1] = glm::min(s.store[1] + m_settings.fuelRate * ref.yield * staff * dt, s.capacity[1]);
+        else if (ref.type == EStructureType::Quarry)
+            s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * ref.yield * staff * dt, s.capacity[2]);
         else if (ref.type == EStructureType::Fabricator && s.powered) // powered = it paid its wood last tick
             s.store[2] = glm::min(s.store[2] + m_settings.fabricatorMineralsPerSec * staff * dt, s.capacity[2]);
         else if (ref.type == EStructureType::Base)
@@ -453,9 +448,14 @@ void StructureSystem::drawDebug() const
     {
         const glm::vec3 base = node.type == ENodeType::Mineral
             ? glm::vec3(0.2f, 0.4f, 1.0f) : glm::vec3(1.0f, 0.6f, 0.15f);
-        drawCircle(glm::vec3(node.pos.x, node.pos.y - c_nodeHeight + 0.3f, node.pos.z), m_settings.extractorSnapRadius,
-            packColor(base), 24);
+        drawCircle(glm::vec3(node.pos.x, node.pos.y - c_nodeHeight + 0.3f, node.pos.z), 3.0f, packColor(base), 24);
     }
+    // The harvest range of the built yards: green = a lumberyard, grey = a quarry, dimmer with a lower yield.
+    for (const Ref& s : m_frame)
+        if (isHarvestType(s.type) && !s.state->blueprint)
+            drawCircle(s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type) - 0.3f, 0.0f), m_settings.harvestRadius,
+                packColor((s.type == EStructureType::Lumberyard ? glm::vec3(0.35f, 0.8f, 0.3f) : glm::vec3(0.7f, 0.7f, 0.75f))
+                    * glm::mix(0.35f, 0.8f, s.yield)), 48);
 
     // Constructor build/repair reach (amber), medic heal reach (green) + red rings on unpowered
     // consumers.

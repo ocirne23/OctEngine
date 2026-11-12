@@ -136,6 +136,13 @@ public:
         m_structures.setGroundSource(source);
         Globals::settings.game.unitParams.farGround = m_sandboxWorld ? source : nullptr;
     }
+    // THE HARVEST SURVEY (the Lumberyard and the Quarry; see StructureSystem's THE HARVEST). The source is the App's:
+    // the trees and the rocks in a circle, from the world's tree records. Those are readable at ONE point of the frame
+    // only (after the procedural updates, before the tree world's bookkeeping job is kicked), so the ghost never asks
+    // by itself: it leaves its position in m_harvestProbe, and main.cpp calls surveyHarvest at that point. The answer
+    // is on the ghost one frame later.
+    void setHarvestSource(StructureSystem::HarvestSource source) { m_structures.setHarvestSource(source); }
+    void surveyHarvest();
 
     // PROFILING SCENARIO (`--scenario <save>`, main calls it once at `--scenario-frame`): loads the
     // save (F10's path when empty), selects EVERY live own-team unit and orders them all to the
@@ -186,7 +193,7 @@ private:
         bool affordable = false;
         glm::vec3 pos{ 0.0f }; // the snapped GROUND point (y = the height the structure stands on)
         EStructureType type = EStructureType::Emitter;
-        int nodeIndex = -1; // Extractor: the free node the ghost snapped to
+        float yield = 1.0f; // Lumberyard / Quarry: the survey's yield at pos (m_harvestProbe); affordable only once it is known
         StructureSystem::EGroundFit ground = StructureSystem::EGroundFit::Ok; // the sandbox world's ground test
     };
     // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W open
@@ -195,6 +202,22 @@ private:
     enum class EPlayerMode : uint8 { Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
+    // A ROAD cell over water is a BRIDGE: the piece the armed type becomes at a snapped cell. The road's ghost and
+    // its paint stroke go through it, so a road painted across a river bridges it by itself.
+    EStructureType roadPieceAt(EStructureType armed, const glm::vec3& snapped) const;
+    // The armed Lumberyard / Quarry ghost's survey (surveyHarvest): asked for `pos`, answered one frame later.
+    struct HarvestProbe
+    {
+        EStructureType type = EStructureType::Count; // Count = nothing asked
+        glm::vec3 pos{ 0.0f };
+        float yield = 0.0f;
+        bool wanted = false; // a ghost asked this frame
+        bool known = false;  // yield is the answer for (type, pos)
+    };
+    HarvestProbe m_harvestProbe;
+    int m_frameYield = -2; // this frame's harvest ghost: percent, -1 = surveying, -2 = no such ghost
+    int m_shownYield = -2; // what the HUD's "Yield" line shows
+    void showYield(int percent);
     // The sandbox world's ground test on a snapped position (always true on the flat maps): p.y = the stand height.
     bool fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) const;
     StructureSystem::EGroundFit m_frameGroundFit = StructureSystem::EGroundFit::Ok; // this frame's refused ghost
@@ -253,7 +276,7 @@ private:
     float m_wanderSelectedFrac = 0.05f;    // smoothed share of the roster inside the SIM LOD selection (from the probes)
     std::mt19937 m_wanderRng{ 0x5eedu };   // the job's own generator (never the shared C rand from a worker)
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
-    void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
+    void requestPlace(EStructureType type, const glm::vec3& pos, float yield, const glm::vec3& facing);
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
     void sendRoute(int index); // server: GRt broadcast (mirror + join replay)
@@ -627,8 +650,6 @@ private:
     float m_siteWaitTimer = 0.0f;
     void tickBaseSite(float deltaSec);
     void spawnLocalPlayer(); // the authority's own capsule at m_playerStart (+ the server-primary flag)
-    void spawnSandboxNodes(); // resource nodes on fitting ground around the Base (+ the GNd broadcast)
-    void sendNode(int index); // server: one node (GNd) - the clients' node list, in order
     // The ground for something that only STANDS there (a spawn, a fog bank): the collider's exact height, else the coarse
     // terrain height, else the fallback.
     float groundY(float x, float z, float fallback) const { return m_structures.groundHeightAt(x, z, fallback, true); }
@@ -687,9 +708,9 @@ inline constexpr int c_buildBarTabs = 3;
 inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 // 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
-inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "CAMP", "CRYS",
+inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "LNC", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

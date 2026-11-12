@@ -19,14 +19,15 @@ import :Structures;
 // Structures.cpp behind structureTypeName / spawnHeightOf).
 static constexpr const char* structurePrefabs[] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre",
-    "Entities/Game/extractor.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
+    "Entities/Game/lumberyard.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
     "Entities/Game/solar.pre", "Entities/Game/fabricator.pre", "Entities/Game/bastion.pre",
     "Entities/Game/lance.pre", "Entities/Game/barracks.pre", "Entities/Game/wall.pre",
     "Entities/Game/turret.pre", "Entities/Game/mineralstorage.pre", "Entities/Game/constructor.pre",
     "Entities/Game/base.pre", "Entities/Game/cablePower.pre", "Entities/Game/cablePipe.pre",
     "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre", "Entities/Game/crossing.pre",
     "Entities/Game/crossing.pre", "Entities/Game/house.pre",   // the three crossings share one
-    "Entities/Game/medic.pre" };                                // mesh; applyStructureTint hues it
+    "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
+    "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -60,18 +61,13 @@ bool StructureSystem::footprintAreaClear(EStructureType type, const glm::vec3& p
         if (p.x + half.x > r.x + 1e-3f && p.x - half.x < r.z - 1e-3f
             && p.z + half.y > r.y + 1e-3f && p.z - half.y < r.w - 1e-3f)
             return false; // impassable terrain: nothing builds in a rock (unit spawns skip it too)
-    // FREE nodes reserve their future extractor's footprint (buildings can't block extraction);
-    // extracted nodes rely on the standing extractor's own cells.
-    if (type != EStructureType::Extractor)
+    // A resource node (the flat maps) keeps its own ground, 2x2 cells: nothing builds on the deposit.
+    constexpr float c_nodeHalf = GridCellSize;
+    for (const Node& n : m_nodes)
     {
-        const auto overlaps = [&](const glm::vec3& q, float halfB) {
-            return glm::abs(p.x - q.x) < half.x + halfB - 1e-3f
-                && glm::abs(p.z - q.z) < half.y + halfB - 1e-3f; };
-        const float exHalf = footprintCellsOf(EStructureType::Extractor) * GridCellSize * 0.5f;
-        for (const Node& n : m_nodes)
-            if (!n.extracted
-                && overlaps(snapToGrid(EStructureType::Extractor, glm::vec3(n.pos.x, 0.0f, n.pos.z)), exHalf))
-                return false;
+        const glm::vec3 q = snapToGrid(EStructureType::Lumberyard, glm::vec3(n.pos.x, 0.0f, n.pos.z)); // an even footprint: a cell corner
+        if (glm::abs(p.x - q.x) < half.x + c_nodeHalf - 1e-3f && glm::abs(p.z - q.z) < half.y + c_nodeHalf - 1e-3f)
+            return false;
     }
     return true;
 }
@@ -163,12 +159,25 @@ StructureSystem::EGroundFit StructureSystem::groundFit(EStructureType type, cons
         }
     const bool flatPiece = isCableOrCrossing(type); // a slab on the ground, no box to sink
     outY = flatPiece ? center : low; // set before the refusals too: a red ghost still stands on the ground
+    // WATER over the ground: a refusal - except for the types that stand on water (the Bridge, the Gate). For those the
+    // water SURFACE is the ground from here on: the stand height, the step test (the bed under it does not count) and
+    // the tree / rock box.
+    if (Globals::physics.isWaterActive())
+    {
+        const float water = Globals::physics.sampleWaterHeight(p.x, p.z);
+        if (water > low + 0.05f)
+        {
+            if (!standsOnWater(type))
+                return EGroundFit::Water;
+            low = water;
+            high = glm::max(high, water);
+            outY = water;
+        }
+    }
     // "Max ground step (m)" 0 = no slope limit (the default): a building stands on its lowest sample and sinks into the
     // high side.
     if (m_settings.maxGroundStep > 0.0f && high - low > m_settings.maxGroundStep * (flatPiece ? 2.0f : 1.0f))
         return EGroundFit::Steep;
-    if (Globals::physics.isWaterActive() && Globals::physics.sampleWaterHeight(p.x, p.z) > low + 0.05f)
-        return EGroundFit::Water;
     // Trees and rocks (their world colliders): the box from the lowest ground up to the structure's top, a hair
     // inside the footprint so a trunk just touching the edge of the next cell does not count.
     const float top = high + glm::max(spawnHeightOf(type) * 2.0f, 0.5f);
@@ -235,7 +244,7 @@ bool StructureSystem::buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm
 // ---------------------------------------------------------------- spawn/destroy
 
 int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos,
-    const glm::quat& rot, uint8 team, bool built, int nodeIndex)
+    const glm::quat& rot, uint8 team, bool built, float yield)
 {
     EntityPtr entity = Globals::world.spawnAssetFile(structurePrefabs[(int)type],
         Transform(pos, 1.0f, rot), true);
@@ -263,9 +272,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     ref.entity = entity.get();
     ref.state = state;
     ref.type = type;
-    ref.nodeIndex = type == EStructureType::Extractor ? nodeIndex : -1;
-    if (ref.nodeIndex >= 0 && ref.nodeIndex < (int)m_nodes.size())
-        m_nodes[ref.nodeIndex].extracted = true;
+    ref.yield = isHarvestType(type) && std::isfinite(yield) ? glm::clamp(yield, 0.0f, 1.0f) : 1.0f;
     if (isCableType(type)) // cache the 4 render-only arm children (see updateArms)
     {
         static constexpr const char* armNames[4] = { "ArmPX", "ArmNX", "ArmPZ", "ArmNZ" };
@@ -291,8 +298,6 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
 {
     const Ref s = m_frame[index]; // owning copy: the entity stays alive through the bookkeeping
     const uint32 id = s.state->structureId;
-    if (s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size())
-        m_nodes[s.nodeIndex].extracted = false; // a removed extractor frees its node
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     m_frame.erase(m_frame.begin() + index);
@@ -340,7 +345,7 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
     const glm::vec3 pos = snapToGrid(EStructureType::Base, groundPos)
         + glm::vec3(0.0f, groundPos.y + spawnHeightOf(EStructureType::Base), 0.0f);
     const int index = spawnStructure(m_nextStructureId++, EStructureType::Base, pos,
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true, -1);
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true);
     if (index >= 0) // the starting war chest + a FULL shield battery (it drains like any emitter)
     {
         m_frame[index].state->store[2] = glm::min(m_settings.startMinerals, m_settings.mineralBaseCapacity);
@@ -348,7 +353,7 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
     }
 }
 
-void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
+void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groundPos, float yield,
     const glm::vec3& facing, uint8 team)
 {
     if (!isPlaceableType(type) || (int)team >= GameMaxTeams)
@@ -366,7 +371,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
             dir = glm::vec2(0.0f, facing.z > 0.0f ? 1.0f : -1.0f);
         rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
-    // GRID: every placement snaps (extractors snap the node's position too) and occupied cells
+    // GRID: every placement snaps and occupied cells
     // refuse - validated HERE, the MP seam, not just at aim time. A CROSSING goes through
     // planCrossing instead: its END cells may hold own-medium cables, which it REPLACES (below,
     // right before the spawn, so the cells are free when insertCells runs).
@@ -378,11 +383,8 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         crossing.valid = cellsFree(type, snappedGround, rot);
     if (!crossing.valid || actorInFootprint(type, snappedGround))
         return; // overlap raced the ghost - silently refused (it already showed red)
-    if (type == EStructureType::Extractor)
-    {
-        if (nodeIndex < 0 || nodeIndex >= (int)m_nodes.size() || m_nodes[nodeIndex].extracted)
-            return; // two same-frame requests for one node race - validated at apply
-    }
+    // (A Lumberyard's / Quarry's yield is the REQUESTER's survey: this instance may not hold the tree records of the
+    // place - they exist only around its own camera. spawnStructure clamps it.)
     // The ground (sandbox world): re-tested here like the cells. With NO collider under it on this instance - a
     // client building far from the server's camera, outside the server's collider ring - the requester's own height
     // stands (its aim ran the full test against its own colliders).
@@ -419,7 +421,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
                 destroyStructureAt((size_t)idx);
     // CHEAT ("Free instant build", Synced - the server's value rules): skip the blueprint phase.
     const int index = spawnStructure(m_nextStructureId++, type, pos, rot, team,
-        /*built*/ m_settings.cheatInstantBuild, type == EStructureType::Extractor ? nodeIndex : -1);
+        /*built*/ m_settings.cheatInstantBuild, yield);
     if (index >= 0 && onStructurePlaced)
         onStructurePlaced(index);
 }

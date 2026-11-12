@@ -47,6 +47,8 @@ export namespace Procedural
 		}
 		// Every tree and rock of the terrain ring as records (the ground clutter's forest floor reads them; main thread).
 		const TreeWorld& world() const { return m_world; }
+		// TreeWorld::surveyHarvest: the trees and the rocks around a point. Main thread, between update and kickWorldUpdate.
+		bool surveyHarvest(glm::vec2 centre, float radius, float& wood, float& stone) const { return m_world.surveyHarvest(centre, radius, wood, stone); }
 		// TreeWorld's bookkeeping job: main.cpp kicks it after the last reader of the records this frame (the clutter);
 		// the next update joins it.
 		void kickWorldUpdate() { m_world.kickUpdate(); }

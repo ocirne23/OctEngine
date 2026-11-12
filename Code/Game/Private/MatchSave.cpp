@@ -80,7 +80,7 @@ void GameMatch::loadGame(oc::string_view path)
         return;
     }
     // A co-op save carries its map's generation inputs: regenerate the exact map first (clearing
-    // the current structures BEFORE the node set swaps, so no stale extractor outlives its node).
+    // the current structures BEFORE the node set swaps).
     // Connected clients rebuild from the GMp broadcast the same way.
     if (m_coop)
     {

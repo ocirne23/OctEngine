@@ -22,14 +22,14 @@ StructureSystem::ETransportRole StructureSystem::transportRoleOf(EStructureType 
     {
     case 0: // energy
         if (t == EStructureType::Generator || t == EStructureType::Solar) return R::Producer;
-        if (t == EStructureType::Battery || t == EStructureType::Base) return R::Storage; // the Base banks: its
+        if (t == EStructureType::Battery || t == EStructureType::Base || t == EStructureType::Lens) return R::Storage; // the Base banks: its
         return R::Consumer;                                                                 // shield costs no draw
     case 1: // fuel
-        if (t == EStructureType::Extractor) return R::Producer;
+        if (t == EStructureType::Lumberyard) return R::Producer;
         if (t == EStructureType::FuelTank || t == EStructureType::MineralSilo) return R::Storage; // the Storehouse banks wood too
         return R::Consumer;
     default: // minerals
-        if (t == EStructureType::Extractor || t == EStructureType::Fabricator) return R::Producer;
+        if (t == EStructureType::Quarry || t == EStructureType::Fabricator) return R::Producer;
         if (t == EStructureType::Base || t == EStructureType::MineralSilo) return R::Storage;
         return R::Consumer;
     }

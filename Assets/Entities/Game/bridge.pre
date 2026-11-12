@@ -1,0 +1,51 @@
+# Bridge segment: a ROAD segment on a deck (a cable of the conveyor medium, isCableType): one 2 m grid cell, painted
+# like the road, in the road's runs, walked by the carriers. It stands on WATER: over a river, a lake or the sea its
+# origin is 0.25 above the water surface (StructureSystem::groundFit) - a road's origin over its ground.
+# The DECK (CubeQuarter, 0.5 m thick) is moved down 0.35: its top is 0.15 m over the water, a step a body walks up.
+# Its collider is real (no Layer Cable): players and units stand on it.
+# SHAPE: planks, and a PIER under the middle (three render-only pieces, 1.2 m wide, down to 11 m under the deck; it
+# is in the ground on land). Scale is uniform, so the pier is stacked pieces, not one stretched one.
+Prefab gameBridge
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeQuarter
+		Type StaticMesh
+		Color 0.5 0.36 0.2
+		Position 0 -0.35 0
+		Scale 1
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 1 0.25 1
+		Offset 0 -0.35 0
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name Pier1
+			Position 0 -2.4 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.26 0.15
+				Scale 0.6
+		Entity
+			Name Pier2
+			Position 0 -6.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.26 0.15
+				Scale 0.6
+		Entity
+			Name Pier3
+			Position 0 -9.6 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.26 0.15
+				Scale 0.6

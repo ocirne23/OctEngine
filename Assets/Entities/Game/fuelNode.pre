@@ -1,5 +1,5 @@
-# Fuel resource node (wood): an extractor on it gathers Fuel (the hearths burn it). Spawned origin 0.8 above
-# ground.
+# Fuel resource node (wood; the flat maps): a Lumberyard with it in its harvest radius has a full yield (the hearths
+# burn the fuel). Spawned origin 0.8 above ground.
 # SHAPE (a placeholder; uniform scales): a stack of five logs lying along Z - three on the ground (the root is
 # the middle one) and two on top. The child pieces are render-only.
 Prefab gameFuelNode

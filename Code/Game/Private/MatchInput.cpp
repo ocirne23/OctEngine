@@ -61,6 +61,7 @@ static constexpr EStructureType c_combatItems[] = {
     EStructureType::Bastion,
     EStructureType::Lance,
     EStructureType::Wall,
+    EStructureType::Gate,
     EStructureType::Turret,
     EStructureType::Barracks,
 };
@@ -71,7 +72,9 @@ static constexpr int c_cableMaxSegments = 32; // one paint-fill placement burst 
 static constexpr EStructureType c_productionItems[] = {
     EStructureType::Generator,
     EStructureType::Solar,
-    EStructureType::Extractor,
+    EStructureType::Lens,
+    EStructureType::Lumberyard,
+    EStructureType::Quarry,
     EStructureType::Fabricator,
     EStructureType::Constructor,
     EStructureType::MedicStation,
@@ -87,6 +90,7 @@ static constexpr EStructureType c_cableItems[] = {
     EStructureType::House,
     EStructureType::MineralSilo, // the Storehouse: stone AND wood (the Fuel tank is off the hotbar)
     EStructureType::Battery,
+    EStructureType::Bridge, // a road piece on a deck: it stands on water (the Road's stroke places it there by itself)
 };
 static oc::span<const EStructureType> buildCategoryItems(int category)
 {
@@ -157,15 +161,8 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
         offset *= m_structures.placeRange() / dist;
     aim.pos = glm::vec3(playerPos.x + offset.x, 0.0f, playerPos.z + offset.y);
 
-    if (aim.type == EStructureType::Extractor)
-    {
-        // Extractors only build ON a free resource node: snap the ghost to the nearest one.
-        aim.nodeIndex = m_structures.findFreeNodeNear(aim.pos, m_structures.extractorSnapRadius());
-        if (aim.nodeIndex < 0)
-            return aim; // no free node under the cursor - invalid, no ghost
-        aim.pos = m_structures.nodeGroundPos(aim.nodeIndex);
-    }
-    aim.pos = StructureSystem::snapToGrid(aim.type, aim.pos); // grid-aligned (extractors too)
+    aim.pos = StructureSystem::snapToGrid(aim.type, aim.pos); // grid-aligned
+    aim.type = roadPieceAt(aim.type, aim.pos);                // a road over water: the bridge piece
 
     aim.valid = true;
     // The sandbox world's ground (flat enough, dry, no tree or rock) - and the height to stand on.
@@ -180,7 +177,25 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
     // gates the confirm click; placeStructure re-checks both, the MP seam).
     aim.affordable = aim.ground == StructureSystem::EGroundFit::Ok && m_structures.cellsFree(aim.type, aim.pos)
         && !StructureSystem::actorInFootprint(aim.type, aim.pos);
+    if (isHarvestType(aim.type))
+    {
+        // A Lumberyard / Quarry places with its YIELD, and that is the survey's answer for this very cell (one frame
+        // after the ghost came here - updateBuildMode asks, surveyHarvest answers).
+        const HarvestProbe& probe = m_harvestProbe;
+        const bool known = probe.known && probe.type == aim.type && probe.pos.x == aim.pos.x && probe.pos.z == aim.pos.z;
+        aim.yield = known ? probe.yield : -1.0f;
+        aim.affordable = aim.affordable && known;
+    }
     return aim;
+}
+
+EStructureType GameMatch::roadPieceAt(EStructureType armed, const glm::vec3& snapped) const
+{
+    if (armed != EStructureType::CableConveyor)
+        return armed;
+    float y = 0.0f;
+    return m_structures.groundFit(armed, snapped, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), y) == StructureSystem::EGroundFit::Water
+        ? EStructureType::Bridge : armed;
 }
 
 bool GameMatch::fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot) const
@@ -600,6 +615,23 @@ void GameMatch::showGroundReason(StructureSystem::EGroundFit fit)
         Globals::gameHud.setCounterText("Can't build", StructureSystem::groundFitReason(fit), glm::vec3(1.0f, 0.4f, 0.3f));
 }
 
+void GameMatch::showYield(int percent)
+{
+    if (percent == m_shownYield)
+        return; // the HUD only hears the changes
+    m_shownYield = percent;
+    if (percent == -2)
+        Globals::gameHud.removeCounter("Yield");
+    else if (percent < 0)
+        Globals::gameHud.setCounterText("Yield", "surveying...", glm::vec3(0.7f, 0.7f, 0.7f));
+    else
+    {
+        char text[16];
+        snprintf(text, sizeof(text), "%d %%", percent);
+        Globals::gameHud.setCounterText("Yield", text, glm::mix(glm::vec3(1.0f, 0.4f, 0.3f), glm::vec3(0.4f, 1.0f, 0.5f), (float)percent * 0.01f));
+    }
+}
+
 void GameMatch::disarmBuild()
 {
     m_buildSelection = -1;
@@ -680,8 +712,9 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
             }
         }
         glm::vec3 at = points[i];
-        if (m_structures.cellsFree(armed, at) && fitGround(armed, at))
-            requestPlace(armed, at, -1, glm::vec3(0.0f));
+        const EStructureType piece = roadPieceAt(armed, at);
+        if (m_structures.cellsFree(piece, at) && fitGround(piece, at))
+            requestPlace(piece, at, 1.0f, glm::vec3(0.0f));
     }
     m_cablePendingValid = false;
     m_cablePaintLast = points[count - 1];
@@ -690,8 +723,9 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
 void GameMatch::finishCableStroke(EStructureType armed)
 {
     glm::vec3 at = m_cablePending;
-    if (m_cablePendingValid && m_structures.cellsFree(armed, at) && fitGround(armed, at))
-        requestPlace(armed, at, -1, glm::vec3(0.0f));
+    const EStructureType piece = roadPieceAt(armed, at);
+    if (m_cablePendingValid && m_structures.cellsFree(piece, at) && fitGround(piece, at))
+        requestPlace(piece, at, 1.0f, glm::vec3(0.0f));
     m_cablePendingValid = false;
     m_cablePainting = false;
 }
@@ -710,7 +744,7 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
             glm::vec2(m_cablePaintLast.x, m_cablePaintLast.z)) > 0.1f)
             placeCableLine(armed, m_cablePaintLast, aim.pos);
         if (aim.valid)
-            drawStructureGhost(armed, aim.pos, packColor(glm::vec3(0.3f, 1.0f, 0.4f)));
+            drawStructureGhost(aim.type, aim.pos, packColor(glm::vec3(0.3f, 1.0f, 0.4f)));
         return;
     }
     if (!aim.valid)
@@ -720,7 +754,7 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
     }
     m_frameGroundFit = aim.ground;
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
-    drawStructureGhost(armed, aim.pos, color);
+    drawStructureGhost(aim.type, aim.pos, color);
     if (confirmEdge && aim.affordable)
     {
         m_cablePainting = true; // hold + drag paints from here
@@ -804,9 +838,9 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
 
-    // Wall DRAG: the press anchored the line start; while held, segments preview along the line
-    // to the cursor, and the RELEASE queues one placement per segment. RIGHT-click cancels the
-    // stroke before the release.
+    // LINE DRAG (the Wall, the Gate - isLineType): the press anchored the line start; while held,
+    // segments preview along the line to the cursor, and the RELEASE queues one placement per segment.
+    // RIGHT-click cancels the stroke before the release.
     if (m_wallPlacing)
     {
         if (cancelEdge)
@@ -815,7 +849,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             return; // NOT consumed: the same press also walks the player
         }
         const bool release = !m_lmbDown;
-        const Aim end = computeAim(camera, EStructureType::Wall);
+        const Aim end = computeAim(camera, armed);
         if (end.valid)
         {
             const glm::vec2 span(end.pos.x - m_wallStart.x, end.pos.z - m_wallStart.z);
@@ -829,7 +863,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             int count = 0;
             for (int s = 0; s < segments; ++s)
             {
-                const glm::vec3 snapped = StructureSystem::snapToGrid(EStructureType::Wall,
+                const glm::vec3 snapped = StructureSystem::snapToGrid(armed,
                     m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s));
                 if (count > 0 && glm::distance(glm::vec2(points[count - 1].x, points[count - 1].z),
                     glm::vec2(snapped.x, snapped.z)) < 0.1f)
@@ -838,15 +872,15 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             }
             for (int s = 0; s < count; ++s)
             {
-                const bool fits = fitGround(EStructureType::Wall, points[s]); // + its stand height
-                const bool free = fits && m_structures.cellsFree(EStructureType::Wall, points[s])
-                    && !StructureSystem::actorInFootprint(EStructureType::Wall, points[s]);
-                drawStructureGhost(EStructureType::Wall, points[s],
+                const bool fits = fitGround(armed, points[s]); // + its stand height (the water surface for a Gate)
+                const bool free = fits && m_structures.cellsFree(armed, points[s])
+                    && !StructureSystem::actorInFootprint(armed, points[s]);
+                drawStructureGhost(armed, points[s],
                     packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
             }
             if (release)
                 for (int s = 0; s < count; ++s)
-                    requestPlace(EStructureType::Wall, points[s], -1, glm::vec3(0.0f));
+                    requestPlace(armed, points[s], 1.0f, glm::vec3(0.0f));
         }
         if (release)
             m_wallPlacing = false; // a release off the ground (no valid end) just drops the stroke
@@ -862,8 +896,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     const Aim aim = computeAim(camera, armed);
     if (!aim.valid)
     {
-        // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor - its
-        // aim is invalid over ordinary ground). Clicks still inspect.
+        // No ghost here (off-map). Clicks still inspect.
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
@@ -882,11 +915,29 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.lightHubReach(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 48);
         if (aim.type == EStructureType::Solar)
             drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.mirrorBeamRange(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 64);
+        if (aim.type == EStructureType::Lens) // how far it reaches the next lens / a store, and feeds what uses light
+            drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.lensRange(), packColor(glm::vec3(1.0f, 0.85f, 0.4f)), 64);
     }
     if (aim.type == EStructureType::House) // show how far it links to a barracks
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
     if (aim.type == EStructureType::MedicStation) // show the heal reach
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.medicHealRadius(), color, 48);
+    if (isHarvestType(aim.type))
+    {
+        // The range it works, hued by the yield it would have here (red = little, green = full; grey = no answer
+        // yet). The probe for this cell: surveyHarvest answers it later this frame.
+        HarvestProbe& probe = m_harvestProbe;
+        if (probe.type != aim.type || probe.pos.x != aim.pos.x || probe.pos.z != aim.pos.z)
+        {
+            probe.type = aim.type;
+            probe.pos = aim.pos;
+            probe.known = false;
+        }
+        probe.wanted = true;
+        m_frameYield = aim.yield < 0.0f ? -1 : (int)glm::round(aim.yield * 100.0f);
+        const glm::vec3 hue = aim.yield < 0.0f ? glm::vec3(0.6f) : glm::mix(glm::vec3(1.0f, 0.4f, 0.3f), glm::vec3(0.4f, 1.0f, 0.5f), aim.yield);
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.harvestRadius(), packColor(hue), 64);
+    }
     if (confirmEdge && aim.affordable)
     {
         if (aim.type == EStructureType::Lance)
@@ -894,13 +945,13 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             m_lanceAiming = true; // first click anchors; the next click aims the cone
             m_lancePendingPos = aim.pos;
         }
-        else if (aim.type == EStructureType::Wall)
+        else if (isLineType(aim.type))
         {
             m_wallPlacing = true; // the press anchors the line start; the release ends it
             m_wallStart = aim.pos;
         }
         else
-            requestPlace(aim.type, aim.pos, aim.nodeIndex, glm::vec3(0.0f));
+            requestPlace(aim.type, aim.pos, aim.yield, glm::vec3(0.0f));
     }
     // A click the placement REFUSES (occupied cells - i.e. on a building) inspects it instead of
     // doing nothing; a click that can place always places.

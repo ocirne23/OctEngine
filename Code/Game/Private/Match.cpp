@@ -304,8 +304,8 @@ void GameMatch::spawnWorld()
         m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
     if (m_sandboxWorld)
     {
-        // The procedural terrain IS the map: no rock grid, no barrier, no bounds. Nodes come with the Base site
-        // (spawnSandboxNodes; clients get them as GNd events).
+        // The procedural terrain IS the map: no rock grid, no barrier, no bounds, no resource nodes (the lumberyards
+        // and the quarries work the world's own trees and rocks).
     }
     else if (m_coop)
     {
@@ -326,7 +326,7 @@ void GameMatch::spawnWorld()
     {
         // PvP ARENA: rock terrain + nodes from the lobby's map pick (setPvpMap). The AUTHORITY
         // builds now; a CLIENT builds the identical layout when the server's GMp event names the
-        // arena (first in its join replay) - nodes included, so extractor node indices agree.
+        // arena (first in its join replay) - nodes included.
         // Until then the Lane's bounds stand in (cellsFree needs some before the map lands).
         if (!m_isClient)
             rebuildPvpMap(m_pvpMap);
@@ -488,64 +488,22 @@ void GameMatch::tickBaseSite(float deltaSec)
     m_structures.spawnBase(m_basePos);
     m_player.setRespawnPos(m_playerStart);
     spawnLocalPlayer();
-    spawnSandboxNodes();
     Log::info(oc::format("Sandbox world: the Base stands at ({:.0f}, {:.1f}, {:.0f})", m_basePos.x, m_basePos.y, m_basePos.z));
 }
 
-// Resource nodes around the Base, on ground an EXTRACTOR fits on: the starter pair close in, then a golden-angle
-// spiral out to the collider ring (nodes need a height, and the terrain collider exists only near the camera). The
-// set is the AUTHORITY's: clients get it node by node (GNd, in order - extractor node indices must agree).
-void GameMatch::spawnSandboxNodes()
+// main.cpp calls this where the tree records are readable (see setHarvestSource): the answer to the ghost's probe.
+void GameMatch::surveyHarvest()
 {
-    const glm::quat identity(1.0f, 0.0f, 0.0f, 0.0f);
-    oc::vector<glm::vec2> placed;
-    const auto tryNode = [&](const glm::vec2& want, ENodeType type)
+    HarvestProbe& probe = m_harvestProbe;
+    if (!probe.wanted)
     {
-        for (const glm::vec2& q : placed)
-            if (glm::dot(want - q, want - q) < 13.0f * 13.0f)
-                return false;
-        const glm::vec3 snapped = StructureSystem::snapToGrid(EStructureType::Extractor, glm::vec3(want.x, 0.0f, want.y));
-        float y = 0.0f;
-        if (m_structures.groundFit(EStructureType::Extractor, snapped, identity, y) != StructureSystem::EGroundFit::Ok
-            || !m_structures.cellsFree(EStructureType::Extractor, snapped))
-            return false;
-        m_structures.spawnNode(want.x, want.y, type, y);
-        placed.push_back(want);
-        if (m_isServer)
-            sendNode(m_structures.nodeCount() - 1);
-        return true;
-    };
-    const glm::vec2 base(m_basePos.x, m_basePos.z);
-    // The starter pair: the first fitting spot on a small ring each, mineral east-ish, fuel north-ish.
-    for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(0.4f + i * 0.52f), std::sin(0.4f + i * 0.52f)) * 11.0f, ENodeType::Mineral); ++i) {}
-    for (int i = 0; i < 12 && !tryNode(base + glm::vec2(std::cos(1.9f + i * 0.52f), std::sin(1.9f + i * 0.52f)) * 11.0f, ENodeType::Fuel); ++i) {}
-    constexpr int c_nodeTarget = 7;
-    constexpr int c_nodeTries = 40;
-    int count = 0;
-    for (int i = 0; i < c_nodeTries && count < c_nodeTarget; ++i)
-    {
-        const float t = ((float)i + 0.5f) / (float)c_nodeTries;
-        const float r = glm::mix(24.0f, 80.0f, std::sqrt(t)); // sqrt = uniform area
-        const float a = (float)i * 2.3999632f;                 // the golden angle
-        if (tryNode(base + glm::vec2(std::cos(a), std::sin(a)) * r, (count % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral))
-            ++count;
-    }
-}
-
-void GameMatch::sendNode(int index)
-{
-    // [u16 index][f32 x, y, z of the GROUND][u8 type]: a client appends it when the index is its next one.
-    if (index < 0 || index >= m_structures.nodeCount())
+        probe.type = EStructureType::Count; // no ghost this frame: the next one asks again
+        probe.known = false;
         return;
-    uint8 buffer[24];
-    NetWriter writer(buffer);
-    const glm::vec3 p = m_structures.nodeGroundPos(index);
-    writer.write<uint16>((uint16)index);
-    writer.write<float>(p.x);
-    writer.write<float>(p.y);
-    writer.write<float>(p.z);
-    writer.write<uint8>((uint8)m_structures.nodeType(index));
-    Globals::networkManager.fireNetworkEvent("GNd", writer.data());
+    }
+    probe.wanted = false;
+    if (!probe.known)
+        probe.known = m_structures.harvestYield(probe.type, probe.pos, probe.yield);
 }
 
 // ---- the frame ----
@@ -934,7 +892,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
         // WALLS are BREACHABLE obstacles ("Wall breach cost"): the field routes through one where
         // the detour is longer, the units walk into it and chew it down instead of skirting it.
-        const uint8 breach = s.type == EStructureType::Wall && !s.state->blueprint
+        const uint8 breach = isBreachable(s.type) && !s.state->blueprint
             ? (uint8)glm::clamp(m_structures.wallBreachCost(), 1, 254) : (uint8)0;
         m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach });
         // Sources: what units of OTHER teams walk toward - the same filter the local search used
@@ -1128,6 +1086,7 @@ void GameMatch::updateGameInput(const Camera& camera)
     ProfileScope modeScope("Game mode input", EProfileCategory::Game);
     updateModeSwitching();
     m_frameGroundFit = StructureSystem::EGroundFit::Ok; // a refused ghost below sets it (the HUD line)
+    m_frameYield = -2;                                  // a Lumberyard / Quarry ghost below sets it (the HUD line)
     m_rmbConsumed = false;
     bool lmbEdge = m_placeClicked;
     bool rmbEdge = m_rmbClicked;
@@ -1171,6 +1130,7 @@ void GameMatch::updateGameInput(const Camera& camera)
     m_lmbReleased = false; // a release the active mode did not consume (box select runs in Select
                            // and in Build with nothing armed)
     showGroundReason(m_frameGroundFit);
+    showYield(m_frameYield);
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
     // same press - disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or

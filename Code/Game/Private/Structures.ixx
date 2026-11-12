@@ -41,8 +41,7 @@ public:
         Entity* entity = nullptr;
         GameStructureComponent* state = nullptr;
         EStructureType type = EStructureType::Emitter;
-        int nodeIndex = -1; // Extractor: the node under it
-        // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
+        float yield = 1.0f; // Lumberyard / Quarry: its share of the full rate, fixed at placement (harvestYield)        // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
         // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
@@ -86,7 +85,7 @@ public:
     oc::function<void(uint32 id, oc::span<const glm::vec3> route)> onRouteLiveUnits;
 
     void mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos, const glm::vec2& facingXZ,
-        int nodeIndex, uint8 team, bool built);
+        float yield, uint8 team, bool built);
     void mirrorRemove(uint32 id);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
         float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint);
@@ -111,7 +110,7 @@ public:
     void tickMirror(float deltaSec); // client per-frame: refresh + ease emitter outputs
 
     glm::vec2 structureFacing(int index) const; // from the entity's rotation (Lance/Crossing replay)
-    int structureNodeIndex(int index) const { return m_frame[index].nodeIndex; }
+    float structureYield(int index) const { return m_frame[index].yield; } // Lumberyard / Quarry (1 elsewhere)
     float structureOutputFrac(int index) const // union: the emitter variant (Base included)
     {
         return hasShieldEmitter(m_frame[index].type) ? m_frame[index].state->emitter.outputFrac : 0.0f;
@@ -128,8 +127,9 @@ public:
     void loadFrom(const AssetNode& root);
     void clearAllStructures();
 
-    // CO-OP: GameMatch places nodes one by one from the generated map (seeded - every instance
-    // derives the identical set from the same seed, the corridor-set contract).
+    // THE FLAT MAPS' RESOURCE NODES: GameMatch places them one by one from the generated map (seeded - every instance
+    // derives the identical set from the same seed, the corridor-set contract). A node is a DEPOSIT: a Quarry (mineral
+    // node) or a Lumberyard (fuel node) with one in its harvest radius has a full yield. The sandbox world has none.
     void spawnNode(float x, float z, ENodeType type, float groundY = 0.0f); // one resource node entity + roster entry
     void clearNodes(); // co-op map regeneration: drop the node entities + roster (nothing else)
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0);
@@ -141,13 +141,14 @@ public:
     // (server/single player) and tickMirror (clients).
     void refresh();
     // World::removeRootEntity notification (wired by GameMatch): deregisters the entry with full
-    // bookkeeping (unlink, node free, GRm hook) for ANY removal path - editor delete, script
+    // bookkeeping (unlink, GRm hook) for ANY removal path - editor delete, script
     // destroy - not just the game's own. Must NOT call removeRootEntity (see World.ixx).
     void onWorldRootRemoved(const Entity* entity);
     oc::span<const Ref> structures() const { return m_frame; }
 
     // Client requests / local input (queued; validated + applied in tickAuthority - the MP seam).
-    void queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
+    // yield: a Lumberyard's / Quarry's, from the requester's survey (harvestYield); ignored for every other type.
+    void queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, float yield,
         const glm::vec3& facing, uint8 team);
     void queueDemolishRequest(uint32 id, uint8 team);
     void queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team);
@@ -283,17 +284,18 @@ public:
     void tickAuthority(const glm::vec3& playerPos, float deltaSec);
     void drawDebug() const;
 
-    int findFreeNodeNear(const glm::vec3& groundPos, float maxDist) const;
-    glm::vec3 nodeGroundPos(int nodeIndex) const
-    {
-        const glm::vec3& p = m_nodes[nodeIndex].pos;
-        return glm::vec3(p.x, p.y - c_nodeHeight, p.z);
-    }
-    float extractorSnapRadius() const { return m_settings.extractorSnapRadius; }
-    int nodeCount() const { return (int)m_nodes.size(); }
-    glm::vec3 nodePos(int index) const { return m_nodes[index].pos; }
-    ENodeType nodeType(int index) const { return m_nodes[index].type; }
-    bool nodeExtracted(int index) const { return m_nodes[index].extracted; }
+    // ---- THE HARVEST (the Lumberyard and the Quarry) ----
+    // A yard stands anywhere; what is within "Harvest radius" of it sets its YIELD (0..1, a share of the full rate),
+    // fixed at placement. The sandbox world: the trees (Lumberyard) / the rocks (Quarry) of the world's records, through
+    // the App's source. The flat maps: a resource node of its kind in the radius is a full yield.
+    // The source answers what stands in a circle: wood = trees, stone = the rocks' summed size (m). false = it does not
+    // know (the place is too far from this instance's camera, or its world is not generated yet).
+    using HarvestSource = bool (*)(float x, float z, float radius, float& wood, float& stone);
+    void setHarvestSource(HarvestSource source) { m_harvestSource = source; }
+    float harvestRadius() const { return m_settings.harvestRadius; }
+    // The yield `type` would have at a ground point; false = the source has no answer. IT CALLS THE SOURCE, which reads
+    // the tree records: only from GameMatch::surveyHarvest (the App's survey point in the frame).
+    bool harvestYield(EStructureType type, const glm::vec3& groundPos, float& outYield) const;
     // The nearest structure the cursor can select within maxDist (planar).
     int findConnectableNear(const glm::vec3& pos, float maxDist) const;
 
@@ -312,7 +314,7 @@ public:
         case EStructureType::Emitter:     return m_settings.emitterBuffer; // shield emitters hold a deeper charge:
         case EStructureType::Bastion:     return m_settings.bastionBuffer; // pressure draw spikes under a push
         case EStructureType::Lance:       return m_settings.lanceBuffer;
-        // (The Extractor, the Fabricator and the Constructor hold no light: production runs on WORKERS, see staffing.)
+        // (The Lumberyard, the Quarry, the Fabricator and the Constructor hold no light: production runs on WORKERS, see staffing.)
         case EStructureType::Solar:
         case EStructureType::MedicStation:
         case EStructureType::Turret:      return m_settings.internalBuffer;
@@ -320,6 +322,7 @@ public:
                                                        // stamped per instance (= its unit's cost, the build bar)
         case EStructureType::Generator:   return m_settings.generatorBuffer;
         case EStructureType::Battery:     return m_settings.batteryCapacity;
+        case EStructureType::Lens:        return m_settings.lensBuffer;
         case EStructureType::Base:        return m_settings.baseEnergyCapacity; // feeds its always-on shield
         default:                          return 0.0f;
         }
@@ -332,7 +335,8 @@ public:
     {
         switch (t)
         {
-        case EStructureType::Extractor:   return m_settings.workersExtractor;
+        case EStructureType::Lumberyard:
+        case EStructureType::Quarry:      return m_settings.workersHarvest;
         case EStructureType::Fabricator:  return m_settings.workersFabricator;
         case EStructureType::Constructor: return m_settings.workersConstructor;
         case EStructureType::Generator:   return m_settings.workersGenerator;
@@ -345,7 +349,7 @@ public:
     bool lightBeams() const { return m_settings.lightBeams; }
     float lightHubReach() const { return m_settings.lightHubReach; }
     float mirrorBeamRange() const { return m_settings.mirrorBeamRange; }
-    int teamWorkers(uint8 team) const { return m_workers[team]; }
+    float lensRange() const { return m_settings.lensRange; }    int teamWorkers(uint8 team) const { return m_workers[team]; }
     int teamJobs(uint8 team) const { return m_jobs[team]; }
     int teamCarriers(uint8 team) const { return m_carrierCount[team]; } // workers out on the road (Carriers.cpp; the authority)
     bool structureOnRoad(int index) const { return touchesRoad(index); }
@@ -364,7 +368,7 @@ public:
         case EStructureType::FuelTank:   return m_settings.fuelTankCapacity;
         // THE STOREHOUSE holds every good: stone (below) AND wood. The Fuel tank (the Woodshed) is off the hotbar.
         case EStructureType::MineralSilo: return m_settings.fuelTankCapacity;
-        case EStructureType::Extractor:
+        case EStructureType::Lumberyard:
         case EStructureType::Fabricator: return m_settings.internalBuffer;
         default:                         return 0.0f;
         }
@@ -373,7 +377,7 @@ public:
     {
         switch (t)
         {
-        case EStructureType::Extractor:
+        case EStructureType::Quarry:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:  return m_settings.internalBuffer;
         // Barracks hold NO minerals: units are paid from their energy store (no conveyor attaches).
@@ -411,7 +415,8 @@ public:
         case EStructureType::Bastion:
         case EStructureType::Turret:
         case EStructureType::Solar:
-        case EStructureType::Extractor:
+        case EStructureType::Lumberyard:
+        case EStructureType::Quarry:
         case EStructureType::Fabricator:
         case EStructureType::House:
         case EStructureType::MedicStation:
@@ -502,14 +507,13 @@ private:
         EntityPtr entity;
         glm::vec3 pos{ 0.0f };
         ENodeType type = ENodeType::Mineral;
-        bool extracted = false;
     };
     struct PlaceRequest
     {
         EStructureType type;
         glm::vec3 pos;
         glm::vec3 facing{ 0.0f };
-        int nodeIndex = -1;
+        float yield = 1.0f;
         uint8 team = 0;
     };
     struct RouteRequest
@@ -535,15 +539,15 @@ private:
         const int index = structureIndexById(id);
         return index >= 0 ? m_frame[index].state : nullptr;
     }
-    void placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
+    void placeStructure(EStructureType type, const glm::vec3& groundPos, float yield,
         const glm::vec3& facing, uint8 team);
     void spendMinerals(uint8 team, float amount); // drains the team's Silos first, the Base last
     // The one placement path: spawns the prefab, stamps the component, registers into the frame.
     // Returns the frame index or -1. rot = authored orientation (Lance facing).
     int spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos, const glm::quat& rot,
-        uint8 team, bool built, int nodeIndex);
+        uint8 team, bool built, float yield = 1.0f);
     void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
-    void removeStructureBookkeeping(size_t index); // unlink, free the node, erase + reindex, fire GRm
+    void removeStructureBookkeeping(size_t index); // unlink, erase + reindex, fire GRm
     void applyStructureTint(const Ref& s);
     void applyDemolishRequest(uint32 id, uint8 team);
     void stampTuning(const Ref& s); // capacities + machine variant (per tick - tweaks stay live)
@@ -597,7 +601,7 @@ private:
     // cell. goal(roster index) of every building a visited cell touches: 2 = take it (the search ends), 1 = keep the
     // first such as the fallback, 0 = no. Returns the roster index (-1 = none) and the walking path to its road cell.
     int roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const;
-    // Where a load of `good` from sourceIdx goes: the first CONSUMER the search reaches, else the first STORAGE.
+    // Where a load of `good` from sourceIdx goes: the NEAREST taker by road, a consumer or a storage alike.
     int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, oc::vector<glm::vec3>& outPath) const;
     bool carrierSendGood(int index, int good, bool& consumersOnly) const; // does it have a load of `good` to send?
     int carrierJobTier(int index, uint8 team) const;                      // roadSearch goal: 2 = a load waits for a walker, 1 = a producer with no walker
@@ -626,7 +630,7 @@ private:
     void insertCells(const Ref& s);   // spawn seam (also demotes an under-cable below a crossing)
     void eraseCells(const Ref& s);    // remove seam (promotes the under-cable back to primary)
     // Everything a footprint must clear BEFORE the per-cell occupancy walk: the arena bounds, the
-    // co-op rock rects and the free nodes' reserved extractor footprints. Shared by cellsFree and
+    // co-op rock rects and the resource nodes' own ground. Shared by cellsFree and
     // planCrossing, which only differ in what they make of an OCCUPIED cell.
     bool footprintAreaClear(EStructureType type, const glm::vec3& p, const glm::quat& rot) const;
     // (cx, cz) is the raised MIDDLE cell of the crossing at frame index `index`.
@@ -760,6 +764,7 @@ private:
     oc::vector<glm::vec4> m_terrainBlocked; // co-op rock rects (minX, minZ, maxX, maxZ)
     bool m_terrainGround = false;           // the sandbox world (setTerrainGround)
     GroundSource m_groundSource = nullptr;  // setGroundSource
+    HarvestSource m_harvestSource = nullptr; // setHarvestSource
     static constexpr float c_nodeHeight = 0.8f; // a resource node entity's center above its ground
 
     int m_workers[GameMaxTeams] = {}; // see staffing()

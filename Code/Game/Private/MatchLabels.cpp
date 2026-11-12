@@ -53,28 +53,25 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     //    stock: a cabled-but-starved or cabled-but-backed-up machine is not a badge (its bars say
     //    that, and it resolves itself), while an uncabled one never resolves.
     //    The BASE is exempt: it is the hub, and starts every match bare.
-    const int node = m_structures.structureNodeIndex(index);
-    const bool fuelNode = node >= 0 && node < m_structures.nodeCount()
-        && m_structures.nodeType(node) == ENodeType::Fuel; // an extractor makes ONE of the two
     // ENERGY: burnt by the emitters/machines/turrets, banked by batteries, made by gen + solar.
     const bool energy = hasShieldEmitter(type) || isBarracksType(type) // (production runs on workers: no light)
         || type == EStructureType::MedicStation
         || type == EStructureType::Turret || type == EStructureType::Generator
-        || type == EStructureType::Solar || type == EStructureType::Battery;
-    // FUEL: burnt by generators and fabricators, banked by tanks, made by a fuel-node extractor.
+        || type == EStructureType::Solar || type == EStructureType::Battery || type == EStructureType::Lens;
+    // FUEL: burnt by generators and fabricators, banked by tanks, made by the lumberyards.
     const bool fuel = type == EStructureType::Generator || type == EStructureType::Fabricator
         || type == EStructureType::FuelTank || type == EStructureType::MineralSilo
-        || (type == EStructureType::Extractor && fuelNode);
-    // MINERALS: spent by constructors, banked by silos, made by fabricators + mineral extractors.
+        || type == EStructureType::Lumberyard;
+    // MINERALS: spent by constructors, banked by silos, made by fabricators + quarries.
     const bool minerals = type == EStructureType::Constructor || type == EStructureType::MineralSilo
-        || type == EStructureType::Fabricator || (type == EStructureType::Extractor && !fuelNode);
+        || type == EStructureType::Fabricator || type == EStructureType::Quarry;
     if (type != EStructureType::Base)
     {
         if (m_structures.lightBeams())
         {
             // Light on beams: a building that makes or uses light needs a HUB (a Crystal store, the Beacon) in reach
             // with a clear line. A Crystal store alone is no problem.
-            if (energy && type != EStructureType::Battery && !m_structures.structureLightLinked(index))
+            if (energy && type != EStructureType::Battery && type != EStructureType::Lens && !m_structures.structureLightLinked(index))
             {
                 color = c_red;
                 return m_structures.structureLightBlocked(index) ? "Light blocked" : "No light store in reach";
@@ -88,12 +85,11 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
         // Wood and stone go by CARRIER on the road (the conveyor medium): one badge for both.
         if (Globals::settings.game.structures.carriers)
         {
-            if ((fuel || minerals) && !linked(2))
-            {
-                color = c_amber;
-                return "No road";
-            }
-            if (type == EStructureType::House && !m_structures.structureOnRoad(index)) // its workers cannot go out to carry
+            // "On the road" = a built road piece touches its footprint (what the carriers' search uses) - NOT the
+            // conveyor medium's attach bit: that bit is stamped only on a building that holds MINERALS, so a wood-only
+            // building (the Hearth, the Lumberyard) never had it and always showed the badge.
+            // The House: its workers cannot go out to carry.
+            if ((fuel || minerals || type == EStructureType::House) && !m_structures.structureOnRoad(index))
             {
                 color = c_amber;
                 return "No road";
@@ -229,7 +225,8 @@ void GameMatch::buildWorldLabels()
         const float mineralCap = m_structures.structureMineralCapacity(i);
         // Second bar: fuel (orange) on the fuel holders, MINERALS (blue) on the mineral stores and
         // on anything that runs on minerals alone, energy (yellow) elsewhere (barracks included).
-        const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank;
+        const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank
+            || type == EStructureType::Lumberyard;
         const bool mineralBar = type == EStructureType::MineralSilo
             || (mineralCap > 0.0f && energyCap <= 0.0f);
         // The STORE bars are opt-in when unselected: only the prefabs that author
@@ -297,6 +294,8 @@ void GameMatch::buildWorldLabels()
             if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nStone %.0f / %.0f",
                     m_structures.structureMinerals(i), mineralCap);
+            if (isHarvestType(type) && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nYield %.0f %%", m_structures.structureYield(i) * 100.0f);
             if (isBarracksType(type) && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nPopulation %d / %d (%d houses)",
                     m_structures.structurePopulation(i), m_structures.structurePopCap(i),

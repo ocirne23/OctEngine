@@ -1,0 +1,32 @@
+# Lens: a relay of light. A 3 m post (Pillar3 at half scale: 1x3x1 m) with a large crystal on top - a light HUB
+# with a small store ("Lens buffer") and ONE aimed beam to the hub on its target tile ("Lens range";
+# StructureSystem::rebuildLightLinks). Spawned origin 1.5 above ground; the crystal's centre is Light.cpp's
+# beamHeightOf (2.2 over the origin): keep them in step.
+# SHAPE (a placeholder): a bronze post, the crystal over its top.
+Prefab gameLens
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Pillar3
+		Type StaticMesh
+		Color 0.6 0.42 0.18
+		Scale 0.5
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 0.5 1.5 0.5
+	Component GameStructure
+		MeleeRadius 1
+		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Crystal
+			Position 0 2.2 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.85 0.45
+				Emissive 2.5
+				Scale 0.5

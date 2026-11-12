@@ -4,9 +4,35 @@
 
 ## Economy
 
-A node produces NOTHING until an **extractor** is built on it — one per node; the ghost snaps to the
-nearest free node within "Extractor snap radius" (6 m), validated again at place time. The extractor
-needs no energy: only workers (below).
+### The harvest: the Lumberyard and the Quarry
+
+Two production buildings make the raw goods: the **Lumberyard** makes fuel (wood), the **Quarry** minerals (stone)
+(`isHarvestType`). **Each stands ANYWHERE** a building fits. What is within "Harvest radius" (32 m) of it sets its
+**YIELD** (0..1, `Ref::yield`): its rate is "Lumberyard fuel/s" (1) or "Quarry minerals/s" (2) x the yield x the
+staffing. Neither needs energy: only workers (below).
+
+| | The yield |
+|---|---|
+| Lumberyard | the TREES in the radius / "Trees for full lumberyard yield" (12). Dead wood (a log, a stump) counts half a tree; a bush counts nothing. |
+| Quarry | the ROCKS in the radius, their sizes added (m, each rock's longest axis) / "Rock (m) for full quarry yield" (12). A cactus counts nothing. |
+| The flat maps | no trees or rocks: a RESOURCE NODE of the yard's kind (fuel / mineral) in the radius is a full yield. Several yards can share one node. |
+| Always | at least "Harvest minimum yield" (0.1), at most 1. |
+
+* **The yield is FIXED AT PLACEMENT** and is part of the structure: on GPl (a `uint16`), in the save (`Yield`, written
+  only below 1). Nothing removes a tree: it never changes.
+* **The source** (`StructureSystem::HarvestSource`, set by the App through `GameMatch::setHarvestSource`; the sandbox
+  world only): `TreeSystem::surveyHarvest` counts the tree world's CPU records in a circle (Procedural, "World records"
+  in [Trees.md](../Procedural/Trees.md); `TreeWorld::FloorType::harvest` says what a record type gives). Those records
+  exist only within the tree world's CPU keep radius of THIS instance's camera, and they are readable at one point of
+  the frame only: after the procedural updates, before `TreeSystem::kickWorldUpdate`.
+* **So the GHOST asks, and the answer comes one frame later**: `updateBuildMode` leaves the ghost's cell in
+  `m_harvestProbe`, main.cpp calls `GameMatch::surveyHarvest` at that point (`StructureSystem::harvestYield`), and
+  `computeAim` reads the answer for that very cell. Until then - or while the source has no answer (the world's chunks
+  are not generated yet) - the ghost cannot place and the HUD line "Yield" reads "surveying...".
+* **The placement carries the REQUESTER's yield** (`queuePlaceRequest`, GqP): the authority may be too far from the
+  place to hold its records. It only clamps the value (a co-op trust, like the client's ground height).
+* **Shown:** the ghost draws its harvest radius, hued from red (little) to green (full), and the HUD line "Yield" gives
+  the percent; a selected yard's label has a "Yield" line; `drawDebug` rings every built yard's radius.
 
 ### Light on beams
 
@@ -16,10 +42,12 @@ links (`Light.cpp`). No link is authored, saved or sent: every instance derives 
 
 | | |
 |---|---|
-| Hubs | The Crystal stores (Battery) and the Beacon (Base): the STORAGE role of the energy medium (`transportRoleOf`). |
+| Hubs | The Crystal stores (Battery), the Beacon (Base) and the Lenses: the STORAGE role of the energy medium (`transportRoleOf`). |
 | A producer's beam | A Mirror (Solar) links to the nearest hub within "Mirror beam range (m)" (60) that it has a clear line to; a Hearth (Generator) to the nearest within "Hub reach (m)". It empties its buffer into the hub at "Beam rate" (20/s). |
 | A hub's feed | Every CONSUMER (fields, the turret, the barracks, the medic station) links to the nearest hub within "Hub reach (m)" (30) with a clear line, and fills from it at "Feed rate" (10/s). **THE LIGHT BALANCE** (defaults; the default sun cycle gives a Mirror ~780 s of full daylight and keeps a field awake ~640 s a night; all with enough storage between): an Emitter draws 1 light/s awake, a Bastion 3. **4 Mirrors carry 1 Emitter through the night, 12 a Bastion** ("Solar energy/s" 0.21: 4 x 0.21 x 780 = 655). **1 Hearth, burning day and night, carries 1 Emitter, 3 a Bastion** ("Gen energy/s" 0.45: 0.45 x 1440 = 648). **ONE full Crystal store ("Battery capacity" 1500) runs TWO Emitters through one night** (1280, plus room for the pressure draw). A change of the sun cycle's speed or latitude moves all of these. **The barracks and the turret keep their METERED intake** (their store is the build / reload bar). The Beacon keeps a quarter of its store for its own field. |
 | Hub to hub | A hub links to the nearest OTHER hub within "Hub link range (m)" (60); the two level their fill fractions at "Share rate" (10/s). So stores chain a network over the land. |
+| **The Lens** | A RELAY (`lens.pre`, 1×1, a 3 m post; the Works page): a hub with a small store ("Lens buffer" 40). Nothing is aimed: **it links to the NEAREST hub within "Lens range (m)" (32) with a clear line - but not to a hub that links to IT already** (that pair is joined). Every structure has one link, so without that rule a lens between a store and the next lens would link back to the store, and the chain would end there. `rebuildLightLinks` runs the lenses in a second pass, so each sees the links of the others (and of the lenses before it). **A line of lenses 32 m apart, or less, is a chain.** A link with a lens at an end is never longer than the lens range, whatever the other end's own range (a store's 60 m link range, a mirror's beam range). The link levels the two fill fractions like any hub pair, at "Beam rate" (not the share rate), so light goes both ways: from a far mirror field to the base, or from the base to a far outpost. As a hub, a lens also takes the mirrors' and hearths' light and feeds the consumers in its reach. The ghost shows the lens range. Like a Crystal store, a lens never shows the light badges: the end of a chain has no link of its own (the others link to it). |
+| Which hub | **The nearest USEFUL hub in range with a clear line, else the nearest one** (`rebuildLightLinks`). Useful: for a consumer a hub with light to give (over the Beacon's reserve), for a producer a hub with room. So a turret or a barracks next to a full Crystal store does not stay dark because an empty hub is nearer (the Beacon at its reserve, a lens with nothing behind it), and a mirror does not beam into a full store. The links are derived again about once a second, so a link follows the light. Hub to hub: the nearest. |
 | A beam's ends | `beamPointOf`: the CENTRE OF THE BUILDING'S CRYSTAL (`beamHeightOf` in Light.cpp, per type; keep it in step with the `Crystal` child of the .pre files); a building with no crystal: 1 m over its top. |
 | A clear line | `lightLineClear`: one physics ray between the two beam points against the Terrain and Vegetation layers. Buildings and units do not block. |
 | When | `rebuildLightLinks` about once a second, and at once when the roster size changes (`tickLight` on the authority, `tickMirror` on a client: the beams and the badges). `tickLight` (authority, after the carriers) moves the light. |
@@ -34,24 +62,24 @@ Force CONTEXT): by day a field draws no light and is faint, but its output and i
 it at once** (`engaged`: pressure, or the units' drain), with the full draw and the full shell. The mirror wakes on
 its own emitter's pressure. The Beacon's field follows the same alpha (its draw is free anyway).
 
-**Not built (the design in `Docs/GDD-Economy.md`):** a player-aimed beam (the link is the nearest hub), the Collector
-tower and the Lens, loss in fog, demons that block a beam, a volumetric draw of the beams.
+**Not built (the design in `Docs/GDD-Economy.md`):** a player-aimed beam (every link is the nearest hub), the Collector
+tower, loss in fog, demons that block a beam, a volumetric draw of the beams.
 
 ### Workers: production runs on population, not on light
 
 **Light runs the fields and the machines of defence** (emitters, the turret, the barracks, the medic station).
-**Production draws none:** the Extractor, the Fabricator and the Constructor hold no energy store and have no power
-port (`energyCapacityOf`, `consumerDraw`), and an Extractor needs nothing but its node. They and the Generator need
+**Production draws none:** the Lumberyard, the Quarry, the Fabricator and the Constructor hold no energy store and have
+no power port (`energyCapacityOf`, `consumerDraw`). They and the Generator need
 WORKERS (`StructureSystem::workersNeeded`, "Game/Population" "Workers: ..." 2 / 3 / 2 / 1).
 
 * A team's workers = "Base workers" (6) + "House workers" (4) for each BUILT House; its jobs = the sum over its built
   production buildings (`updateStaffing`: in `tickProduction` on the authority, in `tickMirror` on a client).
 * `staffing(team)` = workers / jobs, at most 1. **Short of workers, every production rate of the team scales by it**:
-  the extractor's yield, the fabricator's output and its wood draw, the generator's output, the constructor's rate.
+  the lumberyard's and the quarry's output, the fabricator's output and its wood draw, the generator's output, the constructor's rate.
   No building stops alone.
 * The HUD counter "Workers" shows jobs / workers (red when short); every production building then carries the
   "Short of workers" badge.
-* `powered` on a production building means "it works": always for the extractor, the constructor and the generator,
+* `powered` on a production building means "it works": always for the lumberyard, the quarry, the constructor and the generator,
   and "it paid its wood" for the fabricator.
 * A House ALSO still raises the population cap of the nearest barracks (see [Hotbar.md](Hotbar.md)).
 
@@ -71,7 +99,7 @@ pipeline is off the hotbar; the conveyor is the **Road**.
 | Who gets a walker | `carrierJobTier`: 2 = the building has a load to send (`Ref::sendReady`) and no walker waits at it or is on its way (so a long road gets MORE walkers, up to "Max walkers per building" 6); 1 = a producer with no walker at all. `roadSearch` takes the nearest tier 2, else the nearest tier 1. |
 | The ~1 s pass | `carrierHousePass`: derives `sendReady` (a storage: only with a hungry consumer on its road), then every house sends ONE worker per pass while a job wants one and the team has a free worker. When production takes the worker (free < walkers), the house DISMISSES walkers, the waiting ones first: a dismissed walker goes home when it is next idle. |
 | Waiting | The first walker in line at a pickup (`Ref::waitRank`) loads; it looks for a load about once a second. A walker BEHIND another one looks for other work on its road network (tier 1 or 2). The first in line leaves only for a waiting load elsewhere (tier 2) and only after 8 s idle. After 20 s idle a walker goes home, except the one walker of a producer. |
-| Where to | `findRoadTarget` = `roadSearch` with the takers as the goal: ONE breadth-first search over the road cells from the walker's cell (4096 cells at most). The first consumer with room that a road cell touches wins; with none, the first storage with room. Same team, built. The result is also the walking path (cell centres). |
+| Where to | `findRoadTarget` = `roadSearch` with the takers as the goal: ONE breadth-first search over the road cells from the walker's cell (4096 cells at most). **The first TAKER with room that a road cell touches wins - a storage as much as a consumer**, so a load stops at the nearest storehouse and that storehouse's own carriers feed the consumers farther on (a consumer first, whatever the distance, sent every load past a near storehouse to a far one). Same team, built. The result is also the walking path (cell centres). |
 | The trip | The load leaves the store at departure. The walker goes at "Walk speed (m/s)" (3.5), unloads what fits, walks the same path back to the pickup, and puts the rest back into the job's store. |
 | The walker | `carrier.pre`: render-only, `Global true`, no physics and no unit sim; the tick writes its `pos` / `rot` (it faces its walking direction: an entity's forward is -Z) and shows its LOAD (the prefab's second child, held in front of the body) only while it carries one. Removed when it arrives home, when its house is gone, or when no road leads home. The per-building counters (`Ref::walkers`, `walkersIdle`, `homeWalkers`) are counted from `m_walkers` at the top of every tick, so a removed building needs no bookkeeping. |
 | Badge | "No road": a building that moves wood or stone and touches no road (`attachedMask` bit 2), or a House that touches none (its workers cannot go out). |
@@ -132,14 +160,14 @@ by structure id, save as `Fill`, and mirror to clients by id — GCf, see [Sync.
 plus the ~2 s throughput average as a fraction of the rate, so clients draw the same bottleneck rings
 and label numbers).
 
-**Buffers:** extractor and other consumers "Internal buffer" 10; the shield emitters hold deeper
+**Buffers:** the lumberyard (fuel), the quarry (minerals) and the other consumers "Internal buffer" 10; the shield emitters hold deeper
 stores — "Emitter buffer" 50, "Bastion buffer" 150, "Lance buffer" 100 (the emitter restart charge
 clamps to each) — "Generator buffer" 10, "Battery capacity" 200. **A barracks' energy capacity is the
 selected unit's spawn energy** (stamped per instance in `stampTuning`; `energyCapacityOf` returns a
 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its transport slot meters
 its demand to "Barracks energy intake/s" (2) whatever feeds its junction, so the store fills at the
 build rate and a unit is born the moment it is full (build time = cost / intake — Grunt 2.5 s, Brute
-10 s; no timer). A barracks needs a power cable and holds no minerals. Powered extractors and
+10 s; no timer). A barracks needs a power cable and holds no minerals. Lumberyards, quarries and
 fabricators fill their OWN buffer and **stall when full**. Only what sits in Mineral silos and the
 Base is SPENDABLE (a per-team cache recomputed per tick; spending drains silos first, Base last).
 
@@ -187,7 +215,7 @@ crossings chain and stack); its ends must be free** — plus the derivation and 
 `ignoreCables` is the unit-spawn probe, since cables are walk-through.
 
 > **A CROSSING is validated by `planCrossing`, not `cellsFree`** (both share `footprintAreaClear`
-> for the bounds / rock / reserved-node checks). One relaxation: an END cell may hold a plain cable
+> for the bounds / rock / resource-node checks). One relaxation: an END cell may hold a plain cable
 > of the crossing's OWN medium and OWN team, which the placement **REPLACES** — that segment is
 > redundant under an end, which conducts that medium anyway, and refusing it would stop a paint
 > stroke from crossing a foreign line wherever its own run already stands. Anything else (another
@@ -212,7 +240,7 @@ its TYPE's medium hue always, conducting or not.
 
 `drawDebug` draws the BOTTLENECK marker — a pulsing red ring over every segment whose ~2 s average
 throughput sits at or above 90 % of its out-rate (clients read the mirrored GCf average, so they see
-the same rings) — plus the node rings, the constructor / medic reach rings and a red ring on every
+the same rings) — plus the node rings, the built yards' harvest radius, the constructor / medic reach rings and a red ring on every
 unpowered consumer.
 
 Segments are full structures: a blueprint phase (**NON-conductive until built**), health ("Cable
@@ -241,7 +269,7 @@ players**) skips the blueprint phase.
 
 * **PLAYERS** — a carried inventory ("Game/Player/Materials max" 50; **server-authoritative for ALL
   players**, clients receive theirs through the game blob), refilled within "Refill radius" (6 m) of
-  own-team Silos, Base or mineral Extractors at "Refill rate" (15/s) — `takeStoredMinerals`, so
+  own-team Silos, Base or Quarries at "Refill rate" (15/s) — `takeStoredMinerals`, so
   **hand-couriering a fresh dig site's buffer works before any conveyor exists** — and invested into
   nearby BLUEPRINTS only within "Player build radius" (6 m) at "Player build rate" (8/s), all
   "Game/Construction" tweaks.
@@ -258,14 +286,14 @@ strain emitters like shielded ones.
 
 ### Grid placement
 
-Every placement — **extractors included, since the node's position snaps too** — aligns to a
+Every placement aligns to a
 `GridCellSize` **2 m** world grid (odd footprints centre on a cell, even on a corner) and occupies
 `footprintExtent(type, rot)` cells, within "Place range" (30 m) of the player.
 
 | Footprint | Types |
 |---|---|
-| 1×1 (cables included) | Emitter, Lance, Wall, Constructor |
-| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Solar, Extractor, Fabricator, MineralSilo, House, MedicStation |
+| 1×1 (cables included; the Bridge is one) | Emitter, Lance, Wall, Gate, Lens, Constructor |
+| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation |
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 
@@ -279,8 +307,7 @@ Every placement — **extractors included, since the node's position snaps too**
 everything sits flush.**
 
 **Refusals.** `cellsFree` refuses overlaps at aim (red ghost) AND at `placeStructure` (**the MP
-seam**). FREE resource nodes reserve their extractor's future footprint, so buildings cannot block
-extractor placement.
+seam**). A resource node (the flat maps) keeps its own 2×2 cells: nothing builds on the deposit.
 
 **THE GROUND (the co-op sandbox world, `StructureSystem::setTerrainGround`).** `groundFit(type, pos, rot, outY)` runs
 next to `cellsFree` at aim (the ghost, plus a "Can't build" HUD line naming the reason) AND in `placeStructure`. It
@@ -291,7 +318,7 @@ and refuses:
 |---|---|
 | `NoGround` | a ray misses (outside the streamed collider ring) — at aim no ghost at all |
 | `Steep` | highest − lowest sample > "Max ground step (m)" (twice that for cable pieces). **0 = no slope limit, the default**: a building stands on any slope |
-| `Water` | the physics water surface (ocean, rivers, lakes) above the lowest sample |
+| `Water` | the physics water surface (ocean, rivers, lakes) above the lowest sample - **never for the Bridge and the Gate** (`standsOnWater`, below) |
 | `Blocked` | a tree or rock world collider (layer "Vegetation", `PhysicsWorld::overlapBoxAny`) cuts the box from the lowest ground to the structure's top |
 
 `outY` — set on refusals too, so a red ghost stands on the ground — is the LOWEST sample for a building (the box sinks
@@ -299,6 +326,28 @@ into the high side, it never floats over the low one) and the center for a cable
 `outY + spawnHeightOf`. **The MP seam:** `GqP` carries the client's ground height; when the SERVER has no collider
 there (`NoGround` — the client builds far from the server's camera), that height stands. On the flat maps the ground
 is the y = 0 plane and every test passes. Debug rings and routes draw at `structureGroundPos` / the terrain height.
+
+**ON WATER (`standsOnWater`: the Bridge and the Gate).** Where the water surface (at the footprint's centre) is above
+the lowest sample, **the SURFACE is the ground**: `outY`, the step test (the bed does not count) and the tree / rock
+box all start there. So the structure's origin is `water + spawnHeightOf`, whatever the depth - a river, a lake or the
+sea. Each prefab carries what is under the surface, since `Scale` is uniform and a piece cannot stretch to the bed:
+* **Bridge** (`bridge.pre`, 1×1; the Logistics page): **A ROAD SEGMENT ON A DECK** - `isCableType`, the conveyor
+  medium (`cableMediumOf` 2). So it is in the road's runs (`rebuildNetworks`), the carriers walk it (`roadAt`), a
+  building next to it is "on the road", and everything a cable piece is holds for it: painted by a stroke, walk-through
+  for Nav / `actorInFootprint` / `buildingAt`, cable health, no label, outside GSt. **The Road's stroke places it by
+  itself**: `GameMatch::roadPieceAt` turns a road cell whose ground test says `Water` into a Bridge (the ghost and
+  `placeCableLine` / `finishCableStroke`), so a road painted across a river bridges it. What differs from a road: its
+  collider is REAL (no `Layer Cable`: players and units stand on the deck), it has no arm pieces, and its origin is
+  0.25 over the WATER. The deck (`CubeQuarter`, 0.5 m) is moved down 0.35 in the prefab: its top is 0.15 m over the
+  water, a step a capsule walks up. A render-only pier of three stacked pieces reaches 11 m under the deck. The
+  carriers walk the path between the cells' entity heights, so they go up and down smoothly between road and deck.
+  **A bank more than a step above the water has no ramp**: the road ends on the bank, the deck is at the water.
+* **Gate** (`gate.pre`, 1×1, a drag line; the Defence page): a wall segment whose top is a wall's height (4 m) over the
+  surface, with a foot of two pieces down to 12 m under it; the collider covers all of it. `Layer Gate`,
+  `CollidesWith Default Projectile`: **the PLAYERS (layer Player) walk through it, every unit does not** (the layers
+  cannot tell teams: own units are stopped too, and an enemy PLAYER passes). Nav takes it as a wall (`isBreachable`).
+* Water deeper than the pier / the foot leaves a gap under it. The aim ray hits the BED (the terrain collider), so
+  over deep water the ghost is a little past the cursor.
 
 `actorInFootprint` (a spatial query for GameUnitComponents) refuses a placement a UNIT is standing in, at
 both seams. **A player capsule does not block**: the builder stands in most of its own footprints. Each
@@ -325,5 +374,6 @@ a blueprint's crystal is gray and does not glow.
 their bases, the same above and below; scale 1 = 2 m tall, 1.4 m across, the origin at the middle): a large one
 floats INSIDE the Base's beam (the beam starts at the crown under it), one floats high over the tall pedestal of the
 Emitter and of the Bastion (above their collider boxes, to show from far), a large one stands in the Battery (a 4 m
-building now), and small ones sit on the Turret, Solar and Barracks. The two resource
-nodes are models too: a rock outcrop with ore (`mineralNode.pre`) and a log stack (`fuelNode.pre`).
+building now), and small ones sit on the Turret, Solar and Barracks. The flat maps' two resource
+nodes are models too: a rock outcrop with ore (`mineralNode.pre`) and a log stack (`fuelNode.pre`). The Lumberyard
+(`lumberyard.pre`, brown) and the Quarry (`quarry.pre`, grey) are placeholder boxes.

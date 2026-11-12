@@ -48,10 +48,11 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Emitter / Bastion / Lance | Lantern (LNTN) / Great lantern (GLNT) / Lance |
 | Turret | Light tower (TOWR) |
 | Solar / Generator / Battery | Mirror (MIRR) / Hearth (HRTH) / Crystal store (CRYS) |
-| Extractor / Fabricator | Work camp (CAMP) / Stoneworks (STNW) |
+| Lumberyard / Quarry / Fabricator | Lumberyard (LMBR) / Quarry (QRRY) / Stoneworks (STNW) |
 | Mineral silo / Fuel tank | Storehouse (STOR) / Woodshed (WOOD) |
 | Constructor / Medic station | Builder's hut (BUIL) / Healer's hut (HEAL) |
-| Conveyor | Road (ROAD): the carriers walk it. The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
+| Bridge / Gate / Lens | Bridge (BRDG) / Gate (GATE) / Lens (LENS) |
+| Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
 | badges: No power cable / No pipeline, No conveyor | No light store in reach, Light blocked / No road |
@@ -86,7 +87,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 ## Partitions
 
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
-(`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
+(`EStructureType` + the constexpr type predicates - `isHarvestType`: the Lumberyard and the Quarry; `isLineType` / `isBreachable`: the Wall and the Gate; `standsOnWater`: the Gate and the Bridge, which is a cable type (a road segment) -, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
 `Game:Npc`, `Game:Faction` (`FactionLayer`: whose land each cell is, see The faction layer in [Modes.md](Modes.md)),
 `Game:GameCamera` (top-down + the third-person orbit), `Game:PlayerLocomotion` (the camera-locked strafe
@@ -98,7 +99,7 @@ host's team/map picks; the `Lb*` events) and `Game:Chat` (the TEXT CHAT model, `
 **`StructureSystem`'s bodies are split over six implementation units by topic** (all
 `module Game;`, the list is repeated at the end of `Structures.ixx`): `Structures.cpp` (the
 type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, the settings listeners,
-`refresh` / `stampTuning`, `clear`, the nodes, request queueing, `tickAuthority` / `tickMirror`),
+`refresh` / `stampTuning`, `clear`, the nodes, `harvestYield`, request queueing, `tickAuthority` / `tickMirror`),
 `StructuresPlacement.cpp` (the grid: snap, footprints, the cell hash, `cellsFree` /
 `planCrossing`; `spawnStructure` / destroy / `placeStructure` / `spawnBase` / demolish — the
 prefab table lives here), `StructuresNetwork.cpp` (`rebuildNetworks` + `updateArms`),
@@ -177,7 +178,7 @@ With the LOD active the World visits ONLY entities within the outer tier radius 
 or a zone's band, plus `Global true` roots. A structure beyond that radius **does not tick at all** —
 no production, no flows, no turret fire.
 
-> **EVERY BUILDING prefab authors `Global true`** (emitter, generator, extractor, battery, fuel tank,
+> **EVERY BUILDING prefab authors `Global true`** (emitter, generator, lumberyard, quarry, battery, fuel tank,
 > solar, fabricator, bastion, lance, barracks, wall, turret, mineral silo, constructor, base, house,
 > medic), so player structures are never LOD-culled. **Only the CABLE segments and the crossings
 > stay LOD-selected** — they carry no stores, and hundreds of them would sit in the always-visited
@@ -234,7 +235,7 @@ GPl replay** (reliable ch1 order). GMp carries a MODE BYTE: **0 = the co-op inpu
 f32, lanes u8), 1 = the PvP arena index (u8).**
 
 **Clients defer terrain and nodes until it arrives**, so a client has no terrain until its join
-replay lands — which is also what makes extractor node indices agree by construction. `rebuildCoopMap`
+replay lands. `rebuildCoopMap`
 / `rebuildPvpMap` no-op on repeats.
 
 The same inputs ride the F9 save (`MapSeed` / `MapFill` / `MapLanes`, or `PvpMap`), **because a
@@ -249,7 +250,7 @@ clearing structures, and re-broadcasts GMp.
 
 A full sim snapshot to `Assets/Local/gamesave.txt` through AssetParser
 (`StructureSystem::saveTo` / `loadFrom` / `clearAllStructures`, `NpcSystem::saveUnits` / `loadUnits`,
-`GameMatch::saveGame` / `loadGame`): structures with id / type / pos / facing / node / team /
+`GameMatch::saveGame` / `loadGame`): structures with id / type / pos / facing / yield / team /
 blueprint / stores / route — **cable segments are ordinary Structure entries, with NO Cable nodes** —
 plus the map inputs and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
 clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds to it) and
@@ -257,9 +258,9 @@ clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds
 `TimeOfDay` (the light rules, [Modes.md](Modes.md)). **Shots are NOT saved**; projectiles
 are transient and a load clears them.
 
-**A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, NodeIndex,
+**A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, Yield (a Lumberyard's / Quarry's),
 Team, Blueprint, Health, the three stores (Charge / Fuel / Minerals), Fill, OutputFrac, UnitType and
-Route only when the `loadFrom` fallback (no facing, no node, team 0, built, full health, empty stores,
+Route only when the `loadFrom` fallback (no facing, a full yield, team 0, built, full health, empty stores,
 no fill, dark, Grunt, no route) would not restore them. A blueprint's health is its build progress and
 is always below max, so it is always written.
 

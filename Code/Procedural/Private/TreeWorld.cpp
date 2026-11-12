@@ -260,6 +260,7 @@ namespace Procedural
 			floor.kind = 1;
 			floor.crown = desc.crownRadius * meanScale;
 			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
+			floor.harvest = desc.bush ? 0 : 1;
 			// A bush with a Placement block grows ON ITS OWN too (the desert's agaves): the bush pass, not the trees'.
 			Species& species = (desc.bush ? m_bushes : m_species).emplace_back();
 			species.name = desc.name;
@@ -310,6 +311,7 @@ namespace Procedural
 			floor.kind = desc.surface == ERockSurface::Wood ? 3 : 2;
 			floor.rockScale = desc.scale;
 			floor.footprint = rockFootprint(desc);
+			floor.harvest = desc.surface == ERockSurface::Wood ? 1 : desc.surface == ERockSurface::Rock ? 2 : 0;
 			RockSpecies& rock = m_rocks.emplace_back();
 			rock.name = desc.name;
 			rock.type = type;
@@ -530,6 +532,42 @@ namespace Procedural
 	{
 		const auto it = m_chunks.find(chunkKey(coord));
 		return it != m_chunks.end() && it->second.hasCpu ? &it->second.records : nullptr;
+	}
+
+	bool TreeWorld::surveyHarvest(glm::vec2 centre, float radius, float& wood, float& stone) const
+	{
+		wood = 0.0f;
+		stone = 0.0f;
+		if (!m_settings.enabled || m_chunkSize <= 0.0f)
+			return true;
+		constexpr float DEAD_WOOD_SHARE = 0.5f; // a fallen log or a stump against a standing tree
+		const glm::ivec2 c0 = glm::ivec2(glm::floor((centre - radius) / m_chunkSize));
+		const glm::ivec2 c1 = glm::ivec2(glm::floor((centre + radius) / m_chunkSize));
+		const float radiusSq = radius * radius;
+		for (int z = c0.y; z <= c1.y; ++z)
+			for (int x = c0.x; x <= c1.x; ++x)
+			{
+				const glm::ivec2 coord(x, z);
+				const oc::vector<TreeRecord>* records = cpuRecords(coord);
+				if (!records)
+					return false;
+				const glm::vec2 local = centre - glm::vec2(coord) * m_chunkSize;
+				for (const TreeRecord record : *records)
+				{
+					const uint32 type = treeRecordType(record);
+					if (type >= m_floorTypes.size() || m_floorTypes[type].harvest == 0)
+						continue;
+					const glm::vec2 d = treeRecordLocal(record, m_chunkSize) - local;
+					if (glm::dot(d, d) > radiusSq)
+						continue;
+					const FloorType& floor = m_floorTypes[type];
+					if (floor.harvest == 2)
+						stone += rockRecordScale(treeRecordSeed(seed(), coord, record), floor.rockScale);
+					else
+						wood += floor.kind == 3 ? DEAD_WOOD_SHARE : 1.0f;
+				}
+			}
+		return true;
 	}
 
 	void TreeWorld::dropCpu(Chunk& chunk)

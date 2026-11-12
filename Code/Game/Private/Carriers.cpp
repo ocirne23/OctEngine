@@ -50,7 +50,7 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY) const
         if (index < 0 || m_frame[index].state->blueprint)
             continue;
         const EStructureType type = m_frame[index].type;
-        if (type == EStructureType::CableConveyor || type == EStructureType::CrossingConveyor)
+        if (cableMediumOf(type) == 2 || type == EStructureType::CrossingConveyor) // the Road, the Bridge, the road crossing
         {
             outY = m_frame[index].entity->pos.y;
             return true;
@@ -162,12 +162,13 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
 int StructureSystem::findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly,
     oc::vector<glm::vec3>& outPath) const
 {
+    // THE NEAREST TAKER wins, a storage as much as a consumer (the search ends at the first one, and it goes out by
+    // road distance): a storage near the producer takes the load, and the storage's own carriers feed the consumers
+    // farther on. (A consumer first, whatever the distance, sent every load past a storehouse with room to a far one.)
     return roadSearch(fromStructure, fromCell, [&](int index)
     {
         bool isConsumer = false;
-        if (!carrierAccepts(sourceIdx, index, good, consumersOnly, isConsumer))
-            return 0;
-        return isConsumer ? 2 : 1;
+        return carrierAccepts(sourceIdx, index, good, consumersOnly, isConsumer) ? 2 : 0;
     }, outPath);
 }
 

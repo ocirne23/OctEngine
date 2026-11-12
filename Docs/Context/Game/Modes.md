@@ -28,14 +28,11 @@ collider ring follows the camera). Once the terrain collider answers under the a
 rock world colliders follow the terrain). The local player spawns ON the anchor (the ground under it + 1.5 m), the
 camera looking along the anchor direction. The Base takes the nearest point on 4 m rings out to 56 m around a point
 14 m ahead along that direction (so it stands in view) where it passes the ground test (see Grid placement in
-[Economy.md](Economy.md)) and its footprint stays 2 m off the player's spot. Then the nodes. No site → the Base goes on
+[Economy.md](Economy.md)) and its footprint stays 2 m off the player's spot. No site → the Base goes on
 that point ahead anyway (warning); no ground at all after 60 s → the anchor's own height.
 
-**Nodes** (`spawnSandboxNodes`): a starter mineral + fuel pair on an 11 m ring, then up to 7 more on a golden-angle
-spiral from 24 to 80 m — only spots where an EXTRACTOR passes the ground test, 13 m apart. They need terrain heights,
-and the collider exists only near the camera, so there are none farther out. **Clients get them as `GNd` events**
-(index, ground point, type), in order, replayed on join; a client appends only its next index, so extractor node
-indices agree.
+**No resource nodes:** wood and stone come from the world itself. A Lumberyard works the trees around it, a Quarry
+the rocks (The harvest in [Economy.md](Economy.md)).
 
 **The player** (`GamePlayer::setDirectControl`): `playerCoop.pre` — `player.pre` with `ThirdPersonAnimator` and no
 script — driven by camera-relative WASD at the "Network/Player" speeds, Space jumps, LShift sprints (the shield battery
@@ -236,7 +233,7 @@ resources, the staff. The time of day is not synced to clients.
 **Known gaps:** the scene focus, the colliders and the Base site all follow THIS instance's camera, so in multiplayer a
 client building far from the server's player has its height trusted (`placeStructure`'s fallback), and the server's
 units near a far client have no terrain under them. Client twins joined before the site exists spawn at the anchor.
-F9 saves carry no nodes: a load keeps the session's nodes. Remote players do not run the strafe animation.
+A lumberyard's / quarry's yield is its placer's survey (the tree records exist only around each instance's own camera). Remote players do not run the strafe animation.
 
 ### The map (`Sandbox world` off)
 
@@ -273,7 +270,8 @@ between them. Co-op only: a PvP arena's rock border is already solid.
 > `c_edgeWallHalfThick` must be kept in step with `edgewall.pre`'s `HalfExtents`.
 
 **Nodes:** a STARTER mineral + fuel pair ~11 m from the Base, then up to 48 golden-angle-spiral
-candidates SNAPPED to reachable open cells with a 13 m spacing floor.
+candidates SNAPPED to reachable open cells with a 13 m spacing floor. A node is a DEPOSIT: a Lumberyard (fuel node)
+or a Quarry (mineral node) with one in its harvest radius has a full yield (The harvest in [Economy.md](Economy.md)).
 
 ### Teams
 
