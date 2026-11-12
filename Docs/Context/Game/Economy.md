@@ -69,7 +69,7 @@ links (`Light.cpp`). No link is authored, saved or sent: every instance derives 
 | Shown while building | With a type that uses light on the ghost, `drawDebug` (its `armed` input) rings each built hub in gold at the distance that type links over: the same range choice as `rebuildLightLinks`, a Lens end never longer than "Lens range". |
 | A clear line | `lightLineClear`: one physics ray between the two beam points against the Terrain and Vegetation layers. Buildings and units do not block. |
 | When | `rebuildLightLinks` about once a second, and at once when the roster size changes (`tickLight` on the authority, `tickMirror` on a client: the beams and the badges). `tickLight` (authority, after the carriers) moves the light. |
-| Drawn | `drawLightLinks`, called from `tickAuthority` / `tickMirror` (**never from `drawDebug`: that runs before the begin-frame job, which resets the frame's light records**): **a link shows only while it MOVES light** - `Ref::lightFlow` above 0.02 light/s, the link's MEASURED flow, smoothed over ~1/3 s in `tickLight` (a store that is topped up every tick never looks busy, so the stores cannot say it); on a mirror it is an estimate from what the building makes or draws - as a `BeamLight` between the two crystals ("Beam glow", "Beam radius (m)", "Beam glow range (m)"; **the glow is × flow / "Beam full flow (light/s)" (5), and the radius goes from half to full with it**, so a beam shows how much light it carries): the Beacon's beam in small. No line is drawn. The 14 moving links nearest the camera get one (the renderer draws 16 columns a frame, and the Beacon's beam takes one at night). With the fog off no beam shows. |
+| Drawn | `drawLightLinks`, called from `tickAuthority` / `tickMirror` (**never from `drawDebug`: that runs before the begin-frame job, which resets the frame's light records**): **a link shows only while it MOVES light** - `Ref::lightFlow` above 0.02 light/s, the link's MEASURED flow, smoothed over ~1/3 s in `tickLight` (a store that is topped up every tick never looks busy, so the stores cannot say it); on a mirror it is an estimate from what the building makes or draws - as a `BeamLight` between the two crystals ("Beam glow", "Beam radius (m)", "Beam glow range (m)"; **the glow is × flow / "Beam full flow (light/s)" (5), and the radius goes from half to full with it**, so a beam shows how much light it carries): the Beacon's beam in small. **A MIRROR's beam is LIGHT GLITTER, not a beam column** (within 400 m of the camera): golden sparks that fly from the mirror to its hub's crystal - `Effects/light_glitter.pfx` through `ParticleSystem::emitStream` (Particle's CONTEXT, "Streams"), "Mirror glitter (sparks/s)" (14) x the mirror's share of its full output. A field of mirrors is dozens of beams, and the fog apply draws the glow of only `RendererState::MAX_BEAM_COLUMNS` (32) beams a frame (every pixel walks them all) - as columns the mirrors took all of them. A stream has no such count, and it is no light. Tried debug lines, dropped because a 1 px line has no glow. Every other link keeps its column and is also a light (`addLightInfo`), the 14 nearest. No line is drawn. The 14 moving links nearest the camera get one (the renderer draws 16 columns a frame, and the Beacon's beam takes one at night). With the fog off no beam shows. |
 | Badges | "No light store in reach" / "Light blocked" (a hub is in range, no clear line) on a building that makes or uses light and has no link. A Crystal store and the Beacon never show them. |
 | Ghost | A Crystal store's ghost shows its hub reach, a Mirror's its beam range. |
 
@@ -295,7 +295,7 @@ income or flows; links pre-wire but carry nothing).
 > `rubble2.pre` for a 2x2 one, the same at scale 1.5 for a 3x3 one; `Models/rubble.obj`, hand-written; a root entity
 > owned by `Ref::rubbleVisual`) - and the COLLIDER off (a `SetEnabled` body command) - **rubble is walked over and is no target**, or a
 > wall's rubble would block the enemy for ever: `damage()` ignores it, the units' bite probe skips it, and it is no
-> Nav obstacle, no Nav source and no building for `buildingAt`. Its cells stay taken (Delete mode removes it). It
+> Nav obstacle and no Nav source. Its cells stay taken (Delete mode removes it). It
 > **Rubble is not built up under attack** (`rubbleBlocked`): a living enemy unit within "Rubble safe radius (m)" (30,
 > flat on the map) blocks every way to build it - `investMaterials` takes nothing, and `blueprintNeed` and
 > `fundNearbyBlueprint` skip it, so no worker walks to it and the stone goes to the next blueprint. It
@@ -343,7 +343,7 @@ Every placement aligns to a
 > Prefab `Scale` / `HalfExtents` = footprint half, so boxes fill their cells.
 
 **Heights** use the baseshapes variants — `CubeHalf` / `CubeQuarter` / `Pillar2` / `Pillar3` are the
-2 m cube at 0.5× / 0.25× / 2× / 3× height, origin centred: Mineral silo `Pillar2`, the Wall and the Gate two overlapping `Cube`s (3 m tall: no 3 m piece exists and
+2 m cube at 0.5× / 0.25× / 2× / 3× height, origin centred: the Storehouse (Mineral silo) a two-storey warehouse of several pieces in a 6 m box, the Wall and the Gate two overlapping `Cube`s (3 m tall: no 3 m piece exists and
 a scale is uniform), Battery
 `CubeHalf`, Solar `CubeQuarter`. `structureSpawnHeights` is each prefab's box HALF height, **so
 everything sits flush.**
@@ -376,7 +376,7 @@ sea. Each prefab carries what is under the surface, since `Scale` is uniform and
 * **Bridge** (`bridge.pre`, 1×1; the Logistics page): **A ROAD SEGMENT ON A DECK** - `isCableType`, the conveyor
   medium (`cableMediumOf` 2). So it is in the road's runs (`rebuildNetworks`), the carriers walk it (`roadAt`), a
   building next to it is "on the road", and everything a cable piece is holds for it: painted by a stroke, walk-through
-  for Nav / `actorInFootprint` / `buildingAt`, cable health, no label, outside GSt. **The Road's stroke places it by
+  for Nav / `actorInFootprint`, cable health, no label, outside GSt. **The Road's stroke places it by
   itself**: `GameMatch::roadPieceAt` turns a road cell whose ground test says `Water` into a Bridge (the ghost and
   `placeCableLine` / `finishCableStroke`), so a road painted across a river bridges it. What differs from a road: its
   collider is REAL (no `Layer Cable`: players and units stand on the deck), it has no arm pieces, and its origin is
@@ -391,12 +391,11 @@ sea. Each prefab carries what is under the surface, since `Scale` is uniform and
 * Water deeper than the pier / the foot leaves a gap under it. The aim ray hits the BED (the terrain collider), so
   over deep water the ghost is a little past the cursor.
 
-`actorInFootprint` (a spatial query for GameUnitComponents) refuses a placement a UNIT is standing in, at
-both seams. **A player capsule does not block**: the builder stands in most of its own footprints. Each
-instance moves its OWN player out instead (`GameMatch::updatePlayer`, pre-physics): while
-`StructureSystem::buildingAt` finds a building's footprint around the player (and the player is not on top
-of it), the player teleports out through the nearest side. A Gate is no building for `buildingAt` (as the
-walk-through types): the players walk through it. **It is deliberately NOT folded into `cellsFree`**,
+`actorInFootprint` (a spatial query for GameUnitComponents) refuses a placement a UNIT OR A PLAYER is standing in, at
+both seams. **Nothing moves a body out of a building**, so no building may be made around one: the ghost is red
+while a player stands in the footprint, and rubble with a body on the pile is not built up (`rubbleBlocked`). The
+walk-through types are never refused, and a player does not refuse a Gate (its collider is not on the players'
+layer). **It is deliberately NOT folded into `cellsFree`**,
 which doubles as the unit-spawn-point probe and must not refuse a cell just because units stand near
 it.
 

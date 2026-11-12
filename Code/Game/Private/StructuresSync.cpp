@@ -190,7 +190,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
         if (typeInt < 0 || typeInt >= (int)EStructureType::Count || id == 0 || structureIndexById(id) >= 0)
             continue; // garbage / duplicate entry
         int unitType = 0; // a barracks' unit type: the UnitType key below
-        const glm::vec3 pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
+        glm::vec3 pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
         const glm::vec3 facing = n->find("Facing") ? n->find("Facing")->asVec3() : glm::vec3(0.0f);
         glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
         if (glm::dot(glm::vec2(facing.x, facing.z), glm::vec2(facing.x, facing.z)) > 1e-4f)
@@ -198,6 +198,13 @@ void StructureSystem::loadFrom(const AssetNode& root)
             const glm::vec2 dir = glm::normalize(glm::vec2(facing.x, facing.z));
             rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
         }
+        // THE HEIGHT COMES FROM THE WORLD, not from the save: the structure stands on the ground under it, at its
+        // type's stand height NOW (the placement's own test: groundFit, the water surface for a bridge or a gate).
+        // A save holds the origin, which is the ground + the type's half height at the time it was made - a type
+        // whose model got taller or lower since would float or sink. The saved height stays only where this
+        // instance has no ground under the place (outside its collider ring).
+        if (float groundY = 0.0f; groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
+            pos.y = groundY + spawnHeightOf((EStructureType)typeInt);
         const float yield = n->find("Yield") ? n->find("Yield")->asFloat() : 1.0f;
         const uint8 team = (uint8)glm::clamp(n->find("Team") ? n->find("Team")->asInt() : 0, 0, GameMaxTeams - 1);
         const bool blueprint = n->find("Blueprint") ? n->find("Blueprint")->asBool() : false;

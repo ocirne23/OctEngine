@@ -56,6 +56,41 @@ burst()                                      // queues every emitter's Burst cou
 instance holds **one renderer emitter slot per emitter in its desc**; `MAX_PARTICLE_EMITTERS` is 256,
 and running out logs and skips that emitter.
 
+## Streams — one look along any number of lines
+
+`ParticleSystem::emitStream(pfxPath, from, to, particlesPerSec)`: call it every frame, for every line that flows (main
+thread). Particles of the `.pfx`'s FIRST emitter spawn at `from`, fly to `to` at the emitter's `Speed` and end there.
+The game's mirror beams use it (`Effects/light_glitter.pfx`).
+
+* **Why:** a renderer emitter slot holds ONE place a frame, and there are 256 slots for everything. A slot per line
+  does not scale to a field of lines.
+* **How:** a stream (one per `.pfx` path) holds `StreamSlots` (12) renderer emitters and MOVES them. `updateStreams`
+  (the end of `update`) serves the next 12 lines of the frame's list, from a cursor that goes round: each served line
+  gets its slot's config (position, the rotation that turns +Y along the line, `Life` = the line's length over the
+  speed) and what it is due since its last turn (rate x frame x lines / served, the fraction dithered). **A particle
+  keeps its own position, velocity and life**, so it does not notice that its emitter slot is at another line a frame
+  later; only the per-emitter LOOK (colour, size, drag, turbulence) is read from the slot, and that is the same for
+  every line.
+* The packet of one turn starts a random way into the gap that the line's last turn left, so a line with a turn
+  every 15 frames does not show a clump every 15 frames.
+* The slots are made at the first call and released after ~600 frames without one.
+* The `.pfx`: `Rate 0` (the stream decides), no `Offset` / `Direction` / `InheritVelocity`; `Life` is unused.
+
+## Puffs — one-shot bursts with a hard cap
+
+`createPuffStream(pfxPath)` (main thread, once per look; at most 4) returns an id; `emitPuff(id, pos)` asks for one
+burst of the `.pfx`'s FIRST emitter (its `Burst` count) at a point, **from any thread** - the parallel entity pass
+included. The game uses it for the reveal smoke (`Effects/reveal_smoke.pfx`: a demon that the light makes solid) and
+the death burst (`Effects/demon_death.pfx`: an enemy unit that dies).
+
+* **The cap is the point:** thousands of units can ask in one frame. `emitPuff` is lock-free (an atomic count over a
+  fixed table) and keeps the first `MaxPuffRequests` (128) of the frame; the rest are dropped. `updatePuffs` (the end
+  of `update`) keeps the ones within `PuffRange` (150 m) of the camera and draws at most `PuffSlots` (12) of them,
+  picked evenly over the kept list, so one corner of a crowd does not take every slot. So a frame makes at most
+  12 x `Burst` particles of a look, whatever the crowd.
+* It moves 12 emitter slots from point to point, as a stream does (a particle keeps its own position and life).
+* With no `update` (headless) the count stays at the cap and `emitPuff` returns at once.
+
 ## Simulation — on the GPU
 
 Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.cs.glsl`.

@@ -47,7 +47,7 @@ export struct GameMatchSettings
     // THE LIGHT RULES (the sandbox world): the waves come at NIGHT only, daylight burns the demons, and a field does
     // not push them - they walk in and burn.
     float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
-    float nightWaveInterval = 45.0f;  // s between the waves of one night (the first one launches at dusk)
+    int   nightWaves = 14;            // waves in one night (the first at dusk): the time between them is the night's length / this
     float waveSizeMult = 1.0f;        // x every wave's budget: the one knob for "how many enemies"
     float nightWaveRamp = 0.25f;     // each later wave of a night is this much bigger (x the night's base size, added per wave)
     float nightWaveVariation = 0.4f;  // random +- on a night wave's size and on the time to the next one
@@ -272,6 +272,7 @@ export struct GameStructureSettings
     float lightFeedRate = 10.0f;      // light/s a consumer takes (the barracks and the turret keep their own intake)
     float lightShareRate = 10.0f;     // light/s between two hubs
     // The look of a link's beam (the nearest few are BeamLights): its glow, its core, how far it lights surfaces.
+    float mirrorGlitterRate = 14.0f;  // sparks/s on a mirror's beam in full daylight (Effects/light_glitter.pfx; 0 = none)
     float lightBeamGlow = 1.5f;       // at the full flow
     float lightBeamFullFlow = 1.0f;   // light/s at which a beam has its full glow and radius (less light = less beam):
                                       // a Lantern's draw - a Mirror's 0.21 is a thin beam, a Hearth's 0.45 a half one
@@ -411,6 +412,9 @@ export struct GameUnitParams
     // Runtime (GameMatch, the co-op sandbox world's light rules; the other modes keep the defaults):
     bool fieldPush = true;         // false = an enemy field does not push a unit (it walks in and burns); a prefab's
                                    // `FieldBlocked true` keeps the push for that type
+    uint32 revealPuff = 0xFFFFFFFFu; // runtime (GameMatch): the particle system's puff stream for the smoke of a shadow that
+                                     // turns solid (ParticleSystem::createPuffStream); UINT32_MAX = none
+    uint32 deathPuff = 0xFFFFFFFFu;  // runtime (GameMatch): the same for the burst of an enemy unit that dies
     int shadowTeam = -1;           // the team that is SHADOW outside an opposing field: no direct damage, no turret
                                    // lock (-1 = none); daylight makes it solid
     // THE PLAYERS' STAFF LIGHT (runtime, GameMatch): a shadow-team unit this near a player is solid too, so a player

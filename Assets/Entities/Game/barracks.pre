@@ -1,8 +1,9 @@
 # Barracks: spawns friendly NPC units up to a per-barracks alive limit; each spawn spends
 # "Barracks spawn energy" from its internal store, so unit production needs a cable feed.
 # On a 6x6x6 m box. Spawned origin 3.0 above ground.
-# SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone hall (the root), a timber
-# upper storey, a dark stepped roof and a staff crystal on its peak. The child pieces are render-only.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a small KEEP - a stone hall (the root), a timber
+# upper storey, a dark stepped roof and a staff crystal on its peak, a stone TOWER with a dark cap at each of the
+# four corners, a dark gate in the -Z face and two red banners over it. The child pieces are render-only.
 Prefab gameBarracks
 	Global true
 	Component Render
@@ -39,6 +40,107 @@ Prefab gameBarracks
 				Type StaticMesh
 				Color 0.25 0.2 0.16
 				Scale 1.4
+		Entity
+			Name TowerPP
+			Position 2.45 -1.5 2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.56 0.54 0.5
+				Scale 0.5
+		Entity
+			Name TowerNP
+			Position -2.45 -1.5 2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.56 0.54 0.5
+				Scale 0.5
+		Entity
+			Name TowerPN
+			Position 2.45 -1.5 -2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.56 0.54 0.5
+				Scale 0.5
+		Entity
+			Name TowerNN
+			Position -2.45 -1.5 -2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.56 0.54 0.5
+				Scale 0.5
+		Entity
+			Name CapPP
+			Position 2.45 0.16 2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.2 0.16
+				Scale 0.65
+		Entity
+			Name CapNP
+			Position -2.45 0.16 2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.2 0.16
+				Scale 0.65
+		Entity
+			Name CapPN
+			Position 2.45 0.16 -2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.2 0.16
+				Scale 0.65
+		Entity
+			Name CapNN
+			Position -2.45 0.16 -2.45
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.2 0.16
+				Scale 0.65
+		Entity
+			Name Gate
+			Position 0 -2.2 -2.3
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.18 0.14 0.1
+				Scale 0.8
+		Entity
+			Name BannerL
+			Position -1.1 1.0 -2.25
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.75 0.12 0.1
+				Rotation 90 0 0
+				Scale 0.4
+		Entity
+			Name BannerR
+			Position 1.1 1.0 -2.25
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.75 0.12 0.1
+				Rotation 90 0 0
+				Scale 0.4
 		Entity
 			Name Crystal
 			Position 0 3.15 0

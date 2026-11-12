@@ -31,8 +31,8 @@ public:
     }
 
     // THIRD PERSON (co-op in the sandbox world): an orbit around the body's eye point - the mouse turns it (lookDelta =
-    // relative mouse counts this frame), the wheel zooms, and a ray from the pivot pulls the eye in front of walls and
-    // terrain (ignoring the player's own body). The crosshair is the view center, so the aim ray is the camera's
+    // relative mouse counts this frame), the wheel zooms, and a ray from the pivot pulls the eye in front of the
+    // TERRAIN only (see below). The crosshair is the view center, so the aim ray is the camera's
     // forward. Shares the yaw with the top-down mode, so forwardPlanar() steers the body either way.
     void applyThirdPerson(Camera& camera, const glm::vec3& targetPos, const glm::vec2& lookDelta, float wheelDelta,
         const PhysicsBody* ignoreBody)
@@ -47,15 +47,20 @@ public:
         const glm::vec3 dir = glm::normalize(forwardPlanar() * std::cos(pitchR) + glm::vec3(0.0f, std::sin(pitchR), 0.0f));
         const glm::vec3 pivot = targetPos + glm::vec3(0.0f, s.thirdEyeHeight, 0.0f);
         const glm::vec3 back = -dir * s.thirdDistance;
-        const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(pivot, back, PhysicsLayers::All, ignoreBody);
+        // ONLY THE TERRAIN pulls the eye in: a hill between the two would put the eye under the ground. A building, a
+        // tree, a rock or a unit does NOT - the camera keeps its distance and the player may be hidden behind it (a
+        // camera that jumps forward each time something passes behind the player is worse than a hidden player).
+        const uint64 terrain = PhysicsLayers::bit("Terrain");
+        const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(pivot, back, terrain, ignoreBody);
         glm::vec3 eye = pivot + (hit.hit ? back * glm::max(hit.fraction - 0.1f, 0.0f) : back);
         // THE MIN HEIGHT over the ground ("Third person min height"): a ray down from just over the eye; the eye lifts to
-        // that far over what it hits (the terrain, or a roof it stands on), so a low orbit does not skim the ground.
+        // that far over the terrain it hits, so a low orbit does not skim the ground. The terrain alone, for the same
+        // reason: a roof under the eye does not move it.
         if (s.thirdMinHeight > 0.0f)
         {
             constexpr float c_probeUp = 1.5f;
             const glm::vec3 down(0.0f, -(c_probeUp + s.thirdMinHeight), 0.0f);
-            const PhysicsWorld::RayHit ground = Globals::physics.castRayClosest(eye + glm::vec3(0.0f, c_probeUp, 0.0f), down, PhysicsLayers::All, ignoreBody);
+            const PhysicsWorld::RayHit ground = Globals::physics.castRayClosest(eye + glm::vec3(0.0f, c_probeUp, 0.0f), down, terrain, ignoreBody);
             if (ground.hit)
                 eye.y = glm::max(eye.y, eye.y + c_probeUp + down.y * ground.fraction + s.thirdMinHeight);
         }

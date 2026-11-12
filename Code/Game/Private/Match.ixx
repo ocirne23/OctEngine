@@ -638,6 +638,7 @@ private:
     // Waves are sized in BUDGET POINTS ("Game/Coop" settings), each type at its own cost.
     float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
     float nightAverageScale() const;  // the sandbox world: a night's average wave power over its base (the next night's base grows by it)
+    float nightWaveInterval() const;  // the sandbox world: seconds between two waves = the night's length / "Waves per night"
     float waveCostOf(ENpcType t) const { return glm::max(m_settings.waveCost[(int)t], 0.1f); }
     // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" -
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.

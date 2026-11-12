@@ -256,7 +256,10 @@ blueprint / stores / route — **cable segments are ordinary Structure entries, 
 plus the map inputs and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
 clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds to it) and
 `MatchTime` (the HUD clock), so a load resumes the escalation; the sandbox world adds `NightIndex` / `Night` /
-`TimeOfDay` / `NightWave` / `WaveScale` (the light rules and the night's build-up, [Modes.md](Modes.md)). **Shots are NOT saved**; projectiles
+`TimeOfDay` / `NightWave` / `WaveScale` (the light rules and the night's build-up, [Modes.md](Modes.md)). **A structure's HEIGHT comes from the world at load, not from the save**:
+`loadFrom` puts it on the ground under it at its type's stand height NOW (`groundFit`, the placement's own test; the
+water surface for a bridge or a gate), so a type whose model got taller or lower does not float or sink; the saved
+height stays only where this instance has no ground collider under the place. **Shots are NOT saved**; projectiles
 are transient and a load clears them.
 
 **A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, Yield (a Lumberyard's / Quarry's),

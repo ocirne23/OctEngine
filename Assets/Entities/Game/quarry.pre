@@ -1,13 +1,18 @@
 # Quarry: makes minerals (stone) from the rocks within the harvest radius around it. It stands anywhere: its yield
-# is fixed at placement. No field, no light use.
+# follows what stands around it. No field, no light use. A 4x4x4 m box (2x2 cells). Spawned origin 2.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a STONE YARD - a stone floor (the root), a large
+# cut block with a smaller one turned on top of it, a second block beside them, and a timber CRANE in a corner: a
+# mast of two pieces, an arm (a pillar turned on its side) and a block hanging under the arm. The child pieces are
+# render-only.
 Prefab gameQuarry
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.6 0.6 0.65
-		Scale 2
+		Color 0.5 0.5 0.54
+		Position 0 -1.51 0
+		Scale 1.95
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -15,3 +20,80 @@ Prefab gameQuarry
 		HalfExtents 2 2 2
 	Component GameStructure
 		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Block
+			Position -0.75 -0.12 0.7
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.68 0.68 0.72
+				Scale 0.9
+		Entity
+			Name BlockTop
+			Position -0.75 1.23 0.7
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.6 0.6 0.66
+				Rotation 0 45 0
+				Scale 0.45
+		Entity
+			Name BlockSide
+			Position 1.05 -0.47 0.95
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.62 0.62 0.67
+				Rotation 0 20 0
+				Scale 0.55
+		Entity
+			Name Slab
+			Position 0.2 -0.87 -1.2
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.72 0.72 0.76
+				Rotation 0 -15 0
+				Scale 0.6
+		Entity
+			Name Mast1
+			Position 1.45 -0.27 -1.35
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Scale 0.25
+		Entity
+			Name Mast2
+			Position 1.45 1.18 -1.35
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Scale 0.25
+		Entity
+			Name Arm
+			Position 0.85 1.75 -1.35
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.34 0.24 0.14
+				Rotation 0 0 90
+				Scale 0.28
+		Entity
+			Name Load
+			Position 0.2 1.0 -1.35
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.7 0.7 0.74
+				Scale 0.3

@@ -60,6 +60,25 @@ public:
     ParticleEffect createEffect(const oc::string& pfxPath, const glm::vec3& pos = glm::vec3(0.0f), const glm::quat& rot = glm::quat(1, 0, 0, 0));
     ParticleEffect createEffect(const ParticleEffectDesc& desc, const glm::vec3& pos = glm::vec3(0.0f), const glm::quat& rot = glm::quat(1, 0, 0, 0));
 
+    // A PARTICLE STREAM: one .pfx look (its FIRST emitter) drawn along ANY NUMBER of lines, on a few emitter slots.
+    // Call it every frame, for every line that flows (main thread, before update): particles spawn at `from`, fly to
+    // `to` at the emitter's Speed and end there, `particlesPerSec` of them. A renderer emitter slot holds ONE place a
+    // frame and there are MAX_PARTICLE_EMITTERS (256) for everything, so a slot per line does not scale. A stream
+    // holds StreamSlots slots and MOVES them: each frame it serves the next StreamSlots lines of the frame's list
+    // with what they are due since their last turn. A particle keeps its own position, velocity and life, so it
+    // does not notice that its emitter slot is at another line a frame later. The slots are made at the first call
+    // and released after ~10 s without one. The .pfx: `Rate 0`, no `Offset` / `Direction`; `Life` is set per line.
+    void emitStream(const oc::string& pfxPath, const glm::vec3& from, const glm::vec3& to, float particlesPerSec);
+
+    // PUFFS: one-shot bursts of one .pfx look (its FIRST emitter's `Burst` count) at points that ANY THREAD names -
+    // with a HARD CAP, so a crowd of thousands cannot flood the pool. createPuffStream: main thread, once per look;
+    // the id is stable (MaxPuffStreams looks; UINT32_MAX = none left). emitPuff: lock-free, from the parallel entity
+    // pass too - the first MaxPuffRequests of a frame are kept, the rest are dropped. update then takes the ones
+    // within PuffRange of the camera and draws at most PuffSlots of them, spread evenly over the kept list (so one
+    // corner of a crowd does not take every slot). It moves PuffSlots emitter slots from point to point, as a stream.
+    uint32 createPuffStream(const oc::string& pfxPath);
+    void emitPuff(uint32 stream, const glm::vec3& pos);
+
     // Projects a decal onto a surface (pos = hit point, normal = surface normal). Fire-and-forget:
     // it ages out per desc.lifetime (0 = persistent); the returned id can removeDecal early (fades
     // out over desc.fadeOutTime). The pool caps at MAX_DECALS; the oldest non-persistent decal is
@@ -92,6 +111,36 @@ private:
         oc::shared_ptr<const ParticleEffectDesc> desc; // shared so cache invalidation can't dangle
         oc::vector<EmitterInstance> emitters;          // parallel to desc->emitters
     };
+    // emitStream's state per .pfx path (main thread only: no lock).
+    static constexpr uint32 StreamSlots = 12;
+    struct StreamLine { glm::vec3 from, to; float rate; };
+    struct Stream
+    {
+        oc::string path;
+        oc::shared_ptr<const ParticleEffectDesc> desc;
+        oc::vector<EmitterInstance> slots;  // up to StreamSlots renderer emitters, all of the desc's first emitter
+        oc::vector<StreamLine> lines;       // this frame's calls; cleared by update
+        uint32 cursor = 0;                  // the first line the next update serves
+        uint32 idleFrames = 0;              // frames without a call
+    };
+    oc::vector<Stream> m_streams;
+    void updateStreams(float deltaSec);
+
+    // createPuffStream / emitPuff. A fixed table: emitPuff reads it from worker threads, so it never moves.
+    static constexpr uint32 MaxPuffStreams = 4, PuffSlots = 12, MaxPuffRequests = 128;
+    static constexpr float PuffRange = 150.0f; // m from the camera
+    struct PuffStream
+    {
+        oc::string path;
+        oc::shared_ptr<const ParticleEffectDesc> desc;
+        oc::vector<EmitterInstance> slots;
+        glm::vec3 requests[MaxPuffRequests];
+        oc::atomic<uint32> count{ 0 }; // this frame's emitPuff calls (may pass MaxPuffRequests: only the first are stored)
+    };
+    PuffStream m_puffStreams[MaxPuffStreams];
+    uint32 m_numPuffStreams = 0;
+    void updatePuffs(Renderer& renderer);
+
     struct DecalInstance
     {
         uint32 id = 0;

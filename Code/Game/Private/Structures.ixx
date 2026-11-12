@@ -486,9 +486,6 @@ public:
     // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
     // cell just because units stand nearby.
     static bool actorInFootprint(EStructureType type, const glm::vec3& snappedGroundPos);
-    // The building (never a walk-through piece) whose footprint holds the point, unless the point is on top of it:
-    // its centre and its XZ half extents. The player's push-out reads it (a placement may stand on a player).
-    bool buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm::vec2& outHalf) const;
     void setPlacementBounds(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
     {
         m_boundsMin = boundsMin;

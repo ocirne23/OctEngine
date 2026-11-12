@@ -280,7 +280,12 @@ structure for `AttackDamage` — each reported as a `HitRecord` for the game's v
 false in the co-op sandbox world) or the prefab's `FieldBlocked true`. The exposure damage and the battery drain do not
 depend on it. **The shadow form:** `params.shadowTeam` (runtime) makes that team's units `solid` only in an opposing
 field (half the iso value up) or in daylight; `setSolid` (from `tickField`) also swaps the subtree's tint to
-near-black. **A searchlight cone does the same and burns:** `setSolid` also tests `params.lightCones` (runtime, the
+near-black. **The reveal smoke:** at the change to solid, `setSolid` asks the particle system for ONE puff of black
+smoke (`ParticleSystem::emitPuff` with `params.revealPuff`, the game's puff stream of `Effects/reveal_smoke.pfx`;
+`UINT32_MAX` = none). The particle system draws at most 12 puffs a frame, near the camera (Particle's CONTEXT,
+"Puffs"), so a crowd of thousands costs no more than a few units. **The death burst** is the same call from `kill`
+(`params.deathPuff`, `Effects/demon_death.pfx`): one request for a unit that is no puppet and not of the viewer's
+team (`localTeam`), on the authority (a client's units are removed by replication and ask for none). **A searchlight cone does the same and burns:** `setSolid` also tests `params.lightCones` (runtime, the
 game's shining Searchlights as flat wedges, each with its team) - a unit of another team in one is solid and loses
 `lightConeDps` health/s per cone. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid, and the turret's target query
 skips it. `params.sunBurnTeam` / `sunDps` (runtime too) drain that team's health in `applyDamageAndHeal` and in

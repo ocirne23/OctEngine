@@ -27,7 +27,7 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+    2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
     0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f }; // (the Wall and the Gate: 3 m tall)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
@@ -834,6 +834,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
 void StructureSystem::tickMirror(float deltaSec)
 {
     ProfileScope scope("Structures mirror", EProfileCategory::Game);
+    m_time += deltaSec; // the visuals' clock (the mirror beams' running dashes)
     refresh();
     rebuildNetworks(); // clients derive the graph locally from the mirrored structures - same
                        // code, same inputs; the fills arrive by id (GCf), nothing is simulated

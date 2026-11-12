@@ -17,6 +17,7 @@ import Force;
 import RendererVK;
 import Network;
 import Nav;
+import Particle; // the reveal smoke's puff stream
 import Spatial;
 import Threading; // the ambient wander + nav feed ride the post-update batch
 import :Match;
@@ -50,6 +51,11 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // A time of day set BY HAND is no day that passed (tickWaves). The sun cycle writes the value directly, which
     // fires no listener: only the tweak panel (and a tweak override) does.
     Tweak::onChange(Globals::settings.sky.timeOfDay, this, [this] { m_timeOfDayEdited = true; });
+    // The black smoke of a shadow that the light makes solid (GameUnitComponent::setSolid): the particle system's
+    // capped puffs. Only where there are shadows: the sandbox world.
+    Globals::settings.game.unitParams.revealPuff = m_sandboxWorld ? Globals::particleSystem.createPuffStream("Effects/reveal_smoke.pfx") : UINT32_MAX;
+    // The burst of an enemy unit that dies (GameUnitComponent::kill): the same capped puffs, in every mode.
+    Globals::settings.game.unitParams.deathPuff = Globals::particleSystem.createPuffStream("Effects/demon_death.pfx");
 
     // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
     // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
@@ -204,6 +210,8 @@ GameMatch::~GameMatch()
     Globals::settings.game.unitParams.shadowTeam = -1;
     Globals::settings.game.unitParams.lightPointCount = 0;
     Globals::settings.game.unitParams.lightConeCount = 0;
+    Globals::settings.game.unitParams.revealPuff = UINT32_MAX;
+    Globals::settings.game.unitParams.deathPuff = UINT32_MAX;
     Globals::settings.game.unitParams.slowTeam = -1;
     Globals::settings.game.unitParams.fieldZoneCount = 0;
     if (m_sandboxWorld)
@@ -526,26 +534,7 @@ void GameMatch::updatePlayer(float deltaSec)
         // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
         m_player.clientAdopt(teamStartPos((uint8)m_team));
     }
-    // A building was placed on our player (a player never blocks a placement): step out through the nearest side.
-    // Pre-physics, so the teleport's direct body setters are sanctioned here.
-    if (m_player.entity())
-    {
-        const glm::vec3 pos = m_player.bodyPos();
-        glm::vec3 center;
-        glm::vec2 half;
-        if (m_structures.buildingAt(pos, center, half))
-        {
-            constexpr float c_clear = 0.9f; // the capsule's radius and a little room
-            const glm::vec2 d(pos.x - center.x, pos.z - center.z);
-            glm::vec3 out = pos;
-            if (half.x - glm::abs(d.x) < half.y - glm::abs(d.y)) // the nearer pair of sides
-                out.x = center.x + (d.x >= 0.0f ? 1.0f : -1.0f) * (half.x + c_clear);
-            else
-                out.z = center.z + (d.y >= 0.0f ? 1.0f : -1.0f) * (half.y + c_clear);
-            out.y = pos.y + 0.1f;
-            m_player.teleport(out);
-        }
-    }
+    // (No building ever stands on a player: a player in the footprint refuses the placement, StructureSystem::actorInFootprint.)
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
     m_player.tickShieldAndHealth(deltaSec); // body writes too: the shield push impulse, the death stop
 }

@@ -9,6 +9,7 @@ import Force;
 import Physics;
 import Spatial;
 import Nav;
+import Particle; // the reveal smoke (ParticleSystem::emitPuff)
 import RendererVK;
 
 static void atomicAdd(float& value, float amount)
@@ -942,6 +943,11 @@ void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
     }
     if (now == solid)
         return;
+    // THE REVEAL: a puff of black smoke at the moment the light makes a shadow solid. One request a unit; the particle
+    // system draws at most a dozen puffs a frame, near the camera (ParticleSystem::emitPuff), so a crowd of
+    // thousands that walks into a field costs no more than a few units do.
+    if (now && params.revealPuff != UINT32_MAX)
+        Globals::particleSystem.emitPuff(params.revealPuff, t.pos);
     solid = now;
     const SpawnInfo* info = getGameUnitSpawnInfo(&t.entity);
     tintSubtree(&t.entity, info && info->color.x >= 0.0f ? &info->color : nullptr, tintState == 1, !now);
@@ -1017,6 +1023,10 @@ void GameUnitComponent::kill(Entity& entity)
     if (deathReported) // the queued destroy may take a tick to drain
         return;
     deathReported = true;
+    // THE DEATH BURST of an enemy of the viewer (never a player capsule): one request; the particle system draws at
+    // most a dozen a frame, near the camera (ParticleSystem::emitPuff), so hundreds of deaths a second stay cheap.
+    if (!puppet && (int)team != params.localTeam && params.deathPuff != UINT32_MAX)
+        Globals::particleSystem.emitPuff(params.deathPuff, entity.pos);
     Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
     if (sourceId != 0)
     {

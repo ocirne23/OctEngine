@@ -3,6 +3,7 @@ module Game;
 import Core;
 import Core.glm;
 import Entity;
+import Particle; // the mirrors' light glitter (ParticleSystem::emitStream)
 import Physics;
 import RendererVK;
 import :Structures;
@@ -282,7 +283,21 @@ void StructureSystem::drawLightLinks() const
         // Keep the c_linkBeams nearest (by the link's middle): replace the farthest kept one.
         const glm::vec3 mid = (a + b) * 0.5f - eye;
         // The beam follows the AMOUNT of light: its glow is the flow over "Beam full flow (light/s)", up to 1.
-        const Beam beam{ a, b, glm::dot(mid, mid), glm::clamp(ref.lightFlow / glm::max(m_settings.lightBeamFullFlow, 0.1f), 0.0f, 1.0f) };
+        const float power = glm::clamp(ref.lightFlow / glm::max(m_settings.lightBeamFullFlow, 0.1f), 0.0f, 1.0f);
+        // A MIRROR's beam is LIGHT GLITTER, not a beam column: golden sparks that fly from the mirror to the crystal
+        // (Effects/light_glitter.pfx through ParticleSystem::emitStream), more of them with more light. A field of
+        // mirrors is dozens of beams, and the renderer draws the glow of only RendererState::MAX_BEAM_COLUMNS beams
+        // a frame (every pixel walks them all) - the mirrors took every one of them. A stream has no such count: it
+        // moves a few emitter slots from beam to beam.
+        if (ref.type == EStructureType::Solar)
+        {
+            constexpr float c_mirrorGlitterRange = 400.0f; // m from the camera
+            if (glm::dot(mid, mid) < c_mirrorGlitterRange * c_mirrorGlitterRange && m_settings.mirrorGlitterRate > 0.0f)
+                Globals::particleSystem.emitStream("Effects/light_glitter.pfx", a, b,
+                    m_settings.mirrorGlitterRate * glm::clamp(ref.lightFlow / glm::max(m_settings.solarEnergyPerSec, 0.01f), 0.0f, 1.0f));
+            continue;
+        }
+        const Beam beam{ a, b, glm::dot(mid, mid), power };
         if (count < c_linkBeams)
             nearest[count++] = beam;
         else

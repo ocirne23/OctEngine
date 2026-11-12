@@ -116,7 +116,13 @@ void StructureSystem::applyStructureTint(const Ref& s)
 // and the searches for work skip it (blueprintNeed, fundNearbyBlueprint).
 bool StructureSystem::rubbleBlocked(const Ref& s) const
 {
-    if (!s.state->rubble || m_settings.rubbleSafeRadius <= 0.0f)
+    if (!s.state->rubble)
+        return false;
+    // A BODY ON THE PILE blocks it too (a player or a unit of any team): rubble is walked over, and the building
+    // that comes back would close around whoever stands there - nothing moves a body out of a building.
+    if (actorInFootprint(s.type, s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f)))
+        return true;
+    if (m_settings.rubbleSafeRadius <= 0.0f)
         return false;
     const float radius = m_settings.rubbleSafeRadius;
     const glm::vec3 pos = s.entity->pos;

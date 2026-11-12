@@ -187,7 +187,7 @@ void GameMatch::tickWaves(float deltaSec)
     queueWave();
     if (m_sandboxWorld)
     {
-        m_waveTimer = m_settings.nightWaveInterval * glm::linearRand(1.0f - variation, 1.0f + variation);
+        m_waveTimer = nightWaveInterval() * glm::linearRand(1.0f - variation, 1.0f + variation);
         ++m_nightWave;
         rollNextWave();
     }
@@ -796,17 +796,26 @@ float GameMatch::nextWaveBudget() const
         * m_waveScale * m_settings.waveSizeMult; // the night's build-up (tickWaves; 1 outside the sandbox world) x the user's knob
 }
 
-// The mean of a night's wave scales (1 + ramp x k, x the surge size on every Nth wave) over the waves a night HAS: the
-// first at dusk, then one per "Night wave interval (s)" for the night's length - from the sun cycle's latitude, day
-// of year and speed, so a longer night or a shorter interval (more waves, a higher ramp reached) raises it.
-float GameMatch::nightAverageScale() const
+// The mean of a night's wave scales (1 + ramp x k, x the surge size on every Nth wave) over "Waves per night". That
+// count is a SETTING, not a result of the night's length: the time between two waves follows the night
+// (nightWaveInterval), so the sun cycle's speed, the latitude and the day of the year change WHEN the waves come and
+// never how many there are - the wave power does not depend on them.
+// The seconds between two waves of a night: the night's length (the sun below the horizon, from the sun cycle's
+// latitude, day of year and speed) over "Waves per night" - the first wave at dusk, the last one a share before dawn.
+// Held to 5 .. 300 s, so a stopped or very slow sun cycle still sends waves.
+float GameMatch::nightWaveInterval() const
 {
     const auto& sky = Globals::settings.sky;
     const float decl = glm::radians(23.44f) * std::sin(glm::two_pi<float>() * (284.0f + sky.dayOfYear) / 365.0f); // as SkyParams::cycleSunDirection
     const float cosSunset = glm::clamp(-std::tan(glm::radians(sky.latitude)) * std::tan(decl), -1.0f, 1.0f); // the hour angle of the sunset
     const float nightHours = 24.0f - 2.0f * glm::degrees(std::acos(cosSunset)) / 15.0f;
     const float nightSeconds = nightHours * 3600.0f / glm::max(sky.sunCycleSpeed, 0.01f);
-    const int waves = glm::clamp((int)(nightSeconds / glm::max(m_settings.nightWaveInterval, 1.0f)) + 1, 1, 512);
+    return glm::clamp(nightSeconds / (float)glm::clamp(m_settings.nightWaves, 1, 512), 5.0f, 300.0f);
+}
+
+float GameMatch::nightAverageScale() const
+{
+    const int waves = glm::clamp(m_settings.nightWaves, 1, 512);
     float sum = 0.0f;
     for (int k = 0; k < waves; ++k)
     {

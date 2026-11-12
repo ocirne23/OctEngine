@@ -1,20 +1,109 @@
-# Mineral silo: raises the team's mineral STORAGE CAP ("Mineral silo capacity" per silo on top of
-# "Mineral base capacity") - income clamps at the cap, so banking a bigger war chest needs silos.
-# No power, no grid role; just capacity that dies with it. A 4x8x4 m silo tower (Pillar2).
-# Spawned origin 4.0 above the ground hit.
+# Storehouse (the Mineral silo): holds the stone and the wood the carriers bring ("Mineral silo capacity", "Fuel tank
+# capacity"). No light, no field. A 4x6x4 m box (2x2 cells): taller than a house (3 m). Spawned origin 3.0 above the
+# ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a two-storey WAREHOUSE, 5.3 m to its ridge - a
+# stone plinth (the root), a tall timber hall, a dark roof that hangs over the hall with a ridge on it, a blue door
+# and a blue loft hatch in the -Z face (the store's old colour, so it still reads as "the blue one"), a hoist beam
+# that sticks out over the hatch, and three crates on the plinth. The child pieces are render-only.
 Prefab gameMineralStorage
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Pillar2
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.25 0.45 1
-		Scale 2
+		Color 0.5 0.48 0.45
+		Position 0 -2.51 0
+		Scale 1.95
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 2 4 2
+		HalfExtents 2 3 2
 	Component GameStructure
 		MeleeRadius 2
 		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Hall
+			Position 0 -0.52 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.46 0.33 0.2
+				Scale 1.5
+		Entity
+			Name Roof
+			Position 0 1.4 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.2 0.19 0.22
+				Scale 1.7
+		Entity
+			Name Ridge
+			Position 0 2.07 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.16 0.15 0.18
+				Scale 1.0
+		Entity
+			Name Door
+			Position 0 -1.42 -1.3
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.25 0.45 1
+				Scale 0.6
+		Entity
+			Name Hatch
+			Position 0 0.2 -1.35
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.25 0.45 1
+				Scale 0.35
+		Entity
+			Name Hoist
+			Position 0 0.8 -1.8
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.3 0.22 0.14
+				Rotation 90 0 0
+				Scale 0.2
+		Entity
+			Name Crate1
+			Position 1.72 -1.82 1.72
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.6 0.45 0.25
+				Scale 0.2
+		Entity
+			Name Crate2
+			Position -1.7 -1.8 1.2
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.55 0.4 0.22
+				Rotation 0 30 0
+				Scale 0.22
+		Entity
+			Name Crate3
+			Position 1.72 -1.84 -1.1
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.62 0.47 0.27
+				Rotation 0 -20 0
+				Scale 0.18

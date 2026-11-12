@@ -211,6 +211,198 @@ void ParticleSystem::destroyEffect(uint64 id)
     }
 }
 
+// ---- Streams (emitStream) ----
+
+void ParticleSystem::emitStream(const oc::string& pfxPath, const glm::vec3& from, const glm::vec3& to, float particlesPerSec)
+{
+    if (particlesPerSec <= 0.0f)
+        return;
+    Stream* stream = nullptr;
+    for (Stream& s : m_streams)
+        if (s.path == pfxPath)
+            stream = &s;
+    if (!stream)
+    {
+        m_streams.emplace_back();
+        stream = &m_streams.back();
+        stream->path = pfxPath;
+    }
+    stream->lines.push_back({ from, to, particlesPerSec });
+}
+
+void ParticleSystem::updateStreams(float deltaSec)
+{
+    for (Stream& stream : m_streams)
+    {
+        const uint32 numLines = (uint32)stream.lines.size();
+        if (numLines == 0)
+        {
+            // No call for ~10 s: the slots go back (their particles retire), the entry stays for the next call.
+            if (++stream.idleFrames > 600 && !stream.slots.empty())
+            {
+                stream.slots.clear();
+                stream.desc.reset();
+            }
+            continue;
+        }
+        stream.idleFrames = 0;
+        if (!stream.desc)
+        {
+            getEffectDesc(stream.path); // populate the cache (locks internally)
+            const std::lock_guard lock(m_effectMutex);
+            if (auto it = m_effectCache.find(stream.path); it != m_effectCache.end())
+                stream.desc = it->second;
+        }
+        if (!stream.desc || stream.desc->emitters.empty())
+        {
+            stream.lines.clear();
+            continue;
+        }
+        const ParticleEmitterDesc& desc = stream.desc->emitters[0];
+        if (stream.slots.empty())
+        {
+            const uint16 texture = getTexture(desc.texturePath, desc.textureSRGB);
+            for (uint32 i = 0; i < StreamSlots; ++i)
+            {
+                EmitterInstance slot;
+                slot.textureIdx = texture;
+                slot.rendererSlot = RenderParticleEmitter::create(desc.toGpu(texture));
+                if (!slot.rendererSlot.isValid())
+                    break; // out of emitter slots: the stream runs on what it got
+                stream.slots.push_back(oc::move(slot));
+            }
+            if (stream.slots.empty())
+                printf("ParticleSystem: out of emitter slots for stream '%s'\n", stream.path.c_str());
+        }
+        const uint32 serve = oc::min((uint32)stream.slots.size(), numLines);
+        if (serve == 0)
+        {
+            stream.lines.clear();
+            continue;
+        }
+        // Each served line gets what it is due since its last turn: its rate x the frame x (lines / served). The
+        // fraction is dithered, so a slow rate still averages right.
+        const float turn = deltaSec * (float)numLines / (float)serve;
+        const float speed = oc::max((desc.speedMin + desc.speedMax) * 0.5f, 0.1f);
+        stream.cursor %= numLines;
+        for (uint32 j = 0; j < serve; ++j)
+        {
+            const StreamLine& line = stream.lines[(stream.cursor + j) % numLines];
+            const glm::vec3 axis = line.to - line.from;
+            const float length = glm::length(axis);
+            if (length < 0.05f)
+                continue;
+            const glm::vec3 dir = axis / length;
+            m_rngState = m_rngState * 747796405u + 2891336453u;
+            const float rollA = (float)(m_rngState >> 8) * (1.0f / 16777216.0f);
+            m_rngState = m_rngState * 747796405u + 2891336453u;
+            const float rollB = (float)(m_rngState >> 8) * (1.0f / 16777216.0f);
+            // The packet starts a random way into the gap the line's last turn left (the particles of one turn
+            // would otherwise all start at `from`, as a clump every turn), at most half the line.
+            const float start = oc::min(rollA * speed * turn, length * 0.5f);
+            const float life = (length - start) / speed;
+            ParticleEmitterGpu gpu = desc.toGpu(stream.slots[j].textureIdx);
+            gpu.posSpawnRadius = glm::vec4(line.from + dir * start, gpu.posSpawnRadius.w);
+            gpu.rotation = quatToVec4(rotationBetween(glm::vec3(0, 1, 0), dir));
+            gpu.lifeParams.x = oc::max(life * 0.85f, 0.01f); // it ends at, or a little before, `to`
+            gpu.lifeParams.y = oc::max(life, 0.01f);
+            gpu.velocityInherit = glm::vec4(0.0f);
+            stream.slots[j].rendererSlot.update(gpu);
+            const uint32 count = (uint32)(line.rate * turn + rollB);
+            if (count > 0)
+                stream.slots[j].rendererSlot.emit(count);
+        }
+        stream.cursor = (stream.cursor + serve) % numLines;
+        stream.lines.clear();
+    }
+}
+
+// ---- Puffs (createPuffStream / emitPuff) ----
+
+uint32 ParticleSystem::createPuffStream(const oc::string& pfxPath)
+{
+    for (uint32 i = 0; i < m_numPuffStreams; ++i)
+        if (m_puffStreams[i].path == pfxPath)
+            return i;
+    if (m_numPuffStreams >= MaxPuffStreams)
+    {
+        printf("ParticleSystem: out of puff streams for '%s'\n", pfxPath.c_str());
+        return UINT32_MAX;
+    }
+    m_puffStreams[m_numPuffStreams].path = pfxPath;
+    return m_numPuffStreams++;
+}
+
+void ParticleSystem::emitPuff(uint32 stream, const glm::vec3& pos)
+{
+    if (stream >= MaxPuffStreams)
+        return;
+    PuffStream& s = m_puffStreams[stream];
+    if (s.count.load(oc::memory_order_relaxed) >= MaxPuffRequests)
+        return; // the frame's list is full (also: no update runs, headless - the count then stays at the cap)
+    const uint32 index = s.count.fetch_add(1, oc::memory_order_relaxed);
+    if (index < MaxPuffRequests)
+        s.requests[index] = pos;
+}
+
+void ParticleSystem::updatePuffs(Renderer& renderer)
+{
+    const glm::vec3 eye = renderer.cameraPos();
+    for (uint32 p = 0; p < m_numPuffStreams; ++p)
+    {
+        PuffStream& stream = m_puffStreams[p];
+        const uint32 stored = oc::min(stream.count.exchange(0, oc::memory_order_relaxed), MaxPuffRequests);
+        if (stored == 0)
+            continue;
+        // Keep the ones near the camera (in place, at the front of the list).
+        uint32 kept = 0;
+        for (uint32 i = 0; i < stored; ++i)
+        {
+            const glm::vec3 d = stream.requests[i] - eye;
+            if (glm::dot(d, d) <= PuffRange * PuffRange)
+                stream.requests[kept++] = stream.requests[i];
+        }
+        if (kept == 0)
+            continue;
+        if (!stream.desc)
+        {
+            getEffectDesc(stream.path); // populate the cache (locks internally)
+            const std::lock_guard lock(m_effectMutex);
+            if (auto it = m_effectCache.find(stream.path); it != m_effectCache.end())
+                stream.desc = it->second;
+        }
+        if (!stream.desc || stream.desc->emitters.empty())
+            continue;
+        const ParticleEmitterDesc& desc = stream.desc->emitters[0];
+        if (stream.slots.empty())
+        {
+            const uint16 texture = getTexture(desc.texturePath, desc.textureSRGB);
+            for (uint32 i = 0; i < PuffSlots; ++i)
+            {
+                EmitterInstance slot;
+                slot.textureIdx = texture;
+                slot.rendererSlot = RenderParticleEmitter::create(desc.toGpu(texture));
+                if (!slot.rendererSlot.isValid())
+                    break;
+                stream.slots.push_back(oc::move(slot));
+            }
+        }
+        const uint32 serve = oc::min((uint32)stream.slots.size(), kept);
+        const glm::vec3 dir = glm::dot(desc.localDirection, desc.localDirection) > 1e-6f ? glm::normalize(desc.localDirection) : glm::vec3(0, 1, 0);
+        for (uint32 j = 0; j < serve; ++j)
+        {
+            const glm::vec3 pos = stream.requests[(uint32)((uint64)j * kept / serve)]; // spread evenly over the kept list
+            ParticleEmitterGpu gpu = desc.toGpu(stream.slots[j].textureIdx);
+            gpu.posSpawnRadius = glm::vec4(pos + desc.localOffset, gpu.posSpawnRadius.w);
+            gpu.rotation = quatToVec4(rotationBetween(glm::vec3(0, 1, 0), dir));
+            gpu.velocityInherit = glm::vec4(0.0f);
+            stream.slots[j].rendererSlot.update(gpu);
+            if (desc.burst > 0)
+                stream.slots[j].rendererSlot.emit(desc.burst);
+        }
+    }
+}
+
 void ParticleSystem::update(Renderer& renderer, float deltaSec)
 {
     ProfileScope profileScope("Particles", EProfileCategory::Particle);
@@ -348,6 +540,9 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
     }
     if (occlusionRequested)
         renderer.setRainOcclusionVolume((occlusionMin + occlusionMax) * 0.5f, (occlusionMax - occlusionMin) * 0.5f);
+
+    updateStreams(deltaSec);
+    updatePuffs(renderer);
 
     // Decals: age, fade, submit the live set (per-frame push, like lights).
     for (size_t i = 0; i < m_decals.size();)

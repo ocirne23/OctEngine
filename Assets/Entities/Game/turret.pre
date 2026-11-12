@@ -3,7 +3,8 @@
 # Spawned origin 2.0 above ground.
 # SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone OBELISK - a wide foot (the root), a thick
 # lower shaft and a thin upper one, each with a bronze collar, and a cold blue crystal at the tip, 5.6 m over the
-# ground. The child pieces are render-only; the collider is the 4x4x4 m box. Keep the `Head` height in step with
+# ground. The child pieces are render-only. THE COLLIDER follows the model, not the 2x2 tile: one box as wide as the
+# foot (2.8 m) from the ground to the top of the lower shaft (3.7 m). Keep the `Head` height in step with
 # beamHeightOf(Turret) in Game/Private/Light.cpp and c_turretMuzzle in GameStructureComponent.cpp.
 Prefab gameTurret
 	Global true
@@ -18,10 +19,11 @@ Prefab gameTurret
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 2 2 2
+		HalfExtents 1.4 1.85 1.4
+		Offset 0 -0.15 0
 	Component GameStructure
 		AlwaysShowResources true
-		MeleeRadius 2
+		MeleeRadius 1.4
 	Component Scene
 		Entity
 			Name Shaft

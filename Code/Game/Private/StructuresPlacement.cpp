@@ -203,14 +203,14 @@ const char* StructureSystem::groundFitReason(EGroundFit fit)
 
 bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
 {
-    // A UNIT standing on the cells blocks the placement: the structure would spawn inside it and the
-    // solver would fling whatever it engulfs. Checked at aim (red ghost) AND in placeStructure (the MP
-    // seam) - actors move between the two. A PLAYER capsule does not block: the builder stands in most
-    // of its own footprints, and each instance moves its own player out (GameMatch::updatePlayer, buildingAt).
+    // A UNIT OR A PLAYER standing on the cells blocks the placement: the structure would spawn inside it and the
+    // solver would fling whatever it engulfs (nothing moves a body out of a building afterwards). Checked at aim
+    // (red ghost) AND in placeStructure (the MP seam) - actors move between the two.
     // Cables/crossings/solars are WALK-THROUGH (their collider ignores bodies), so standing on the
-    // cells never blocks them.
+    // cells never blocks them; a GATE's collider ignores the players, so a player does not block a gate.
     if (isWalkThrough(type))
         return false;
+    const bool playersPass = type == EStructureType::Gate;
     constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f + actorRadius;
     bool blocked = false;
@@ -218,30 +218,12 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
     {
         Entity* entity = reinterpret_cast<Entity*>(user);
         const GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
-        if (!unit || unit->puppet) // units only: a player capsule (a puppet) is moved out instead
+        if (!unit || !unit->alive() || (unit->puppet && playersPass)) // a puppet = a player capsule
             return;
         if (glm::abs(entity->pos.x - p.x) < half && glm::abs(entity->pos.z - p.z) < half)
             blocked = true;
     });
     return blocked;
-}
-
-bool StructureSystem::buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm::vec2& outHalf) const
-{
-    const auto it = m_cells.find(cellKey((int)std::floor(pos.x / GridCellSize), (int)std::floor(pos.z / GridCellSize)));
-    if (it == m_cells.end() || it->second.id == 0)
-        return false;
-    const int index = structureIndexById(it->second.id);
-    // (A Gate is not a building here: the players walk through it - its collider is not on their layer - so a player
-    // inside one must not be moved out.)
-    if (index < 0 || isWalkThrough(m_frame[index].type) || m_frame[index].type == EStructureType::Gate || m_frame[index].state->rubble)
-        return false; // (rubble is walked over too: its collider is off)
-    const Ref& ref = m_frame[index];
-    if (pos.y > ref.entity->pos.y + spawnHeightOf(ref.type) - 0.3f)
-        return false; // standing ON it
-    outCenter = ref.entity->pos;
-    outHalf = glm::vec2(footprintExtent(ref.type, ref.entity->rot)) * (GridCellSize * 0.5f);
-    return true;
 }
 
 // ---------------------------------------------------------------- spawn/destroy

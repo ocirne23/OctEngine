@@ -1,13 +1,17 @@
 # Lumberyard: makes fuel (wood) from the trees within the harvest radius around it. It stands anywhere: its yield
-# is fixed at placement. No field, no light use.
+# follows what stands around it. No field, no light use. A 4x4x4 m box (2x2 cells). Spawned origin 2.0 above ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a TIMBER YARD - a plank floor (the root), a pile
+# of LOGS (pillars turned on their side: three below, two on top), a saw shed with a dark roof in a corner, and a
+# bundle of trunks that stands upright beside it. The child pieces are render-only.
 Prefab gameLumberyard
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.45 0.3 0.15
-		Scale 2
+		Color 0.36 0.26 0.15
+		Position 0 -1.51 0
+		Scale 1.95
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -15,3 +19,91 @@ Prefab gameLumberyard
 		HalfExtents 2 2 2
 	Component GameStructure
 		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Log1
+			Position -1.35 -0.72 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.5 0.34 0.18
+				Rotation 90 0 0
+				Scale 0.3
+		Entity
+			Name Log2
+			Position -0.7 -0.72 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.45 0.3 0.16
+				Rotation 90 0 0
+				Scale 0.3
+		Entity
+			Name Log3
+			Position -0.05 -0.72 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.52 0.36 0.2
+				Rotation 90 0 0
+				Scale 0.3
+		Entity
+			Name Log4
+			Position -1.02 -0.14 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.48 0.32 0.17
+				Rotation 90 0 0
+				Scale 0.3
+		Entity
+			Name Log5
+			Position -0.38 -0.14 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.54 0.38 0.21
+				Rotation 90 0 0
+				Scale 0.3
+		Entity
+			Name Shed
+			Position 0.95 -0.52 -0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeHalf
+				Type StaticMesh
+				Color 0.42 0.3 0.18
+				Scale 1.0
+		Entity
+			Name ShedRoof
+			Position 0.95 0.28 -0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.2 0.17 0.14
+				Scale 1.2
+		Entity
+			Name Trunks
+			Position -1.3 -0.12 -1.2
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.27 0.14
+				Scale 0.3
+		Entity
+			Name Stump
+			Position -0.55 -0.72 -1.3
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.56 0.4 0.22
+				Rotation 0 25 0
+				Scale 0.3

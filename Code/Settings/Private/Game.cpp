@@ -45,7 +45,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Sandbox wave distance (m)", &s.sandboxWaveDistance, 20.0f, 90.0f, 1.0f);
     Tweak::floatVar("Game/Coop", "Sandbox wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Start time of day (h)", &s.startTimeOfDay, -1.0f, 24.0f, 0.25f);
-    Tweak::floatVar("Game/Coop", "Night wave interval (s)", &s.nightWaveInterval, 5.0f, 600.0f, 5.0f);
+    Tweak::intVar("Game/Coop", "Waves per night", &s.nightWaves, 1, 100, 1);
     Tweak::floatVar("Game/Coop", "Wave size multiplier", &s.waveSizeMult, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Coop", "Night wave growth per wave", &s.nightWaveRamp, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Coop", "Night wave variation", &s.nightWaveVariation, 0.0f, 0.9f, 0.05f);
@@ -224,6 +224,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Light", "Beam rate (light/s)", &s.lightBeamRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Feed rate (light/s)", &s.lightFeedRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Share rate (light/s)", &s.lightShareRate, 0.5f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Light", "Mirror glitter (sparks/s)", &s.mirrorGlitterRate, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Beam glow", &s.lightBeamGlow, 0.0f, 100.0f, 0.1f);
     Tweak::floatVar("Game/Light", "Beam full flow (light/s)", &s.lightBeamFullFlow, 0.1f, 500.0f, 0.1f);
     Tweak::floatVar("Game/Light", "Beam radius (m)", &s.lightBeamRadius, 0.02f, 5.0f, 0.01f);
