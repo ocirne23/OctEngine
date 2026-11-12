@@ -271,9 +271,9 @@ public:
                 });
             // The harvest: the trees and the rocks a lumberyard / quarry would work (the tree world's records; main.cpp
             // calls GameMatch::surveyHarvest where they are readable).
-            m_game->setHarvestSource([](float x, float z, float radius, float& wood, float& stone)
+            m_game->setHarvestSource([](float x, float z, float radius, void (*visit)(void* user, float x, float z, float wood, float stone), void* user)
                 {
-                    return Globals::trees.surveyHarvest(glm::vec2(x, z), radius, wood, stone);
+                    return Globals::trees.surveyHarvest(glm::vec2(x, z), radius, visit, user);
                 });
         }
         uint32 mapSeed;

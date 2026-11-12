@@ -18,19 +18,36 @@ staffing. Neither needs energy: only workers (below).
 | The flat maps | no trees or rocks: a RESOURCE NODE of the yard's kind (fuel / mineral) in the radius is a full yield. Several yards can share one node. |
 | Always | at least "Harvest minimum yield" (0.1), at most 1. |
 
-* **The yield is FIXED AT PLACEMENT** and is part of the structure: on GPl (a `uint16`), in the save (`Yield`, written
-  only below 1). Nothing removes a tree: it never changes.
+* **YARDS SHARE: a tree or a rock works for ONE yard.** Yards of one kind whose circles overlap form a CLUSTER (centres
+  under two radii apart, joined through any number of yards: `harvestCluster`) and divide what stands in their circles.
+  `shareHarvest` is a MAXIMUM FLOW from the records to the yards, one yard after the other in id order (the older yard
+  first). The records are grouped by the SET of yards that reach them (one group per region of the overlapping
+  circles), so the flow runs on a few groups. A yard takes what is free in its groups, then it takes from an earlier
+  yard what that yard can get back from another group (an augmenting path). **So nothing a yard could use stays
+  unused**: the total is the most the cluster can get, an older yard works the trees only it can reach before the
+  shared ones, and the order only says who is short. A yard's amount never drops when a younger one comes; it can rise
+  when a yard goes. At most 64 yards share in one cluster. A flat map's node is not shared.
+* **The yield is part of the structure**: on GPl (a `uint16`), in the save (`Yield`, written only below 1). Nothing
+  removes a tree, so it changes only when a yard of its kind comes or goes: `spawnStructure` and
+  `removeStructureBookkeeping` mark the yards of the kind (`Ref::harvestDirty`), and `resolveHarvestYields` (EVERY
+  instance, from `GameMatch::surveyHarvest`) shares each dirty cluster again from this instance's own records - at
+  once, then about once a second while the source has no answer for a circle. Each instance derives the same yields
+  from the same roster and the same world, so nothing more is sent. With no source (the flat maps, a headless
+  server) a yard keeps its placement yield.
 * **The source** (`StructureSystem::HarvestSource`, set by the App through `GameMatch::setHarvestSource`; the sandbox
-  world only): `TreeSystem::surveyHarvest` counts the tree world's CPU records in a circle (Procedural, "World records"
+  world only): `TreeSystem::surveyHarvest` VISITS each record of the tree world's CPU records in a circle, with its
+  world position (a record's identity across two surveys), its wood and its stone (Procedural, "World records"
   in [Trees.md](../Procedural/Trees.md); `TreeWorld::FloorType::harvest` says what a record type gives). Those records
   exist only within the tree world's CPU keep radius of THIS instance's camera, and they are readable at one point of
   the frame only: after the procedural updates, before `TreeSystem::kickWorldUpdate`.
 * **So the GHOST asks, and the answer comes one frame later**: `updateBuildMode` leaves the ghost's cell in
-  `m_harvestProbe`, main.cpp calls `GameMatch::surveyHarvest` at that point (`StructureSystem::harvestYield`), and
+  `m_harvestProbe`, main.cpp calls `GameMatch::surveyHarvest` at that point (`StructureSystem::harvestYield`: the
+  ghost as the YOUNGEST yard of its cluster, so the preview is what is left for it), and
   `computeAim` reads the answer for that very cell. Until then - or while the source has no answer (the world's chunks
   are not generated yet) - the ghost cannot place and the HUD line "Yield" reads "surveying...".
 * **The placement carries the REQUESTER's yield** (`queuePlaceRequest`, GqP): the authority may be too far from the
-  place to hold its records. It only clamps the value (a co-op trust, like the client's ground height).
+  place to hold its records. It only clamps the value (a co-op trust, like the client's ground height), and replaces
+  it by its own share (`resolveHarvestYields`) when it holds the records.
 * **Shown:** the ghost draws its harvest radius, hued from red (little) to green (full), and the HUD line "Yield" gives
   the percent, which a world label over the ghost repeats with a bar (`updateLabels`, from `m_shownYield` / `m_yieldGhostPos`); a selected yard's label has a "Yield" line; `drawDebug` rings every built yard's radius.
 
@@ -354,7 +371,8 @@ sea. Each prefab carries what is under the surface, since `Scale` is uniform and
 both seams. **A player capsule does not block**: the builder stands in most of its own footprints. Each
 instance moves its OWN player out instead (`GameMatch::updatePlayer`, pre-physics): while
 `StructureSystem::buildingAt` finds a building's footprint around the player (and the player is not on top
-of it), the player teleports out through the nearest side. **It is deliberately NOT folded into `cellsFree`**,
+of it), the player teleports out through the nearest side. A Gate is no building for `buildingAt` (as the
+walk-through types): the players walk through it. **It is deliberately NOT folded into `cellsFree`**,
 which doubles as the unit-spawn-point probe and must not refuse a cell just because units stand near
 it.
 

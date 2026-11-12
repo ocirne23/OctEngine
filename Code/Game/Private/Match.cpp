@@ -495,6 +495,7 @@ void GameMatch::tickBaseSite(float deltaSec)
 // main.cpp calls this where the tree records are readable (see setHarvestSource): the answer to the ghost's probe.
 void GameMatch::surveyHarvest()
 {
+    m_structures.resolveHarvestYields(); // the yards that stand: shared again after one came or went
     HarvestProbe& probe = m_harvestProbe;
     if (!probe.wanted)
     {

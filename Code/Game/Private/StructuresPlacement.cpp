@@ -232,7 +232,9 @@ bool StructureSystem::buildingAt(const glm::vec3& pos, glm::vec3& outCenter, glm
     if (it == m_cells.end() || it->second.id == 0)
         return false;
     const int index = structureIndexById(it->second.id);
-    if (index < 0 || isWalkThrough(m_frame[index].type))
+    // (A Gate is not a building here: the players walk through it - its collider is not on their layer - so a player
+    // inside one must not be moved out.)
+    if (index < 0 || isWalkThrough(m_frame[index].type) || m_frame[index].type == EStructureType::Gate)
         return false;
     const Ref& ref = m_frame[index];
     if (pos.y > ref.entity->pos.y + spawnHeightOf(ref.type) - 0.3f)
@@ -288,6 +290,9 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     m_nextStructureId = glm::max(m_nextStructureId, id + 1);
     m_byId[id] = (int)m_frame.size();
     m_frame.push_back(ref);
+    if (isHarvestType(type)) // the yards of its kind share the trees / rocks again (resolveHarvestYields)
+        for (Ref& other : m_frame)
+            other.harvestDirty |= other.type == type;
     insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
     m_linksDirty = true;
     return (int)m_frame.size() - 1;
@@ -302,6 +307,9 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     m_frame.erase(m_frame.begin() + index);
+    if (isHarvestType(s.type)) // what it worked is free for the yards around it (resolveHarvestYields)
+        for (Ref& other : m_frame)
+            other.harvestDirty |= other.type == s.type;
     m_byId.clear();
     for (int i = 0; i < (int)m_frame.size(); ++i)
         m_byId[m_frame[i].state->structureId] = i;
@@ -384,8 +392,9 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         crossing.valid = cellsFree(type, snappedGround, rot);
     if (!crossing.valid || actorInFootprint(type, snappedGround))
         return; // overlap raced the ghost - silently refused (it already showed red)
-    // (A Lumberyard's / Quarry's yield is the REQUESTER's survey: this instance may not hold the tree records of the
-    // place - they exist only around its own camera. spawnStructure clamps it.)
+    // (A Lumberyard's / Quarry's yield is the REQUESTER's survey at first: this instance may not hold the tree records
+    // of the place - they exist only around its own camera. spawnStructure clamps it, and resolveHarvestYields shares
+    // the cluster again from this instance's own records as soon as it holds them.)
     // The ground (sandbox world): re-tested here like the cells. With NO collider under it on this instance - a
     // client building far from the server's camera, outside the server's collider ring - the requester's own height
     // stands (its aim ran the full test against its own colliders).

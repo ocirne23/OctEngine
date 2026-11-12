@@ -41,7 +41,9 @@ public:
         Entity* entity = nullptr;
         GameStructureComponent* state = nullptr;
         EStructureType type = EStructureType::Emitter;
-        float yield = 1.0f; // Lumberyard / Quarry: its share of the full rate, fixed at placement (harvestYield)        // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
+        float yield = 1.0f; // Lumberyard / Quarry: its share of the full rate (harvestYield at placement, then resolveHarvestYields)
+        bool harvestDirty = false; // a yard of its kind came or went: resolveHarvestYields shares its cluster again
+        // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
         // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
@@ -290,12 +292,24 @@ public:
     // the App's source. The flat maps: a resource node of its kind in the radius is a full yield.
     // The source answers what stands in a circle: wood = trees, stone = the rocks' summed size (m). false = it does not
     // know (the place is too far from this instance's camera, or its world is not generated yet).
-    using HarvestSource = bool (*)(float x, float z, float radius, float& wood, float& stone);
+    // It VISITS each tree and rock once, with its world position (the same in every survey), its wood and its stone.
+    using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone);
+    using HarvestSource = bool (*)(float x, float z, float radius, HarvestVisitor visit, void* user);
     void setHarvestSource(HarvestSource source) { m_harvestSource = source; }
     float harvestRadius() const { return m_settings.harvestRadius; }
-    // The yield `type` would have at a ground point; false = the source has no answer. IT CALLS THE SOURCE, which reads
-    // the tree records: only from GameMatch::surveyHarvest (the App's survey point in the frame).
+    // YARDS SHARE: a tree or a rock works for ONE yard. Yards of one kind whose circles overlap (a CLUSTER, joined
+    // through any number of yards) divide what stands in the circles between them: the OLDER yard (the lower id) is
+    // served first, and a younger one gets what is left - but an older yard takes its share from the trees the
+    // younger one cannot reach first, so nothing that a yard could use stays unused (shareHarvest: a maximum flow,
+    // one yard after the other; a yard's amount never drops when a younger one comes, and can rise when a yard goes).
+    // The yield `type` would have at a ground point, next to the yards that stand; false = the source has no answer.
+    // IT CALLS THE SOURCE, which reads the tree records: only from GameMatch::surveyHarvest (the App's survey point
+    // in the frame).
     bool harvestYield(EStructureType type, const glm::vec3& groundPos, float& outYield) const;
+    // The yields of the yards that stand, again from the world (every instance; from GameMatch::surveyHarvest too):
+    // after a yard came or went (Ref::harvestDirty), each cluster with a dirty yard, about once a second until the
+    // source answers for all of it. With no source (the flat maps, a headless server) a yard keeps its placement yield.
+    void resolveHarvestYields();
     // The nearest structure the cursor can select within maxDist (planar).
     int findConnectableNear(const glm::vec3& pos, float maxDist) const;
 
@@ -770,6 +784,15 @@ private:
     bool m_terrainGround = false;           // the sandbox world (setTerrainGround)
     GroundSource m_groundSource = nullptr;  // setGroundSource
     HarvestSource m_harvestSource = nullptr; // setHarvestSource
+    int m_harvestRetry = 0;                  // resolveHarvestYields: calls until the next try
+    static constexpr int MaxHarvestCluster = 64; // yards in one cluster that share (a bit each); the rest of it gets nothing more
+    // The amount (trees, or m of rock) each yard of a cluster gets, in the order given = the order they are served.
+    // false = the source has no answer for a circle.
+    bool shareHarvest(bool lumber, oc::span<const glm::vec2> yards, oc::span<float> got) const;
+    // The yards of `type` that share with yard `seed` of `centres` (its cluster), in the order of `centres`.
+    static void harvestCluster(oc::span<const glm::vec2> centres, int seed, float radius, oc::vector<int>& out);
+    float harvestFull(bool lumber) const { return glm::max(lumber ? m_settings.harvestTreesFull : m_settings.harvestStoneFull, 1.0f); }
+    bool harvestNodeNear(bool lumber, glm::vec2 pos) const; // the flat maps: a deposit of the kind in the radius (a full yield, not shared)
     static constexpr float c_nodeHeight = 0.8f; // a resource node entity's center above its ground
 
     int m_workers[GameMaxTeams] = {}; // see staffing()

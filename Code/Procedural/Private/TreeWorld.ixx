@@ -124,11 +124,14 @@ export namespace Procedural
 			uint8 harvest = 0;        // surveyHarvest: 0 = nothing (a bush, a cactus), 1 = wood (a tree, dead wood), 2 = stone (a rock)
 		};
 		const oc::vector<FloorType>& floorTypes() const { return m_floorTypes; }
-		// THE HARVEST SURVEY (the game's lumberyard and quarry): what stands within `radius` of a point. wood = the trees
-		// (dead wood counts half), stone = the rocks' summed size (m, each rock's longest axis). Main thread, between
-		// update and kickUpdate (as cpuRecords). false = the CPU does not hold every chunk the circle touches (too far
-		// from the camera, or not generated yet): no answer. Disabled = true with nothing.
-		bool surveyHarvest(glm::vec2 centre, float radius, float& wood, float& stone) const;
+		// THE HARVEST SURVEY (the game's lumberyard and quarry): every tree and rock within `radius` of a point, one
+		// visit each - its world position (the same in every survey: the game shares the records of overlapping
+		// circles by it), then wood (a tree 1, dead wood 0.5; 0 for a rock) and stone (a rock's size in m, its longest
+		// axis; 0 for a tree). Main thread, between update and kickUpdate (as cpuRecords). false = the CPU does not hold
+		// every chunk the circle touches (too far from the camera, or not generated yet): no answer, and the visits made
+		// so far do not count. Disabled = true with no visit.
+		using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone);
+		bool surveyHarvest(glm::vec2 centre, float radius, HarvestVisitor visit, void* user) const;
 		// The keep radius is at least this (the expansion's near radius needs the records).
 		void requireKeepRadius(int chunks)
 		{

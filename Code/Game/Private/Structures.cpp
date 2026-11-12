@@ -458,32 +458,257 @@ void StructureSystem::clearNodes()
     m_nodes.clear();
 }
 
+// The flat maps' deposits: one node of the yard's kind in the radius is a full yield (a deposit is not shared).
+bool StructureSystem::harvestNodeNear(bool lumber, glm::vec2 pos) const
+{
+    const float radius = m_settings.harvestRadius;
+    for (const Node& n : m_nodes)
+    {
+        const glm::vec2 d = glm::vec2(n.pos.x, n.pos.z) - pos;
+        if ((n.type == ENodeType::Fuel) == lumber && glm::dot(d, d) <= radius * radius)
+            return true;
+    }
+    return false;
+}
+
+// The yards joined to `seed` through overlapping circles (centres under two radii apart), any number of yards deep.
+void StructureSystem::harvestCluster(oc::span<const glm::vec2> centres, int seed, float radius, oc::vector<int>& out)
+{
+    out.clear();
+    const float reachSq = 4.0f * radius * radius;
+    oc::vector<uint8> in(centres.size(), 0);
+    oc::vector<int> open;
+    in[seed] = 1;
+    open.push_back(seed);
+    while (!open.empty())
+    {
+        const int a = open.back();
+        open.pop_back();
+        for (int b = 0; b < (int)centres.size(); ++b)
+        {
+            const glm::vec2 d = centres[b] - centres[a];
+            if (!in[b] && glm::dot(d, d) < reachSq)
+            {
+                in[b] = 1;
+                open.push_back(b);
+            }
+        }
+    }
+    for (int i = 0; i < (int)centres.size(); ++i) // in the order of `centres`: the order the yards are served
+        if (in[i])
+            out.push_back(i);
+}
+
+// A MAXIMUM FLOW from the trees (or rocks) to the yards, one yard after the other. Each record gives its amount to the
+// yards whose circle holds it; a yard takes at most the full amount. The records are grouped by the SET of yards that
+// reach them (a group = one region of the overlapping circles), so the flow runs on a few groups, not on the records.
+// A yard first takes what is free in its groups. Then it takes from an EARLIER yard what that yard can get back from
+// another group (an augmenting path, any number of yards deep): the earlier yard keeps its amount, and the trees it
+// alone can reach are used before the shared ones. So the total is the most the yards can get together, whatever the
+// order, and the order only says who is short.
+bool StructureSystem::shareHarvest(bool lumber, oc::span<const glm::vec2> yards, oc::span<float> got) const
+{
+    const int count = glm::min((int)yards.size(), MaxHarvestCluster);
+    for (float& g : got)
+        g = 0.0f;
+    if (!m_harvestSource || count == 0)
+        return true;
+    // Every record of every circle, with the yard that saw it; then one entry per record with all its yards.
+    struct Item { uint64 key; float amount; uint64 mask; };
+    struct Visit { oc::vector<Item>* items; uint64 bit; bool lumber; };
+    oc::vector<Item> items;
+    const float radius = m_settings.harvestRadius;
+    for (int y = 0; y < count; ++y)
+    {
+        Visit visit{ &items, 1ull << y, lumber };
+        const auto add = [](void* user, float x, float z, float wood, float stone)
+        {
+            const Visit& v = *static_cast<const Visit*>(user);
+            const float amount = v.lumber ? wood : stone;
+            if (amount <= 0.0f)
+                return;
+            // The record's position is its identity (the source gives one record the same position in every survey).
+            const uint64 key = ((uint64)(uint32)(int32)glm::round(x * 16.0f) << 32) | (uint64)(uint32)(int32)glm::round(z * 16.0f);
+            v.items->push_back(Item{ key, amount, v.bit });
+        };
+        if (!m_harvestSource(yards[y].x, yards[y].y, radius, add, &visit))
+            return false;
+    }
+    oc::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.key < b.key; });
+    struct Group { uint64 mask; float left; };
+    oc::vector<Group> groups;
+    for (size_t i = 0; i < items.size();)
+    {
+        uint64 mask = 0;
+        size_t j = i;
+        for (; j < items.size() && items[j].key == items[i].key; ++j)
+            mask |= items[j].mask;
+        Group* group = nullptr;
+        for (Group& g : groups)
+            if (g.mask == mask)
+                group = &g;
+        if (!group)
+        {
+            groups.push_back(Group{ mask, 0.0f });
+            group = &groups.back();
+        }
+        group->left += items[i].amount;
+        i = j;
+    }
+    const int numGroups = (int)groups.size();
+    oc::vector<float> flow((size_t)numGroups * count, 0.0f); // flow[g * count + y]: what group g gives yard y
+    constexpr float c_eps = 1e-4f;
+    const float full = harvestFull(lumber);
+    int fromYard[MaxHarvestCluster], fromGroup[MaxHarvestCluster], open[MaxHarvestCluster];
+    for (int y = 0; y < count; ++y)
+    {
+        float need = full;
+        for (int guard = 0; need > c_eps && guard < 4096; ++guard)
+        {
+            // Breadth first from yard y: to a group with something left, through yards that hold a group's flow.
+            for (int i = 0; i < count; ++i)
+                fromYard[i] = -2; // not reached
+            fromYard[y] = -1;
+            int head = 0, tail = 0, endYard = -1, endGroup = -1;
+            open[tail++] = y;
+            while (head < tail && endYard < 0)
+            {
+                const int a = open[head++];
+                for (int g = 0; g < numGroups && endYard < 0; ++g)
+                {
+                    if (!(groups[g].mask & (1ull << a)))
+                        continue;
+                    if (groups[g].left > c_eps)
+                    {
+                        endYard = a;
+                        endGroup = g;
+                        break;
+                    }
+                    for (int b = 0; b < y; ++b) // only the earlier yards hold flow
+                        if (fromYard[b] == -2 && flow[(size_t)g * count + b] > c_eps)
+                        {
+                            fromYard[b] = a;
+                            fromGroup[b] = g;
+                            open[tail++] = b;
+                        }
+                }
+            }
+            if (endYard < 0)
+                break; // nothing more can reach this yard
+            // The most the path carries: the need, what the end group has left, and each flow that moves on the way.
+            float amount = glm::min(need, groups[endGroup].left);
+            for (int b = endYard; fromYard[b] >= 0; b = fromYard[b])
+                amount = glm::min(amount, flow[(size_t)fromGroup[b] * count + b]);
+            groups[endGroup].left -= amount;
+            flow[(size_t)endGroup * count + endYard] += amount;
+            for (int b = endYard; fromYard[b] >= 0; b = fromYard[b]) // b gives its share of the group to the yard before it
+            {
+                flow[(size_t)fromGroup[b] * count + b] -= amount;
+                flow[(size_t)fromGroup[b] * count + fromYard[b]] += amount;
+            }
+            need -= amount;
+        }
+        got[y] = full - glm::max(need, 0.0f);
+    }
+    return true;
+}
+
 bool StructureSystem::harvestYield(EStructureType type, const glm::vec3& groundPos, float& outYield) const
 {
     outYield = 1.0f;
     if (!isHarvestType(type))
         return true;
     const bool lumber = type == EStructureType::Lumberyard;
-    const float radius = m_settings.harvestRadius;
-    float yield = 0.0f;
-    // The flat maps' deposits: one node of the yard's kind in the radius is a full yield.
-    for (const Node& n : m_nodes)
+    const glm::vec2 pos(groundPos.x, groundPos.z);
+    float yield = harvestNodeNear(lumber, pos) ? 1.0f : 0.0f;
+    // The sandbox world: the trees and the rocks that stand there, after the yards that stand (the new yard is the
+    // youngest: it is served last).
+    if (m_harvestSource && yield < 1.0f)
     {
-        const glm::vec2 d = glm::vec2(n.pos.x, n.pos.z) - glm::vec2(groundPos.x, groundPos.z);
-        if ((n.type == ENodeType::Fuel) == lumber && glm::dot(d, d) <= radius * radius)
-            yield = 1.0f;
-    }
-    // The sandbox world: the trees and the rocks that stand there.
-    if (m_harvestSource)
-    {
-        float wood = 0.0f, stone = 0.0f;
-        if (!m_harvestSource(groundPos.x, groundPos.z, radius, wood, stone))
+        oc::vector<oc::pair<uint32, glm::vec2>> yards;
+        for (const Ref& ref : m_frame)
+            if (ref.type == type)
+                yards.push_back({ ref.state->structureId, glm::vec2(ref.entity->pos.x, ref.entity->pos.z) });
+        oc::sort(yards.begin(), yards.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        oc::vector<glm::vec2> centres;
+        for (const auto& yard : yards)
+            centres.push_back(yard.second);
+        centres.push_back(pos);
+        oc::vector<int> cluster;
+        harvestCluster(centres, (int)centres.size() - 1, m_settings.harvestRadius, cluster);
+        // Over the cluster limit the OLDEST yards drop out of the preview's flow (the new yard is the last entry).
+        const int first = glm::max((int)cluster.size() - MaxHarvestCluster, 0);
+        oc::vector<glm::vec2> members;
+        for (int i = first; i < (int)cluster.size(); ++i)
+            members.push_back(centres[cluster[i]]);
+        oc::vector<float> got(members.size(), 0.0f);
+        if (!shareHarvest(lumber, members, got))
             return false;
-        yield = glm::max(yield, lumber ? wood / glm::max(m_settings.harvestTreesFull, 1.0f)
-                                       : stone / glm::max(m_settings.harvestStoneFull, 1.0f));
+        yield = got.back() / harvestFull(lumber);
     }
     outYield = glm::clamp(yield, glm::clamp(m_settings.harvestMinYield, 0.0f, 1.0f), 1.0f);
     return true;
+}
+
+void StructureSystem::resolveHarvestYields()
+{
+    if (!m_harvestSource)
+        return;
+    bool dirty = false;
+    for (const Ref& ref : m_frame)
+        dirty |= ref.harvestDirty;
+    if (!dirty)
+    {
+        m_harvestRetry = 0; // the next change is shared at once
+        return;
+    }
+    if (--m_harvestRetry > 0)
+        return;
+    m_harvestRetry = 60; // a cluster the source cannot answer for yet: again in about a second
+    const float minYield = glm::clamp(m_settings.harvestMinYield, 0.0f, 1.0f);
+    for (const EStructureType type : { EStructureType::Lumberyard, EStructureType::Quarry })
+    {
+        const bool lumber = type == EStructureType::Lumberyard;
+        oc::vector<oc::pair<uint32, int>> yards; // id, roster index: the older yard first
+        for (int i = 0; i < (int)m_frame.size(); ++i)
+            if (m_frame[i].type == type)
+                yards.push_back({ m_frame[i].state->structureId, i });
+        oc::sort(yards.begin(), yards.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        oc::vector<glm::vec2> centres;
+        for (const auto& yard : yards)
+            centres.push_back(glm::vec2(m_frame[yard.second].entity->pos.x, m_frame[yard.second].entity->pos.z));
+        oc::vector<uint8> done(yards.size(), 0);
+        oc::vector<int> cluster;
+        oc::vector<glm::vec2> members;
+        oc::vector<float> got;
+        for (int seed = 0; seed < (int)yards.size(); ++seed)
+        {
+            if (done[seed])
+                continue;
+            harvestCluster(centres, seed, m_settings.harvestRadius, cluster);
+            bool clusterDirty = false;
+            for (const int c : cluster)
+            {
+                done[c] = 1;
+                clusterDirty |= m_frame[yards[c].second].harvestDirty;
+            }
+            if (!clusterDirty)
+                continue;
+            members.clear();
+            for (const int c : cluster)
+                members.push_back(centres[c]);
+            got.assign(members.size(), 0.0f);
+            if (!shareHarvest(lumber, members, got))
+                continue; // stays dirty
+            for (size_t k = 0; k < cluster.size(); ++k)
+            {
+                Ref& ref = m_frame[yards[cluster[k]].second];
+                const float yield = harvestNodeNear(lumber, members[k]) ? 1.0f : got[k] / harvestFull(lumber);
+                ref.yield = glm::clamp(yield, minYield, 1.0f);
+                ref.harvestDirty = false;
+            }
+        }
+    }
 }
 
 int StructureSystem::findConnectableNear(const glm::vec3& pos, float maxDist) const

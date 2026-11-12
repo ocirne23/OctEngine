@@ -534,10 +534,8 @@ namespace Procedural
 		return it != m_chunks.end() && it->second.hasCpu ? &it->second.records : nullptr;
 	}
 
-	bool TreeWorld::surveyHarvest(glm::vec2 centre, float radius, float& wood, float& stone) const
+	bool TreeWorld::surveyHarvest(glm::vec2 centre, float radius, HarvestVisitor visit, void* user) const
 	{
-		wood = 0.0f;
-		stone = 0.0f;
 		if (!m_settings.enabled || m_chunkSize <= 0.0f)
 			return true;
 		constexpr float DEAD_WOOD_SHARE = 0.5f; // a fallen log or a stump against a standing tree
@@ -557,14 +555,18 @@ namespace Procedural
 					const uint32 type = treeRecordType(record);
 					if (type >= m_floorTypes.size() || m_floorTypes[type].harvest == 0)
 						continue;
-					const glm::vec2 d = treeRecordLocal(record, m_chunkSize) - local;
+					const glm::vec2 recordLocal = treeRecordLocal(record, m_chunkSize);
+					const glm::vec2 d = recordLocal - local;
 					if (glm::dot(d, d) > radiusSq)
 						continue;
 					const FloorType& floor = m_floorTypes[type];
+					// The world position comes from the chunk and the record alone, so one record has the same position
+					// in every survey (the game tells the records of two overlapping circles apart by it).
+					const glm::vec2 world = glm::vec2(coord) * m_chunkSize + recordLocal;
 					if (floor.harvest == 2)
-						stone += rockRecordScale(treeRecordSeed(seed(), coord, record), floor.rockScale);
+						visit(user, world.x, world.y, 0.0f, rockRecordScale(treeRecordSeed(seed(), coord, record), floor.rockScale));
 					else
-						wood += floor.kind == 3 ? DEAD_WOOD_SHARE : 1.0f;
+						visit(user, world.x, world.y, floor.kind == 3 ? DEAD_WOOD_SHARE : 1.0f, 0.0f);
 				}
 			}
 		return true;
