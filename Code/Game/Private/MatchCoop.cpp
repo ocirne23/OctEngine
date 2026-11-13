@@ -101,7 +101,7 @@ namespace
     }
 }
 
-ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) const
+ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 6>& mix) const
 {
     float total = 0.0f;
     for (const WaveMixEntry& e : mix)
@@ -933,6 +933,39 @@ void GameMatch::queueWave()
     for (const auto& entry : c_waveArchetypes[pick].mix)
         if (entry.weight > 0.0f)
             m_waveMix.push_back({ entry.type, entry.weight * glm::linearRand(0.6f, 1.4f) });
+    // THE SPRINKLE: one STRONG type on top of the recipe, a few bodies that stand out of the mass. It takes
+    // c_sprinkleShare of the wave's points; a type is a candidate from its level on, when the recipe does not have it
+    // and that share pays for half a body at least (so a Titan waits for the big waves). The roll is between the two
+    // most expensive candidates: a late wave gets a Titan or a Giant, not one more Brute.
+    {
+        constexpr float c_sprinkleShare = 0.15f;
+        constexpr struct { ENpcType type; int minLevel; } c_sprinkles[] = { // by rising cost
+            { ENpcType::Warrior, 1 }, { ENpcType::Elite, 3 }, { ENpcType::Brute, 2 }, { ENpcType::Spawner, 4 }, { ENpcType::Giant, 5 },
+            { ENpcType::Titan, 6 } };
+        ENpcType candidates[2];
+        int numCandidates = 0;
+        for (const auto& s : c_sprinkles)
+        {
+            bool inMix = false;
+            for (const WaveMixEntry& e : m_waveMix)
+                inMix |= e.type == s.type;
+            if (inMix || level < s.minLevel || budget * c_sprinkleShare < 0.5f * waveCostOf(s.type))
+                continue;
+            if (numCandidates == 2)
+                candidates[0] = candidates[1];
+            candidates[glm::min(numCandidates, 1)] = s.type;
+            numCandidates = glm::min(numCandidates + 1, 2);
+        }
+        if (numCandidates > 0)
+        {
+            const ENpcType type = candidates[glm::linearRand(0.0f, 1.0f) < 0.5f ? 0 : numCandidates - 1];
+            // The mix weights are per BODY: the weight that gives this type the share of the POINTS.
+            float cost = 0.0f;
+            for (const WaveMixEntry& e : m_waveMix)
+                cost += e.weight * waveCostOf(e.type);
+            m_waveMix.push_back({ type, c_sprinkleShare * cost / ((1.0f - c_sprinkleShare) * waveCostOf(type)) });
+        }
+    }
     // Size the blob for EVERYTHING still queued (a previous wave's tail included) - once, with the
     // mix that will spend it, so the density holds from the first body to the last.
     m_waveRadius = waveSpawnRadius(m_wavePendingBudget);

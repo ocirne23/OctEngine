@@ -33,6 +33,7 @@ export struct GameMatchSettings
     float ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
     float labelMaxDistance = 120.0f;  // world labels beyond this are not built
     float labelBarDistance = 45.0f;   // m from the CAMERA: a building farther than this shows no bars (health / build, stores); its badge stays
+    float labelUnitStrength = 1.5f;   // a unit shows a bar only when its health + shield is at least this x the common enemy's in view
     // Unit nav sources are culled to units with ANOTHER team's unit/player within this reach.
     float navUnitSourceReach = 64.0f;
     // A non-AI unit farther than this from every SIM LOD focus seeds a new cluster focus.

@@ -175,9 +175,11 @@ lock-free — **unless its `CullMode` says otherwise (below).**
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when it has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by the culling config's
-  `skinnedRadiusScale`; otherwise a point at the spawn position. **For a tree CHILD that is its LOCAL
-  position** — the entry links at the next commit, and the child's first visit re-places it in world
-  space before any query can see it.
+  `skinnedRadiusScale`; otherwise a point at the spawn position. **A tree CHILD spawns in its parent's
+  space** (its node too, until its first visit places it), so `create` takes its bounds through the
+  ancestors' transforms: the entry is in WORLD space from the start. A child whose entry links before its
+  first visit needs a real stamp to be visited (a Global root's children, `simLodSelected`), and only an
+  entry at the real place gets one.
 * Headless has no render nodes, so every entry there is a point.
 * Gameplay queries use the Render layer; **the Entity layer is the World's update-selection layer.**
 * Headless still registers and main.cpp calls `commitFrame()` in place of the cull job, so radius

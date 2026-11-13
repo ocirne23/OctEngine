@@ -37,6 +37,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &s.ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
     Tweak::floatVar("HUD", "Label max distance", &s.labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
     Tweak::floatVar("HUD", "Building bar distance (m)", &s.labelBarDistance, 0.0f, 2000.0f, 5.0f, {}, ETweakFlags::None);
+    Tweak::floatVar("HUD", "Unit bar strength (x common enemy)", &s.labelUnitStrength, 0.0f, 10.0f, 0.1f, {}, ETweakFlags::None);
     Tweak::floatVar("Game/Nav", "Nav unit source reach", &s.navUnitSourceReach, 8.0f, 400.0f, 4.0f);
     Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &s.focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);

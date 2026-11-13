@@ -283,7 +283,14 @@ only rejects what is BEHIND the camera.
 **World labels:** a health bar over every damageable structure, plus a second bar for storage (energy
 yellow, fuel orange) and a third on the Base. **FULL health and shield bars stay hidden** — only
 damage, blueprint progress, selection, or a prefab's `AlwaysDisplayHealth true` shows one. Undamaged
-non-player units skip their label entirely; `player.pre` opts in so player tags persist. A SELECTED
+non-player units skip their label entirely; `player.pre` opts in so player tags persist.
+
+**ONLY THE STRONG UNITS CARRY A BAR.** A unit's toughness (`healthMax + energyMax`) is compared with the COMMON
+ENEMY's: the mean toughness of the enemy units in view (`m_labelCommonToughness`, smoothed over ~20 s, kept while no
+enemy is in view). A damaged unit shows its bar only at "HUD/Unit bar strength (x common enemy)" (1.5) times that or
+more, so the scale follows the spawns: a Brute among grunts and swarm has a bar, a Brute in a horde of Brutes has
+none. The rule holds for both teams; players and `AlwaysDisplayHealth` prefabs are exempt; before the first enemy
+is seen, each damaged unit passes. The value is local to each process (not synced, tweak not Synced). A SELECTED
 cable segment or crossing adds its transport readout — "Energy 3 / 4 cells, 8.0 / 10.0 per s" plus
 "Run 41 / 96 cells over 24 segments" (`StructureSystem::cableInfo`: the segment's fill, the cells
 leaving it as a ~2 s average against its out-rate — also its second bar, hued by medium — and its

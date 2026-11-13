@@ -364,13 +364,26 @@ void GameMatch::buildWorldLabels()
     // maxDist + |camera - player| of the camera, so that bound keeps the traversal tight and the
     // exact player-distance test below does the rest.
     NpcSystem::queryVisibleUnits(camera, m_settings.labelMaxDistance + glm::distance(cullCenter, camera.position), units);
+    // ONLY THE STRONG UNITS CARRY A BAR. "Strong" is relative to what is in the field: a unit's toughness (health +
+    // shield) against the COMMON ENEMY's, the mean over the enemy units in view, smoothed over ~20 s so it follows the
+    // spawns and not one frame's view. So a Brute among grunts and swarm has a bar, and a Brute in a horde of Brutes
+    // has none. Local to each process (no sync): it reads only the unit components, which every instance has.
+    const float strongAt = m_labelCommonToughness * m_settings.labelUnitStrength; // 0 before the first enemy: all pass
+    float enemyToughness = 0.0f;
+    int enemyCount = 0;
     for (Entity* unitEntity : units)
     {
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
-        if (!u || unitEntity == ownPlayer || !inRange(unitEntity->pos))
+        if (!u || unitEntity == ownPlayer)
             continue;
-        // (Swarm bodies included: full bars are hidden, so only the DAMAGED slice of a thousand-
-        // body horde pushes a label - the drown-the-HUD concern the old shieldOutput skip covered.)
+        const float toughness = u->healthMax + u->energyMax;
+        if (!u->puppet && u->team != (uint32)m_team)
+        {
+            enemyToughness += toughness;
+            ++enemyCount;
+        }
+        if (!inRange(unitEntity->pos) || (!u->puppet && !u->alwaysDisplayHealth && toughness < strongAt))
+            continue;
         HudWorldLabel label;
         const float height = u->puppet ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos)
@@ -411,6 +424,12 @@ void GameMatch::buildWorldLabels()
         if (!u->puppet && label.barMax <= 0.0f)
             continue;
         labels.push_back(oc::move(label));
+    }
+    if (enemyCount > 0)
+    {
+        const float mean = enemyToughness / (float)enemyCount;
+        m_labelCommonToughness = m_labelCommonToughness <= 0.0f ? mean
+            : glm::mix(m_labelCommonToughness, mean, 1.0f - glm::exp(-m_labelsDelta / 20.0f));
     }
     // A Lumberyard / Quarry GHOST: the yield it would have here, over the ghost (the HUD's "Yield" line says the same).
     if (m_shownYield != -2)

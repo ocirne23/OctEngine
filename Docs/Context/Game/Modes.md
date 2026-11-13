@@ -442,6 +442,14 @@ exists.
 | 9–10 | **giant push** · **hive** (9) · siege column (10) |
 | 11–13 | **titan** (11) · **hive siege** (12) · endgame (13, all four elites) |
 
+**THE SPRINKLE** (`queueWave`, waves only — not the ambient scatter): each wave adds ONE strong type on top of its
+recipe, with a weight that gives it 15 % of the wave's points (`c_sprinkleShare`; the mix weights are per body, so
+the weight is `share * sum(w * cost) / ((1 - share) * cost)`). Candidates by level (the wave index; the night in
+the sandbox world): Warrior 1, Brute 2, Elite 3, Spawner 4, Giant 5, Titan 6 — only a type the recipe does not have, and only
+when the share pays for half a body or more, so the budget decides when a Giant or a Titan can come. The roll is
+between the two most expensive candidates. The entry is part of `m_waveMix` (capacity 6: a recipe's 5 + this), so
+the save holds it.
+
 `sampleMix` samples the wave's stored jittered copy per spawn; the ambient scatter samples the
 archetype directly per spawn. The wave log names the recipe.
 

@@ -266,6 +266,7 @@ private:
     Rect m_labelsViewport;
     bool m_labelsCameraValid = false;
     JobCounter m_labelsCounter;
+    float m_labelCommonToughness = 0.0f; // health + shield of the common enemy in view, smoothed: the scale a unit's bar is judged on (0 = none seen)
     oc::vector<Entity*> m_labelUnits; // the labels job's visible-unit scratch (one job in flight; never a thread_local - the job may park)
     oc::vector<HudWorldLabel> m_labelsScratch; // the labels job builds here, then SWAPS with GameHud's list (two vectors ping-pong)
     HudPopup m_labelsPopup;                    // same for the barracks popup (its buttons vector keeps its capacity)
@@ -565,8 +566,8 @@ private:
     // minWave gate, driven by depth instead of time, so the deep map holds the heavy recipes and
     // the near ring stays swarm-grade. Authority-only (clients never spawn).
     struct WaveMixEntry { ENpcType type; float weight; };
-    ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) const; // weighted type roll
-    oc::fixed_vector<WaveMixEntry, 4> m_waveMix;
+    ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 6>& mix) const; // weighted type roll
+    oc::fixed_vector<WaveMixEntry, 6> m_waveMix; // a recipe's 5 at most + the sprinkle
     int m_lastArchetype = -1;    // never the same recipe twice in a row (when a choice exists)
     bool m_coop = false;
     float m_matchTime = 0.0f;    // authority sim seconds since the world spawned: the HUD "Time" clock, saved/restored

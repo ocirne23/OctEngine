@@ -350,9 +350,12 @@ EntityPtr EntityState::create(const EntitySpawnTemplate& tmpl, const Transform& 
 
     // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
     // the render node when there is one (skinned inflated by the culling config), else a point at
-    // the spawn position (for a tree CHILD that is its LOCAL position - the entry links at the
-    // next commit and the child's first visit re-places it in world space before any query can
-    // see it). Headless has no render nodes, so every entry there is a point.
+    // the spawn position. A tree CHILD spawns in its parent's space (its node too, until its first visit places it), so
+    // its bounds go through the ancestors' transforms: the entry must be where the entity IS. A child whose entry links
+    // before its first visit is selected only by a real stamp (a Global root's children, World::simLodSelected), and an
+    // entry at the local position - next to the world origin - never gets one: the child is never visited and never
+    // placed (a loaded base whose buildings showed only their root mesh). Headless has no render nodes, so every entry
+    // there is a point.
     // CullMode: None registers nothing, and neither does anything spawned under a RootOnly
     // ancestor; the RootOnly root itself registers over its whole subtree (already spawned above).
     if (tmpl.cullMode == EEntityCullMode::RootOnly && !hasRootOnlyAncestor(parent))
@@ -384,6 +387,11 @@ EntityPtr EntityState::create(const EntitySpawnTemplate& tmpl, const Transform& 
                 radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
             }
             layers |= SpatialLayer_Render;
+        }
+        for (const Entity* ancestor = parent; ancestor; ancestor = ancestor->parent)
+        {
+            center = glm::dvec3(ancestor->pos + ancestor->rot * (glm::vec3(center) * ancestor->scale));
+            radius *= glm::abs(ancestor->scale);
         }
         entity->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(center, radius, reinterpret_cast<uint64>(entity), layers));
     }
