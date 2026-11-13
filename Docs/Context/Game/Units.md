@@ -53,7 +53,7 @@ capsule inside `attackRange + victim.bodyRadius` (a capsule gets a flat 0.8 allo
 at that ring.
 
 **MELEE IS DISCRETE.** A unit swings once every `AttackInterval` seconds for `AttackDamage` health
-on a unit or structure, `PlayerDamage` on a player capsule (all authored per prefab; the timer runs
+on a unit, `StructureDamage` x the bite mult on a structure, `PlayerDamage` on a player capsule (all authored per prefab; the timer runs
 down whether or not a victim is in reach, clamped at 0, so the first swing on arrival lands at
 once, and it starts at a random phase so a barracks batch never swings in lockstep). One swing
 lands on ONE victim: the melee enemy unit or player first, else the structure it is biting. Each

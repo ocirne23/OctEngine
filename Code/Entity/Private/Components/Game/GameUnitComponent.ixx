@@ -81,6 +81,7 @@ export struct GameUnitComponent
         float attackInterval = 1.0f;  // melee is discrete: one hit of attackDamage per interval
         float attackDamage = 6.0f;
         float playerDamage = 10.0f;   // per hit on a PLAYER capsule
+        float structureDamage = -1.0f; // per bite on a STRUCTURE, before params.structureBiteMult; < 0 = attackDamage (the siege units author more)
         float emitterDrain = 1.0f;    // energy/s this unit costs the nearest active enemy emitter
         bool ranged = false;
         float standoffRange = 16.0f;
@@ -98,6 +99,7 @@ export struct GameUnitComponent
     float shieldOutput = 0.8f;
     float moveSpeed = 4.0f, accel = 15.0f;
     float attackRange = 1.5f, attackInterval = 1.0f, attackDamage = 6.0f, playerDamage = 10.0f;
+    float structureDamage = 6.0f; // per bite on a structure, before params.structureBiteMult (resolved at spawn: never < 0)
     float emitterDrain = 1.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;

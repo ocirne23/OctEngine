@@ -281,9 +281,9 @@ adds to the kind's count (one atomic add, no lock). `takeSoundCues` hands out th
 **`Component GameUnit`** — `ShortName` (the 3–5 char HUD tag, owned by each component; the world labels use it on
 every instance, **so replicated units need no type on the wire**), then `Team`, `Puppet`, `HealthMax`,
 `EnergyMax`, `ShieldOutput`, `MoveSpeed`, `Accel`, `AttackRange`, `AttackInterval` + `AttackDamage`
-+ `PlayerDamage` (melee is DISCRETE: one hit every `AttackInterval` seconds on one victim — the
++ `PlayerDamage` + `StructureDamage` (melee is DISCRETE: one hit every `AttackInterval` seconds on one victim — the
 nearest enemy unit or player capsule first, for `AttackDamage` / `PlayerDamage`, else the bitten
-structure for `AttackDamage` — each reported as a `HitRecord` for the game's visual),
+structure for `StructureDamage` (not authored = `AttackDamage`) x `GameUnitParams::structureBiteMult` — each reported as a `HitRecord` for the game's visual),
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,
 `FieldBlocked`, `HeightLimit`, `Color`.
 

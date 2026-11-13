@@ -26,4 +26,5 @@ Prefab gameEnemyBrute
 		AttackInterval 1.5
 		AttackDamage 18
 		PlayerDamage 30
+		StructureDamage 60
 		EmitterDrain 5

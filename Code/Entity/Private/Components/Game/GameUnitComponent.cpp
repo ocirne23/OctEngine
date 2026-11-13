@@ -149,6 +149,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     attackInterval = info.attackInterval;
     attackDamage = info.attackDamage;
     playerDamage = info.playerDamage;
+    structureDamage = info.structureDamage >= 0.0f ? info.structureDamage : info.attackDamage;
     emitterDrain = info.emitterDrain;
     ranged = info.ranged;
     standoffRange = info.standoffRange;
@@ -600,7 +601,7 @@ void GameUnitComponent::tickCombat(Tick& t)
         if (meleeVictim)
             meleeVictim->damage(swing, team);
         else
-            bite->damage(swing * params.structureBiteMult);
+            bite->damage(structureDamage * params.structureBiteMult);
         m_attackTimer = attackInterval;
         const std::lock_guard<std::mutex> lock(g_unitEventMutex);
         g_hits.push_back(HitRecord{ t.pos, meleeVictim ? meleeVictimPos : bitePos });
@@ -1212,6 +1213,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.attackInterval != d.attackInterval) out.set("AttackInterval", info.attackInterval);
     if (info.attackDamage != d.attackDamage) out.set("AttackDamage", info.attackDamage);
     if (info.playerDamage != d.playerDamage) out.set("PlayerDamage", info.playerDamage);
+    if (info.structureDamage != d.structureDamage) out.set("StructureDamage", info.structureDamage);
     if (info.emitterDrain != d.emitterDrain) out.set("EmitterDrain", info.emitterDrain);
     if (info.ranged != d.ranged)             out.set("Ranged", info.ranged);
     if (info.standoffRange != d.standoffRange) out.set("StandoffRange", info.standoffRange);

@@ -1627,6 +1627,7 @@ void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("AttackInterval")) info->attackInterval = glm::max(n->asFloat(0, info->attackInterval), 0.05f);
         if (const AssetNode* n = unitNode->find("AttackDamage"))  info->attackDamage = n->asFloat(0, info->attackDamage);
         if (const AssetNode* n = unitNode->find("PlayerDamage"))  info->playerDamage = n->asFloat(0, info->playerDamage);
+        if (const AssetNode* n = unitNode->find("StructureDamage")) info->structureDamage = n->asFloat(0, info->structureDamage);
         if (const AssetNode* n = unitNode->find("EmitterDrain"))  info->emitterDrain = n->asFloat(0, info->emitterDrain);
         if (const AssetNode* n = unitNode->find("Ranged"))        info->ranged = n->asBool();
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);

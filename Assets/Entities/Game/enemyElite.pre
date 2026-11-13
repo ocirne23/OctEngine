@@ -25,4 +25,5 @@ Prefab gameEnemyElite
 		AttackInterval 0.8
 		AttackDamage 9
 		PlayerDamage 13
+		StructureDamage 16
 		EmitterDrain 4

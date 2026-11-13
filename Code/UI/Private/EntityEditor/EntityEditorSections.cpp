@@ -986,6 +986,7 @@ void EntityEditor::renderGameUnitSection(EntityDocNode& node)
 	edited |= fieldFloat("Attack Interval", unit.attackInterval, 0.01f, 0.05f, 100.0f);
 	edited |= fieldFloat("Attack Damage", unit.attackDamage, 0.1f, 0.0f, 100000.0f);
 	edited |= fieldFloat("Player Damage", unit.playerDamage, 0.1f, 0.0f, 100000.0f, "Per hit on a player capsule");
+	edited |= fieldFloat("Structure Damage", unit.structureDamage, 0.1f, -1.0f, 100000.0f, "Per bite on a structure, before the global bite mult; below 0 = Attack Damage");
 	edited |= fieldFloat("Emitter Drain", unit.emitterDrain, 0.01f, 0.0f, 1000.0f, "Energy/s this unit costs the nearest active enemy emitter");
 	edited |= fieldCheck("Ranged", unit.ranged);
 	if (unit.ranged)

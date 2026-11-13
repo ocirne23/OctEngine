@@ -265,7 +265,7 @@ unpowered consumer.
 
 Segments are full structures: a blueprint phase (**NON-conductive until built**), health (40; a crossing 60 —
 **every type has its own health**: `GameStructureSettings::health`, indexed by `EStructureType`, the "Game/Health"
-tweaks, through `StructureSystem::healthMaxOf`: the Beacon 1000, a Wall 1000, a Gate 800, a Great lantern / Barracks 400 (a unit's bite on a structure is its `AttackDamage` x "Bite damage on structures mult" 0.5, `GameUnitParams::structureBiteMult`),
+tweaks, through `StructureSystem::healthMaxOf`: the Beacon 1000, a Wall 1000, a Gate 800, a Great lantern / Barracks 400 (a unit's bite on a structure is its `StructureDamage` - by default its `AttackDamage`; the siege types author more: Elite 16, Brute 60, Giant 240, Titan 900 - x "Bite damage on structures mult" 0.5, `GameUnitParams::structureBiteMult`),
 a Light tower 300, most buildings 200-250, a House / Bridge 150, a Mirror / Lens 100. `stampTuning` stamps it into
 the component's `healthMax` each tick, and `investMaterials` heals against that, so the build and repair price is
 the type's cost whatever its health), territory drain, projectile damage (`Layer Cable, CollidesWith Projectile` plus

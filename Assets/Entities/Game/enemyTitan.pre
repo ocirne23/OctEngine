@@ -34,5 +34,6 @@ Prefab gameEnemyTitan
 		AttackInterval 2.5
 		AttackDamage 140
 		PlayerDamage 112
+		StructureDamage 900
 		EmitterDrain 25
 		AlwaysDisplayHealth true

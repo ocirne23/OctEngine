@@ -205,7 +205,8 @@ export struct GameStructureSettings
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
-    // bites for 3, a Brute for 9, a Giant for 28, a Titan for 70 (AttackDamage x GameUnitParams::structureBiteMult), and
+    // bites for 3, a Brute for 30, a Giant for 120, a Titan for 450 (the prefab's StructureDamage, else its AttackDamage, x
+    // GameUnitParams::structureBiteMult), and
     // an enemy field burns 6 health/s.
     float health[GameStructureTypeCount] = {
         200.0f,  // Emitter (the Lantern)
@@ -394,7 +395,7 @@ export struct GameUnitParams
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe
     float emitterDrainMult = 0.175f;
-    float structureBiteMult = 0.5f; // a unit's bite on a STRUCTURE: x its AttackDamage (a hit on a unit or a player is not scaled)
+    float structureBiteMult = 0.5f; // a unit's bite on a STRUCTURE: x its StructureDamage (a hit on a unit or a player is not scaled)
     float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
     float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
