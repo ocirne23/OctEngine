@@ -77,6 +77,11 @@ clips, each with its own `Volume` / `Pitch` / `Loop` / `Relative` / `ReferenceDi
 * Playing spatial sounds otherwise follow the entity every update.
 * Demo: `Entities/Debug/physicsCube.pre`.
 
+**The GAME's sounds do not use `AudioComponent` or the one-shot pool.** `GameSound` (Code/Game) owns its own
+`AudioSource` voices and buffers (`createBuffer` from synthesized PCM, or `loadSound`), with the engine's distance
+falloff off (`setAttenuation(1, max, 0)`: the distance is in the gain) — see
+[`Docs/Context/Game/Sound.md`](../Game/Sound.md).
+
 **DSL surface** — `self.audio.trigger(string alias)` and `self.audio.stop(string alias)`, registered
 in `registerScriptDslBindings` ([ScriptContext.cpp:336](../../../Code/Entity/Private/ScriptContext.cpp#L336)).
 They lower to the `ctx->audioTrigger` / `ctx->audioStop` ABI thunks; `audioTrigger` takes an

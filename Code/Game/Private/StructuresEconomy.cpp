@@ -9,6 +9,7 @@ import Physics;
 import RendererVK;
 import Spatial;
 import :Structures;
+import :Sound;
 
 // THE ECONOMY TICKS + materials (see Structures.ixx): production (income, fuel burn, consumer
 // drain, the emitter ramps - over the roster, the transport moves the cells between them), the
@@ -166,6 +167,7 @@ float StructureSystem::investMaterials(const Ref& s, float amount, float repairH
         applyStructureTint(s); // back to the authored color
         m_linksDirty = true;   // a finished cable segment starts conducting
         Log::info(oc::string(structureTypeName(s.type)) + " constructed");
+        GameSound::post(EGameSound::StructureBuilt, s.entity->pos, isCableOrCrossing(s.type) ? 0.4f : 1.0f);
         if (onStructureBuilt) // server: re-fire GPl - cables are outside GSt, so this IS the
             onStructureBuilt(s.state->structureId); // client's only built notification
     }
@@ -436,9 +438,10 @@ void StructureSystem::tickDamage(float)
         }
         // RUBBLE: a BUILT building the enemy destroys stays as rubble - a blueprint again (inert: no production, no
         // field, no light link, no walkers), at the health "Rubble rebuild cost (x)" leaves to pay, with its stores
-        // lost. The builders, the workers and the players build it up like any blueprint. A blueprint that never
-        // stood, and a road or conduit piece (their state mirrors outside GSt), are removed as before.
-        if (!s.state->blueprint && !isCableOrCrossing(s.type) && m_settings.rubbleCost > 0.0f)
+        // lost. The builders, the workers and the players build it up like any blueprint. A ROAD PIECE too (a cable
+        // type: its rubble flag mirrors in GCb, with the blueprint progress). A blueprint that never stood and a
+        // crossing are removed as before.
+        if (!s.state->blueprint && !isCrossingType(s.type) && m_settings.rubbleCost > 0.0f)
         {
             Log::info(oc::string(structureTypeName(s.type)) + " destroyed: rubble");
             GameStructureComponent& c = *s.state;
@@ -463,6 +466,8 @@ void StructureSystem::tickDamage(float)
 // for a 3x3 one. The pile is a root entity of its own, owned by the roster entry.
 void StructureSystem::setRubble(const Ref& s, bool rubble)
 {
+    if (rubble && !s.state->rubble)
+        GameSound::post(EGameSound::StructureCollapse, s.entity->pos, 1.0f, (float)footprintCellsOf(s.type));
     s.state->rubble = rubble ? 1 : 0;
     applyStructureTint(s);
     if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(s.entity))
@@ -477,7 +482,9 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
         }
         const int cells = footprintCellsOf(s.type);
         const glm::vec3 ground = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f);
-        s.rubbleVisual = Globals::world.spawnAssetFile(cells <= 1 ? "Entities/Game/rubble1.pre" : "Entities/Game/rubble2.pre",
+        // (a road piece: broken paving, rubbleRoad.pre - no pile to climb)
+        s.rubbleVisual = Globals::world.spawnAssetFile(isCableType(s.type) ? "Entities/Game/rubbleRoad.pre"
+            : cells <= 1 ? "Entities/Game/rubble1.pre" : "Entities/Game/rubble2.pre",
             Transform(ground, cells >= 3 ? 1.5f : 1.0f, s.entity->rot), true);
         if (s.rubbleVisual)
             Globals::world.addRootEntity(s.rubbleVisual);

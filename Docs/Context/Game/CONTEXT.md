@@ -33,6 +33,7 @@ documentation lives in topic files in this folder — read the ones for the area
 | [Economy.md](Economy.md) | Economy: the cable transport, physical cables and crossings, derived networks, the cell hash, construction, grid placement |
 | [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, routes), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
 | [Units.md](Units.md) | Units and the player: the unit sim / NpcSystem split, targets, melee, damage, the far tick, parked loose units, friction; the player shield, problem bubbles, world labels, HUD |
+| [Sound.md](Sound.md) | Sound: cues (posted, never played), the limits for crowds, the battle and horde beds, ambience, building loops, the synthesized sounds and their file overrides |
 
 ## The names: code words and player words
 
@@ -91,7 +92,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
 (`EStructureType` + the constexpr type predicates - `isHarvestType`: the Lumberyard and the Quarry; `isLineType` / `isBreachable`: the Wall and the Gate; `standsOnWater`: the Gate and the Bridge, which is a cable type (a road segment) -, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
-`Game:Npc`, `Game:Faction` (`FactionLayer`: whose land each cell is, see The faction layer in [Modes.md](Modes.md)),
+`Game:Npc`, `Game:Sound` (`GameSound`: every game sound, see [Sound.md](Sound.md)), `Game:Faction` (`FactionLayer`: whose land each cell is, see The faction layer in [Modes.md](Modes.md)),
 `Game:GameCamera` (top-down + the third-person orbit), `Game:PlayerLocomotion` (the camera-locked strafe
 of a `ThirdPersonAnimator` body — the co-op player's and App's key C capsule's), `Game:Lobby` (the pre-game LOBBY model, `LobbySystem` — multiplayer,
 or LOCAL: offline, one player, Start launches at once — ready checks, the start countdown, the

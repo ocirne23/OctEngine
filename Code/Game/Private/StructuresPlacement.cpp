@@ -9,6 +9,7 @@ import Force;
 import Physics; // the sandbox world's ground: terrain rays, tree / rock overlap, the water surface
 import Spatial;
 import :Structures;
+import :Sound;
 
 // GRID PLACEMENT + the spawn/remove seams (see Structures.ixx): the snap, the footprints, the
 // per-cell occupancy hash the derived links and every placement run on, cellsFree / planCrossing
@@ -277,6 +278,8 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
             other.harvestDirty |= other.type == type;
     insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
     m_linksDirty = true;
+    if (!built) // a blueprint goes down (a load or a join replay spawns built structures: silent)
+        GameSound::post(EGameSound::StructurePlaced, pos, isCableOrCrossing(type) ? 0.5f : 1.0f);
     return (int)m_frame.size() - 1;
 }
 
@@ -286,6 +289,7 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
 {
     const Ref s = m_frame[index]; // owning copy: the entity stays alive through the bookkeeping
     const uint32 id = s.state->structureId;
+    GameSound::post(EGameSound::StructureCollapse, s.entity->pos, isCableOrCrossing(s.type) || s.state->blueprint ? 0.3f : 1.0f);
     if (s.rubbleVisual) // its rubble pile goes with it
         Globals::world.removeRootEntity(s.rubbleVisual.get());
     if (s.walkPiece) // a Walkway's deck or stairs

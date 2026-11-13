@@ -15,7 +15,8 @@ idempotent; the server side is fed by StructureSystem's `onStructure*` hooks.
   applies the built flag idempotently. **Cable segments sit outside GSt, so this IS their build
   notification.**
 * Their build PROGRESS mirrors through **GCb**, sent right after every GSt: blueprint cable and
-  crossing segments only, `[u16 count]{u32 id, u8 healthFrac}` over the segment's own `healthMax`, up
+  crossing segments only, `[u16 count]{u32 id, u8: 7 bits healthFrac + the top bit RUBBLE}` over the segment's own `healthMax` (the rubble bit
+  is how a client learns that a built road piece was destroyed: it makes the piece a blueprint again), up
   to 190 records with `m_cableSyncCursor` rotating past that.
 * **There is NO cable wire** — links derive locally on both sides. The cable FILLS ride **GCf**
   (`[u16 count]{u32 id, u8 fill, u8 util}`, up to 160, rotating through `m_cableFillCursor`).

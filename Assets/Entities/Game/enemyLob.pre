@@ -25,7 +25,7 @@ Prefab gameEnemyLob
 	Component Network
 	Component GameProjectile
 		UnitDamage 12
-		StructureDamage 18
+		StructureDamage 9
 		Lifetime 7
 		EmitterDrain 20
 		EmitterDrainRadius 6

@@ -12,6 +12,7 @@ import File; // AssetNode (the trickle save state)
 import :Match;
 import :Structures;
 import :Npc;
+import :Sound;
 
 // ---- CO-OP director: waves, the spawn trickle, the ambient scatter and its wander - authority only (the state: Match.ixx CO-OP) ----
 
@@ -374,6 +375,7 @@ void GameMatch::tickBeacon(float deltaSec)
 
 void GameMatch::addSpawnFog(const glm::vec3& pos, float radius)
 {
+    GameSound::post(EGameSound::WaveHorn, pos); // a wave comes down: the horn, from its side (every instance)
     m_spawnFog[m_spawnFogNext] = { pos, glm::clamp(radius, 6.0f, 60.0f), 0.0f };
     m_spawnFogNext = (m_spawnFogNext + 1) % c_spawnFogSites;
 }
@@ -675,6 +677,10 @@ void GameMatch::tickLightning(float deltaSec)
                     const glm::vec2 foot(slot->pos.x + glm::linearRand(-lean, lean), slot->pos.z + glm::linearRand(-lean, lean));
                     slot->ground = glm::vec3(foot.x, groundY(foot.x, foot.y, centre.y), foot.y);
                 }
+                // The thunder: later and quieter with the distance (the delay is capped: a flash 5 km away is not 15 s late).
+                const float thunderDist = glm::distance(wantStrike ? slot->ground : slot->pos, centre);
+                GameSound::post(EGameSound::Thunder, slot->pos, glm::clamp(800.0f / glm::max(thunderDist, 1.0f), 0.15f, 1.0f) * (wantStrike ? 1.0f : 0.6f),
+                    1.0f, glm::min(thunderDist / 340.0f, 6.0f));
             }
         }
     }
@@ -944,6 +950,8 @@ void GameMatch::queueWave()
         fogRadius = glm::min(m_waveRadius, m_settings.sandboxWaveDistance * 0.5f);
         addSpawnFog(fogPos, fogRadius);
     }
+    else
+        GameSound::post(EGameSound::WaveHorn, fogPos); // the flat maps have no spawn fog: the horn alone
     if (m_isServer)
     {
         uint8 buffer[24];

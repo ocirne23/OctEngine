@@ -265,6 +265,17 @@ Tuning statics (`GameUnitComponent::params` / `GameStructureComponent::params`) 
 parameter tables and the steering are in [`Docs/Context/Nav/CONTEXT.md`](../Nav/CONTEXT.md) and
 [`Docs/Context/Game/CONTEXT.md`](../Game/CONTEXT.md).
 
+#### Sound cues
+
+`GameUnitComponent::reportSound(kind, pos, size)` is the components' side of the game's sound
+([`Docs/Context/Game/Sound.md`](../Game/Sound.md)): any thread, every role. The kinds (`ESoundCue`): `UnitReveal` from
+`setSolid`, with the reveal smoke (the authority: `tickField` runs there); `UnitDeath` from `tickHurtLight` (it
+compares the health on every role, so a replicated drop to 0 counts) and from `kill`; **there is no hurt cue** (a hit
+that does not kill makes no sound of the unit's own); `ShotFired` / `LobFired` from
+`GameProjectileComponent::spawn`; `ShotImpact` / `SplashImpact` from its `destroy` (not when the shot ran out in the
+air). **The queue is BOUNDED:** between two drains a kind keeps `MaxSoundCues` (48) positions; a report over that only
+adds to the kind's count (one atomic add, no lock). `takeSoundCues` hands out the positions and the full counts.
+
 #### Authoring
 
 **`Component GameUnit`** — `ShortName` (the 3–5 char HUD tag, owned by each component; the world labels use it on

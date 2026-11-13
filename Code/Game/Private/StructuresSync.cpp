@@ -6,6 +6,7 @@ import Core.Log;
 import Entity;
 import File;
 import :Structures;
+import :Sound;
 
 // STATE IN AND OUT (see Structures.ixx): the client-side MIRROR appliers (idempotent, driven by
 // GameMatch's game events - GPl / GRm / GSt / GCb / GRt / GBu), and the F9/F10 SAVE/LOAD of the
@@ -26,8 +27,11 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
         {
             m_frame[existing].state->blueprint = false;
             m_frame[existing].state->health = m_frame[existing].state->healthMax;
+            if (m_frame[existing].state->rubble) // a road piece built up again from rubble
+                setRubble(m_frame[existing], false);
             applyStructureTint(m_frame[existing]);
             m_linksDirty = true;
+            GameSound::post(EGameSound::StructureBuilt, m_frame[existing].entity->pos, isCableOrCrossing(type) ? 0.4f : 1.0f);
         }
         return;
     }
@@ -84,12 +88,20 @@ void StructureSystem::mirrorUnitType(uint32 id, uint8 unitType)
     stampTuning(m_frame[index]);
 }
 
-void StructureSystem::mirrorCableProgress(uint32 id, float healthFrac)
+void StructureSystem::mirrorCableProgress(uint32 id, float healthFrac, bool rubble)
 {
     const int index = structureIndexById(id);
-    if (index < 0 || !m_frame[index].state->blueprint)
-        return; // a finished segment's health is authoritative from the built flip (GPl)
+    if (index < 0)
+        return;
     GameStructureComponent& s = *m_frame[index].state;
+    if (rubble && !s.rubble) // a built road piece the enemy destroyed: a blueprint again, as rubble
+    {
+        s.blueprint = true;
+        setRubble(m_frame[index], true);
+        m_linksDirty = true;
+    }
+    if (!s.blueprint)
+        return; // a finished segment's health is authoritative from the built flip (GPl)
     s.health = glm::clamp(healthFrac * s.healthMax, 1.0f, s.healthMax);
 }
 

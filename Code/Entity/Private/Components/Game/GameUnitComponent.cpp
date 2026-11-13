@@ -25,6 +25,26 @@ static oc::vector<GameUnitComponent::DeathRecord> g_deaths;
 static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
 static oc::vector<GameUnitComponent::HitRecord> g_hits;
 static oc::atomic<int> g_liveUnits = 0; // spawn/destroy both run on workers in the batch paths
+static std::mutex g_soundCueMutex;
+static oc::vector<GameUnitComponent::SoundCue> g_soundCues;
+static oc::atomic<uint32> g_soundCueCounts[(int)GameUnitComponent::ESoundCue::Count];
+
+void GameUnitComponent::reportSound(ESoundCue kind, const glm::vec3& pos, float size)
+{
+    if (g_soundCueCounts[(int)kind].fetch_add(1, oc::memory_order_relaxed) >= MaxSoundCues)
+        return; // counted only
+    const std::lock_guard<std::mutex> lock(g_soundCueMutex);
+    g_soundCues.push_back(SoundCue{ pos, size, kind });
+}
+
+void GameUnitComponent::takeSoundCues(oc::vector<SoundCue>& out, uint32 counts[(int)ESoundCue::Count])
+{
+    const std::lock_guard<std::mutex> lock(g_soundCueMutex);
+    out.swap(g_soundCues);
+    g_soundCues.clear();
+    for (int k = 0; k < (int)ESoundCue::Count; ++k)
+        counts[k] = g_soundCueCounts[k].exchange(0, oc::memory_order_relaxed);
+}
 
 int GameUnitComponent::liveCount()
 {
@@ -201,6 +221,9 @@ void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
     m_hurtGlow = glm::max(m_hurtGlow - deltaSec / glm::max(params.hurtLightDecay, 1e-3f), 0.0f);
     if (health < m_lastHealth - 1e-4f && claimFlash(entity.pos, (float)Globals::time.getSimElapsedSec()))
         m_hurtGlow = 1.0f;
+    // The death's sound cue, on every role (a replicated drop to 0 counts too). A hit that does not kill makes no cue.
+    if (m_lastHealth > 0.0f && health <= 0.0f)
+        reportSound(ESoundCue::UnitDeath, entity.pos, bodyRadius);
     m_lastHealth = health;
     if (m_hurtGlow <= 0.0f || params.hurtLightIntensity <= 0.0f || !Globals::rendererVK.isInitialized())
         return;
@@ -577,7 +600,7 @@ void GameUnitComponent::tickCombat(Tick& t)
         if (meleeVictim)
             meleeVictim->damage(swing, team);
         else
-            bite->damage(swing);
+            bite->damage(swing * params.structureBiteMult);
         m_attackTimer = attackInterval;
         const std::lock_guard<std::mutex> lock(g_unitEventMutex);
         g_hits.push_back(HitRecord{ t.pos, meleeVictim ? meleeVictimPos : bitePos });
@@ -947,7 +970,10 @@ void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
     // system draws at most a dozen puffs a frame, near the camera (ParticleSystem::emitPuff), so a crowd of
     // thousands that walks into a field costs no more than a few units do.
     if (now && params.revealPuff != UINT32_MAX)
+    {
         Globals::particleSystem.emitPuff(params.revealPuff, t.pos);
+        reportSound(ESoundCue::UnitReveal, t.pos, bodyRadius); // the sizzle that goes with the smoke
+    }
     solid = now;
     const SpawnInfo* info = getGameUnitSpawnInfo(&t.entity);
     tintSubtree(&t.entity, info && info->color.x >= 0.0f ? &info->color : nullptr, tintState == 1, !now);
@@ -1023,6 +1049,11 @@ void GameUnitComponent::kill(Entity& entity)
     if (deathReported) // the queued destroy may take a tick to drain
         return;
     deathReported = true;
+    if (m_lastHealth > 0.0f) // the death cue, once: tickHurtLight compares against m_lastHealth too
+    {
+        reportSound(ESoundCue::UnitDeath, entity.pos, bodyRadius);
+        m_lastHealth = 0.0f;
+    }
     // THE DEATH BURST of an enemy of the viewer (never a player capsule): one request; the particle system draws at
     // most a dozen a frame, near the camera (ParticleSystem::emitPuff), so hundreds of deaths a second stay cheap.
     if (!puppet && (int)team != params.localTeam && params.deathPuff != UINT32_MAX)

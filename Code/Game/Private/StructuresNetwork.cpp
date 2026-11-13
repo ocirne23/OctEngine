@@ -496,6 +496,6 @@ void StructureSystem::updateArms(const Ref& s)
                 on = cap > 0.0f;
             }
         }
-        s.arms[a]->setEnabled(on);
+        s.arms[a]->setEnabled(on && !s.state->rubble); // (rubble hides the piece's own meshes: setRubble)
     }
 }

@@ -17,6 +17,7 @@ import Nav;
 import Threading;
 import :Npc;
 import :Structures;
+import :Sound;
 
 // Per-type PREFABS: the stats live in each prefab's Component GameUnit block.
 static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
@@ -149,6 +150,11 @@ void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind ki
     m_beams.push_back(beam);
     if (kind == EBeamKind::Turret || m_newBeams.size() < c_maxHitBroadcast)
         m_newBeams.push_back(beam);
+    // The strike's sound, on every role (a client adds the server's beams here too): the shot at the muzzle, the hit on the victim.
+    if (kind == EBeamKind::Turret)
+        GameSound::post(EGameSound::TurretFire, from);
+    else
+        GameSound::post(EGameSound::MeleeHit, to);
     // No impact flash: the VICTIM lights itself on the health drop (GameUnitComponent's hurt
     // light), on every role. The turret's muzzle light is drawn off the beam itself.
 }

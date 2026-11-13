@@ -40,7 +40,7 @@ export struct GameProjectileComponent
     bool spent = false; // hit something - despawn queued, never damage twice
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
-    void destroy(Entity& entity, const SpawnInfo& info) {}
+    void destroy(Entity& entity, const SpawnInfo& info); // the impact's sound cue
     void update(Entity& entity, float deltaSec);
     void onContact(Entity& self, Entity* other, bool begin); // other = null: a body with no entity (the terrain, a tree, a rock)
 };

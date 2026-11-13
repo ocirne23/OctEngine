@@ -17,6 +17,7 @@ import :Faction;
 import :Player;
 import :Structures;
 import :Npc;
+import :Sound;
 
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
@@ -317,6 +318,7 @@ private:
     float m_savedBakeHeight = Globals::settings.forceSystem.bakeSampleHeight; // "Force/Bake" "Sample height" before the Base's (tickBeacon)
     StructureSystem m_structures;
     NpcSystem m_npcs;
+    GameSound m_sound; // every game sound: the cue limits, the beds, the building loops (updateWindowed runs it)
 
     EntityPtr m_ground;
     oc::vector<Nav::NavObstacle> m_wallObstacles; // rock terrain rects (static, both modes)

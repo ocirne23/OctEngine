@@ -222,7 +222,9 @@ void GameMatch::sendStats()
         if (!isCableOrCrossing(m_structures.structureType(i)) || !m_structures.structureBlueprint(i))
             continue;
         cableWriter.write<uint32>(m_structures.structureId(i));
-        cableWriter.write<uint8>(frac8(m_structures.structureHealth(i), m_structures.structureHealthMaxOf(i)));
+        // 7 bits of progress, and the top bit = RUBBLE (a destroyed road piece: the client's only notice of it)
+        cableWriter.write<uint8>((uint8)((frac8(m_structures.structureHealth(i), m_structures.structureHealthMaxOf(i)) >> 1)
+            | (m_structures.structureRubble(i) ? 0x80u : 0u)));
         ++cableCount;
     }
     m_cableSyncCursor = i;
@@ -418,7 +420,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
                 const uint32 id = reader.read<uint32>();
                 const uint8 health = reader.read<uint8>();
                 if (!reader.overflowed())
-                    m_structures.mirrorCableProgress(id, health / 255.0f);
+                    m_structures.mirrorCableProgress(id, (float)(health & 0x7Fu) / 127.0f, (health & 0x80u) != 0);
             }
         }
         else if (name == "GCf")

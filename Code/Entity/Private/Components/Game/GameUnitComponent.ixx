@@ -50,6 +50,21 @@ export struct GameUnitComponent
         glm::vec3 to{ 0.0f };
     };
     static void takeHits(oc::vector<HitRecord>& out);
+    // SOUND CUES for the game's sound system (Game:Sound), from the unit and the projectile components. Reported from any
+    // thread, on every role. BOUNDED: between two drains a kind keeps MaxSoundCues positions; a report over that is
+    // only counted, so 30 000 deaths in one frame cost 30 000 atomic adds and 48 queue entries.
+    // (There is no "hurt" cue: a unit that takes a hit makes no sound of its own; the hit does.)
+    enum class ESoundCue : uint8 { UnitReveal, UnitDeath, ShotFired, LobFired, ShotImpact, SplashImpact, Count };
+    struct SoundCue
+    {
+        glm::vec3 pos{ 0.0f };
+        float size = 1.0f; // the body radius (a unit) or the splash radius (a shell)
+        ESoundCue kind = ESoundCue::UnitDeath;
+    };
+    static constexpr uint32 MaxSoundCues = 48;
+    static void reportSound(ESoundCue kind, const glm::vec3& pos, float size = 1.0f);
+    // counts: every report of the kind since the last drain, the ones over the bound included.
+    static void takeSoundCues(oc::vector<SoundCue>& out, uint32 counts[(int)ESoundCue::Count]);
     static int liveCount(); // non-puppet instances; a unit at 0 hp counts until its destroy drains
 
     struct SpawnInfo

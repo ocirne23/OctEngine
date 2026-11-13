@@ -438,6 +438,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Economy](../Docs/Context/Game/Economy.md) | The cable transport, physical cables, construction, grid placement |
 | ↳ [Hotbar](../Docs/Context/Game/Hotbar.md) | The RTS grid hotbar pages, bases, structure health + labels, unit selection, interaction modes |
 | ↳ [Units](../Docs/Context/Game/Units.md) | Units (split, targets, damage, far tick, parked spawns) and the player (the shield battery) |
+| ↳ [Sound](../Docs/Context/Game/Sound.md) | **Game sound**: cues, the voice limits for crowds, the battle / horde beds, ambience, building loops, the synthesized sounds + `Sounds/Game/*.wav` overrides |
 | [DslCompiler](../Docs/Context/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
 | [ScriptEditorSim](../Docs/Context/ScriptEditorSim/CONTEXT.md) | **The Script Editor with simulated keys, no window or engine** — how Claude iterates on the editor's UX: key programs, traces, screenshots, the random-key test, the typing regression file |
 

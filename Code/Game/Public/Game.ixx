@@ -8,4 +8,5 @@ export import :PlayerLocomotion;
 export import :Player;
 export import :Structures;
 export import :Npc;
+export import :Sound;
 export import :Match;

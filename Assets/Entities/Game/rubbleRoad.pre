@@ -1,0 +1,9 @@
+# The rubble of a destroyed ROAD piece (a Road, a Bridge, a Walkway): broken paving, low and flat. A render-only
+# entity the game puts on the piece's ground point while it is rubble (StructureSystem::setRubble). Its origin is on
+# the ground.
+Prefab gameRubbleRoad
+	Component Render
+		ObjectContainer rubbleRoad
+		Node RubbleRoad
+		Type StaticMesh
+		Color 0.24 0.22 0.2

@@ -204,7 +204,8 @@ export struct GameStructureSettings
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
-    // bites for 6, a Brute for 18, a Giant for 56, a Titan for 140, and an enemy field burns 6 health/s.
+    // bites for 3, a Brute for 9, a Giant for 28, a Titan for 70 (AttackDamage x GameUnitParams::structureBiteMult), and
+    // an enemy field burns 6 health/s.
     float health[GameStructureTypeCount] = {
         200.0f,  // Emitter (the Lantern)
         200.0f,  // Generator (the Hearth)
@@ -216,7 +217,7 @@ export struct GameStructureSettings
         400.0f,  // Bastion (the Great lantern)
         250.0f,  // Lance
         400.0f,  // Barracks
-        500.0f,  // Wall: made to be bitten
+        1000.0f, // Wall: made to be bitten
         300.0f,  // Turret (the Light tower)
         250.0f,  // MineralSilo (the Storehouse)
         200.0f,  // Constructor
@@ -231,7 +232,7 @@ export struct GameStructureSettings
         200.0f,  // MedicStation
         200.0f,  // Quarry
         150.0f,  // Bridge
-        400.0f,  // Gate: a wall of wood
+        800.0f,  // Gate: a wall of wood
         100.0f,  // Lens
         250.0f,  // Searchlight
         120.0f,  // Walkway: a scaffold of wood
@@ -392,6 +393,7 @@ export struct GameUnitParams
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe
     float emitterDrainMult = 0.175f;
+    float structureBiteMult = 0.5f; // a unit's bite on a STRUCTURE: x its AttackDamage (a hit on a unit or a player is not scaled)
     float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
     float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
@@ -525,8 +527,34 @@ export struct GameFactionSettings
     float outpostBeamRange = 60.0f;      // m: where the beam's halo ends
 };
 
+// GameSound ("Game/Sound"): the volumes per group and the voice budget.
+export struct GameSoundSettings
+{
+    bool enabled = true;
+    float effectsVolume = 1.0f;       // attacks, damage, deaths, impacts
+    float structureVolume = 0.6f;     // building loops, place / built / collapse
+    float ambienceVolume = 0.6f;      // wind, the day and night beds, thunder
+    float crowdVolume = 0.8f;         // the battle bed and the horde bed
+    float interfaceVolume = 0.7f;     // the wave horn, the alarm, the player's own hurt sound
+    int maxVoices = 24;               // one-shot voices (each spatial voice is one HRTF convolution on the audio thread)
+    int maxLoops = 6;                 // building loop voices: the nearest buildings get them
+    float fullVolumeDistance = 10.0f; // m from the ear: no attenuation inside
+    float hearingRange = 110.0f;      // m from the ear: a cue beyond it is dropped before it costs anything
+    float crowdFull = 40.0f;          // weighted combat cues per second for a full battle bed
+    float battleFocus = 1.0f;         // 0 = every combat cue may sound in a battle .. 1 = fewer, nearer one-shots as the battle bed comes up (2 = sooner)
+    float hordeFull = 150.0f;        // enemy units in the horde radius for a full horde bed
+    float hordeRadius = 70.0f;        // m around the ear
+    float fearUnits = 6.0f;           // enemy units in the horde radius (weighted by nearness) at which every animal is silent
+    float fearReturn = 30.0f;         // s after the last enemy until the animals are all back
+    int audition = 0;                 // "Play a sound": 0 = none, else EGameSound + 1; GameSound plays it once, flat, and sets it back to 0
+    int voicesPlaying = 0;            // live readout
+    int cuesPerSecond = 0;            // live readout: cues that came in (before any limit)
+    int cuesPlayed = 0;               // live readout: one-shots started in the last second
+};
+
 export struct GameSettings
 {
+    GameSoundSettings sound;
     GameFactionSettings faction;
     GameMatchSettings match;
     GameCameraSettings camera;

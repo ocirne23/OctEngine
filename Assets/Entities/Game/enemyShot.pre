@@ -25,7 +25,7 @@ Prefab gameEnemyShot
 	Component Network
 	Component GameProjectile
 		UnitDamage 0
-		StructureDamage 10
+		StructureDamage 5
 		Lifetime 6
 		EmitterDrain 15
 		EmitterDrainRadius 5

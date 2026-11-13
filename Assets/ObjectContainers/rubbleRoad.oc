@@ -1,0 +1,3 @@
+# The rubble of a destroyed road piece (Models/rubbleRoad.obj, `RubbleRoad`): Entities/Game/rubbleRoad.pre draws it.
+ObjectContainer rubbleRoad
+	Path "Models/rubbleRoad.obj"

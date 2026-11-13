@@ -21,6 +21,16 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     splashRadius = info.splashRadius;
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity))
         fc->emitter.setTeam(team);
+    // The shot's sound, on every role (a replicated shell spawns here too).
+    GameUnitComponent::reportSound(splashRadius > 0.0f ? GameUnitComponent::ESoundCue::LobFired : GameUnitComponent::ESoundCue::ShotFired, entity.pos);
+}
+
+void GameProjectileComponent::destroy(Entity& entity, const SpawnInfo&)
+{
+    if (age > lifetime)
+        return; // it ran out in the air: no impact
+    GameUnitComponent::reportSound(splashRadius > 0.0f ? GameUnitComponent::ESoundCue::SplashImpact : GameUnitComponent::ESoundCue::ShotImpact,
+        entity.pos, glm::max(splashRadius, 1.0f));
 }
 
 void GameProjectileComponent::update(Entity& entity, float deltaSec)

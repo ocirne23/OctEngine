@@ -107,7 +107,7 @@ public:
         float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble);
     // Cable/crossing BLUEPRINTS only (GCb): health = build progress, over the segment's own
     // healthMax. The built flip still arrives through the GPl re-send.
-    void mirrorCableProgress(uint32 id, float healthFrac);
+    void mirrorCableProgress(uint32 id, float healthFrac, bool rubble);
     void mirrorRoute(uint32 id, oc::span<const glm::vec3> points);
     void mirrorUnitType(uint32 id, uint8 unitType);
     void mirrorTotals(oc::span<const float> minerals, oc::span<const float> fuel, float energyTotal,

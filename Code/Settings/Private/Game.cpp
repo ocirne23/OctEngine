@@ -343,6 +343,7 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     Tweak::floatVar("Game/Enemies", "Field damage mult", &up.fieldDpsMult, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push starts (x iso)", &up.fieldPushStart, 0.0f, 0.95f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain mult", &up.emitterDrainMult, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies", "Bite damage on structures mult", &up.structureBiteMult, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain range (m)", &up.strainRange, 0.0f, 40.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Damage absorb (energy per hp)", &up.damageAbsorb, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Enemies", "Unit damage radius", &up.damageRadius, 0.0f, 3.0f, 0.05f);
@@ -418,8 +419,39 @@ static void registerFaction(GameFactionSettings& s)
     Tweak::floatVar("Game/Enemy outposts", "Beam halo range (m)", &s.outpostBeamRange, 1.0f, 500.0f, 1.0f);
 }
 
+static void registerSound(GameSoundSettings& s)
+{
+    Tweak::boolean("Game/Sound", "Enabled", &s.enabled);
+    Tweak::floatVar("Game/Sound", "Effects volume", &s.effectsVolume, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Sound", "Structure volume", &s.structureVolume, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Sound", "Ambience volume", &s.ambienceVolume, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Sound", "Crowd volume", &s.crowdVolume, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Sound", "Interface volume", &s.interfaceVolume, 0.0f, 2.0f, 0.01f);
+    Tweak::intVar("Game/Sound/Limits", "Max one-shot voices", &s.maxVoices, 1, 48, 1.0f);
+    Tweak::intVar("Game/Sound/Limits", "Max building loops", &s.maxLoops, 0, 12, 1.0f);
+    Tweak::floatVar("Game/Sound/Limits", "Full volume distance (m)", &s.fullVolumeDistance, 1.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Sound/Limits", "Hearing range (m)", &s.hearingRange, 10.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Sound/Crowd", "Cues/s for a full battle bed", &s.crowdFull, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Sound/Crowd", "Battle focus", &s.battleFocus, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Sound/Crowd", "Units for a full horde bed", &s.hordeFull, 1.0f, 5000.0f, 1.0f);
+    Tweak::floatVar("Game/Sound/Crowd", "Horde radius (m)", &s.hordeRadius, 5.0f, 300.0f, 1.0f);
+    // In EGameSound's order (Game:Sound), after "-": the pick plays that sound once. Every pick is another variant.
+    static constexpr oc::string_view SOUND_NAMES[] = { "-", "Melee hit", "Unit reveal", "Unit death", "Shot fired", "Lob fired",
+        "Shot impact", "Splash impact", "Turret fire", "Structure placed", "Structure built", "Structure collapse",
+        "Bird song", "Cricket bout", "Owl call", "Wind gust", "Water lap", "Thunder",
+        "Wave horn", "Alarm", "Player hurt", "Loop: wind", "Loop: day", "Loop: night", "Loop: battle", "Loop: horde",
+        "Loop: hum", "Loop: fire", "Loop: works", "Loop: water" };
+    Tweak::enumVar("Game/Sound", "Play a sound", &s.audition, SOUND_NAMES, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Game/Sound/Ambience", "Enemies that silence the animals", &s.fearUnits, 0.5f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Sound/Ambience", "Animals return (s)", &s.fearReturn, 1.0f, 300.0f, 1.0f);
+    Tweak::intVar("Game/Sound/Stats", "Voices playing", &s.voicesPlaying, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
+    Tweak::intVar("Game/Sound/Stats", "Cues in/s", &s.cuesPerSecond, 0, 1 << 30, 0.0f, {}, ETweakFlags::None);
+    Tweak::intVar("Game/Sound/Stats", "One-shots started/s", &s.cuesPlayed, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
+}
+
 void Settings::registerGame(GameSettings& s)
 {
+    registerSound(s.sound);
     registerMatch(s.match);
     registerFaction(s.faction);
     registerCamera(s.camera);

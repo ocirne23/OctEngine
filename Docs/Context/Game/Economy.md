@@ -265,7 +265,7 @@ unpowered consumer.
 
 Segments are full structures: a blueprint phase (**NON-conductive until built**), health (40; a crossing 60 —
 **every type has its own health**: `GameStructureSettings::health`, indexed by `EStructureType`, the "Game/Health"
-tweaks, through `StructureSystem::healthMaxOf`: the Beacon 1000, a Wall 500, a Gate / Great lantern / Barracks 400,
+tweaks, through `StructureSystem::healthMaxOf`: the Beacon 1000, a Wall 1000, a Gate 800, a Great lantern / Barracks 400 (a unit's bite on a structure is its `AttackDamage` x "Bite damage on structures mult" 0.5, `GameUnitParams::structureBiteMult`),
 a Light tower 300, most buildings 200-250, a House / Bridge 150, a Mirror / Lens 100. `stampTuning` stamps it into
 the component's `healthMax` each tick, and `investMaterials` heals against that, so the build and repair price is
 the type's cost whatever its health), territory drain, projectile damage (`Layer Cable, CollidesWith Projectile` plus
@@ -299,8 +299,11 @@ income or flows; links pre-wire but carry nothing).
 > **Rubble is not built up under attack** (`rubbleBlocked`): a living enemy unit within "Rubble safe radius (m)" (30,
 > flat on the map) blocks every way to build it - `investMaterials` takes nothing, and `blueprintNeed` and
 > `fundNearbyBlueprint` skip it, so no worker walks to it and the stone goes to the next blueprint. It
-> rides GSt's status byte (bit 4) and the save key `Rubble`. A blueprint that never stood, and a cable or crossing
-> piece (outside GSt), are removed as before; the Base never dies.
+> rides GSt's status byte (bit 4) and the save key `Rubble`. **A ROAD PIECE is rubble too** (the cable
+> types: Road, Bridge, Walkway): broken paving (`rubbleRoad.pre`, `Models/rubbleRoad.obj`) in place of its meshes
+> (`updateArms` keeps the arm pieces off), no road for the carriers while it is a blueprint, and built up again like any
+> other. It is outside GSt, so its flag rides GCb's top bit, and the built re-send of GPl clears it. A blueprint that
+> never stood and a crossing are removed as before; the Base never dies.
 
 **Cheat:** "Game/Construction/Free instant build" (a Synced checkbox — **the server's value rules all
 players**) skips the blueprint phase.
@@ -318,7 +321,7 @@ players**) skips the blueprint phase.
   Searchlights' ranges), which funds the nearest own-team blueprint **OR damaged structure**
   within "Constructor range" (27 m) at "Constructor build rate" (4/s). A REPAIR (a built structure) is
   also limited to "Constructor repair health/s" (20, x staffing; `investMaterials`' `repairHealCap`): by the stone price
-  alone a cheap structure with much health (a Wall: 5 stone, 500 health) would repair at 400 health/s. A blueprint has
+  alone a cheap structure with much health (a Wall: 5 stone, 1000 health) would repair at 800 health/s. A blueprint has
   no such limit, and the workers' repair deliveries have none. With nothing to build or repair it idles.
 
 Blueprint state mirrors through a GPl built flag plus a GSt status-bits byte (bit0 powered, bit1

@@ -25,6 +25,7 @@ import :GameCamera;
 import :Player;
 import :Structures;
 import :Npc;
+import :Sound;
 
 // The orchestrator's CORE: construction, the world spawn, the three frame entry points, the nav
 // feed, the player ticks and the HUD. The rest of GameMatch is split by topic - see the file list
@@ -35,6 +36,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     if (!m_enabled)
         return;
     m_sandboxWorld = coop && m_settings.coopSandboxWorld;
+    GameSound::discardPosted(); // what a previous match's teardown posted
     // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
     // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
     Globals::settings.game.unitParams.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
@@ -1256,6 +1258,18 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
 
     m_structures.drawDebug(m_mode == EPlayerMode::Build || m_buildUi, armedType());
     m_npcs.drawBeams(deltaSec); // ages the strikes, draws the melee hit lines (the turret's light: drawBeamLights, in update)
+    {
+        // THE SOUND: what was posted and reported since the last windowed frame, heard from the player (the camera
+        // gives the direction; with the camera detached it is the ear too).
+        GameSound::Frame sound;
+        sound.camera = &camera;
+        sound.ear = detached ? camera.position : m_player.interpolatedPos();
+        sound.daylight = daylight();
+        sound.outdoors = m_sandboxWorld;
+        sound.localTeam = (int)m_team;
+        sound.playerHealth = m_player.entity() ? m_player.health() : -1.0f;
+        m_sound.update(sound, m_structures);
+    }
     if (m_coop && !m_sandboxWorld)
         drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)
