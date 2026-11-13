@@ -63,6 +63,21 @@ The direction and blend are `oc::atomic<float>`s written by `updateSource` on th
 read by the audio thread. **Steam Audio does the HRTF direct path only** — no occlusion and no reflections; the
 reverb is the engine's own:
 
+## No value that is not a number reaches the output
+
+**One NaN is the end of the audio**: at the endpoint it is silence or a blast, and in the reverb - which feeds itself -
+it is in every sample from then on. Three guards (Engine.cpp), each for a case that happened or can:
+
+* **A source at the listener has no direction.** `iplCalculateRelativeDirection` divides by the distance; at 0 it
+  gives NaN and the HRTF then writes NaN samples. `updateSource`: inside 5 cm (or with a direction that is not a
+  number) the source is straight ahead with the HRTF blended out, and blends in over the next 45 cm.
+* **The binaural node** checks every HRTF block: a block with a bad value is dropped whole and the effect is reset.
+  A bad value is never added to the send ring.
+* **The reverb node** checks its output: a bad value clears the reverb (`FdnReverb::clear`) - a gap of a tail.
+
+The test is `isNumber` (the float's exponent bits), **not `std::isfinite`**: the build is `/fp:fast`, under which the
+compiler may take such a test as always true and remove it.
+
 ## The shared reverb and the distance filter
 
 **ONE reverb for every spatial source** (`FdnReverb`, [Reverb.ixx](../../../Code/Audio/Private/Reverb.ixx)), tweaks

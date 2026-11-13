@@ -45,7 +45,7 @@ export enum class EGameSound : uint8
     LoopWind, LoopDay, LoopNight, LoopBattle, LoopHorde, LoopHum, LoopFire, LoopWorks, LoopWater,
     Count,
 };
-export constexpr int c_gameSoundVariants = 6; // buffers per one-shot at most
+export constexpr int c_gameSoundVariants = 8; // buffers per one-shot at most
 
 // SoundSynth.cpp: one sound's samples (interleaved when stereo), peak-normalized. `rate` is the sample rate.
 void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool& stereo, uint32& rate);

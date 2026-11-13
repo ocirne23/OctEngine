@@ -59,10 +59,17 @@ Two columns of `c_soundDefs`, `pitchJitter` and `gainJitter`, per sound:
   down as up) from the sum of two rolls, so most starts are near the sound's own pitch and a few are far from it.
   Large for the creatures and the impacts (each throat and each blow is its own), small for the light tower (a
   machine), **0 for the alarm, and no pitch shift for "built": a signal is the same every time.**
-* **A loop:** its pitch and volume DRIFT by up to that share for as long as it plays (`GameSound::drift`: three sines
-  whose rates share no period, so the drift never repeats in step with the loop). The wind's gusts are then longer
-  than its 10 s loop. A building loop drifts by itself, seeded by its structure id: one fire flares while the one
-  next to it dies down. Small for the hum (a steady field), large for the fire and the wind.
+* **A loop:** its VOLUME drifts by up to that share for as long as it plays (`GameSound::drift`: three sines whose
+  rates share no period, so the drift never repeats in step with the loop). The wind's gusts are then longer than
+  its 10 s loop. A building loop drifts by itself, seeded by its structure id: one fire flares while the one next to
+  it dies down. Small for the hum (a steady field), large for the fire and the wind.
+* **EVERY LOOP, AND EVERY LONG NOISE ONE-SHOT (a gust, thunder), PLAYS AT PITCH 1** (`pitchJitter` 0; no pitch per
+  building, per water voice or by the battle's level). The engine changes a pitch by linear interpolation with no
+  filter (The playback path, checked). Between two samples that is a low pass, on a sample it is none: at a pitch a
+  little off 1 the highs go down and up thousands of times a second, at a rate that moves with the pitch. On a tone
+  or a short hit nobody hears it; on NOISE that goes on (wind, leaves, water, fire, a crowd) it is a grit over the
+  whole sound - "grainy". At exactly 1 the engine copies samples. Tried and dropped: a pitch drift of 1 - 7 % on
+  every loop, a pitch per building, the second water voice at 0.88.
 
 ## The listener is the player, turned like the camera
 
@@ -76,6 +83,11 @@ forward are the camera's, laid flat on the ground; up is the world's, x "Height 
 the camera's own axes. A sound 10 m to the player's left is then 10 m to the left of the engine's listener. Every
 frame, for every playing voice: the player turns while a long sound plays, and the sound stays where it is.
 The DISTANCE was never the engine's (the gain holds it, from the ear).
+
+**A sound AT the ear** (a blow on the player, water the player stands in) would land exactly on the engine's
+listener, where a sound has no direction. `heardAt` puts anything within half a metre of the ear half a metre ahead,
+and `updateWater` puts the water of a player who stands in it 1.5 m ahead. (The engine guards a source at its
+listener too - see "No value that is not a number" in the Audio CONTEXT: this once took the whole output down.)
 
 ## The distance is more than a gain
 
@@ -101,9 +113,9 @@ samples. A sound with no place sends nothing.
 * **Samples:** 16 bit in the cache and in the buffers the engine plays (peak 0.9).
 * **Pitch** (every game voice has one: the random shift, the size, a loop's drift) is miniaudio's LINEAR
   interpolation with no filter (its default for pitch, `engineConfig.pitchResampling`; miniaudio's own note: the
-  filter is off because it gets unstable while the pitch moves). It dulls and roughens the top octaves a little. Not
-  changed: these sounds have little above 8 kHz, so it costs about -35 dB of artefacts there. To get rid of it, a
-  sound must be played at pitch 1 (variants at their own pitch in the buffer).
+  filter is off because it gets unstable while the pitch moves). On a short hit or a tone it costs little; on noise
+  that goes on it is an audible grit, so every loop and every long noise one-shot plays at pitch 1 (The random feel).
+  To get rid of it for the rest, a sound must be played at pitch 1 (variants at their own pitch in the buffer).
 
 ## Bursts: the cases that are closed
 
@@ -164,16 +176,24 @@ in the world, through the same cue limits as everything else (so in a battle the
 | Owl | 1 | 40 - 80 m, 6 - 12 m up | full night, every 12 - 35 s | `OwlCall` |
 | Gust | 2 | 15 - 45 m, 2 - 12 m up | always, every 3 - 10 s | `WindGust` |
 
-* **NO BIRD SONG IS A RECORDING** (`GameSound::singBird`). The six `BirdSong` buffers are single NOTES (a flat
-  whistle, a rising chirp, a falling chirp, a tick, a long soft whistle, a rough triple pulse). A song is a run of
-  note cues made at run time, each with its own delay, pitch and level (`postVariant(sound, pos, gain, variant, pitch,
+* **NO BIRD SONG IS A RECORDING** (`GameSound::singBird`). The eight `BirdSong` buffers are single NOTES (0 a flat
+  whistle, 1 a rising chirp, 2 a falling chirp, 4 a long soft whistle) and fast RUNS (3, 6 a trill; 5, 7 a chatter).
+  A song is a row of cues made at run time, each with its own delay, pitch and level (`postVariant(sound, pos, gain, variant, pitch,
   delaySec)`). A bird has a VOICE (`Perch::pitch`, 0.7 - 1.35) and a STYLE (`variant % 6`: stepped whistles, a warble,
   a trill, steps down, one chirp again and again, a low chatter), but every number is rolled again for each song: how
   many notes, every gap, every interval. One hears "that kind of bird", never "that sound again". **70 % of what a
   bird says is a plain CALL** (one to three of its usual chirps); the full song is the rare one. Tried and dropped: a
   whole song per buffer (six songs, each heard again within a minute) and songs in the day loop (the same song at the
-  same second of every round). A note's timing is on the frame (a cue starts in `update`), so the fastest run - the
-  trill - has a gap of 50 ms or more.
+  same second of every round). 
+  **NOTHING IS POSTED LESS THAN 0.13 s AFTER THE LAST CUE OF THE SONG.** A cue starts on a frame (in `update`), so
+  notes posted 50 ms apart are heard 33, 50 or 67 ms apart: an uneven rhythm, a chop. A fast run (a trill, a
+  chatter) is ONE buffer with every note in its place to the sample; `singBird` posts whole runs, 0.7 s or more
+  apart. Tried and dropped: a trill and a chatter as single ticks 50 - 130 ms apart.
+* **The day loop is LEAVES** (far off; no bird): smooth noise through two bands that wander between 2 and 6 kHz,
+  nothing above 9 kHz, the level never under half. The gust's leaf layer is the same.
+  Tried and dropped: high-passed noise x a gust curve from 0.1 to 1 (most of its energy above 5 kHz, and it came and
+  went by 20 dB: a detuned radio that fades in and out); a gust's hiss cut 9 - 16 times a second at 70 % (a chop);
+  thousands of tiny ticks a second (`dust`) through the bands, for "a rustle with a grain" (heard as grainy).
 * **A perch keeps its place and its song** (`postVariant`: the cue names its variant, `startVoice` takes no random one)
   while the ear is in reach: walk past a bird and it stays in its tree, behind you. A perch farther than its leave
   distance (85 / 55 / 100 m) gets a new place near the ear and another animal.
@@ -200,8 +220,8 @@ first every 1.5 - 5 s. No water in 40 m: both fade out.
 "Max building loops" (6) voices. Every 0.25 s the nearest built, powered, non-rubble structures with a loop within
 60 m get them (`loopSoundOf`): hum (the buildings that make a field: the Emitter, Bastion, Lance, Base; within 30 m),
 fire (the Generator), works (the Lumberyard, Quarry, Fabricator). A voice keeps its structure by id; one that lost it
-fades out before it takes another. Each building's loop has its own pitch (off the id), so two of one type are never
-in phase.
+fades out before it takes another. Every loop plays at pitch 1 (The random feel); two of one type start at other
+moments, so they are not in step.
 
 **AT MOST ONE HUM, two fires and two workshops play** (the nearest of each kind). A loop is a steady sound: several
 of one kind do not read as several buildings, they add up to one louder, rougher drone. Tried and dropped: a hum on
@@ -262,7 +282,22 @@ that is not finite is made silent and logged).
 | `noise` | white / pink / brown noise through a filter that glides (`Svf`: stable while its frequency moves) | slaps, air, rumble, crackle, the saw |
 | `modal` | a STRUCK BODY: noise that dies away, through one resonance per mode (`c_wood`, `c_metal`, `c_tube`, `c_drum`, `c_glow`, `rockClack`). The noise drives the resonances while they ring, so a mode is a narrow band of noise, never a sine; `maxQ` bounds how near a tone it gets | the mallet, the chisel, stones, the drum |
 | `vocal` | a THROAT: soft pulses whose length and strength change from one to the next, plus breath that gets louder with every pulse, through three wide formants; `VocalKey`s move the pitch, the mouth, the breath and the roughness | the single creature sounds: `makeDeathCry` (the death grunt), the player's grunt (a crowd is not made of these: see A CROWD IS A TEXTURE) |
-| `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch - the only tones in the game | birds, crickets, the owl |
+| `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch (a real whistle is a tone) | birds, crickets, the owl |
+| `bubble` | air caught in water: a short tone that dies in a few hundredths of a second, at the pitch of its size, rising a little as it closes. A tone is right here: a bubble is one. A DETAIL, never the sound | a trace in the water loop (12 a second, far under the rush), a few in the water lap |
+
+**A RIVER IS A RUSH WITH A COLOUR THAT MOVES** (`LoopWater`, 12 s). One unbroken sound: a wide band of noise around
+1 kHz (little above 5 kHz), and LEADING it three narrower peaks - near 480 Hz, 1 kHz and 2.1 kHz - that each drift up
+and down by themselves over seconds (the water going round the stones: what says "water" and not "wind" or
+"static"). The level breathes by 15 %; it does not come and go. Tried and dropped, in this order: a band of noise
+with big swells and quiet noise drops (a hiss that pumps); the sound built FROM bubbles, 110 - 400 a second (a babble,
+"too bubbly: a river does not sound like bubbles"); the rush with the three peaks at 0.6 - 0.9 of its level and wide
+(they did not show in the spectrogram: plain noise again).
+
+**The water's PLACE does not jump** (`GameSound::updateWater`): the nearest ring of the scan with water in it, the
+MIDDLE of its wet directions (not the first one found: that changed with every step along a bank), and on that line
+the shore itself, by halving between this ring and the dry one inside it (not the ring's own 6, 18 or 40 m: the level
+stepped as the player walked to the water - a chop). The voice's place and level follow in a second or more. The
+single laps are rare (4 - 10 s) and soft.
 | `Canvas::reverb` | THE ROOM, by CONVOLUTION with a made impulse response (`makeImpulse`: a short gap, a few single reflections, then dense noise that dies over 0.15 - 2.7 s, its highs first; an own one per channel). A loop's tail runs over the end into the start. Tried and dropped: eight comb filters and four allpasses, the classic digital reverb of the 1980s - it rings at its combs' own pitches (horizontal lines in the spectrogram), a metallic colour on every sound | every sound that has a room |
 | `flutter` | an uneven level (random values with straight lines between), where a regular tremolo would sound like a machine | the saw's teeth, a gurgle |
 

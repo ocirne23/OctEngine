@@ -52,24 +52,30 @@ namespace
         { "structure_placed",   GroupStructures, PlaceWorld, 4, 2, 0.60f, 0.08f,  0.09f, 0.20f, 0.0f },
         { "structure_built",    GroupStructures, PlaceWorld, 2, 2, 0.60f, 0.25f,  0.00f, 0.10f, 0.0f }, // bells: the note stays
         { "structure_collapse", GroupStructures, PlaceWorld, 3, 2, 1.00f, 0.30f,  0.10f, 0.15f, 0.0f },
-        { "bird_song",          GroupAmbience,   PlaceWorld, 6, 8, 0.50f, 0.02f,  0.02f, 0.20f, 0.0f }, // single NOTES: singBird makes the song
+        { "bird_song",          GroupAmbience,   PlaceWorld, 8, 6, 0.50f, 0.10f,  0.02f, 0.20f, 0.0f }, // NOTES and fast RUNS: singBird makes the song
         { "cricket_bout",       GroupAmbience,   PlaceWorld, 4, 4, 0.35f, 0.10f,  0.02f, 0.20f, 0.0f },
         { "owl_call",           GroupAmbience,   PlaceWorld, 2, 1, 0.50f, 1.00f,  0.03f, 0.15f, 0.0f },
-        { "wind_gust",          GroupAmbience,   PlaceWorld, 4, 3, 0.60f, 0.50f,  0.10f, 0.30f, 0.0f },
+        { "wind_gust",          GroupAmbience,   PlaceWorld, 4, 3, 0.60f, 0.50f,  0.00f, 0.30f, 0.0f }, // long noise: pitch 1 (see the loops)
         { "water_lap",          GroupAmbience,   PlaceWorld, 4, 2, 0.50f, 0.30f,  0.10f, 0.30f, 0.0f },
-        { "thunder",            GroupAmbience,   PlaceFar,   6, 2, 1.00f, 0.50f,  0.10f, 0.15f, 0.0f }, // the variant is the distance (tickLightning)
-        { "thunder_crack",      GroupAmbience,   PlaceFar,   4, 3, 0.80f, 0.02f,  0.10f, 0.15f, 0.0f }, // one per later stroke of a flash; variants 0, 1 near, 2, 3 middle
+        { "thunder",            GroupAmbience,   PlaceFar,   6, 2, 1.00f, 0.50f,  0.00f, 0.15f, 0.0f }, // the variant is the distance (tickLightning); long noise: pitch 1
+        { "thunder_crack",      GroupAmbience,   PlaceFar,   4, 3, 0.80f, 0.02f,  0.00f, 0.15f, 0.0f }, // one per later stroke of a flash; variants 0, 1 near, 2, 3 middle
         { "alarm",              GroupInterface,  PlaceFlat,  1, 1, 0.60f, 1.00f,  0.00f, 0.00f, 0.0f },
         { "player_hurt",        GroupInterface,  PlaceFlat,  3, 2, 0.80f, 0.30f,  0.07f, 0.15f, 0.0f },
-        { "loop_wind",          GroupAmbience,   PlaceFlat,  1, 1, 0.50f, 0.0f,   0.07f, 0.30f, 0.0f }, // gusts longer than the loop
-        { "loop_day",           GroupAmbience,   PlaceFlat,  1, 1, 0.35f, 0.0f,   0.02f, 0.15f, 0.0f }, // the far background only:
-        { "loop_night",         GroupAmbience,   PlaceFlat,  1, 1, 0.30f, 0.0f,   0.015f, 0.15f, 0.0f }, // the perches are in front
-        { "loop_battle",        GroupCrowd,      PlaceFlat,  1, 1, 0.55f, 0.0f,   0.04f, 0.15f, 0.0f },
-        { "loop_horde",         GroupCrowd,      PlaceFar,   1, 1, 0.45f, 0.0f,   0.05f, 0.20f, 0.0f },
-        { "loop_hum",           GroupStructures, PlaceWorld, 1, 1, 0.22f, 0.0f,   0.008f, 0.10f, 0.0f }, // a steady field: a little
-        { "loop_fire",          GroupStructures, PlaceWorld, 1, 1, 0.70f, 0.0f,   0.04f, 0.25f, 0.0f }, // a fire is never steady
-        { "loop_works",         GroupStructures, PlaceWorld, 1, 1, 0.60f, 0.0f,   0.03f, 0.15f, 0.0f }, // the worker's tempo
-        { "loop_water",         GroupAmbience,   PlaceWorld, 1, 1, 0.70f, 0.0f,   0.03f, 0.20f, 0.0f },
+        // EVERY LOOP PLAYS AT PITCH 1 (pitch drift 0), and so does every long noise one-shot above. The engine changes a
+        // pitch by LINEAR interpolation with no filter (miniaudio's pitch resampler). Between two samples that is a low
+        // pass, on a sample it is none: at a pitch a little off 1 the highs are turned down and up thousands of times a
+        // second, at a rate that moves with the pitch. On a tone or a short hit nobody hears it; on NOISE that goes on -
+        // wind, leaves, water, fire, a crowd - it is a grit over the whole sound. At exactly 1 the engine copies samples.
+        // A loop's life is its volume drift (the next column) and what is in its buffer.
+        { "loop_wind",          GroupAmbience,   PlaceFlat,  1, 1, 0.50f, 0.0f,   0.0f,  0.30f, 0.0f }, // gusts longer than the loop
+        { "loop_day",           GroupAmbience,   PlaceFlat,  1, 1, 0.35f, 0.0f,   0.0f,  0.15f, 0.0f }, // the far background only:
+        { "loop_night",         GroupAmbience,   PlaceFlat,  1, 1, 0.30f, 0.0f,   0.0f,  0.15f, 0.0f }, // the perches are in front
+        { "loop_battle",        GroupCrowd,      PlaceFlat,  1, 1, 0.55f, 0.0f,   0.0f,  0.15f, 0.0f },
+        { "loop_horde",         GroupCrowd,      PlaceFar,   1, 1, 0.45f, 0.0f,   0.0f,  0.20f, 0.0f },
+        { "loop_hum",           GroupStructures, PlaceWorld, 1, 1, 0.22f, 0.0f,   0.0f,  0.10f, 0.0f }, // a steady field: a little
+        { "loop_fire",          GroupStructures, PlaceWorld, 1, 1, 0.70f, 0.0f,   0.0f,  0.25f, 0.0f }, // a fire is never steady
+        { "loop_works",         GroupStructures, PlaceWorld, 1, 1, 0.60f, 0.0f,   0.0f,  0.15f, 0.0f },
+        { "loop_water",         GroupAmbience,   PlaceWorld, 1, 1, 0.70f, 0.0f,   0.0f,  0.20f, 0.0f },
     };
     static_assert(oc::size(c_soundDefs) == (size_t)EGameSound::Count);
 
@@ -475,7 +481,11 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
 
 glm::vec3 GameSound::heardAt(const glm::vec3& pos) const
 {
-    const glm::vec3 offset = pos - m_ear;
+    // A sound AT the ear (a blow on the player, water the player stands in) has no direction: it goes half a metre
+    // ahead. (The engine guards a source at its listener too; this keeps such a sound in front, where it belongs.)
+    glm::vec3 offset = pos - m_ear;
+    if (glm::dot(offset, offset) < 0.25f)
+        offset = m_earForward * 0.5f;
     return m_camPos + m_camRight * glm::dot(offset, m_earRight) + m_camUp * (offset.y * m_settings.panHeight)
         + m_camForward * glm::dot(offset, m_earForward);
 }
@@ -709,7 +719,7 @@ void GameSound::updateBeds(const Frame& frame, float dt)
     setBed(BedNight, EGameSound::LoopNight, frame.outdoors ? ambience * (1.0f - day) * (1.0f - 0.85f * m_fear) : 0.0f, dt);
     // The level curve is nearly straight (power 0.8). A square root made both beds loud from the first few cues or
     // units on: a bed that is always nearly at full level is a drone, not a crowd that grows.
-    setBed(BedBattle, EGameSound::LoopBattle, m_crowdLevel > 0.01f ? crowd * std::pow(m_crowdLevel, 0.8f) : 0.0f, dt, 0.92f + 0.16f * m_crowdLevel);
+    setBed(BedBattle, EGameSound::LoopBattle, m_crowdLevel > 0.01f ? crowd * std::pow(m_crowdLevel, 0.8f) : 0.0f, dt);
     if (m_hordePosValid && m_beds[BedHorde].source.isValid())
     {
         m_beds[BedHorde].source.setPosition(heardAt(m_hordePos));
@@ -829,8 +839,7 @@ void GameSound::updateStructureLoops(const Frame& frame, const StructureSystem& 
                 voice.pos = c.pos;
                 voice.gain = 0.0f;
                 voice.wanted = true;
-                // Two buildings of one type must not play in phase: a pitch per building, off its id.
-                voice.pitch = 0.94f + 0.12f * (float)((c.id * 2654435761u) >> 24) / 255.0f;
+                voice.pitch = 1.0f; // pitch 1, as every loop (c_soundDefs): two of a kind start at other moments, so they are not in step anyway
                 voice.source.setLooping(true);
                 voice.source.setRelative(false);
                 voice.source.setAttenuation(1.0f, c_noFalloff, 0.0f);
@@ -941,8 +950,11 @@ void GameSound::updateAmbience(const Frame& frame, const StructureSystem& struct
 }
 
 // A BIRD SINGS: no song is a recording. The `BirdSong` buffers are single NOTES (0 a flat whistle, 1 a rising chirp,
-// 2 a falling chirp, 3 a tick, 4 a long soft whistle, 5 a rough triple pulse), and a song is a run of note cues made
-// here, each with its own time, pitch and level. The bird has a voice (perch.pitch) and a STYLE (perch.variant % 6) -
+// 2 a falling chirp, 4 a long soft whistle) and fast RUNS (3, 6 a trill; 5, 7 a chatter), and a song is a row of cues
+// made here, each with its own time, pitch and level.
+// NOTHING HERE IS POSTED LESS THAN 0.13 s AFTER THE LAST: a cue starts on a frame, so a row of notes 50 ms apart is
+// heard 33, 50 or 67 ms apart - an uneven rhythm, a chop. A fast run is one buffer, with every note in its place.
+// The bird has a voice (perch.pitch) and a STYLE (perch.variant % 6) -
 // which notes, how fast, which way the pitch goes - but every number is rolled again each time: how many notes, every
 // gap, every interval. So one hears "that kind of bird", never "that sound again".
 // MOST of what a bird says is a plain CALL (one to three of its usual chirps); the full song is the rare one.
@@ -966,7 +978,7 @@ void GameSound::singBird(const Perch& perch)
         for (int k = 0, n = count(1, 3); k < n; ++k)
         {
             note(usual, pitch * roll(0.97f, 1.03f), roll(0.7f, 1.0f));
-            t += roll(0.11f, 0.32f);
+            t += roll(0.15f, 0.34f);
         }
         return;
     }
@@ -984,23 +996,21 @@ void GameSound::singBird(const Perch& perch)
         }
         break;
     }
-    case 1: // a warble: quick chirps, up and down, at any pitch
-        for (int k = 0, n = count(4, 10); k < n; ++k)
+    case 1: // a warble: chirps, up and down, at any pitch
+        for (int k = 0, n = count(3, 6); k < n; ++k)
         {
             note(rand01() < 0.5f ? 1 : 2, roll(0.8f, 1.35f), roll(0.6f, 1.0f));
-            t += roll(0.065f, 0.12f);
+            t += roll(0.14f, 0.24f);
         }
         break;
-    case 2: // a trill: ticks at one speed (another speed each time) whose pitch and level drift
+    case 2: // a trill, or two with a breath between them: the runs are whole buffers (3, 6), at this song's pitch
     {
-        const float gap = roll(0.05f, 0.075f);
-        float pitch = roll(1.3f, 1.7f);
-        const float slide = roll(0.985f, 1.015f);
-        for (int k = 0, n = count(6, 18); k < n; ++k)
+        float pitch = roll(1.2f, 1.6f);
+        for (int k = 0, n = count(1, 2); k < n; ++k)
         {
-            note(3, pitch, glm::min(0.5f + 0.1f * (float)k, 1.0f));
-            t += gap * roll(0.93f, 1.07f);
-            pitch *= slide;
+            note(rand01() < 0.5f ? 3 : 6, pitch, roll(0.8f, 1.0f));
+            t += roll(0.75f, 1.1f);
+            pitch *= roll(0.92f, 1.08f);
         }
         break;
     }
@@ -1026,11 +1036,11 @@ void GameSound::singBird(const Perch& perch)
         }
         break;
     }
-    default: // a low chatter: rough pulses and ticks, uneven
-        for (int k = 0, n = count(5, 13); k < n; ++k)
+    default: // a low chatter: one to three runs of rough pulses (whole buffers: 5, 7), each at another pitch
+        for (int k = 0, n = count(1, 3); k < n; ++k)
         {
-            note(rand01() < 0.6f ? 5 : 3, roll(0.6f, 0.82f), roll(0.5f, 1.0f));
-            t += roll(0.06f, 0.13f);
+            note(rand01() < 0.5f ? 5 : 7, roll(0.6f, 0.85f), roll(0.6f, 1.0f));
+            t += roll(0.7f, 1.0f);
         }
         break;
     }
@@ -1047,43 +1057,75 @@ void GameSound::updateWater(const Frame& frame, const StructureSystem& structure
     if (active)
     {
         constexpr float c_ring[3] = { 6.0f, 18.0f, 40.0f };
+        const auto wetAt = [&](float x, float z, float& water)
+        {
+            const float ground = structures.groundHeightAt(x, z, -FLT_MAX, true);
+            water = Globals::physics.sampleWaterHeight(x, z);
+            return ground != -FLT_MAX && water > ground + 0.1f;
+        };
         for (int n = 0; n < 4; ++n)
         {
             const int i = m_waterProbe;
             const float angle = glm::two_pi<float>() * (float)(i % 16) / 16.0f;
             const float x = frame.ear.x + std::cos(angle) * c_ring[i / 16], z = frame.ear.z + std::sin(angle) * c_ring[i / 16];
-            const float ground = structures.groundHeightAt(x, z, -FLT_MAX, true);
-            const float water = Globals::physics.sampleWaterHeight(x, z);
-            m_waterWet[i] = ground != -FLT_MAX && water > ground + 0.1f;
+            float water = 0.0f;
+            m_waterWet[i] = wetAt(x, z, water);
             m_waterHit[i] = glm::vec3(x, water, z);
             if (++m_waterProbe < c_waterProbes)
                 continue;
             m_waterProbe = 0;
-            int nearest = -1, other = -1;
-            for (int k = 0; k < c_waterProbes; ++k)
-                if (m_waterWet[k] && (nearest < 0 || k / 16 < nearest / 16)) // the rings are in the order of their distance
-                    nearest = k;
-            if (nearest >= 0)
+            // THE NEAREST WATER, AS A PLACE THAT DOES NOT JUMP. The nearest ring with water in it; the MIDDLE of its
+            // wet directions (not the first one found: that one changed with every step along a bank); and on that line
+            // the SHORE itself, by halving between this ring and the dry one inside it (not the ring's own distance:
+            // 6, 18 or 40 m, so the level stepped as the player walked to the water - heard as a chop).
+            int ring = -1;
+            for (int k = 0; k < c_waterProbes && ring < 0; ++k)
+                if (m_waterWet[k])
+                    ring = k / 16;
+            int other = -1;
+            bool found = false;
+            if (ring >= 0)
             {
-                const float nearAngle = glm::two_pi<float>() * (float)(nearest % 16) / 16.0f;
-                for (int k = 0; k < c_waterProbes; ++k)
+                glm::vec2 middle(0.0f);
+                for (int k = ring * 16; k < ring * 16 + 16; ++k)
+                    if (m_waterWet[k])
+                        middle += glm::vec2(std::cos(glm::two_pi<float>() * (float)(k % 16) / 16.0f), std::sin(glm::two_pi<float>() * (float)(k % 16) / 16.0f));
+                float surface = 0.0f;
+                found = true;
+                if (glm::dot(middle, middle) < 0.01f) // water all around: the player stands in it
                 {
-                    const float a = glm::two_pi<float>() * (float)(k % 16) / 16.0f;
-                    if (m_waterWet[k] && std::cos(a - nearAngle) < 0.0f && (other < 0 || k / 16 < other / 16))
-                        other = k;
+                    // Just ahead of the ear, never AT it: a sound at the listener has no direction (the engine guards
+                    // that too - at a distance of 0 its direction was NaN, and the whole output went with it).
+                    wetAt(frame.ear.x, frame.ear.z, surface);
+                    m_water[0].target = glm::vec3(frame.ear.x, surface, frame.ear.z) + m_earForward * 1.5f;
+                }
+                else
+                {
+                    middle = glm::normalize(middle);
+                    float dry = ring > 0 ? c_ring[ring - 1] : 0.0f, wet = c_ring[ring];
+                    for (int step = 0; step < 4; ++step)
+                    {
+                        const float half = 0.5f * (dry + wet);
+                        (wetAt(frame.ear.x + middle.x * half, frame.ear.z + middle.y * half, surface) ? wet : dry) = half;
+                    }
+                    wetAt(frame.ear.x + middle.x * wet, frame.ear.z + middle.y * wet, surface);
+                    m_water[0].target = glm::vec3(frame.ear.x + middle.x * wet, surface, frame.ear.z + middle.y * wet);
+                    // The second voice: the nearest water on the other side of the ear from the first.
+                    for (int k = 0; k < c_waterProbes && other < 0; ++k)
+                    {
+                        const float a = glm::two_pi<float>() * (float)(k % 16) / 16.0f;
+                        if (m_waterWet[k] && std::cos(a) * middle.x + std::sin(a) * middle.y < 0.0f)
+                            other = k;
+                    }
                 }
             }
-            const int picks[2] = { nearest, other };
-            for (int v = 0; v < 2; ++v)
-            {
-                m_water[v].wanted = picks[v] >= 0;
-                if (picks[v] >= 0)
-                {
-                    m_water[v].target = m_waterHit[picks[v]];
-                    if (!m_water[v].playing)
-                        m_water[v].pos = m_water[v].target;
-                }
-            }
+            m_water[0].wanted = found;
+            m_water[1].wanted = other >= 0;
+            if (other >= 0)
+                m_water[1].target = m_waterHit[other];
+            for (WaterVoice& voice : m_water)
+                if (voice.wanted && !voice.playing)
+                    voice.pos = voice.target;
         }
     }
     for (int v = 0; v < 2; ++v)
@@ -1091,9 +1133,10 @@ void GameSound::updateWater(const Frame& frame, const StructureSystem& structure
         WaterVoice& voice = m_water[v];
         if (!active)
             voice.wanted = false;
-        voice.pos += (voice.target - voice.pos) * glm::min(dt * 1.5f, 1.0f);
+        // Slowly, both: water does not move and does not switch. A second and more to a new place or level.
+        voice.pos += (voice.target - voice.pos) * glm::min(dt * 1.0f, 1.0f);
         const float target = voice.wanted ? attenuation(glm::distance(voice.pos, frame.ear)) * def.gain * m_settings.ambienceVolume : 0.0f;
-        voice.gain += (target - voice.gain) * glm::min(dt * 2.0f, 1.0f);
+        voice.gain += (target - voice.gain) * glm::min(dt * 0.8f, 1.0f);
         if (voice.gain < 0.003f && !voice.wanted)
         {
             if (voice.playing)
@@ -1121,16 +1164,15 @@ void GameSound::updateWater(const Frame& frame, const StructureSystem& structure
         voice.source.setPosition(heardAt(voice.pos));
         applyDistance(voice.source, glm::distance(voice.pos, m_ear));
         voice.source.setGain(voice.gain * m_duck * (1.0f + drift(40.0f + (float)v * 9.0f, 0.3f) * def.gainJitter));
-        // The two voices play one loop: another pitch each, so they are never the same water.
-        voice.source.setPitch((v == 0 ? 1.0f : 0.88f) * (1.0f + drift(50.0f + (float)v * 7.0f, 0.13f) * def.pitchJitter));
+        voice.source.setPitch(1.0f); // pitch 1, as every loop (c_soundDefs); the two voices start at other moments
     }
     // Single laps, near the first voice: the water is never the loop alone.
     m_waterLapTimer -= dt;
     if (m_waterLapTimer <= 0.0f)
     {
-        m_waterLapTimer = 1.5f + 3.5f * rand01();
+        m_waterLapTimer = 4.0f + 6.0f * rand01(); // now and then, and soft: a detail on the rush, not its rhythm
         if (m_water[0].wanted)
-            post(EGameSound::WaterLap, m_water[0].target + glm::vec3(rand01() * 8.0f - 4.0f, 0.0f, rand01() * 8.0f - 4.0f), 0.6f + 0.4f * rand01());
+            post(EGameSound::WaterLap, m_water[0].target + glm::vec3(rand01() * 8.0f - 4.0f, 0.0f, rand01() * 8.0f - 4.0f), 0.3f + 0.25f * rand01());
     }
 }
 

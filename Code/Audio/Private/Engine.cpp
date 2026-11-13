@@ -23,6 +23,15 @@ constexpr float SpeedOfSound = 343.0f;
 
 static IPLVector3 toIpl(const glm::vec3& v) { return IPLVector3{ v.x, v.y, v.z }; }
 
+// "Is this a number": by its BITS (the exponent is not all ones). The build is /fp:fast, under which the compiler may
+// take a test like isNumber(x) or x == x as always true and remove it. This one it cannot.
+static bool isNumber(float value)
+{
+    uint32 bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (bits & 0x7f800000u) != 0x7f800000u;
+}
+
 SystemState& audioState()
 {
     static SystemState state;
@@ -88,7 +97,11 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
             if (node.sendWrite + 1024 < state.sendRead + SendLead || node.sendWrite > state.sendRead + SendRingSize - 2 * IplFrameSize)
                 node.sendWrite = state.sendRead + SendLead;
             for (uint32 i = 0; i < IplFrameSize; ++i)
-                state.sendRing[(node.sendWrite + i) & (SendRingSize - 1)] += node.inFifo[i] * send;
+            {
+                const float sample = node.inFifo[i] * send;
+                if (isNumber(sample)) // never a bad value into the reverb: it would stay there (reverbNodeProcess)
+                    state.sendRing[(node.sendWrite + i) & (SendRingSize - 1)] += sample;
+            }
             node.sendWrite += IplFrameSize;
         }
 
@@ -103,10 +116,21 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
         IPLAudioBuffer outBuffer{ 2, (IPLint32)IplFrameSize, outChannels };
         iplBinauralEffectApply(node.effect, &params, &inBuffer, &outBuffer);
 
+        // THE LAST LINE: no value that is not finite leaves this node. One NaN at the endpoint is silence or a blast
+        // from the device for as long as it lasts. A bad block is dropped whole, and the effect is reset (its own
+        // state holds the NaN too).
+        bool finite = true;
+        for (uint32 i = 0; i < IplFrameSize; ++i)
+            finite &= isNumber(node.scratchL[i]) && isNumber(node.scratchR[i]);
+        if (!finite)
+        {
+            iplBinauralEffectReset(node.effect);
+            node.lowpassState = 0.0f;
+        }
         for (uint32 i = 0; i < IplFrameSize; ++i)
         {
-            node.outBlock[i * 2 + 0] = node.scratchL[i];
-            node.outBlock[i * 2 + 1] = node.scratchR[i];
+            node.outBlock[i * 2 + 0] = finite ? node.scratchL[i] : 0.0f;
+            node.outBlock[i * 2 + 1] = finite ? node.scratchR[i] : 0.0f;
         }
         node.outRead = 0;
         node.outAvail = IplFrameSize;
@@ -129,16 +153,27 @@ void reverbNodeProcess(ma_node*, const float**, ma_uint32*, float** ppFramesOut,
     float* out = ppFramesOut[0];
     const uint32 frames = *pFrameCountOut;
     const float level = state.reverbLevel.load(oc::memory_order_relaxed);
+    bool finite = true;
     for (uint32 i = 0; i < frames; ++i)
     {
         float& cell = state.sendRing[(state.sendRead + i) & (SendRingSize - 1)];
         float left = 0.0f, right = 0.0f;
-        state.reverb.process(cell, left, right);
+        state.reverb.process(isNumber(cell) ? cell : 0.0f, left, right);
         cell = 0.0f;
+        finite &= isNumber(left) && isNumber(right);
         out[i * 2 + 0] = left * level;
         out[i * 2 + 1] = right * level;
     }
     state.sendRead += frames;
+    // A REVERB FEEDS ITSELF: one value in it that is not finite is in every sample from then on. If that ever
+    // happens, this block is silence and the reverb starts again from nothing - a gap of a tail, not the end of the
+    // audio.
+    if (!finite)
+    {
+        state.reverb.clear();
+        for (uint32 i = 0; i < frames * 2; ++i)
+            out[i] = 0.0f;
+    }
 }
 
 void updateSource(SourceState& s)
@@ -158,12 +193,25 @@ void updateSource(SourceState& s)
         {
             const glm::vec3 toSource = s.position - state.listenerPos;
             const float dist = glm::length(toSource);
-            const IPLVector3 dir = iplCalculateRelativeDirection(state.iplContext,
-                toIpl(s.position), toIpl(state.listenerPos), toIpl(state.listenerFwd), toIpl(state.listenerUp));
+            // A SOURCE AT THE LISTENER HAS NO DIRECTION. iplCalculateRelativeDirection divides by the distance: at 0 it
+            // gives NaN, the HRTF then writes NaN samples, and those go to the endpoint AND into the reverb, which
+            // feeds itself - the whole output is gone until the engine restarts. So: inside 5 cm, or with any value
+            // that is not finite, the source is straight ahead and the HRTF is blended out (it plays as it is).
+            IPLVector3 dir{ 0.0f, 0.0f, -1.0f };
+            float blend = 0.0f;
+            if (dist > 0.05f && isNumber(dist))
+            {
+                dir = iplCalculateRelativeDirection(state.iplContext,
+                    toIpl(s.position), toIpl(state.listenerPos), toIpl(state.listenerFwd), toIpl(state.listenerUp));
+                if (isNumber(dir.x) && isNumber(dir.y) && isNumber(dir.z))
+                    blend = glm::clamp((dist - 0.05f) / 0.45f, 0.0f, 1.0f); // in over the next 45 cm: no jump at the edge
+                else
+                    dir = IPLVector3{ 0.0f, 0.0f, -1.0f };
+            }
             s.node.dirX.store(dir.x, oc::memory_order_relaxed);
             s.node.dirY.store(dir.y, oc::memory_order_relaxed);
             s.node.dirZ.store(dir.z, oc::memory_order_relaxed);
-            s.node.blend.store(1.0f, oc::memory_order_relaxed);
+            s.node.blend.store(blend, oc::memory_order_relaxed);
 
             const float clamped = glm::clamp(dist, s.refDist, s.maxDist);
             attenuation = s.refDist / (s.refDist + s.rolloff * (clamped - s.refDist));

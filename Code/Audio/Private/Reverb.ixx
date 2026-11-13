@@ -65,6 +65,22 @@ export struct FdnReverb
         lowCutCoef = 1.0f - std::exp(-6.2831853f * 150.0f / sampleRate);
     }
 
+    // Everything that rings, to nothing (the shape stays). The audio thread's: reverbNodeProcess calls it when a value
+    // that is not finite got in.
+    void clear()
+    {
+        for (int i = 0; i < Lines; ++i)
+        {
+            for (int k = 0; k < MaxDelay; ++k)
+                line[i][k] = 0.0f;
+            tone[i] = 0.0f;
+        }
+        for (int i = 0; i < Diffusers; ++i)
+            for (int k = 0; k < MaxDiffuser; ++k)
+                diffuser[i][k] = 0.0f;
+        lowCutState = 0.0f;
+    }
+
     void process(float in, float& outLeft, float& outRight)
     {
         // The low cut, then the diffusers.
