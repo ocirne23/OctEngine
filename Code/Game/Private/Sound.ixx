@@ -38,7 +38,7 @@ export enum class EGameSound : uint8
     // The ambient one-shots in the world: GameSound places them itself, around the ear (THE AMBIENCE, below)
     BirdSong, CricketBout, OwlCall, WindGust, WaterLap,
     // One-shots with a direction but no distance (the far field)
-    Thunder, WaveHorn,
+    Thunder,
     // One-shots with no place
     Alarm, PlayerHurt,
     // Loops
@@ -49,6 +49,8 @@ export constexpr int c_gameSoundVariants = 6; // buffers per one-shot at most
 
 // SoundSynth.cpp: one sound's samples (interleaved when stereo), peak-normalized. `rate` is the sample rate.
 void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool& stereo, uint32& rate);
+// A number that changes whenever SoundSynth.cpp does (its modification time): the key of the cached output.
+uint32 synthGameSoundStamp();
 
 export class GameSound final
 {
@@ -102,15 +104,22 @@ private:
         AudioSource source;
         EGameSound sound = EGameSound::Count;
         float loudness = 0.0f;
+        float gain = 0.0f; // what it plays at, before the loudness limit
         double end = 0.0; // real seconds: free from then on
     };
     oc::vector<Voice> m_voices;
+    // THE LOUDNESS LIMIT: everything that plays, summed (as power: the sounds are not in step), must stay under
+    // "Loudness limit", or the mix goes over full scale at the output and DISTORTS - the one way many quiet sounds
+    // become one loud noise. m_duck is the factor on every game voice that holds the sum there: down at once, up slowly.
+    float m_duck = 1.0f;
+    void updateLoudnessLimit(float dt);
 
     // The beds: one looping source each (2D, or the horde's at its centroid).
     struct Bed
     {
         AudioSource source;
         float gain = 0.0f;
+        float level = 0.0f; // what it plays at, before the loudness limit
         bool playing = false;
     };
     enum { BedWind, BedDay, BedNight, BedBattle, BedHorde, BedCount };

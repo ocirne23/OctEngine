@@ -439,11 +439,13 @@ static void registerSound(GameSoundSettings& s)
     static constexpr oc::string_view SOUND_NAMES[] = { "-", "Melee hit", "Unit reveal", "Unit death", "Shot fired", "Lob fired",
         "Shot impact", "Splash impact", "Turret fire", "Structure placed", "Structure built", "Structure collapse",
         "Bird song", "Cricket bout", "Owl call", "Wind gust", "Water lap", "Thunder",
-        "Wave horn", "Alarm", "Player hurt", "Loop: wind", "Loop: day", "Loop: night", "Loop: battle", "Loop: horde",
+        "Alarm", "Player hurt", "Loop: wind", "Loop: day", "Loop: night", "Loop: battle", "Loop: horde",
         "Loop: hum", "Loop: fire", "Loop: works", "Loop: water" };
     Tweak::enumVar("Game/Sound", "Play a sound", &s.audition, SOUND_NAMES, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Game/Sound/Ambience", "Enemies that silence the animals", &s.fearUnits, 0.5f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Sound/Ambience", "Animals return (s)", &s.fearReturn, 1.0f, 300.0f, 1.0f);
+    Tweak::floatVar("Game/Sound/Limits", "Loudness limit", &s.loudnessLimit, 0.1f, 8.0f, 0.05f);
+    Tweak::floatVar("Game/Sound/Stats", "Loudness (before the limit)", &s.loudness, 0.0f, 100.0f, 0.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Sound/Stats", "Voices playing", &s.voicesPlaying, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Sound/Stats", "Cues in/s", &s.cuesPerSecond, 0, 1 << 30, 0.0f, {}, ETweakFlags::None);
     Tweak::intVar("Game/Sound/Stats", "One-shots started/s", &s.cuesPlayed, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);

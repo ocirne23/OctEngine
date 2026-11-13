@@ -28,7 +28,6 @@ The cue sites:
 | `StructureBuilt` | `investMaterials` (the authority), `mirrorPlace`'s built re-send (a client) |
 | `StructureCollapse` | `setRubble(true)`, `removeStructureBookkeeping` (quiet for a cable or a blueprint) |
 | `Thunder` | `tickLightning`, delayed by the distance (capped at 6 s) |
-| `WaveHorn` | `addSpawnFog` (every instance), `queueWave` on the flat maps |
 | `Alarm` | `GameSound::updateAlarm`: the own team's built structures lost health between two samples (0.5 s) with none removed; 10 s between two alarms |
 | `PlayerHurt` | `GameSound::update`: the local player's health fell |
 | `BirdSong`, `CricketBout`, `OwlCall`, `WindGust`, `WaterLap` | `GameSound::updateAmbience` / `updateWater` (The ambience is positional, below) |
@@ -59,11 +58,23 @@ Two columns of `c_soundDefs`, `pitchJitter` and `gainJitter`, per sound:
 * **A one-shot:** every start is shifted in pitch and in volume by up to that share. The pitch shift is a RATIO (as far
   down as up) from the sum of two rolls, so most starts are near the sound's own pitch and a few are far from it.
   Large for the creatures and the impacts (each throat and each blow is its own), small for the light tower (a
-  machine), **0 for the bells, the alarm and the horn: they have their note.**
+  machine), **0 for the alarm, and no pitch shift for "built": a signal is the same every time.**
 * **A loop:** its pitch and volume DRIFT by up to that share for as long as it plays (`GameSound::drift`: three sines
   whose rates share no period, so the drift never repeats in step with the loop). The wind's gusts are then longer
   than its 10 s loop. A building loop drifts by itself, seeded by its structure id: one fire flares while the one
   next to it dies down. Small for the hum (a steady field), large for the fire and the wind.
+
+## Bursts: the cases that are closed
+
+Every path that can start a sound has a bound. The ones that are not in the list above:
+
+| Case | What would happen | The bound |
+|---|---|---|
+| ONE sound posts thousands of cues in a frame (the melee hits of a horde, through `addBeam`) | it fills the post queue (2048), and every sound posted after it in that frame is lost: a "built", a thunder, a bird's notes | `pushPosted`: a sound keeps 32 posts between two updates; the rest is only counted, and weighs in the battle bed (as the component cues over their bound do) |
+| No update for a while (the lobby or the main menu is up, the sounds are being synthesized, a hitch) | the cues of the whole gap play as one late burst, and their counts - read as one frame's - throw the battle bed to its full level | a gap of more than 0.5 s between two updates: `discardPosted` and the battle bed's sum to 0 |
+| A match starts; F10 loads a save | a collapse per removed structure, a "placed" per blueprint | `discardPosted` in the `GameMatch` constructor and after the load (it drops the components' cues too). The shots a load removes are destroyed by a job after it: at most one impact sound |
+| MANY sounds at once, each at a fair level | the sum goes over full scale at the output and DISTORTS: many quiet sounds become one loud noise | THE LOUDNESS LIMIT: `updateLoudnessLimit` sums everything that plays (as power: the sounds are not in step) and holds it under "Loudness limit" (1.2) with one factor on every game voice (`m_duck`): down at once, up slowly. "Game/Sound/Stats" shows the sum before the limit |
+| The audio thread's cost | each spatial voice is an HRTF convolution | at most "Max one-shot voices" (24, up to 48) + 5 beds + "Max building loops" (6, up to 12) + 2 water voices, whatever the game does |
 
 ## The beds: what the limits drop is not lost
 
@@ -158,15 +169,35 @@ also the quietest loop (gain 0.22): it says "a field is here" and no more.
 
 ## The sounds
 
-All 29 sounds are SYNTHESIZED at the first update (`synthGameSound` in `SoundSynth.cpp`, 48 kHz - the engine's rate),
-on the main thread: a one-time cost at the first windowed frame of a match. Each sound is a few LAYERS mixed on a
+All 28 sounds are SYNTHESIZED (`synthGameSound` in `SoundSynth.cpp`, 48 kHz - the engine's rate) and kept in a
+file, so a run synthesizes only what the file does not hold.
+
+### The sound cache
+
+`GameSound::load` (the first windowed frame of a match, main thread) reads `Assets/Local/Sounds/game.snd`: a header
+(magic, STAMP, entry count), then per sound and variant a 12 byte record (sound, variant, stereo, rate, sample count)
+and the samples as 16 bit.
+
+* **The stamp makes the file invalid by itself**, with no number to bump by hand: it is `synthGameSoundStamp()` - a
+  hash of `__TIMESTAMP__` in `SoundSynth.cpp`, the time that source file was last changed - mixed with every sound's
+  name and variant count in `c_soundDefs`' order. So an edit of the synthesis, a new or moved sound and another
+  variant count each give another stamp, and a file with another stamp is not read at all.
+  **A change of the synthesis that is NOT in `SoundSynth.cpp` does not change the stamp** - keep all of it there.
+* A sound the file does not hold (the first run, a cut file, a `Sounds/Game/*.wav` that was removed) is synthesized,
+  and the whole file is written again with it. The log line "GameSound: synthesized N sounds" says when that happened.
+* A sound that comes from a `.wav` is not in the file.
+* The buffers are made from the 16 bit samples on EVERY run, also the one that synthesizes: a run with the cache
+  sounds the same as the run that made it.
+* To force a new synthesis: delete the file.
+
+Without the file the synthesis is a one-time cost of seconds at the first windowed frame of a match. Each sound is a few LAYERS mixed on a
 canvas, then a room (`Canvas::reverb`) and `Canvas::finish` (no offset, soft edges, peak 0.9; a sound with a value
 that is not finite is made silent and logged).
 
 > **THE RULE: NOISE IS THE SOURCE, A FILTER GIVES IT ITS PITCH.** A pure sine, a sine whose pitch slides, a regular
 > tremolo, a saw wave and an FM pair are what makes a synthesized sound read as an old game console. No layer is one.
 > Tried and dropped for that reason: the pitch-drop sine thump, sums of decaying sines for struck bodies and bells, a
-> saw-wave voice, an FM strike for the light tower, a chord of sines for the field hum, a filtered saw for the horn.
+> saw-wave voice, an FM strike for the light tower, a chord of sines for the field hum.
 
 | Building block | What it is | Used for |
 |---|---|---|
@@ -177,7 +208,7 @@ that is not finite is made silent and logged).
 | `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch - the only tones in the game | birds, crickets, the owl |
 | `flutter` | an uneven level (random values with straight lines between), where a regular tremolo would sound like a machine | the saw's teeth, a gurgle |
 
-The horn is breath and lip pulses into one resonance per harmonic; the field hum is noise through the resonances of
+The field hum is noise through the resonances of
 a low chord (air that sings); the alarm is a war drum; "built" is two mallet blows and a soft glow of air.
 
 **The death sound is a GRUNT, not a scream:** 0.2 - 0.4 s, low (about 80 - 130 Hz), more breath than voice, and
@@ -219,7 +250,7 @@ to hide them - a steady drone. A continuous low noise ("roar") under the battle 
 **A file `Assets/Sounds/Game/<name>.wav`
 (`<name>2.wav`, `<name>3.wav` for the variants) replaces a synthesized sound** — the names are the first column of
 `c_soundDefs`: `melee_hit`, `unit_reveal`, `unit_death`, `shot_fired`, `lob_fired`, `shot_impact`, `splash_impact`,
-`turret_fire`, `structure_placed`, `structure_built`, `structure_collapse`, `thunder`, `wave_horn`, `alarm`,
+`turret_fire`, `structure_placed`, `structure_built`, `structure_collapse`, `thunder`, `alarm`,
 `player_hurt`, `bird_song`, `cricket_bout`, `owl_call`, `wind_gust`, `water_lap`, `loop_wind`, `loop_day`,
 `loop_night`, `loop_battle`, `loop_horde`, `loop_hum`, `loop_fire`, `loop_works`, `loop_water`. A MONO file is spatialized (HRTF); a stereo file plays flat, so a world sound must be mono.
 

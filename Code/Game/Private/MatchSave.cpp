@@ -10,6 +10,7 @@ import :Match;
 import :Player;
 import :Structures;
 import :Npc;
+import :Sound;
 
 // SAVE / LOAD (F9/F10, server/single player only - clients refuse) and the profiling SCENARIO
 // built on the load. See the Match.ixx comments on saveGame/loadGame and runScenario.
@@ -113,6 +114,7 @@ void GameMatch::loadGame(oc::string_view path)
     // replication (Component Network in their prefabs).
     m_structures.loadFrom(root);
     m_npcs.loadUnits(root, m_structures);
+    GameSound::discardPosted(); // the clear's collapses and the load's placements are no events of the game: silent
     m_selectedId = 0;
     // The wave clock (co-op saves; older saves without it keep the current clock).
     if (const AssetNode* n = root.find("WaveIndex"))

@@ -535,7 +535,7 @@ export struct GameSoundSettings
     float structureVolume = 0.6f;     // building loops, place / built / collapse
     float ambienceVolume = 0.6f;      // wind, the day and night beds, thunder
     float crowdVolume = 0.8f;         // the battle bed and the horde bed
-    float interfaceVolume = 0.7f;     // the wave horn, the alarm, the player's own hurt sound
+    float interfaceVolume = 0.7f;     // the alarm, the player's own hurt sound
     int maxVoices = 24;               // one-shot voices (each spatial voice is one HRTF convolution on the audio thread)
     int maxLoops = 6;                 // building loop voices: the nearest buildings get them
     float fullVolumeDistance = 10.0f; // m from the ear: no attenuation inside
@@ -547,6 +547,8 @@ export struct GameSoundSettings
     float fearUnits = 6.0f;           // enemy units in the horde radius (weighted by nearness) at which every animal is silent
     float fearReturn = 30.0f;         // s after the last enemy until the animals are all back
     int audition = 0;                 // "Play a sound": 0 = none, else EGameSound + 1; GameSound plays it once, flat, and sets it back to 0
+    float loudnessLimit = 1.2f;       // the power sum of everything that plays is held under this (1 = one sound at full gain): no distortion at the output
+    float loudness = 0.0f;            // live readout: that sum, before the limit
     int voicesPlaying = 0;            // live readout
     int cuesPerSecond = 0;            // live readout: cues that came in (before any limit)
     int cuesPlayed = 0;               // live readout: one-shots started in the last second

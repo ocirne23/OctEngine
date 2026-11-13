@@ -33,7 +33,7 @@ namespace
         float minInterval;  // s between two starts
         // THE RANDOM FEEL. A one-shot: every start is shifted by up to this share in pitch (as a ratio, most starts near the
         // middle) and in volume. A loop: its pitch and volume DRIFT by up to this share, slowly, for as long as it plays.
-        // 0 where a shift would be wrong: a bell and a horn have their note.
+        // 0 where a shift would be wrong: a sound with a note of its own.
         float pitchJitter;
         float gainJitter;
         float crowdWeight;  // what one cue at the ear adds to the battle bed
@@ -58,7 +58,6 @@ namespace
         { "wind_gust",          GroupAmbience,   PlaceWorld, 4, 3, 0.60f, 0.50f,  0.10f, 0.30f, 0.0f },
         { "water_lap",          GroupAmbience,   PlaceWorld, 4, 2, 0.50f, 0.30f,  0.10f, 0.30f, 0.0f },
         { "thunder",            GroupAmbience,   PlaceFar,   4, 2, 1.00f, 0.50f,  0.14f, 0.20f, 0.0f },
-        { "wave_horn",          GroupInterface,  PlaceFar,   2, 1, 0.90f, 3.00f,  0.00f, 0.00f, 0.0f },
         { "alarm",              GroupInterface,  PlaceFlat,  1, 1, 0.60f, 1.00f,  0.00f, 0.00f, 0.0f },
         { "player_hurt",        GroupInterface,  PlaceFlat,  3, 2, 0.80f, 0.30f,  0.07f, 0.15f, 0.0f },
         { "loop_wind",          GroupAmbience,   PlaceFlat,  1, 1, 0.50f, 0.0f,   0.07f, 0.30f, 0.0f }, // gusts longer than the loop
@@ -121,27 +120,48 @@ namespace
     constexpr float c_noFalloff = 3.0e38f;
 }
 
+// THE POST QUEUE IS BOUNDED PER SOUND: between two updates a sound keeps c_maxPostedOfSound cues; one over that is only
+// counted (it still weighs in the battle bed, like the components' cues over their bound). Without it ONE sound could
+// fill the whole queue - thousands of melee hits in a frame - and every other sound posted after it in that frame was
+// lost: a "built", a thunder, the notes of a bird.
+namespace
+{
+    constexpr uint32 c_maxPostedOfSound = 32;
+    uint32 g_postedOfSound[(int)EGameSound::Count]; // since the last update, the ones over the bound included
+
+    void pushPosted(const Posted& posted)
+    {
+        if (++g_postedOfSound[(int)posted.sound] <= c_maxPostedOfSound && g_posted.size() < c_maxPosted)
+            g_posted.push_back(posted);
+    }
+}
+
 void GameSound::post(EGameSound sound, const glm::vec3& pos, float gain, float size, float delaySec)
 {
-    if (g_posted.size() < c_maxPosted)
-        g_posted.push_back(Posted{ pos, gain, size, Globals::time.getElapsedSec() + (double)delaySec, sound, true });
+    pushPosted(Posted{ pos, gain, size, Globals::time.getElapsedSec() + (double)delaySec, sound, true });
 }
 
 void GameSound::post2D(EGameSound sound, float gain)
 {
-    if (g_posted.size() < c_maxPosted)
-        g_posted.push_back(Posted{ glm::vec3(0.0f), gain, 1.0f, Globals::time.getElapsedSec(), sound, false });
+    pushPosted(Posted{ glm::vec3(0.0f), gain, 1.0f, Globals::time.getElapsedSec(), sound, false });
 }
 
 void GameSound::postVariant(EGameSound sound, const glm::vec3& pos, float gain, int variant, float pitch, float delaySec)
 {
-    if (g_posted.size() < c_maxPosted)
-        g_posted.push_back(Posted{ pos, gain, 1.0f, Globals::time.getElapsedSec() + (double)delaySec, sound, true, (int8)variant, pitch });
+    pushPosted(Posted{ pos, gain, 1.0f, Globals::time.getElapsedSec() + (double)delaySec, sound, true, (int8)variant, pitch });
 }
 
+// Everything that waits to be heard, dropped: the posts and the components' cues. For the moments whose cues are no
+// events of the game: a match that starts (the last one's teardown posted a collapse per structure), a load (the
+// same, and an impact per shot that the load removed), a long gap between two updates.
 void GameSound::discardPosted()
 {
     g_posted.clear();
+    for (uint32& count : g_postedOfSound)
+        count = 0;
+    oc::vector<GameUnitComponent::SoundCue> cues;
+    uint32 counts[(int)GameUnitComponent::ESoundCue::Count];
+    GameUnitComponent::takeSoundCues(cues, counts);
 }
 
 float GameSound::rand01()
@@ -158,12 +178,82 @@ float GameSound::attenuation(float dist) const
     return full / glm::max(dist, full) * (1.0f - glm::smoothstep(range * 0.6f, range, dist));
 }
 
+// THE SOUND CACHE: `Local/Sounds/game.snd`. The synthesis takes seconds and gives the same samples on every run, so
+// its output is kept: a header (magic, stamp, entry count), then per sound and variant a record (sound, variant, stereo,
+// rate, sample count) and the samples as 16 bit. The STAMP is the synthesizer's (the time SoundSynth.cpp was changed)
+// mixed with every sound's name and variant count, in order - so an edit of the synthesis, a new sound or another
+// variant count each make a file with another stamp, and a file with another stamp is not read at all.
+// A sound the file does not hold (the first run; a `Sounds/Game/*.wav` that was removed) is synthesized, and the file
+// is written again with it. A sound that comes from a .wav is not in the file.
+namespace
+{
+    constexpr uint32 c_cacheMagic = 0x444e5347u; // "GSND"
+    constexpr char c_cachePath[] = "Local/Sounds/game.snd";
+    struct CacheRecord
+    {
+        uint8 sound, variant, stereo, pad;
+        uint32 rate;
+        uint32 samples; // int16 values that follow (both channels of a stereo sound)
+    };
+    static_assert(sizeof(CacheRecord) == 12);
+
+    uint32 cacheStamp()
+    {
+        uint32 hash = synthGameSoundStamp();
+        for (const SoundDef& def : c_soundDefs)
+        {
+            for (const char* c = def.name; *c; ++c)
+                hash = (hash ^ (uint8)*c) * 16777619u;
+            hash = (hash ^ def.variants) * 16777619u;
+        }
+        return hash;
+    }
+}
+
 void GameSound::load()
 {
     m_loaded = true;
     ProfileScope scope("Game sound load", EProfileCategory::Audio);
     m_buffers.resize((size_t)EGameSound::Count * c_gameSoundVariants);
+
+    // What the cache holds: where each sound's record is in the file's bytes.
+    const uint32 stamp = cacheStamp();
+    oc::vector<uint8> cached;
+    oc::vector<uint32> recordAt((size_t)EGameSound::Count * c_gameSoundVariants, 0u); // byte offset of the record; 0 = not there
+    if (FileSystem::exists(c_cachePath, /*allowMainThread*/ true) && FileSystem::readFileBytes(c_cachePath, cached, /*allowMainThread*/ true)
+        && cached.size() >= 12)
+    {
+        uint32 header[3];
+        memcpy(header, cached.data(), sizeof(header));
+        size_t at = sizeof(header);
+        if (header[0] == c_cacheMagic && header[1] == stamp)
+            for (uint32 i = 0; i < header[2] && at + sizeof(CacheRecord) <= cached.size(); ++i)
+            {
+                CacheRecord record;
+                memcpy(&record, cached.data() + at, sizeof(record));
+                const size_t bytes = (size_t)record.samples * sizeof(int16);
+                if (at + sizeof(record) + bytes > cached.size())
+                    break; // cut short: what is missing is synthesized
+                if (record.sound < (uint8)EGameSound::Count && record.variant < c_gameSoundVariants)
+                    recordAt[(size_t)record.sound * c_gameSoundVariants + record.variant] = (uint32)at;
+                at += sizeof(record) + bytes;
+            }
+    }
+
+    // The file as it will be written if anything was synthesized: every cached sound copied, every new one added.
+    oc::vector<uint8> written(12);
+    uint32 writtenCount = 0, synthesized = 0;
+    const auto append = [&](const CacheRecord& record, const void* samples)
+    {
+        const size_t at = written.size(), bytes = (size_t)record.samples * sizeof(int16);
+        written.resize(at + sizeof(record) + bytes);
+        memcpy(written.data() + at, &record, sizeof(record));
+        memcpy(written.data() + at + sizeof(record), samples, bytes);
+        ++writtenCount;
+    };
+
     oc::vector<float> samples;
+    oc::vector<int16> packed;
     oc::vector<uint8> fileBytes;
     for (int s = 0; s < (int)EGameSound::Count; ++s)
     {
@@ -176,15 +266,41 @@ void GameSound::load()
                 buffer = Globals::audio.loadSound(path, fileBytes);
             if (!buffer.isValid())
             {
-                bool stereo = false;
-                uint32 rate = 48000;
-                synthGameSound((EGameSound)s, v, samples, stereo, rate);
-                buffer = Globals::audio.createBuffer(stereo ? EAudioFormat::StereoFloat32 : EAudioFormat::MonoFloat32,
-                    oc::as_bytes(oc::span<const float>(samples)), rate);
+                if (const uint32 at = recordAt[(size_t)s * c_gameSoundVariants + v])
+                {
+                    CacheRecord record;
+                    memcpy(&record, cached.data() + at, sizeof(record));
+                    const uint8* data = cached.data() + at + sizeof(record); // at an even offset: the header and every record are 12 bytes
+                    buffer = Globals::audio.createBuffer(record.stereo ? EAudioFormat::Stereo16 : EAudioFormat::Mono16,
+                        oc::span<const std::byte>(reinterpret_cast<const std::byte*>(data), (size_t)record.samples * sizeof(int16)), record.rate);
+                    append(record, data);
+                }
+                else
+                {
+                    bool stereo = false;
+                    uint32 rate = 48000;
+                    synthGameSound((EGameSound)s, v, samples, stereo, rate);
+                    packed.resize(samples.size());
+                    for (size_t i = 0; i < samples.size(); ++i)
+                        packed[i] = (int16)(glm::clamp(samples[i], -1.0f, 1.0f) * 32767.0f);
+                    // The buffer is made from the 16 bit samples too: this run sounds like every later one.
+                    buffer = Globals::audio.createBuffer(stereo ? EAudioFormat::Stereo16 : EAudioFormat::Mono16,
+                        oc::as_bytes(oc::span<const int16>(packed)), rate);
+                    append(CacheRecord{ (uint8)s, (uint8)v, (uint8)(stereo ? 1 : 0), 0, rate, (uint32)packed.size() }, packed.data());
+                    ++synthesized;
+                }
             }
             if (buffer.isValid())
                 m_variantCount[s] = (uint8)(v + 1);
         }
+    }
+    if (synthesized > 0)
+    {
+        const uint32 header[3] = { c_cacheMagic, stamp, writtenCount };
+        memcpy(written.data(), header, sizeof(header));
+        const bool saved = FileSystem::writeFileBytes(c_cachePath, written, /*allowMainThread*/ true);
+        Log::info(oc::format("GameSound: synthesized {} sounds, {} ({:.1f} MB)", synthesized,
+            saved ? "saved to Local/Sounds/game.snd" : "could NOT save Local/Sounds/game.snd", (float)written.size() / (1024.0f * 1024.0f)));
     }
 }
 
@@ -200,15 +316,22 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
             bed = Bed{};
         for (WaterVoice& water : m_water)
             water = WaterVoice{};
-        g_posted.clear();
-        uint32 counts[(int)GameUnitComponent::ESoundCue::Count];
-        GameUnitComponent::takeSoundCues(m_cueScratch, counts);
+        discardPosted();
         m_settings.voicesPlaying = 0;
         return;
     }
     if (!m_loaded)
         load();
-    m_now = Globals::time.getElapsedSec();
+    // A GAP: no update for half a second (the lobby or the main menu was up, the sounds were being synthesized, a long
+    // hitch). Everything that came in meanwhile is old: played now it would be one burst of late sounds, and the cue
+    // counts of the whole gap, read as one frame's, would throw the battle bed to its full level.
+    const double now = Globals::time.getElapsedSec();
+    if (now - m_now > 0.5)
+    {
+        discardPosted();
+        m_crowdAccum = 0.0f;
+    }
+    m_now = now;
     const float dt = glm::clamp((float)Globals::time.getDeltaSec(), 0.0f, 0.1f);
 
     if (frame.playerHealth >= 0.0f && m_lastPlayerHealth >= 0.0f && frame.playerHealth < m_lastPlayerHealth - 0.5f)
@@ -278,9 +401,14 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
                 continue;
             }
             ++m_statCues;
-            consider(p.sound, p.pos, p.gain, p.size, p.placed, 1.0f, p.variant, p.pitch);
+            // A sound over its bound: the cues that are here stand for all of them in the battle bed.
+            const uint32 posted = g_postedOfSound[(int)p.sound];
+            consider(p.sound, p.pos, p.gain, p.size, p.placed, posted > c_maxPostedOfSound ? (float)posted / (float)c_maxPostedOfSound : 1.0f,
+                p.variant, p.pitch);
         }
         g_posted.resize(keep);
+        for (uint32& count : g_postedOfSound)
+            count = 0;
     }
     // One start per sound a frame.
     // THE BATTLE FOCUS: while a battle is on (busy = the battle bed's level x "Battle focus"), the bed carries the mass
@@ -297,6 +425,7 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
             startVoice((EGameSound)s, best[s].pos, best[s].loudness, best[s].size, best[s].placed, best[s].variant, best[s].pitch);
     }
 
+    updateLoudnessLimit(dt);
     updateAmbience(frame, structures, dt); // posts for the next frame
     updateWater(frame, structures, dt);
     updateHorde(frame);
@@ -319,6 +448,36 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
         m_statTimer = 0.0f;
         m_statCues = m_statStarts = 0;
     }
+}
+
+// THE LOUDNESS LIMIT (see m_duck): the power sum of every one-shot, bed, building loop and water voice at its own gain.
+// The beds, the loops and the water set their gain every frame and take m_duck there; the one-shots get it here.
+void GameSound::updateLoudnessLimit(float dt)
+{
+    float power = 0.0f;
+    for (const Voice& v : m_voices)
+        if (v.end > m_now)
+            power += v.gain * v.gain;
+    for (const Bed& bed : m_beds)
+        if (bed.playing)
+            power += bed.level * bed.level;
+    for (const LoopVoice& loop : m_loops)
+        if (loop.structureId != 0)
+            power += loop.gain * loop.gain;
+    for (const WaterVoice& water : m_water)
+        if (water.playing)
+            power += water.gain * water.gain;
+    const float level = std::sqrt(power);
+    const float limit = glm::max(m_settings.loudnessLimit, 0.05f);
+    const float target = level > limit ? limit / level : 1.0f;
+    const float before = m_duck;
+    m_duck += (target - m_duck) * glm::min(dt * (target < m_duck ? 40.0f : 1.5f), 1.0f);
+    m_settings.loudness = level;
+    if (glm::abs(m_duck - before) < 0.002f && m_duck > 0.998f)
+        return; // at rest: nothing to set
+    for (Voice& v : m_voices)
+        if (v.end > m_now)
+            v.source.setGain(v.gain * m_duck);
 }
 
 void GameSound::startVoice(EGameSound sound, const glm::vec3& pos, float loudness, float size, bool positional, int givenVariant, float givenPitch)
@@ -405,7 +564,8 @@ void GameSound::startVoice(EGameSound sound, const glm::vec3& pos, float loudnes
         source.setAttenuation(1.0f, c_noFalloff, 0.0f); // the distance is in the gain already
         source.setPosition(pos);
     }
-    source.setGain(loudness * volumes[def.group]);
+    voice->gain = loudness * volumes[def.group];
+    source.setGain(voice->gain * m_duck);
     source.setPitch(pitch);
     source.play();
     voice->sound = sound;
@@ -443,7 +603,8 @@ void GameSound::setBed(int index, EGameSound sound, float gain, float dt, float 
         bed.playing = true;
     }
     const SoundDef& def = c_soundDefs[(int)sound];
-    bed.source.setGain(bed.gain * def.gain * (1.0f + drift((float)index * 3.7f, 0.23f) * def.gainJitter));
+    bed.level = bed.gain * def.gain;
+    bed.source.setGain(bed.level * m_duck * (1.0f + drift((float)index * 3.7f, 0.23f) * def.gainJitter));
     bed.source.setPitch(pitch * (1.0f + drift((float)index * 5.3f + 1.0f, 0.11f) * def.pitchJitter));
 }
 
@@ -630,7 +791,7 @@ void GameSound::updateStructureLoops(const Frame& frame, const StructureSystem& 
         // Each building's loop drifts by itself (its id is the seed): one fire flares while the one next to it dies down.
         const SoundDef& def = c_soundDefs[(int)voice.sound];
         const float seed = (float)(voice.structureId % 1024u);
-        voice.source.setGain(voice.gain * (1.0f + drift(seed, 0.3f) * def.gainJitter));
+        voice.source.setGain(voice.gain * m_duck * (1.0f + drift(seed, 0.3f) * def.gainJitter));
         voice.source.setPitch(voice.pitch * (1.0f + drift(seed + 11.0f, 0.13f) * def.pitchJitter));
     }
 }
@@ -886,7 +1047,7 @@ void GameSound::updateWater(const Frame& frame, const StructureSystem& structure
             voice.playing = true;
         }
         voice.source.setPosition(voice.pos);
-        voice.source.setGain(voice.gain * (1.0f + drift(40.0f + (float)v * 9.0f, 0.3f) * def.gainJitter));
+        voice.source.setGain(voice.gain * m_duck * (1.0f + drift(40.0f + (float)v * 9.0f, 0.3f) * def.gainJitter));
         // The two voices play one loop: another pitch each, so they are never the same water.
         voice.source.setPitch((v == 0 ? 1.0f : 0.88f) * (1.0f + drift(50.0f + (float)v * 7.0f, 0.13f) * def.pitchJitter));
     }

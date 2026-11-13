@@ -375,7 +375,6 @@ void GameMatch::tickBeacon(float deltaSec)
 
 void GameMatch::addSpawnFog(const glm::vec3& pos, float radius)
 {
-    GameSound::post(EGameSound::WaveHorn, pos); // a wave comes down: the horn, from its side (every instance)
     m_spawnFog[m_spawnFogNext] = { pos, glm::clamp(radius, 6.0f, 60.0f), 0.0f };
     m_spawnFogNext = (m_spawnFogNext + 1) % c_spawnFogSites;
 }
@@ -950,8 +949,6 @@ void GameMatch::queueWave()
         fogRadius = glm::min(m_waveRadius, m_settings.sandboxWaveDistance * 0.5f);
         addSpawnFog(fogPos, fogRadius);
     }
-    else
-        GameSound::post(EGameSound::WaveHorn, fogPos); // the flat maps have no spawn fog: the horn alone
     if (m_isServer)
     {
         uint8 buffer[24];

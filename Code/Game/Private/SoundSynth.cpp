@@ -15,7 +15,7 @@ import :Sound;
 // THE RULE: NOISE IS THE SOURCE, A FILTER GIVES IT ITS PITCH. A pure sine, a sine whose pitch slides, and a regular
 // tremolo are what makes a synthesized sound read as an old game console, so no layer is one: a thump has no pitch
 // slide, a struck body is never a sum of sines, a voice's pulses are never regular. The only tones are the birds, the
-// crickets and the owl (whistle: a real whistle is a tone; it carries breath and its pitch is not steady) and the horn.
+// crickets and the owl (whistle: a real whistle is a tone; it carries breath and its pitch is not steady).
 // A LOOP mixes its events with a wrap (an event that runs over the end continues at the start) and runs every
 // filter and the reverb twice around, keeping the second round: the loop has no seam.
 // Run once, at GameSound's first update. Everything is 48 kHz (the engine's rate: no resampling at pitch 1).
@@ -683,6 +683,17 @@ namespace
     };
 }
 
+// The synthesis is slow (seconds) and its output is the same on every run, so GameSound keeps it in a file
+// (Sound.cpp, load). The file must not outlive the code that made it: this stamp is the time THIS source file was last
+// changed, so any edit here makes the next run synthesize again. No number to bump by hand.
+uint32 synthGameSoundStamp()
+{
+    uint32 hash = 2166136261u;
+    for (const char* c = __TIMESTAMP__; *c; ++c)
+        hash = (hash ^ (uint8)*c) * 16777619u;
+    return hash;
+}
+
 void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool& stereo, uint32& rate)
 {
     rate = (uint32)c_sr;
@@ -913,45 +924,6 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         c.mix(roll, 0.0f, 1.0f);
         c.mix(thump(1.5f, 55.0f, 30.0f, 0.2f, 0.6f, 1.5f), 0.05f, 0.5f);
         c.reverb(0.8f, 0.5f, 0.4f);
-        c.finish();
-        break;
-    }
-    case EGameSound::WaveHorn:
-    {
-        // A war horn far away, as a BLOWN horn: breath and the lips' uneven pulses into the horn's own resonances (one per
-        // harmonic). The pitch comes up into the note; the high resonances open as it gets loud.
-        Canvas c = begin(4.2f, false, false);
-        constexpr int c_harmonics = 9;
-        Svf horn[c_harmonics];
-        Noise breath;
-        float phase = 0.0f, periodScale = 1.0f, strength = 1.0f, unsteady = 0.0f;
-        for (uint32 i = 0; i < c.frames; ++i)
-        {
-            const float t = (float)i / c_sr;
-            const float env = glm::smoothstep(0.0f, 0.35f, t) * (1.0f - glm::smoothstep(2.6f, 3.5f, t));
-            unsteady += (rng.bi() * 0.03f - unsteady) * 0.0008f;
-            const float hz = (variant & 1 ? 73.4f : 87.3f) * (1.0f - 0.11f * std::exp(-t / 0.12f)) * (1.0f + unsteady);
-            phase += hz * periodScale / c_sr;
-            if (phase >= 1.0f)
-            {
-                phase -= 1.0f;
-                periodScale = 1.0f + rng.bi() * 0.04f;
-                strength = 1.0f - rng.uni() * 0.25f;
-            }
-            const float open = phase < 0.5f ? std::sin(0.5f * c_tau * phase / 0.5f) : 0.0f;
-            const float source = (open * open * strength + breath.next(rng, Pink) * (0.5f + open)) * env;
-            float s = 0.0f;
-            for (int h = 0; h < c_harmonics; ++h)
-            {
-                if ((i & 15) == 0)
-                    horn[h].set(hz * (float)(h + 1), 18.0f);
-                horn[h].step(source);
-                // The first three always sound; the rest come in with the loudness.
-                s += horn[h].bp * (h < 3 ? 1.0f : env * env) / std::pow((float)(h + 1), 0.6f);
-            }
-            out[i] = std::tanh(s * 2.0f);
-        }
-        c.reverb(0.85f, 0.35f, 0.45f);
         c.finish();
         break;
     }
