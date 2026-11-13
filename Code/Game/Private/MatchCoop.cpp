@@ -619,6 +619,24 @@ namespace
         }
         return glm::min(level, 1.5f);
     }
+
+    // The strokes of a flash, exactly as lightningLevel draws them: when each one starts and how strong it is. The
+    // thunder puts a crack on every one, so what is heard is what is seen. KEEP IN STEP with lightningLevel.
+    int lightningStrokes(uint32 seed, float timeScale, float starts[6], float strengths[6])
+    {
+        const int strokes = 1 + (int)(lightningHash(seed, 1u) * lightningHash(seed, 2u) * 5.99f);
+        float start = 0.0f;
+        for (int k = 0; k < strokes; ++k)
+        {
+            const uint32 n = 10u + (uint32)k * 4u;
+            const float gap = lightningHash(seed, n);
+            if (k > 0)
+                start += timeScale * glm::mix(0.03f, 0.45f, gap * gap * gap);
+            starts[k] = start;
+            strengths[k] = glm::mix(0.25f, 1.0f, lightningHash(seed, n + 1u));
+        }
+        return strokes;
+    }
 }
 
 void GameMatch::tickLightning(float deltaSec)
@@ -676,10 +694,23 @@ void GameMatch::tickLightning(float deltaSec)
                     const glm::vec2 foot(slot->pos.x + glm::linearRand(-lean, lean), slot->pos.z + glm::linearRand(-lean, lean));
                     slot->ground = glm::vec3(foot.x, groundY(foot.x, foot.y, centre.y), foot.y);
                 }
-                // The thunder: later and quieter with the distance (the delay is capped: a flash 5 km away is not 15 s late).
+                // THE THUNDER IS IN STEP WITH THE FLASH: it starts with the first stroke - no delay for the distance (true
+                // to nature, a flash 2 km away is 6 s ahead of its thunder, and then nobody hears them as one event) - and
+                // every LATER stroke of the flash (it has one to six, lightningStrokes) gets a crack of its own at the
+                // moment it lights up, as loud as it is bright.
+                // The distance is the SOUND (the variants, SoundSynth.cpp): near, a tear and a boom; in the middle, a
+                // duller clap; far, only the roll and no cracks. Two of each.
                 const float thunderDist = glm::distance(wantStrike ? slot->ground : slot->pos, centre);
-                GameSound::post(EGameSound::Thunder, slot->pos, glm::clamp(800.0f / glm::max(thunderDist, 1.0f), 0.15f, 1.0f) * (wantStrike ? 1.0f : 0.6f),
-                    1.0f, glm::min(thunderDist / 340.0f, 6.0f));
+                const int thunderReach = thunderDist < 900.0f ? 0 : thunderDist < 2200.0f ? 1 : 2;
+                const float thunderGain = glm::clamp(800.0f / glm::max(thunderDist, 1.0f), 0.2f, 1.0f) * (wantStrike ? 1.0f : 0.7f);
+                float strokeStart[6], strokeStrength[6];
+                const int strokes = lightningStrokes(slot->seed, glm::max(m_settings.lightningDuration, 0.05f) / 0.6f, strokeStart, strokeStrength);
+                GameSound::postVariant(EGameSound::Thunder, slot->pos, thunderGain * glm::mix(0.6f, 1.0f, strokeStrength[0]),
+                    thunderReach * 2 + (glm::linearRand(0.0f, 1.0f) < 0.5f ? 0 : 1));
+                if (thunderReach < 2)
+                    for (int k = 1; k < strokes; ++k)
+                        GameSound::postVariant(EGameSound::ThunderCrack, slot->pos, thunderGain * strokeStrength[k],
+                            thunderReach * 2 + (glm::linearRand(0.0f, 1.0f) < 0.5f ? 0 : 1), 1.0f, strokeStart[k]);
             }
         }
     }

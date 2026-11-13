@@ -49,6 +49,7 @@ private:
     // list on main in a window no create/release overlaps.
     std::mutex m_sourceMutex;
     bool m_initialized = false;
+    float m_reverbTime = -1.0f, m_reverbTone = -1.0f, m_reverbSize = -1.0f; // the reverb's shape as last configured
     uint32 m_oneShotSteal = 0;
     oc::vector<AudioSource> m_oneShotPool;
 };

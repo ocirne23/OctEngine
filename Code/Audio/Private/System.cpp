@@ -34,6 +34,10 @@ bool AudioSystem::initialize()
     ma_engine_config engineConfig = ma_engine_config_init();
     engineConfig.channels = 2;
     engineConfig.sampleRate = SampleRate;
+    // EVERY volume change glides over 20 ms. miniaudio's default is 0: a new volume is one step in the signal, and a
+    // step is a click. A source whose gain is set every frame (a fade, a sound that follows the listener's distance)
+    // then clicks at the frame rate: the whole mix stutters.
+    engineConfig.defaultVolumeSmoothTimeInPCMFrames = SampleRate / 50;
     if (ma_engine_init(&engineConfig, &state.engine) != MA_SUCCESS)
     {
         Log::error("Audio: failed to open the default output device");
@@ -61,6 +65,24 @@ bool AudioSystem::initialize()
     }
     m_initialized = true;
 
+    // The shared reverb (Reverb.ixx): a node with no input - the spatial sources send to it through SystemState's
+    // ring - on the endpoint. update() keeps it at the "Audio/Reverb" tweaks.
+    {
+        const AudioSettings& audio = Globals::settings.audio;
+        state.reverb.configure((float)SampleRate, audio.reverbTime, audio.reverbTone, audio.reverbSize);
+        ma_node_config nodeConfig = ma_node_config_init();
+        ma_uint32 outChannels = 2;
+        nodeConfig.vtable = &g_reverbNodeVTable;
+        nodeConfig.pOutputChannels = &outChannels;
+        if (ma_node_init(ma_engine_get_node_graph(&state.engine), &nodeConfig, nullptr, &state.reverbNode.base) == MA_SUCCESS)
+        {
+            ma_node_attach_output_bus(&state.reverbNode.base, 0, ma_engine_get_endpoint(&state.engine), 0);
+            state.reverbNodeValid = true;
+        }
+        else
+            Log::error("Audio: failed to create the reverb node - no reverb");
+    }
+
     const float& masterVolume = Globals::settings.audio.masterVolume;
     ma_engine_set_volume(&state.engine, masterVolume);
     Tweak::removeListeners(this); // a re-initialize after shutdown attaches once
@@ -82,6 +104,11 @@ void AudioSystem::shutdown()
         destroySourceState(*source); // sources still held by user handles; those handles no-op after this
     state.sources.clear();
     state.buffers.clear();
+    if (state.reverbNodeValid)
+    {
+        ma_node_uninit(&state.reverbNode.base, nullptr);
+        state.reverbNodeValid = false;
+    }
     m_initialized = false;
     ma_engine_uninit(&state.engine);
     iplHRTFRelease(&state.hrtf);
@@ -101,6 +128,17 @@ void AudioSystem::update(const Camera& camera, const glm::vec3& listenerVelocity
     state.listenerVel = listenerVelocity;
     for (oc::unique_ptr<SourceState>& source : state.sources)
         updateSource(*source);
+
+    // The reverb follows its tweaks ("Audio/Reverb"): the shape only when it changed, the level always.
+    const AudioSettings& audio = Globals::settings.audio;
+    if (audio.reverbTime != m_reverbTime || audio.reverbTone != m_reverbTone || audio.reverbSize != m_reverbSize)
+    {
+        m_reverbTime = audio.reverbTime;
+        m_reverbTone = audio.reverbTone;
+        m_reverbSize = audio.reverbSize;
+        state.reverb.configure((float)SampleRate, m_reverbTime, m_reverbTone, m_reverbSize);
+    }
+    state.reverbLevel.store(audio.reverbLevel, oc::memory_order_relaxed);
 }
 
 AudioBuffer AudioSystem::createBuffer(EAudioFormat format, oc::span<const std::byte> pcmData, uint32 sampleRate)

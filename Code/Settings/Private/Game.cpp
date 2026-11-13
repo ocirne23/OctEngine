@@ -233,6 +233,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Light", "Beam glow range (m)", &s.lightBeamGlowRange, 0.5f, 100.0f, 0.5f);
     Tweak::boolean("Game/Carriers", "Enabled", &s.carriers);
     Tweak::floatVar("Game/Carriers", "Load", &s.carrierLoad, 1.0f, 100.0f, 1.0f);
+    Tweak::floatVar("Game/Carriers", "Cart load", &s.carrierCartLoad, 1.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Carriers", "Walk speed (m/s)", &s.carrierSpeed, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Carriers", "Build rate (stone/s)", &s.carrierBuildRate, 0.1f, 50.0f, 0.1f);
     Tweak::intVar("Game/Carriers", "Max walkers per building", &s.carriersPerBuilding, 1, 32, 1);
@@ -430,6 +431,9 @@ static void registerSound(GameSoundSettings& s)
     Tweak::floatVar("Game/Sound", "Interface volume", &s.interfaceVolume, 0.0f, 2.0f, 0.01f);
     Tweak::intVar("Game/Sound/Limits", "Max one-shot voices", &s.maxVoices, 1, 48, 1.0f);
     Tweak::intVar("Game/Sound/Limits", "Max building loops", &s.maxLoops, 0, 12, 1.0f);
+    Tweak::floatVar("Game/Sound", "Height in the panning", &s.panHeight, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Sound/Distance", "Reverb send", &s.reverbSend, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Sound/Distance", "Air distance (m)", &s.airDistance, 10.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Sound/Limits", "Full volume distance (m)", &s.fullVolumeDistance, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Sound/Limits", "Hearing range (m)", &s.hearingRange, 10.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Sound/Crowd", "Cues/s for a full battle bed", &s.crowdFull, 1.0f, 500.0f, 1.0f);
@@ -439,7 +443,7 @@ static void registerSound(GameSoundSettings& s)
     // In EGameSound's order (Game:Sound), after "-": the pick plays that sound once. Every pick is another variant.
     static constexpr oc::string_view SOUND_NAMES[] = { "-", "Melee hit", "Unit reveal", "Unit death", "Shot fired", "Lob fired",
         "Shot impact", "Splash impact", "Turret fire", "Structure placed", "Structure built", "Structure collapse",
-        "Bird song", "Cricket bout", "Owl call", "Wind gust", "Water lap", "Thunder",
+        "Bird song", "Cricket bout", "Owl call", "Wind gust", "Water lap", "Thunder", "Thunder crack",
         "Alarm", "Player hurt", "Loop: wind", "Loop: day", "Loop: night", "Loop: battle", "Loop: horde",
         "Loop: hum", "Loop: fire", "Loop: works", "Loop: water" };
     Tweak::enumVar("Game/Sound", "Play a sound", &s.audition, SOUND_NAMES, {}, ETweakFlags::Runtime);

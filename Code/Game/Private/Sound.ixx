@@ -38,7 +38,7 @@ export enum class EGameSound : uint8
     // The ambient one-shots in the world: GameSound places them itself, around the ear (THE AMBIENCE, below)
     BirdSong, CricketBout, OwlCall, WindGust, WaterLap,
     // One-shots with a direction but no distance (the far field)
-    Thunder,
+    Thunder, ThunderCrack,
     // One-shots with no place
     Alarm, PlayerHurt,
     // Loops
@@ -83,6 +83,19 @@ private:
     void updateHorde(const Frame& frame);
     void updateStructureLoops(const Frame& frame, const StructureSystem& structures, float dt);
     void updateAlarm(const Frame& frame, const StructureSystem& structures);
+    // THE LISTENER IS THE PLAYER, TURNED LIKE THE CAMERA. The engine's listener is the camera, which hangs over and
+    // behind the player: from there everything around the player is "in front and below" - hardly any left / right,
+    // nothing behind, and the HRTF's dull "from below" colour on every sound. So every positional game voice is
+    // given to the engine at the place it has for an ear AT the player (m_ear) that faces where the camera faces on
+    // the ground: its offset from the player in that frame (right, up x "Height in the panning", forward), put on
+    // the camera's own axes. A sound 10 m to the player's left is then 10 m to the left of the engine's listener.
+    glm::vec3 heardAt(const glm::vec3& pos) const;
+    // THE DISTANCE IS MORE THAN A GAIN. A far sound is quieter (the gain), DULLER (the air takes its highs: the
+    // source's low pass) and WETTER (its direct sound falls off faster than the room's answer: more of it goes to the
+    // engine's shared reverb). One reverb for every sound - the same space - is what makes them belong together.
+    void applyDistance(AudioSource& source, float dist) const;
+    glm::vec3 m_ear{ 0.0f }, m_earRight{ 1.0f, 0.0f, 0.0f }, m_earForward{ 0.0f, 0.0f, -1.0f };
+    glm::vec3 m_camPos{ 0.0f }, m_camRight{ 1.0f, 0.0f, 0.0f }, m_camUp{ 0.0f, 1.0f, 0.0f }, m_camForward{ 0.0f, 0.0f, -1.0f };
     float attenuation(float dist) const;
     float battleBusy() const; // 0..1: how much the combat one-shots step back for the battle bed
     float drift(float seed, float rate) const; // a slow -1..1 curve: a loop's pitch and volume follow it
@@ -105,6 +118,9 @@ private:
         EGameSound sound = EGameSound::Count;
         float loudness = 0.0f;
         float gain = 0.0f; // what it plays at, before the loudness limit
+        float length = 0.0f; // s, at its pitch
+        glm::vec3 pos{ 0.0f }; // where it is in the world (heardAt moves it for the engine's listener every frame)
+        bool positional = false;
         double end = 0.0; // real seconds: free from then on
     };
     oc::vector<Voice> m_voices;

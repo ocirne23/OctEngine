@@ -78,7 +78,7 @@ namespace
 
     struct Noise
     {
-        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, brown = 0.0f;
+        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, brown = 0.0f, drift = 0.0f;
         float next(Rng& rng, EColor color)
         {
             const float w = rng.bi();
@@ -91,8 +91,12 @@ namespace
                 b2 = 0.57000f * b2 + w * 1.0526913f;
                 return (b0 + b1 + b2 + w * 0.1848f) * 0.25f;
             }
-            brown = (brown + w * 0.02f) * 0.998f;
-            return brown * 6.0f;
+            // BROWN NOISE WITH NO SUB-BASS: the slope starts at 40 Hz (the leak), and what is under 30 Hz is taken out
+            // again (drift follows it). A plain integrator (a leak at 15 Hz) put a third to a half of a sound's energy
+            // UNDER 40 Hz - nothing to hear, but the speaker moves with it and the whole sound wobbles.
+            brown = brown * 0.99476f + w * 0.02f;
+            drift += (brown - drift) * 0.0039f;
+            return (brown - drift) * 9.0f;
         }
     };
 
@@ -265,7 +269,11 @@ namespace
             }
             const float open = phase < 0.4f ? std::sin(0.5f * c_tau * phase / 0.4f) : 0.0f;
             const float pulse = open * open * strength;
-            const float source = pulse * (1.0f - 0.5f * glm::min(breath, 1.0f)) + breathNoise.next(rng, Pink) * (breath * 0.9f + pulse * (0.4f + breath));
+            // MOSTLY BREATH, a little pulse. The pulses come 60 - 130 times a second, and a level that is chopped at that
+            // rate is what the ear hears as ROUGH, as a jitter (seen in the waveform of the first version: a row of
+            // separate spikes). So the breath is always there at more than half its level, and the pulses only lean on it.
+            // (The noise is about a third of the pulse's size at the same factor: hence the 3.)
+            const float source = pulse * 0.06f + breathNoise.next(rng, Pink) * 3.0f * (0.75f + breath * 0.5f + pulse * 0.25f);
             if ((i & 7) == 0)
             {
                 f1.set(glm::mix(a.f1, b.f1, u), 4.5f);
@@ -322,7 +330,10 @@ namespace
     }
 
     // An uneven level: random values `hz` times a second, with straight lines between them. Where a regular tremolo
-    // would sound like a machine (a saw's teeth, a gurgle).
+    // would sound like a machine (a saw, a gurgle).
+    // KEEP hz UNDER 20. A level that changes 30 - 150 times a second is not heard as a change of level: it is heard as
+    // ROUGHNESS, a jitter in the sound itself. The same holds for pulses, bursts and clicks: a few a second are events,
+    // hundreds a second are a texture, and the range between is a rattle. Every sound here stays out of it.
     void flutter(Buf& b, Rng& rng, float hz, float depth)
     {
         const float step = hz / c_sr;
@@ -417,7 +428,7 @@ namespace
         const float time = kind == 1 ? rng.range(0.6f, 0.75f) : kind == 2 ? rng.range(1.1f, 1.3f) : rng.range(0.85f, 1.1f);
         Buf out = vocal(rng, keys, pitch, time, 1.6f);
         if (kind == 3)
-            flutter(out, rng, rng.range(14.0f, 22.0f), 0.8f);
+            flutter(out, rng, rng.range(7.0f, 11.0f), 0.6f);
         level(out);
         // The body goes down: as much of the sound as the voice is.
         put(out, thump(0.2f, rng.range(75.0f, 105.0f), 45.0f, 0.03f, 0.06f, 2.0f), 0.2f * time, 0.8f);
@@ -434,6 +445,96 @@ namespace
         return out;
     }
 
+    // ---- The room ----
+
+    // In place, n = a power of two.
+    void fft(Buf& re, Buf& im, bool inverse)
+    {
+        const size_t n = re.size();
+        for (size_t i = 1, j = 0; i < n; ++i)
+        {
+            size_t bit = n >> 1;
+            for (; j & bit; bit >>= 1)
+                j ^= bit;
+            j ^= bit;
+            if (i < j)
+            {
+                const float r = re[i], m = im[i];
+                re[i] = re[j];
+                im[i] = im[j];
+                re[j] = r;
+                im[j] = m;
+            }
+        }
+        for (size_t len = 2; len <= n; len <<= 1)
+        {
+            const double angle = (inverse ? 2.0 : -2.0) * 3.14159265358979323846 / (double)len;
+            const double stepR = std::cos(angle), stepI = std::sin(angle);
+            for (size_t i = 0; i < n; i += len)
+            {
+                double wr = 1.0, wi = 0.0; // in double: the twiddle is multiplied up to n / 2 times
+                for (size_t k = 0; k < len / 2; ++k)
+                {
+                    const size_t a = i + k, b = a + len / 2;
+                    const float xr = (float)(re[b] * wr - im[b] * wi), xi = (float)(re[b] * wi + im[b] * wr);
+                    re[b] = re[a] - xr;
+                    im[b] = im[a] - xi;
+                    re[a] += xr;
+                    im[a] += xi;
+                    const double next = wr * stepR - wi * stepI;
+                    wi = wr * stepI + wi * stepR;
+                    wr = next;
+                }
+            }
+        }
+        if (inverse)
+        {
+            const float scale = 1.0f / (float)n;
+            for (size_t i = 0; i < n; ++i)
+            {
+                re[i] *= scale;
+                im[i] *= scale;
+            }
+        }
+    }
+
+    // What a space answers to one clap: after a short gap a few single reflections (the near walls, the ground), then
+    // the tail - noise, so dense that no single echo is in it, that dies away over the room's time, and whose highs die
+    // first (air and soft things take them). Its energy is 1, so `wet` means the same for every room.
+    Buf makeImpulse(float room, float damp, uint32 seed)
+    {
+        room = glm::clamp(room, 0.0f, 1.0f);
+        const float time = 0.15f + 2.6f * room * room; // s to 60 dB down
+        Buf impulse(framesOf(time * 1.1f + 0.08f), 0.0f);
+        Rng rng{ seed | 1u };
+        const uint32 gap = framesOf(0.006f);
+        for (int i = 0; i < 7; ++i)
+        {
+            const uint32 at = gap + framesOf(rng.range(0.004f, 0.05f + 0.06f * room));
+            if (at < impulse.size())
+                impulse[at] += rng.bi() * rng.range(0.25f, 0.6f);
+        }
+        const uint32 tail = gap + framesOf(0.012f);
+        float low = 0.0f;
+        for (uint32 i = tail; i < (uint32)impulse.size(); ++i)
+        {
+            const float t = (float)(i - tail) / c_sr;
+            // The low pass closes over the room's time; the noise under it keeps its level (the division), so only the
+            // highs go early.
+            const float cutoff = glm::max(16000.0f * std::exp(-t / (time * glm::max(1.1f - damp, 0.05f))), 400.0f);
+            const float a = 1.0f - std::exp(-c_tau * cutoff / c_sr);
+            low += (rng.bi() - low) * a;
+            impulse[i] += low / std::sqrt(a / (2.0f - a)) * std::exp(-6.91f * t / time) * glm::min(t / 0.015f, 1.0f) * 0.12f;
+        }
+        double energy = 1e-12;
+        for (const float v : impulse)
+            energy += (double)v * v;
+        const float scale = (float)(1.0 / std::sqrt(energy));
+        for (float& v : impulse)
+            v *= scale;
+        return impulse;
+    }
+
     // ---- The canvas: the sound itself ----
 
     struct Canvas
@@ -442,6 +543,9 @@ namespace
         uint32 frames = 0;
         uint32 channels = 1;
         bool loop = false;
+        // x every reverb's `wet`. A one-shot with a place in the world gets its ROOM at run time, from the engine's
+        // shared reverb, by its distance (GameSound::applyDistance): here it keeps only a little, for its body.
+        float wetScale = 1.0f;
 
         void addAt(uint32 frame, uint32 channel, float value)
         {
@@ -468,49 +572,41 @@ namespace
             }
         }
 
-        // The room. room 0..1 = its size (the tail's length), damp = how fast the highs die, wet = how much of it.
+        // THE ROOM, by CONVOLUTION: the sound is convolved with an impulse response (makeImpulse: what a real space
+        // answers to one clap - a few early reflections, then dense noise that dies away, its highs first).
+        // room 0..1 = its size (the tail: 0.15 .. 2.7 s), damp = how fast the highs die, wet = how much of it.
+        // (Tried and dropped: eight comb filters and four allpasses - the classic digital reverb of the 1980s. It
+        // rings at its combs' own pitches: horizontal lines in the spectrogram, a metallic colour on every sound, and
+        // the one thing that most made the whole set sound like an old game.)
+        // A loop's tail runs over the end into the start: no seam.
         void reverb(float room, float damp, float wet)
         {
-            constexpr int c_comb[8] = { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 }; // at 44.1 kHz
-            constexpr int c_allpass[4] = { 556, 441, 341, 225 };
-            const float feedback = 0.7f + 0.28f * glm::clamp(room, 0.0f, 1.0f);
-            const float damping = glm::clamp(damp, 0.0f, 1.0f) * 0.4f;
             for (uint32 channel = 0; channel < channels; ++channel)
             {
-                Buf comb[8], allpass[4];
-                float store[8] = {};
-                uint32 combAt[8] = {}, allpassAt[4] = {};
-                for (int i = 0; i < 8; ++i)
-                    comb[i].assign((size_t)((float)(c_comb[i] + (int)channel * 23) * c_sr / 44100.0f), 0.0f);
-                for (int i = 0; i < 4; ++i)
-                    allpass[i].assign((size_t)((float)(c_allpass[i] + (int)channel * 23) * c_sr / 44100.0f), 0.0f);
-                for (int pass = loop ? 0 : 1; pass < 2; ++pass)
-                    for (uint32 frame = 0; frame < frames; ++frame)
-                    {
-                        float& sample = samples[(size_t)frame * channels + channel];
-                        const float in = sample * 0.015f;
-                        float sum = 0.0f;
-                        for (int i = 0; i < 8; ++i)
-                        {
-                            float& cell = comb[i][combAt[i]];
-                            sum += cell;
-                            store[i] = cell * (1.0f - damping) + store[i] * damping;
-                            cell = in + store[i] * feedback;
-                            if (++combAt[i] >= comb[i].size())
-                                combAt[i] = 0;
-                        }
-                        for (int i = 0; i < 4; ++i)
-                        {
-                            float& cell = allpass[i][allpassAt[i]];
-                            const float delayed = cell;
-                            cell = sum + delayed * 0.5f;
-                            sum = delayed - sum;
-                            if (++allpassAt[i] >= allpass[i].size())
-                                allpassAt[i] = 0;
-                        }
-                        if (pass == 1)
-                            sample += sum * wet * 3.0f;
-                    }
+                const Buf impulse = makeImpulse(room, damp, 0x5eedu + channel * 7919u + frames);
+                size_t n = 1;
+                while (n < (size_t)frames + impulse.size())
+                    n <<= 1;
+                Buf re(n, 0.0f), im(n, 0.0f), impulseRe(n, 0.0f), impulseIm(n, 0.0f);
+                for (uint32 frame = 0; frame < frames; ++frame)
+                    re[frame] = samples[(size_t)frame * channels + channel];
+                for (size_t i = 0; i < impulse.size(); ++i)
+                    impulseRe[i] = impulse[i];
+                fft(re, im, false);
+                fft(impulseRe, impulseIm, false);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    const float r = re[i] * impulseRe[i] - im[i] * impulseIm[i];
+                    im[i] = re[i] * impulseIm[i] + im[i] * impulseRe[i];
+                    re[i] = r;
+                }
+                fft(re, im, true);
+                const float amount = wet * wetScale * 1.2f;
+                for (uint32 frame = 0; frame < frames; ++frame)
+                    samples[(size_t)frame * channels + channel] += re[frame] * amount;
+                if (loop)
+                    for (size_t i = frames; i < (size_t)frames + impulse.size(); ++i)
+                        samples[(i % frames) * channels + channel] += re[i] * amount;
             }
         }
 
@@ -535,19 +631,26 @@ namespace
         // The last step of every sound: no offset, no value that is not a number, soft edges on a one-shot, peak at 0.9.
         void finish()
         {
-            const float a = 1.0f - std::exp(-c_tau * 20.0f / c_sr);
+            // NOTHING UNDER 35 Hz leaves this file: a steep high pass (24 dB per octave) on every sound. No ear hears
+            // that band, but it takes the headroom (the peak that is set to 0.9 below is then mostly rumble, and the
+            // sound one hears is quiet under it), it moves the speaker, and every stage after it that is not exactly
+            // linear turns it into a random wobble of what one does hear. (Measured before this: 30 - 50 % of the
+            // energy of the wind, the fire, the hum, the water and the thunder was under 40 Hz.)
             bool finite = true;
             for (uint32 channel = 0; channel < channels; ++channel)
             {
-                float offset = 0.0f;
+                Svf first, second;
+                first.set(35.0f, 0.5412f);
+                second.set(35.0f, 1.3066f);
                 for (int pass = loop ? 0 : 1; pass < 2; ++pass)
                     for (uint32 frame = 0; frame < frames; ++frame)
                     {
                         float& sample = samples[(size_t)frame * channels + channel];
                         finite &= std::isfinite(sample);
-                        offset += (sample - offset) * a;
+                        first.step(sample);
+                        second.step(first.hp);
                         if (pass == 1)
-                            sample -= offset;
+                            sample = second.hp;
                     }
             }
             if (!finite)
@@ -627,7 +730,7 @@ namespace
                 period = 1.0f + rng.bi() * 0.25f;
             }
             const float open = phase < 0.5f ? std::sin(c_tau * phase) : 0.0f;
-            const float source = breath.next(rng, Pink) * (0.3f + open * open);
+            const float source = breath.next(rng, Pink) * (0.8f + 0.2f * open * open); // a lean of the pulse, no chop (see vocal)
             f1.step(source);
             f2.step(source);
             return (f1.bp + f2.bp * 0.7f) * b * b * b * 3.0f;
@@ -702,7 +805,8 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         stereo = isStereo;
         const uint32 frames = framesOf(seconds);
         out.assign((size_t)frames * (isStereo ? 2u : 1u), 0.0f);
-        return Canvas{ out, frames, isStereo ? 2u : 1u, loop };
+        const bool worldOneShot = !loop && !isStereo && (int)sound < (int)EGameSound::Thunder;
+        return Canvas{ out, frames, isStereo ? 2u : 1u, loop, worldOneShot ? 0.35f : 1.0f };
     };
 
     switch (sound)
@@ -723,7 +827,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         const float length = rng.range(0.45f, 0.85f);
         Canvas c = begin(length + 0.1f, false, false);
         Buf hiss = noise(rng, length, White, High, rng.range(4500.0f, 6500.0f), rng.range(6500.0f, 9000.0f), 0.7f, rng.range(0.01f, 0.03f), length * rng.range(0.28f, 0.4f));
-        flutter(hiss, rng, rng.range(60.0f, 130.0f), 0.75f); // it spits
+        flutter(hiss, rng, rng.range(9.0f, 16.0f), 0.5f); // it wavers (slowly: a fast chop is a jitter, see flutter)
         level(hiss);
         c.mix(hiss, 0.0f, 1.0f);
         Buf steam = noise(rng, length, Pink, Band, rng.range(2200.0f, 3200.0f), rng.range(4000.0f, 5500.0f), 0.9f, 0.04f, length * 0.3f);
@@ -908,39 +1012,134 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         c.finish();
         break;
     }
+    case EGameSound::ThunderCrack:
+    {
+        // ONE STROKE of a flash that has several: the tear and a short boom, no roll (the flash's Thunder has the
+        // roll; GameMatch::tickLightning plays one of these at the moment each LATER stroke lights up).
+        // Variants 0, 1 are near (bright), 2, 3 from the middle distance (duller, softer).
+        const bool dull = (variant / 2) % 2 == 1;
+        Canvas c = begin(1.8f, false, false);
+        Buf stroke;
+        const float tear = rng.range(0.22f, 0.4f);
+        for (int i = 0, cracks = 3 + rng.pick(3); i < cracks; ++i)
+        {
+            const float t = std::pow(rng.uni(), 1.6f) * tear;
+            const float hz = rng.range(1200.0f, 4500.0f);
+            Buf crack = noise(rng, rng.range(0.012f, 0.06f), White, Band, hz, hz * rng.range(0.4f, 0.8f), rng.range(0.6f, 1.2f), 0.0003f, rng.range(0.004f, 0.02f));
+            level(crack);
+            put(stroke, crack, t, rng.range(0.4f, 1.0f) * (1.0f - 0.6f * t / tear));
+        }
+        Buf rip = noise(rng, tear + 0.2f, White, High, 900.0f, 600.0f, 0.7f, 0.001f, tear * 0.5f);
+        flutter(rip, rng, rng.range(8.0f, 14.0f), 0.5f);
+        level(rip);
+        put(stroke, rip, 0.0f, 0.5f);
+        if (dull)
+            lowpass(stroke, 2200.0f);
+        level(stroke);
+        c.mix(stroke, 0.0f, dull ? 0.7f : 1.0f);
+        c.mix(thump(0.6f, rng.range(90.0f, 120.0f), 65.0f, 0.05f, 0.2f, 2.5f), 0.01f, 0.65f);
+        c.reverb(0.75f, 0.7f, 0.3f);
+        c.finish();
+        break;
+    }
     case EGameSound::Thunder:
     {
-        // An even variant is near (it cracks first), an odd one is far (it only rolls).
-        const bool nearStrike = (variant & 1) == 0;
-        Canvas c = begin(6.5f, false, false);
-        if (nearStrike)
-            for (int i = 0; i < 6; ++i)
+        // THUNDER IS ONE SOUND HEARD MANY TIMES. The lightning channel is kilometres long, and all of it makes the same
+        // short, tearing sound at the same moment; the ear gets the nearest part first and bright, then the parts
+        // farther along and the echoes off the land and the clouds - later, quieter and duller. So: make the STROKE (the
+        // tear), then build the ROLL from copies of it, each later and more low-passed than the last. That is why real
+        // thunder rumbles in surges and is never a steady noise (tried: one low noise with a few swells - a wash).
+        // The variant is the DISTANCE (GameMatch::tickLightning picks it): 0, 1 near - the tear, the boom, a long roll;
+        // 2, 3 middle - a duller clap, then the roll; 4, 5 far - no stroke at all, the roll comes up slowly out of nothing.
+        const int reach = (variant / 2) % 3;
+        const float length = reach == 0 ? 10.0f : reach == 1 ? 11.0f : 12.0f;
+        Canvas c = begin(length, false, false);
+
+        // The stroke: many cracks, dense at the start, each a short burst with its own pitch, over a hiss that spits.
+        // `stretch` makes a longer one: the far end of the channel is heard smeared.
+        const auto makeStroke = [&](float stretch)
+        {
+            // A SMEARED stroke (stretch > 1: what the roll is made of) is mostly the hiss, moving slowly, with a few long
+            // cracks: twenty-odd copies of a stroke full of short cracks were a rattle - the thunder stuttered.
+            const bool smeared = stretch > 1.0f;
+            Buf stroke;
+            const float tear = rng.range(0.35f, 0.6f) * stretch;
+            // FEW cracks (5 - 8 in half a second): 14 - 24 of them were 30 - 50 a second, and that is a rattle.
+            for (int i = 0, cracks = smeared ? 2 + rng.pick(2) : 5 + rng.pick(4); i < cracks; ++i)
             {
-                const float hz = rng.range(1500.0f, 3500.0f);
-                Buf crack = noise(rng, rng.range(0.03f, 0.09f), White, Band, hz, hz * 0.4f, 0.8f, 0.0005f, rng.range(0.01f, 0.04f));
+                const float t = std::pow(rng.uni(), 1.6f) * tear;
+                const float hz = rng.range(1200.0f, 4500.0f);
+                Buf crack = noise(rng, rng.range(0.012f, 0.06f) * stretch, White, Band, hz, hz * rng.range(0.4f, 0.8f), rng.range(0.6f, 1.2f), 0.0003f,
+                    rng.range(0.004f, 0.02f) * stretch);
                 level(crack);
-                c.mix(crack, rng.range(0.0f, 0.18f), rng.range(0.4f, 0.8f));
+                put(stroke, crack, t, rng.range(0.4f, 1.0f) * (1.0f - 0.6f * t / tear));
             }
-        Buf roll = noise(rng, 6.0f, Brown, Low, nearStrike ? 320.0f : 200.0f, 65.0f, 0.7f, 0.02f, 1.6f);
-        // The roll comes in waves.
-        float bumpAt[6], bumpGain[6];
-        for (int i = 0; i < 6; ++i)
+            Buf rip = noise(rng, tear + 0.2f, White, High, 900.0f, 600.0f, 0.7f, smeared ? tear * 0.15f : 0.001f, tear * 0.5f);
+            flutter(rip, rng, smeared ? rng.range(3.0f, 6.0f) : rng.range(8.0f, 14.0f), 0.5f);
+            level(rip);
+            put(stroke, rip, 0.0f, smeared ? 1.5f : 0.5f);
+            level(stroke);
+            return stroke;
+        };
+        const Buf strokes[3] = { makeStroke(1.0f), makeStroke(2.0f), makeStroke(3.5f) };
+
+        // The roll: the stroke again and again. The later a copy, the longer (a smeared one), the duller and the quieter;
+        // a few are loud - the surges.
+        const float rollTime = length - 4.0f;
+        const float brightest = reach == 0 ? 1400.0f : reach == 1 ? 700.0f : 320.0f;
+        Buf roll;
+        // (Seen in the spectrogram of the first version: the copies came at once, were nearly as loud and as bright as
+        // the stroke, and the result was 2.5 s of one flat wall of noise with no stroke in it. So: a gap after the
+        // stroke, a steep low pass - twice, 24 dB an octave - and most copies far under the stroke, a few surges.)
+        for (int i = 0, echoes = reach == 2 ? 26 : 18; i < echoes; ++i)
         {
-            bumpAt[i] = rng.range(0.3f, 3.5f);
-            bumpGain[i] = rng.range(0.4f, 1.0f);
-        }
-        for (size_t i = 0; i < roll.size(); ++i)
-        {
-            const float t = (float)i / c_sr;
-            float wave = 0.5f;
-            for (int k = 0; k < 6; ++k)
-                wave += bumpGain[k] * std::exp(-(t - bumpAt[k]) * (t - bumpAt[k]) / 0.06f);
-            roll[i] *= wave;
+            const float u = rng.uni();
+            const float t = (reach == 0 ? 0.7f : reach == 1 ? 0.5f : 0.0f) + u * rollTime;
+            Buf echo = strokes[u < 0.2f ? 1 : 2];
+            const float cutoff = glm::mix(brightest, 170.0f, std::sqrt(u)) * rng.range(0.7f, 1.3f);
+            lowpass(echo, cutoff);
+            lowpass(echo, cutoff);
+            level(echo);
+            const float surge = rng.uni() < 0.25f ? 1.0f : rng.range(0.12f, 0.35f);
+            put(roll, echo, t, surge * std::exp(-u * 1.8f));
         }
         level(roll);
-        c.mix(roll, 0.0f, 1.0f);
-        c.mix(thump(1.5f, 55.0f, 30.0f, 0.2f, 0.6f, 1.5f), 0.05f, 0.5f);
-        c.reverb(0.8f, 0.5f, 0.4f);
+
+        // The air under it: low noise that never holds still, dying over the whole length.
+        Buf bed = noise(rng, length - 0.5f, Brown, Low, reach == 0 ? 450.0f : reach == 1 ? 320.0f : 220.0f, 110.0f, 0.7f, reach == 2 ? 1.2f : 0.08f, length * 0.28f);
+        Wander grain;
+        for (float& sample : bed)
+            sample *= 0.35f + 0.65f * grain.next(rng, 2.5f);
+        level(bed);
+
+        if (reach == 0)
+        {
+            c.mix(strokes[0], 0.0f, 1.0f);
+            c.mix(thump(1.2f, rng.range(95.0f, 125.0f), rng.range(60.0f, 75.0f), 0.06f, 0.35f, 3.0f), 0.02f, 0.8f); // the boom
+        }
+        else if (reach == 1)
+        {
+            Buf clap = strokes[1];
+            lowpass(clap, 2200.0f);
+            level(clap);
+            c.mix(clap, 0.0f, 0.6f);
+            c.mix(thump(1.2f, rng.range(85.0f, 110.0f), 60.0f, 0.08f, 0.4f, 2.0f), 0.05f, 0.6f);
+        }
+        if (reach != 2)
+        {
+            Buf sub = noise(rng, 2.5f, Brown, Low, 220.0f, 100.0f, 0.7f, 0.01f, 0.9f);
+            level(sub);
+            c.mix(sub, 0.0f, 0.25f);
+        }
+        c.mix(roll, reach == 2 ? 0.6f : 0.0f, reach == 0 ? 0.55f : reach == 1 ? 0.8f : 1.0f);
+        c.mix(bed, 0.0f, reach == 2 ? 0.5f : 0.25f);
+        if (reach == 2)
+            c.lowpassAll(450.0f); // the air has taken every high sound on the way
+        // (No saturation of the whole: with this much low sound in it, a soft clip makes the lows chop the highs.)
+        // The end is a long fade: thunder does not stop.
+        for (uint32 i = 0; i < c.frames; ++i)
+            out[i] *= 1.0f - glm::smoothstep(length - 3.5f, length, (float)i / c_sr);
+        c.reverb(0.85f, 0.75f, 0.2f); // a wide space that eats the highs: the stroke must not ring on as a hiss
         c.finish();
         break;
     }
@@ -1006,7 +1205,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
                     thin.step(p);
                     low.step(brown.next(r, Brown));
                     if (pass == 1)
-                        c.addAt(i, channel, band.bp * (0.35f + 0.65f * g) + thin.bp * g * g * g * 0.5f + low.lp * 0.25f);
+                        c.addAt(i, channel, band.bp * (0.35f + 0.65f * g) + thin.bp * g * g * g * 0.5f + low.lp * 0.02f); // the low body is a trace: wind is air, not rumble
                 }
             }
         }
@@ -1061,8 +1260,8 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
                     field.step(r.bi());
                     air.step(brown.next(r, Brown));
                     if (pass == 1) // 50 pulses a second: a whole number of them in the loop
-                        c.addAt(i, channel, field.bp * (0.5f - 0.5f * std::cos(c_tau * 50.0f * (float)i / c_sr)) * (0.15f + 0.3f * swell.at((float)i / (float)c.frames))
-                            + air.lp * 0.12f);
+                        c.addAt(i, channel, field.bp * (0.8f - 0.2f * std::cos(c_tau * 50.0f * (float)i / c_sr)) * (0.15f + 0.3f * swell.at((float)i / (float)c.frames))
+                            + air.lp * 0.02f);
                 }
             }
         }
@@ -1096,7 +1295,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
             for (uint32 i = 0; i < (uint32)side.size(); ++i)
             {
                 const float s = 0.35f + 0.65f * surge.next(r, 0.4f);
-                const float d = dust(r, 22.0f);
+                const float d = dust(r, 7.0f); // a blow now and then: 22 a second were a rattle
                 float v = 0.0f;
                 for (int k = 0; k < 3; ++k)
                 {
@@ -1144,7 +1343,9 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         ground.set(420.0f, 0.7f);
         for (uint32 i = 0; i < (uint32)texture.size(); ++i)
         {
-            const float d = dust(r, 60.0f);
+            // 600 small impulses a second: so many that the low filters make one soft rumble of them. (60 a second were
+            // single clicks, seen as spikes in the waveform and heard as a crackle.)
+            const float d = dust(r, 600.0f) * 0.3f;
             patter.step(d);
             ground.step(d);
             float v = (patter.bp * 1.2f + ground.lp * 0.35f) * (0.5f + 0.5f * swell.next(r, 0.3f));
@@ -1162,38 +1363,47 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
     }
     case EGameSound::LoopHum:
     {
-        // A field of light, as AIR that sings: noise through the resonances of a low chord (each a narrow band of noise
-        // whose level wanders by itself - a drone like wind in a pipe, not an electric hum), a low body, and high bands
-        // that come and go.
-        Canvas c = begin(6.0f, false, true);
-        constexpr int c_bands = 8;
-        const float hz[c_bands] = { 98.0f, 147.0f, 196.0f, 294.0f, 392.0f, 1176.0f, 1568.0f, 2352.0f };
-        const float gain[c_bands] = { 1.0f, 0.6f, 0.7f, 0.35f, 0.25f, 0.1f, 0.08f, 0.05f };
-        const LoopLfo comeAndGo[3] = { LoopLfo(rng, 1, 2, 3, 5), LoopLfo(rng, 1, 3, 4, 7), LoopLfo(rng, 2, 3, 5, 6) };
-        Svf band[c_bands], body;
-        Noise pink, brown;
-        for (int k = 0; k < c_bands; ++k)
-            band[k].set(hz[k], k < 5 ? 40.0f : 25.0f);
-        body.set(70.0f, 0.7f);
-        for (int pass = 0; pass < 2; ++pass)
+        // A LANTERN OF LIGHT: a soft, steady GLOW - an open chord (D, A, D, F sharp, A, D: 294 Hz and up, nothing
+        // low), every note three tones a hair apart (they beat slowly against each other: a shimmer, the sound of a
+        // glass or a choir, not of one oscillator), each note coming forward and stepping back by itself, a breath of
+        // air on top, a wide room.
+        // HERE TONES ARE RIGHT, and narrow noise is wrong. Tried: noise through the resonances of a low chord (98 Hz
+        // and up). A narrow band of noise does not hold its level - it wobbles a few times a second, by itself - and
+        // all of it sat at 80 - 320 Hz: a low rumble that wavers, the sound of a bad transformer.
+        // Every tone has a whole number of cycles in the loop (its pitch is rounded to 1/8 Hz): no seam.
+        Canvas c = begin(8.0f, false, true);
+        const float chord[] = { 293.66f, 440.0f, 587.33f, 739.99f, 880.0f, 1174.66f };
+        const float level[] = { 0.8f, 1.0f, 0.7f, 0.4f, 0.35f, 0.15f };
+        for (int k = 0; k < 6; ++k)
         {
-            Rng r{ 0x600d1eu };
-            for (uint32 i = 0; i < c.frames; ++i)
+            const LoopLfo swell(rng, 1 + rng.pick(2), 2 + rng.pick(2), 3 + rng.pick(3), 5 + rng.pick(3));
+            for (int voice = 0; voice < 3; ++voice)
             {
-                const float u = (float)i / (float)c.frames;
-                const float p = pink.next(r, Pink);
-                body.step(brown.next(r, Brown));
-                float s = body.lp * 0.08f;
-                for (int k = 0; k < c_bands; ++k)
-                {
-                    band[k].step(p);
-                    s += band[k].bp * gain[k] * (k < 5 ? 1.0f : comeAndGo[k - 5].at(u));
-                }
-                if (pass == 1)
-                    out[i] = s;
+                const float hz = std::round(chord[k] * (1.0f + ((float)voice - 1.0f) * 0.003f + rng.bi() * 0.0008f) * 8.0f) / 8.0f;
+                const float start = rng.uni() * c_tau;
+                // In double: the phase runs to thousands of cycles.
+                const double step = 6.283185307179586 * (double)hz / (double)c_sr;
+                for (uint32 i = 0; i < c.frames; ++i)
+                    out[i] += (float)std::sin(step * (double)i + (double)start) * level[k] * (0.3f + 0.7f * swell.at((float)i / (float)c.frames)) * (1.0f / 3.0f);
             }
         }
-        c.reverb(0.4f, 0.4f, 0.2f);
+        {
+            const LoopLfo breath(rng, 1, 2, 3, 5);
+            Svf air;
+            Noise pink;
+            air.set(3200.0f, 1.2f);
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                Rng r{ 0x600d1eu };
+                for (uint32 i = 0; i < c.frames; ++i)
+                {
+                    air.step(pink.next(r, Pink));
+                    if (pass == 1)
+                        out[i] += air.bp * (0.3f + 0.7f * breath.at((float)i / (float)c.frames)) * 0.5f;
+                }
+            }
+        }
+        c.reverb(0.65f, 0.4f, 0.35f);
         c.finish();
         break;
     }
@@ -1204,7 +1414,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         const LoopLfo flicker(rng, 3, 7, 11, 17), flutter(rng, 5, 9, 13, 23);
         Svf roar, mid;
         Noise brown, pink;
-        roar.set(500.0f, 0.7f);
+        roar.set(380.0f, 0.6f);
         mid.set(900.0f, 1.0f);
         for (int pass = 0; pass < 2; ++pass)
         {
@@ -1212,10 +1422,10 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
             for (uint32 i = 0; i < c.frames; ++i)
             {
                 const float u = (float)i / (float)c.frames;
-                roar.step(brown.next(r, Brown));
+                roar.step(brown.next(r, Pink)); // pink, not brown: a fire's roar is air (200 - 800 Hz), not a rumble
                 mid.step(pink.next(r, Pink));
                 if (pass == 1)
-                    out[i] = roar.lp * (0.4f + 0.6f * flicker.at(u)) * 0.8f + mid.bp * flutter.at(u) * 0.6f;
+                    out[i] = roar.bp * (0.4f + 0.6f * flicker.at(u)) * 0.8f + mid.bp * flutter.at(u) * 0.8f;
             }
         }
         for (int i = 0; i < 140; ++i)
@@ -1250,7 +1460,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
             const bool push = (i & 1) == 0;
             Buf stroke = noise(rng, 0.45f, White, Band, push ? 1700.0f : 2300.0f, push ? 2300.0f : 1700.0f, 1.5f, 0.06f, 0.3f);
             level(stroke);
-            flutter(stroke, rng, 55.0f, 0.6f); // the teeth catch unevenly
+            flutter(stroke, rng, 12.0f, 0.5f); // the saw catches unevenly
             c.mix(stroke, 1.5f + 0.55f * (float)i, push ? 0.4f : 0.28f);
         }
         c.reverb(0.25f, 0.5f, 0.15f);
@@ -1398,7 +1608,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         const LoopLfo wave(rng, 2, 5, 7, 9), second(rng, 3, 4, 8, 11);
         Svf body, foam;
         Noise pink;
-        body.set(700.0f, 0.7f);
+        body.set(850.0f, 0.5f); // a wide band around 850 Hz: water is not a low sound
         foam.set(3800.0f, 0.7f);
         for (int pass = 0; pass < 2; ++pass)
         {
@@ -1411,7 +1621,7 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
                 body.step(p);
                 foam.step(r.bi());
                 if (pass == 1)
-                    out[i] = body.lp * (0.3f + 0.7f * w) * 1.6f + foam.hp * w * w2 * 0.12f;
+                    out[i] = body.bp * (0.3f + 0.7f * w) * 1.6f + foam.hp * w * w2 * 0.12f;
             }
         }
         for (int i = 0; i < 260; ++i)

@@ -3,7 +3,7 @@
 # Spawned with its feet on the road.
 # SHAPE (a placeholder; uniform scales): a tunic (the root), a head, and the LOAD it holds in FRONT of its body
 # (-Z: an entity's forward is -Z). The load is the SECOND child: tickCarriers shows it only while the walker
-# carries one.
+# carries one on foot. The children after it are the CART of a transport trip (see below).
 # CullMode RootOnly: the root culls for the head and the load. With an entry of its own, a load that was hidden when
 # the walker left its house would keep that entry at the house, and the pass would not visit it when it is shown.
 Prefab gameCarrier
@@ -35,3 +35,51 @@ Prefab gameCarrier
 				Type StaticMesh
 				Color 0.6 0.5 0.3
 				Scale 0.2
+		# THE CART (a transport trip between two stores): pulled BEHIND the walker (+Z). CartLoad is the THIRD child
+		# (shown only while the cart is full); every child after it is the cart itself.
+		Entity
+			Name CartLoad
+			Position 0 0.72 0.95
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.6 0.5 0.3
+				Scale 0.26
+		Entity
+			Name CartBed
+			Position 0 0.38 0.95
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Scale 0.36
+		Entity
+			Name CartWheelL
+			Position -0.42 0.2 0.95
+			Component Render
+				ObjectContainer baseshapes
+				Node Sphere
+				Type StaticMesh
+				Color 0.22 0.16 0.1
+				Scale 0.2
+		Entity
+			Name CartWheelR
+			Position 0.42 0.2 0.95
+			Component Render
+				ObjectContainer baseshapes
+				Node Sphere
+				Type StaticMesh
+				Color 0.22 0.16 0.1
+				Scale 0.2
+		Entity
+			Name CartPole
+			Position 0 0.4 0.38
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Rotation 90 0 0
+				Scale 0.06

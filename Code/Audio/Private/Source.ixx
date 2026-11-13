@@ -48,6 +48,13 @@ public:
     // attenuation beyond maxDistance, rolloff scales how fast gain drops in between.
     void setAttenuation(float referenceDistance, float maxDistance, float rolloff = 1.0f);
 
+    // THE DISTANCE, beyond the gain (mono sources only: they are the ones with a place).
+    // setReverbSend: how much of the sound goes to the shared reverb ("Audio/Reverb"), on top of its direct sound; 0 =
+    // none (the default). A far sound gets more: it is mostly its reverb.
+    // setLowpass: the highs the air took on the way; 20000 or more = open (the default).
+    void setReverbSend(float send);
+    void setLowpass(float hz);
+
 private:
 
     friend class AudioSystem;

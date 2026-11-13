@@ -95,6 +95,11 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 * **Shader fp16 work:** `Tools/fp16conv.ps1 <shader>.glsl` lists every fp16 <-> fp32 conversion in the
   shader's SPIR-V dump by source line (glslang never warns about implicit widening). Rules and results in
   "Half floats" in [`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md).
+* **Game sound work:** nobody can listen for Claude, so it LOOKS. `Tools/sndsynth.ps1 -Items "<sound>:<variant>" -View`
+  builds the synthesizer (`Code/Game/Private/SoundSynth.cpp`) alone, with no engine, and draws each sound's
+  waveform, spectrogram and level, with the energy per band; `Tools/sndview.ps1` does the same for the game's own
+  sound cache (what the last run played). The loop and what to look for: "Looking at a sound" in
+  [`Docs/Context/Game/Sound.md`](../Docs/Context/Game/Sound.md).
 * **Script Editor work:** `ScriptEditorSim` (see [its CONTEXT](../Docs/Context/ScriptEditorSim/CONTEXT.md)) drives the real
   panel with simulated keys, with no window or engine: about 5 s to rebuild, under 0.1 s to run. Its `--check` runs the
   typing regression file.

@@ -79,6 +79,7 @@ void AudioSource::setBuffer(const AudioBuffer& buffer)
         if (s.nodeValid)
         {
             iplBinauralEffectReset(s.node.effect);
+            s.node.flush.store(true, oc::memory_order_relaxed);
             ma_node_attach_output_bus(&s.sound, 0, &s.node.base, 0);
         }
         else
@@ -165,6 +166,17 @@ void AudioSource::setRelative(bool relative)
     SourceState& s = *toState(m_handle);
     s.relative = relative;
     updateSource(s);
+}
+
+void AudioSource::setReverbSend(float send)
+{
+    toState(m_handle)->node.send.store(glm::max(send, 0.0f), oc::memory_order_relaxed);
+}
+
+void AudioSource::setLowpass(float hz)
+{
+    const float coefficient = hz >= 20000.0f ? 1.0f : 1.0f - std::exp(-6.2831853f * glm::max(hz, 20.0f) / float(SampleRate));
+    toState(m_handle)->node.lowpass.store(coefficient, oc::memory_order_relaxed);
 }
 
 void AudioSource::setAttenuation(float referenceDistance, float maxDistance, float rolloff)

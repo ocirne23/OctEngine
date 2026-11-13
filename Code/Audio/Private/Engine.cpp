@@ -38,6 +38,12 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
     float* out = ppFramesOut[0];
     const uint32 inAvail = (pFrameCountIn && in) ? *pFrameCountIn : 0;
     const uint32 outWanted = *pFrameCountOut;
+    if (node.flush.exchange(false, oc::memory_order_relaxed)) // a new sound on this source: drop what the last one left
+    {
+        node.inCount = 0;
+        node.outRead = 0;
+        node.outAvail = 0;
+    }
 
     uint32 framesIn = 0;
     uint32 framesOut = 0;
@@ -59,6 +65,32 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
         }
         if (node.inCount < IplFrameSize)
             break; // not enough input for a full block yet
+
+        // The distance filter on the dry block (the direct sound and the send both get it), then the send.
+        const float lowpass = node.lowpass.load(oc::memory_order_relaxed);
+        if (lowpass < 0.999f)
+        {
+            for (uint32 i = 0; i < IplFrameSize; ++i)
+            {
+                node.lowpassState += (node.inFifo[i] - node.lowpassState) * lowpass;
+                node.inFifo[i] = node.lowpassState;
+            }
+        }
+        else
+            node.lowpassState = node.inFifo[IplFrameSize - 1];
+        const float send = node.send.load(oc::memory_order_relaxed);
+        if (send > 0.0001f)
+        {
+            SystemState& state = audioState();
+            // This node's blocks follow each other in the ring. Only a node that was silent for a while (far behind),
+            // or one that got far ahead, is put back at the lead: a re-sync on every block would leave gaps, because
+            // a node emits its 256-frame blocks in a rhythm that is not the device's.
+            if (node.sendWrite + 1024 < state.sendRead + SendLead || node.sendWrite > state.sendRead + SendRingSize - 2 * IplFrameSize)
+                node.sendWrite = state.sendRead + SendLead;
+            for (uint32 i = 0; i < IplFrameSize; ++i)
+                state.sendRing[(node.sendWrite + i) & (SendRingSize - 1)] += node.inFifo[i] * send;
+            node.sendWrite += IplFrameSize;
+        }
 
         IPLBinauralEffectParams params{};
         params.direction = IPLVector3{ node.dirX.load(oc::memory_order_relaxed), node.dirY.load(oc::memory_order_relaxed), node.dirZ.load(oc::memory_order_relaxed) };
@@ -88,6 +120,25 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
     *pFrameCountOut = outWanted;
     if (pFrameCountIn)
         *pFrameCountIn = framesIn;
+}
+
+// The shared reverb: what the sources sent (the ring), through the reverb, to the endpoint.
+void reverbNodeProcess(ma_node*, const float**, ma_uint32*, float** ppFramesOut, ma_uint32* pFrameCountOut)
+{
+    SystemState& state = audioState();
+    float* out = ppFramesOut[0];
+    const uint32 frames = *pFrameCountOut;
+    const float level = state.reverbLevel.load(oc::memory_order_relaxed);
+    for (uint32 i = 0; i < frames; ++i)
+    {
+        float& cell = state.sendRing[(state.sendRead + i) & (SendRingSize - 1)];
+        float left = 0.0f, right = 0.0f;
+        state.reverb.process(cell, left, right);
+        cell = 0.0f;
+        out[i * 2 + 0] = left * level;
+        out[i * 2 + 1] = right * level;
+    }
+    state.sendRead += frames;
 }
 
 void updateSource(SourceState& s)

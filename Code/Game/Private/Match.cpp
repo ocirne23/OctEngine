@@ -697,7 +697,7 @@ void GameMatch::update(float deltaSec)
             materials += m_structures.takeStoredMinerals(pos, m_settings.refillRadius, team,
                 glm::min(m_settings.refillRate * deltaSec, m_player.materialsMax() - materials));
             materials -= m_structures.fundNearbyBlueprint(pos, m_settings.buildRadius, team,
-                glm::min(m_settings.playerBuildRate * deltaSec, materials));
+                glm::min(m_settings.playerBuildRate * deltaSec, materials), false, FLT_MAX, true);
         };
         float serverMaterials = m_player.materials();
         tickPlayerMaterials(playerPos, (uint8)m_team, serverMaterials);

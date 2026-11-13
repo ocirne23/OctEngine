@@ -98,10 +98,36 @@ float StructureSystem::repairNeed(const Ref& ref) const
     return glm::max((healthMax - s.health) * glm::max(m_settings.costs[(int)ref.type], 0.01f) / healthMax - ref.buildIncoming, 0.0f);
 }
 
+float StructureSystem::transportAmount(int sourceIdx, int targetIdx, int good) const
+{
+    constexpr float c_minFillGap = 0.2f; // of a full store: closer fills are even enough
+    constexpr float c_minCart = 0.2f;    // of a cart: a smaller load is no trip
+    const Ref& source = m_frame[sourceIdx];
+    const Ref& target = m_frame[targetIdx];
+    const GameStructureComponent& s = *source.state;
+    const GameStructureComponent& t = *target.state;
+    if (sourceIdx == targetIdx || s.team != t.team || s.blueprint || t.blueprint || s.capacity[good] <= 0.0f || t.capacity[good] <= 0.0f
+        || transportRoleOf(source.type, good) != ETransportRole::Storage || transportRoleOf(target.type, good) != ETransportRole::Storage)
+        return 0.0f;
+    const float held = t.store[good] + target.goodsIncoming[good]; // with what is on its way there
+    const float gap = s.store[good] / s.capacity[good] - held / t.capacity[good];
+    if (gap < c_minFillGap)
+        return 0.0f;
+    const float cart = glm::max(m_settings.carrierCartLoad, 1.0f);
+    const float even = gap * s.capacity[good] * t.capacity[good] / (s.capacity[good] + t.capacity[good]); // the amount that makes the fills equal
+    const float amount = glm::min(glm::min(cart, even), glm::min(s.store[good], t.capacity[good] - held));
+    return amount >= cart * c_minCart ? amount : 0.0f;
+}
+
 bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, int work, bool& isConsumer) const
 {
     if (targetIdx == sourceIdx)
         return false;
+    if (work == CarrierWork_Transport)
+    {
+        isConsumer = false;
+        return transportAmount(sourceIdx, targetIdx, good) > 0.0f;
+    }
     const Ref& target = m_frame[targetIdx];
     const GameStructureComponent& t = *target.state;
     if (t.team != m_frame[sourceIdx].state->team)
@@ -245,7 +271,7 @@ int StructureSystem::carrierJobTier(int index, uint8 team) const
         return 0;
     if (ref.sendReady && ref.walkersIdle == 0)
         return 2;
-    if ((ref.buildReady || ref.repairReady) && ref.walkersIdle == 0) // stone for a blueprint or a repair: only when no load waits anywhere
+    if ((ref.buildReady || ref.repairReady || ref.transportReady) && ref.walkersIdle == 0) // stone for a blueprint or a repair, a cart trip: only when no load waits anywhere
         return 1;
     if (ref.walkers == 0)
         for (int good = 1; good <= 2; ++good)
@@ -274,6 +300,7 @@ void StructureSystem::carrierHousePass()
         ref.sendReady = false;
         ref.buildReady = false;
         ref.repairReady = false;
+        ref.transportReady = false;
         if (isCableOrCrossing(ref.type) || ref.state->blueprint)
             continue;
         for (int good = 1; good <= 2 && !ref.sendReady; ++good)
@@ -298,6 +325,24 @@ void StructureSystem::carrierHousePass()
             || !repairWaits[ref.state->team] || buildFound[ref.state->team] || !carrierHoldsStone(i))
             continue;
         ref.repairReady = findRoadTarget(i, i, glm::ivec2(0), 2, false, CarrierWork_Repair, scratch) >= 0;
+    }
+    // TRANSPORT (the cart), behind every other work of the building: a storage with a much emptier storage of the same
+    // good on its road. Only a team with two storages of a good has any (no search for the others).
+    int storages[GameMaxTeams][3] = {};
+    for (const Ref& ref : m_frame)
+        if (!ref.state->blueprint && ref.state->team < GameMaxTeams)
+            for (int good = 1; good <= 2; ++good)
+                storages[ref.state->team][good] += ref.state->capacity[good] > 0.0f && transportRoleOf(ref.type, good) == ETransportRole::Storage ? 1 : 0;
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        Ref& ref = m_frame[i];
+        if (ref.state->blueprint || ref.sendReady || ref.buildReady || ref.repairReady || ref.state->team >= GameMaxTeams)
+            continue;
+        for (int good = 1; good <= 2 && !ref.transportReady; ++good)
+            if (storages[ref.state->team][good] >= 2 && ref.state->capacity[good] > 0.0f
+                && transportRoleOf(ref.type, good) == ETransportRole::Storage
+                && ref.state->store[good] >= glm::max(m_settings.carrierCartLoad, 1.0f) * 0.2f)
+                ref.transportReady = findRoadTarget(i, i, glm::ivec2(0), good, false, CarrierWork_Transport, scratch) >= 0;
     }
 
     int freeLeft[GameMaxTeams];
@@ -389,7 +434,7 @@ void StructureSystem::tickCarriers(float deltaSec)
         if (w.state == Walker_Delivering || w.state == Walker_Working) // a load on its way (or going in): a blueprint needs that much less stone, a building has that much less room
             if (const int target = structureIndexById(w.targetId); target >= 0)
             {
-                if (w.work != CarrierWork_Goods)
+                if (w.work == CarrierWork_Build || w.work == CarrierWork_Repair)
                     m_frame[target].buildIncoming += w.load;
                 else
                     m_frame[target].goodsIncoming[w.good] += w.load;
@@ -478,8 +523,9 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (w.entity) // side by side, not inside each other
             {
                 w.entity->pos = w.path.back() + glm::vec3((float)(rank % 3) * 0.45f, 0.0f, (float)(rank / 3 % 3) * 0.45f);
-                if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()); scene && scene->children.size() > 1)
-                    scene->children[1]->setEnabled(false);
+                if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()))
+                    for (size_t c = 1; c < scene->children.size(); ++c) // no load, no cart
+                        scene->children[c]->setEnabled(false);
             }
             w.idle += deltaSec;
             w.wait -= deltaSec;
@@ -535,6 +581,26 @@ void StructureSystem::tickCarriers(float deltaSec)
                         if (jobRef.walkersIdle > 0)
                             --jobRef.walkersIdle;
                     }
+                }
+                // LAST: TRANSPORT. A cart load to a much emptier storage of the same good on this road (transportAmount).
+                for (int good = 1; good <= 2 && w.state == Walker_Waiting; ++good)
+                {
+                    oc::vector<glm::vec3> path;
+                    const int target = findRoadTarget(job, -1, hereCell, good, false, CarrierWork_Transport, path);
+                    if (target < 0 || path.empty())
+                        continue;
+                    w.load = transportAmount(job, target, good);
+                    s.store[good] -= w.load;
+                    m_frame[target].goodsIncoming[good] += w.load;
+                    w.good = (uint8)good;
+                    w.work = CarrierWork_Transport;
+                    w.targetId = m_frame[target].state->structureId;
+                    w.path = oc::move(path);
+                    w.along = 0.0f;
+                    w.idle = 0.0f;
+                    w.state = Walker_Delivering;
+                    if (jobRef.walkersIdle > 0)
+                        --jobRef.walkersIdle;
                 }
                 if (w.state != Walker_Waiting)
                     continue;
@@ -615,9 +681,14 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.entity->pos = pos;
             if (dir.x * dir.x + dir.z * dir.z > 1e-6f) // an entity's forward is -Z
                 w.entity->rot = glm::angleAxis(std::atan2(-dir.x, -dir.z), glm::vec3(0.0f, 1.0f, 0.0f));
-            // The LOAD (carrier.pre's second child) shows only while the walker carries one.
-            if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()); scene && scene->children.size() > 1)
-                scene->children[1]->setEnabled(w.load > 0.0f);
+            // carrier.pre's children: [1] the LOAD in its hands, only while it carries one on foot; [2] the cart's load and
+            // [3..] the CART, on a transport trip (the cart comes back with it, empty).
+            if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()))
+            {
+                const bool cart = w.work == CarrierWork_Transport;
+                for (size_t c = 1; c < scene->children.size(); ++c)
+                    scene->children[c]->setEnabled(c == 1 ? !cart && w.load > 0.0f : cart && (c > 2 || w.load > 0.0f));
+            }
         }
         if (!arrived)
             continue;
@@ -631,7 +702,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             break;
         case Walker_Delivering: // at the target: unload what fits, then walk the same road back
         {
-            if (w.work != CarrierWork_Goods) // stone for a blueprint or a repair: it stays and works (Walker_Working)
+            if (w.work == CarrierWork_Build || w.work == CarrierWork_Repair) // stone for a blueprint or a repair: it stays and works (Walker_Working)
             {
                 w.state = Walker_Working;
                 break;

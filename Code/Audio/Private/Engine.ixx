@@ -15,6 +15,7 @@ export module Audio:Engine;
 
 import Core;
 import Core.glm;
+import :Reverb;
 
 // Internal engine state shared by AudioBuffer/AudioSource/AudioSystem's implementations. Not part of
 // the public API (never re-exported from Audio.ixx).
@@ -40,6 +41,16 @@ export struct BinauralNode
     IPLBinauralEffect effect = nullptr;
     oc::atomic<float> dirX{ 0.0f }, dirY{ 0.0f }, dirZ{ -1.0f }; // listener-space unit direction to the source
     oc::atomic<float> blend{ 1.0f };                             // 0 = unspatialized passthrough (relative sources)
+    // Set by setBuffer (game thread), taken by the audio thread at its next block: the FIFOs below still hold the END
+    // of the sound the source played before, and without this the new sound starts with those few milliseconds.
+    oc::atomic<bool> flush{ false };
+    // THE DISTANCE, beyond the gain: `lowpass` is a one-pole coefficient on the dry mono signal (1 = open; the air
+    // takes a far sound's highs) and `send` is how much of that signal goes to the shared reverb (SystemState's
+    // send ring). Both are the game thread's to set (AudioSource::setLowpass / setReverbSend).
+    oc::atomic<float> lowpass{ 1.0f };
+    oc::atomic<float> send{ 0.0f };
+    float lowpassState = 0.0f; // audio thread
+    uint64 sendWrite = 0;      // audio thread: this node's place in the send ring's timeline
 
     float inFifo[IplFrameSize] = {};           // downmixed mono, waiting for a full block
     uint32 inCount = 0;
@@ -68,8 +79,29 @@ export struct SourceState
     float rolloff = 1.0f;
 };
 
+// The shared reverb's node: no input bus (the sends come through the ring below), one stereo output on the endpoint.
+export struct ReverbNode
+{
+    ma_node_base base; // must be first
+};
+
+export constexpr uint32 SendRingSize = 8192; // frames, a power of two
+// A send lands this far ahead of where the reverb reads: more than a device period plus an HRTF block, so a node
+// that runs after the reverb node in a callback is still ahead of it. It is also the reverb's pre-delay (43 ms).
+export constexpr uint32 SendLead = 2048;
+
 export struct SystemState
 {
+    // THE REVERB BUS (audio thread only, except reverbLevel and FdnReverb::configure). Every BinauralNode adds its
+    // dry block x send into sendRing at its own sendWrite; the reverb node reads from sendRead, clears what it read,
+    // runs the reverb on it and plays it. One timeline for all: sendRead counts the frames the reverb node has played.
+    float sendRing[SendRingSize] = {};
+    uint64 sendRead = 0;
+    FdnReverb reverb;
+    ReverbNode reverbNode;
+    bool reverbNodeValid = false;
+    oc::atomic<float> reverbLevel{ 0.0f };
+
     ma_engine engine;
     IPLContext iplContext = nullptr;
     IPLHRTF hrtf = nullptr;
@@ -93,3 +125,5 @@ export void destroySourceState(SourceState& s);
 
 export void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pFrameCountIn, float** ppFramesOut, ma_uint32* pFrameCountOut);
 export ma_node_vtable g_binauralNodeVTable = { binauralNodeProcess, nullptr, 1, 1, 0 };
+export void reverbNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pFrameCountIn, float** ppFramesOut, ma_uint32* pFrameCountOut);
+export ma_node_vtable g_reverbNodeVTable = { reverbNodeProcess, nullptr, 0, 1, 0 };

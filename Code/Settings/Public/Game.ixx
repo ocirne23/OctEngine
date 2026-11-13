@@ -286,6 +286,7 @@ export struct GameStructureSettings
     // THE CARRIERS: wood and stone move by walkers on the road (the conveyor segments), not as cells on the cables.
     bool carriers = true;             // off = the old cell flow on pipelines and conveyors
     float carrierLoad = 10.0f;        // goods a walker carries
+    float carrierCartLoad = 100.0f;   // goods in a CART: a transport trip between two storages (it evens out their fill)
     float carrierSpeed = 3.5f;        // m/s
     float carrierBuildRate = 2.0f;    // stone/s a walker puts into the blueprint or the damaged structure it stands at
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
@@ -540,6 +541,9 @@ export struct GameSoundSettings
     float interfaceVolume = 0.7f;     // the alarm, the player's own hurt sound
     int maxVoices = 24;               // one-shot voices (each spatial voice is one HRTF convolution on the audio thread)
     int maxLoops = 6;                 // building loop voices: the nearest buildings get them
+    float reverbSend = 0.18f;         // how much of a sound at "Full volume distance" goes to the shared reverb ("Audio/Reverb"); a farther one sends more
+    float airDistance = 90.0f;        // m over which the air takes a sound's highs (its low pass falls to 1/e of 18 kHz)
+    float panHeight = 0.5f;          // how much of a sound's height over / under the player is in its direction (0 = all sounds at ear height .. 1 = true)
     float fullVolumeDistance = 10.0f; // m from the ear: no attenuation inside
     float hearingRange = 110.0f;      // m from the ear: a cue beyond it is dropped before it costs anything
     float crowdFull = 40.0f;          // weighted combat cues per second for a full battle bed
@@ -549,7 +553,7 @@ export struct GameSoundSettings
     float fearUnits = 6.0f;           // enemy units in the horde radius (weighted by nearness) at which every animal is silent
     float fearReturn = 30.0f;         // s after the last enemy until the animals are all back
     int audition = 0;                 // "Play a sound": 0 = none, else EGameSound + 1; GameSound plays it once, flat, and sets it back to 0
-    float loudnessLimit = 1.2f;       // the power sum of everything that plays is held under this (1 = one sound at full gain): no distortion at the output
+    float loudnessLimit = 2.0f;      // the power sum of everything that plays is held under this (1 = one sound at full gain): no distortion at the output
     float loudness = 0.0f;            // live readout: that sum, before the limit
     int voicesPlaying = 0;            // live readout
     int cuesPerSecond = 0;            // live readout: cues that came in (before any limit)

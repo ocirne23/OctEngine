@@ -76,6 +76,7 @@ public:
         bool sendReady = false; // it has a load to send now (a storage: and a consumer on its road wants it)
         bool buildReady = false; // it holds stone, and a blueprint on its road wants it (the ~1 s pass): work for a walker with no other
         bool repairReady = false; // the same for a damaged structure on its road, and only while the team has no build work
+        bool transportReady = false; // a storage: another storage on its road is much emptier (a cart trip), and it has no other work
         float goodsIncoming[3] = {}; // per store index: the goods the walkers carry toward it now (counted fresh every tickCarriers)
         float buildIncoming = 0.0f; // a blueprint: the stone the walkers carry toward it now (counted fresh every tickCarriers)
         // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store or the
@@ -279,7 +280,8 @@ public:
     // RUBBLE: a built building the enemy destroyed (tickDamage) - a blueprint again, dark, walked over, no target.
     bool structureRubble(int index) const { return m_frame[index].state->rubble; }
     void setRubble(const Ref& s, bool rubble); // the flag + its tint + its collider (off while rubble)
-    bool rubbleBlocked(const Ref& s) const;    // rubble with a living enemy unit in "Rubble safe radius (m)": nothing builds it up
+    // Rubble with a body on the pile, or (not for a player) with a living enemy unit in "Rubble safe radius (m)": it is not built up.
+    bool rubbleBlocked(const Ref& s, bool byPlayer = false) const;
     bool structurePowered(int index) const { return m_frame[index].state->powered; }
 
     uint32 randomTargetStructureId(const glm::vec3& nearPos, uint8 attackerTeam) const;
@@ -529,9 +531,10 @@ public:
     // ---- CONSTRUCTION (server) ----
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
     float fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
-        bool includeRepairs = false, float repairHealCap = FLT_MAX);
+        bool includeRepairs = false, float repairHealCap = FLT_MAX, bool byPlayer = false);
     // repairHealCap: the most health this call gives a BUILT structure (a repair); a blueprint has no cap.
-    float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX);
+    // byPlayer: a player pays - rubble takes it with enemies near too (rubbleBlocked).
+    float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX, bool byPlayer = false);
     float constructorRange() const { return m_settings.constructorRange; }
 
 private:
@@ -636,7 +639,12 @@ private:
     // WHAT A LOAD IS FOR, in the order a walker takes work: Goods = the buildings that take goods (never a blueprint);
     // Build = ONLY the blueprints that still need stone (blueprintNeed; rubble too) - the walkers BUILD along the road,
     // the road's own pieces too; Repair = ONLY the damaged built structures (repairNeed), the last work of all.
-    enum ECarrierWork : uint8 { CarrierWork_Goods, CarrierWork_Build, CarrierWork_Repair };
+    // Transport = a CART load ("Cart load") from one STORAGE to another one of the same good (Storehouse, Wood store,
+    // Beacon - transportRoleOf Storage on both ends, nothing else): it evens out the fill of the stores of a base.
+    enum ECarrierWork : uint8 { CarrierWork_Goods, CarrierWork_Build, CarrierWork_Repair, CarrierWork_Transport };
+    // The cart load of `good` that goes from storage sourceIdx to storage targetIdx: what brings the two to the same
+    // fill, at most a cart; 0 = no trip (not two storages of the good, fills too close, or too little to move).
+    float transportAmount(int sourceIdx, int targetIdx, int good) const;
     bool carrierAccepts(int sourceIdx, int targetIdx, int good, bool consumersOnly, int work, bool& isConsumer) const;
     // The stone a blueprint still needs to be built / a damaged structure to be whole, less what the walkers already
     // carry to it.

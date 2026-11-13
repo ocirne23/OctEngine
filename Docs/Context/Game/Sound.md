@@ -27,7 +27,7 @@ The cue sites:
 | `StructurePlaced` | `spawnStructure`, a blueprint only (a load or a join replay spawns built structures: silent) |
 | `StructureBuilt` | `investMaterials` (the authority), `mirrorPlace`'s built re-send (a client) |
 | `StructureCollapse` | `setRubble(true)`, `removeStructureBookkeeping` (quiet for a cable or a blueprint) |
-| `Thunder` | `tickLightning`, delayed by the distance (capped at 6 s) |
+| `Thunder`, `ThunderCrack` | `tickLightning`, IN STEP with the flash: the thunder at its first stroke, a crack at every later stroke (see Thunder under The sounds); the distance picks the variant (near / middle / far) |
 | `Alarm` | `GameSound::updateAlarm`: the own team's built structures lost health between two samples (0.5 s) with none removed; 10 s between two alarms |
 | `PlayerHurt` | `GameSound::update`: the local player's health fell |
 | `BirdSong`, `CricketBout`, `OwlCall`, `WindGust`, `WaterLap` | `GameSound::updateAmbience` / `updateWater` (The ambience is positional, below) |
@@ -64,6 +64,47 @@ Two columns of `c_soundDefs`, `pitchJitter` and `gainJitter`, per sound:
   than its 10 s loop. A building loop drifts by itself, seeded by its structure id: one fire flares while the one
   next to it dies down. Small for the hum (a steady field), large for the fire and the wind.
 
+## The listener is the player, turned like the camera
+
+The audio engine's listener is the CAMERA (`AudioSystem::update(camera)` in main). The game's camera hangs over and
+behind the player, so from there everything around the player is "in front and below": hardly any left / right,
+nothing behind, and the HRTF's dull "from below" colour on every sound.
+
+`GameSound::heardAt(pos)` moves every positional game voice (one-shots, the horde bed, building loops, water) before
+the engine gets it: the sound's offset from the EAR (`Frame::ear`, the player) in the ear's frame - right and
+forward are the camera's, laid flat on the ground; up is the world's, x "Height in the panning" (0.5) - is put on
+the camera's own axes. A sound 10 m to the player's left is then 10 m to the left of the engine's listener. Every
+frame, for every playing voice: the player turns while a long sound plays, and the sound stays where it is.
+The DISTANCE was never the engine's (the gain holds it, from the ear).
+
+## The distance is more than a gain
+
+`GameSound::applyDistance(source, dist)`, for every positional world voice (a one-shot at its start; the horde bed,
+the building loops and the water every frame). A far sound is:
+
+| | How |
+|---|---|
+| quieter | the gain (`attenuation`, The limits) |
+| DULLER | `AudioSource::setLowpass(18000 x e^(-dist / "Air distance (m)"))`: 90 m by default, so 13 kHz at 30 m, 5 kHz at 110 m |
+| WETTER | `AudioSource::setReverbSend("Reverb send" x sqrt(dist / full volume distance))`, at most 1. The send is a share of the sound AFTER its gain, which already falls with the distance, so the share must rise - or the reverb dies as fast as the direct sound and a far sound is dry |
+
+The room is the audio engine's ONE shared reverb ("Audio/Reverb", see The shared reverb in
+[`Docs/Context/Audio/CONTEXT.md`](../Audio/CONTEXT.md)): every sound rings in the same space. So a world one-shot
+keeps only a third of its BAKED reverb (`Canvas::wetScale` 0.35: a little, for its body); the loops, the flat sounds
+and the thunder keep theirs. A far-field sound (thunder) sends a fixed 0.3 and has no filter: its distance is in its
+samples. A sound with no place sends nothing.
+
+## The playback path, checked
+
+* **Sample rate:** 48 kHz in the synthesizer, the cache, the buffers, the engine and the HRTF. No conversion anywhere
+  at pitch 1.
+* **Samples:** 16 bit in the cache and in the buffers the engine plays (peak 0.9).
+* **Pitch** (every game voice has one: the random shift, the size, a loop's drift) is miniaudio's LINEAR
+  interpolation with no filter (its default for pitch, `engineConfig.pitchResampling`; miniaudio's own note: the
+  filter is off because it gets unstable while the pitch moves). It dulls and roughens the top octaves a little. Not
+  changed: these sounds have little above 8 kHz, so it costs about -35 dB of artefacts there. To get rid of it, a
+  sound must be played at pitch 1 (variants at their own pitch in the buffer).
+
 ## Bursts: the cases that are closed
 
 Every path that can start a sound has a bound. The ones that are not in the list above:
@@ -73,7 +114,7 @@ Every path that can start a sound has a bound. The ones that are not in the list
 | ONE sound posts thousands of cues in a frame (the melee hits of a horde, through `addBeam`) | it fills the post queue (2048), and every sound posted after it in that frame is lost: a "built", a thunder, a bird's notes | `pushPosted`: a sound keeps 32 posts between two updates; the rest is only counted, and weighs in the battle bed (as the component cues over their bound do) |
 | No update for a while (the lobby or the main menu is up, the sounds are being synthesized, a hitch) | the cues of the whole gap play as one late burst, and their counts - read as one frame's - throw the battle bed to its full level | a gap of more than 0.5 s between two updates: `discardPosted` and the battle bed's sum to 0 |
 | A match starts; F10 loads a save | a collapse per removed structure, a "placed" per blueprint | `discardPosted` in the `GameMatch` constructor and after the load (it drops the components' cues too). The shots a load removes are destroyed by a job after it: at most one impact sound |
-| MANY sounds at once, each at a fair level | the sum goes over full scale at the output and DISTORTS: many quiet sounds become one loud noise | THE LOUDNESS LIMIT: `updateLoudnessLimit` sums everything that plays (as power: the sounds are not in step) and holds it under "Loudness limit" (1.2) with one factor on every game voice (`m_duck`): down at once, up slowly. "Game/Sound/Stats" shows the sum before the limit |
+| MANY sounds at once, each at a fair level | the sum goes over full scale at the output and DISTORTS: many quiet sounds become one loud noise | THE LOUDNESS LIMIT: `updateLoudnessLimit` sums everything that plays (as power: the sounds are not in step; a one-shot counts with the share of its time that is left) and holds it under "Loudness limit" (2.0) with one factor on every game voice (`m_duck`). It is SLOW both ways (down in about 0.2 s, up in over a second): a hand on the master fader for a mix that STAYS too loud, not a limiter that follows single sounds. Tried and dropped: a fast one that counted a one-shot at full gain to its last moment - every start and end of a sound jerked the volume of everything else, and the whole mix pumped. "Game/Sound/Stats" shows the sum before the limit |
 | The audio thread's cost | each spatial voice is an HRTF convolution | at most "Max one-shot voices" (24, up to 48) + 5 beds + "Max building loops" (6, up to 12) + 2 water voices, whatever the game does |
 
 ## The beds: what the limits drop is not lost
@@ -199,6 +240,22 @@ that is not finite is made silent and logged).
 > Tried and dropped for that reason: the pitch-drop sine thump, sums of decaying sines for struck bodies and bells, a
 > saw-wave voice, an FM strike for the light tower, a chord of sines for the field hum.
 
+> **TWO MORE RULES, both found by LOOKING at the sounds** (waveform, spectrogram, energy per band):
+>
+> * **NOTHING UNDER 35 Hz.** `Canvas::finish` ends every sound with a 24 dB / octave high pass at 35 Hz, and the
+>   brown noise (`Noise`) has no sub-bass in it (its slope starts at 40 Hz). Before this, 30 - 50 % of the energy of
+>   the wind, the fire, the hum, the water and the thunder was under 40 Hz: nothing to hear, but it takes the
+>   headroom (the peak that is set to 0.9 is then mostly rumble), it moves the speaker, and every stage after it that
+>   is not exactly linear turns it into a random wobble of what one does hear. For the same reason NO soft clip on a
+>   whole sound that has much low sound in it (the lows then chop the highs).
+>   A layer that is "the low body" of an air or water sound (wind, fire, water, night) is a TRACE, a few percent.
+> * **NOTHING IS CHOPPED 30 - 150 TIMES A SECOND.** A level that changes at that rate is not heard as a change of
+>   level: it is heard as ROUGHNESS, a jitter in the sound itself. This holds for a `flutter` (keep it under 20 Hz),
+>   for a voice's pulses (60 - 130 a second: they only LEAN on a breath that is always there - `vocal`, `Murmur`),
+>   and for bursts and clicks: a few a second are events, hundreds a second are a texture (the horde's patter: 600
+>   small impulses a second), and the range between is a rattle (tried: 14 - 24 cracks in a thunder stroke of half a
+>   second, 60 impulses a second in the horde, 22 blows a second in the battle, a hiss that "spits" at 60 - 140 Hz).
+
 | Building block | What it is | Used for |
 |---|---|---|
 | `thump` | a short burst of low noise into a damped low resonance (it rings a cycle or two: a thud, no note, no pitch slide) | the weight of a hit, a shot, an explosion |
@@ -206,10 +263,17 @@ that is not finite is made silent and logged).
 | `modal` | a STRUCK BODY: noise that dies away, through one resonance per mode (`c_wood`, `c_metal`, `c_tube`, `c_drum`, `c_glow`, `rockClack`). The noise drives the resonances while they ring, so a mode is a narrow band of noise, never a sine; `maxQ` bounds how near a tone it gets | the mallet, the chisel, stones, the drum |
 | `vocal` | a THROAT: soft pulses whose length and strength change from one to the next, plus breath that gets louder with every pulse, through three wide formants; `VocalKey`s move the pitch, the mouth, the breath and the roughness | the single creature sounds: `makeDeathCry` (the death grunt), the player's grunt (a crowd is not made of these: see A CROWD IS A TEXTURE) |
 | `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch - the only tones in the game | birds, crickets, the owl |
+| `Canvas::reverb` | THE ROOM, by CONVOLUTION with a made impulse response (`makeImpulse`: a short gap, a few single reflections, then dense noise that dies over 0.15 - 2.7 s, its highs first; an own one per channel). A loop's tail runs over the end into the start. Tried and dropped: eight comb filters and four allpasses, the classic digital reverb of the 1980s - it rings at its combs' own pitches (horizontal lines in the spectrogram), a metallic colour on every sound | every sound that has a room |
 | `flutter` | an uneven level (random values with straight lines between), where a regular tremolo would sound like a machine | the saw's teeth, a gurgle |
 
-The field hum is noise through the resonances of
-a low chord (air that sings); the alarm is a war drum; "built" is two mallet blows and a soft glow of air.
+The alarm is a war drum; "built" is two mallet blows and a soft glow of air.
+
+**The field hum (`LoopHum`) is the one sound made of TONES, and there tones are right**: a lantern of light is a
+soft, steady glow. An open chord from 294 Hz up (nothing low), every note three tones a hair apart (they beat slowly:
+a shimmer, like a glass or a choir, not one oscillator), each note coming forward and stepping back by itself, a
+breath of air on top, a wide room. Every tone has a whole number of cycles in the 8 s loop. Tried and dropped: noise
+through the resonances of a low chord (98 Hz and up) - a narrow band of noise does not hold its level, it wobbles a
+few times a second by itself, and all of it sat at 80 - 320 Hz: a low rumble that wavers.
 
 **The death sound is a GRUNT, not a scream:** 0.2 - 0.4 s, low (about 80 - 130 Hz), more breath than voice, and
 quieter than the hits (`c_soundDefs` gain 0.40). Half of it is the body that goes down. **A unit has NO hurt sound**
@@ -225,8 +289,33 @@ in a loop is a `LoopLfo` (sines with whole cycles in the loop).
 
 **The variants differ in CHARACTER** (the `kind` argument = the variant index, plus the variant's own random stream
 for every layer's pitch, time and level): a melee hit is blunt, a claw slash, wet, or a crunch; a death grunt falls, is short, is a long breath out, or gurgles;
-the light tower's swoosh has its own length, peak and colour, and sometimes a second, smaller one inside it; thunder is
-near (cracks first) or far.
+the light tower's swoosh has its own length, peak and colour, and sometimes a second, smaller one inside it.
+
+**THUNDER IS ONE SOUND HEARD MANY TIMES** (`Thunder`, 10 - 12 s). The lightning channel is kilometres long and all of
+it makes the same short, tearing sound at once; the ear gets the nearest part first and bright, then the farther
+parts and the echoes off the land and the clouds - later, quieter, duller. So the synthesis makes the STROKE (many
+cracks - 5 to 8, few on purpose - over a hiss that wavers; also a 2 x and a 3.5 x longer, smeared one) and builds
+the ROLL from 18 - 26 copies of the smeared ones: after a GAP (0.5 - 0.7 s), each later, steeply low-passed (24 dB an
+octave) and far under the stroke, a quarter of them loud (the surges), over low air that never holds still.
+Tried and dropped: one low noise with a few swells (a wash with no shape); copies that came at once and were nearly
+as loud and bright as the stroke (2.5 s of one flat wall of noise, seen in the spectrogram: no stroke in it).
+
+**The thunder's variant is the DISTANCE**, picked by `GameMatch::tickLightning` (`postVariant`), two of each:
+
+| Variants | Flash distance | The sound |
+|---|---|---|
+| 0, 1 | under 900 m | the tear, a boom under it, a long bright roll |
+| 2, 3 | under 2200 m | a duller clap (low-passed at 2.2 kHz), then the roll |
+| 4, 5 | farther | no stroke: the roll comes up slowly out of nothing, all of it under 450 Hz |
+
+The cue's gain is 800 / distance (0.2 .. 1; x 0.7 for a flash with no arc). Two thunders at most play at a time.
+
+**THE THUNDER IS IN STEP WITH THE FLASH.** It starts with the flash's first stroke, with NO delay for the distance
+(true to nature a flash 2 km away is 6 s ahead of its thunder, and then nobody hears the two as one event). A flash
+has one to six strokes (`lightningLevel`); `lightningStrokes` (MatchCoop.cpp, KEEP IN STEP with it) gives each one's
+start and strength, and every LATER stroke gets a `ThunderCrack` - one stroke's tear and a short boom, no roll - at
+the moment it lights up, as loud as it is bright (`postVariant` with the start as its delay). Near and middle
+flashes only: a far one has no cracks. Variants 0, 1 are near, 2, 3 from the middle distance (duller).
 
 **The light tower's strike is a SWOOSH, a beam that sweeps past** (`TurretFire`): a wide band of noise whose pitch and
 level come up together and go down again, a brighter band an octave over it, a narrow band in its middle (the beam's
@@ -260,6 +349,33 @@ to hide them - a steady drone. A continuous low noise ("roar") under the battle 
 `turret_fire`, `structure_placed`, `structure_built`, `structure_collapse`, `thunder`, `alarm`,
 `player_hurt`, `bird_song`, `cricket_bout`, `owl_call`, `wind_gust`, `water_lap`, `loop_wind`, `loop_day`,
 `loop_night`, `loop_battle`, `loop_horde`, `loop_hum`, `loop_fire`, `loop_works`, `loop_water`. A MONO file is spatialized (HRTF); a stereo file plays flat, so a world sound must be mono.
+
+## Looking at a sound
+
+Claude cannot hear. It can LOOK, and that found the two worst faults of the synthesis (the rules above). The loop:
+
+```
+Tools/sndsynth.ps1 -Items "16:0","19:0" -View                     synthesize NOW's code, draw, print the numbers
+Tools/sndsynth.ps1 -Items "16:0" -View -Zoom "16:0:0:1.5"        also a zoom: sound:variant:start:length (s)
+Tools/sndview.ps1 -Items "16:0"                                   the same for the game's cache: what the last run played
+```
+
+* An item is `sound:variant`: the index in `EGameSound` (`Sound.ixx`) and the variant's index.
+* `sndsynth.ps1` compiles `SoundSynth.cpp` alone (a few seconds, no engine, no window), with a few lines in place of
+  `oc::`, `glm::` and `Log`. **So `SoundSynth.cpp` keeps to what it uses now** (`oc::vector` / `span` / `size`, the
+  glm functions the tool defines, std math, `Log::warning`) and holds ALL of the synthesis.
+* Per sound: a PNG (waveform, spectrogram 30 Hz - 20 kHz, level over time) and a `.wav` in `%TEMP%/OctEngineSound`,
+  and two lines of numbers. Read the PNG with the Read tool.
+
+| Look at | A fault is |
+|---|---|
+| `band dB` (the energy per band, as a share of the whole) | anything under 40 Hz above about -25 dB; an air or water sound that peaks under 160 Hz |
+| The waveform and the level curve | a row of separate spikes, or a comb in the level: a chop (30 - 150 a second is a jitter). A sound that is mostly under 100 Hz shows its own cycles in the level curve: that is no chop |
+| The spectrogram | one flat block with no shape (a wall of noise); a hard vertical edge (a cut) |
+| `flutter above 1 kHz` | steady noise is 0.15 - 0.25; much more on a LOOP is a chop (a short one-shot is all attack and decay: the number says nothing) |
+| `crest` (peak over RMS) | above about 15: one spike sets the peak, and the rest of the sound is quiet under it |
+
+A picture shows structure. It does not say if a sound is pleasant: that is the user's ear.
 
 ## Not there
 

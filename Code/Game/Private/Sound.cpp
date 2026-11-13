@@ -57,7 +57,8 @@ namespace
         { "owl_call",           GroupAmbience,   PlaceWorld, 2, 1, 0.50f, 1.00f,  0.03f, 0.15f, 0.0f },
         { "wind_gust",          GroupAmbience,   PlaceWorld, 4, 3, 0.60f, 0.50f,  0.10f, 0.30f, 0.0f },
         { "water_lap",          GroupAmbience,   PlaceWorld, 4, 2, 0.50f, 0.30f,  0.10f, 0.30f, 0.0f },
-        { "thunder",            GroupAmbience,   PlaceFar,   4, 2, 1.00f, 0.50f,  0.14f, 0.20f, 0.0f },
+        { "thunder",            GroupAmbience,   PlaceFar,   6, 2, 1.00f, 0.50f,  0.10f, 0.15f, 0.0f }, // the variant is the distance (tickLightning)
+        { "thunder_crack",      GroupAmbience,   PlaceFar,   4, 3, 0.80f, 0.02f,  0.10f, 0.15f, 0.0f }, // one per later stroke of a flash; variants 0, 1 near, 2, 3 middle
         { "alarm",              GroupInterface,  PlaceFlat,  1, 1, 0.60f, 1.00f,  0.00f, 0.00f, 0.0f },
         { "player_hurt",        GroupInterface,  PlaceFlat,  3, 2, 0.80f, 0.30f,  0.07f, 0.15f, 0.0f },
         { "loop_wind",          GroupAmbience,   PlaceFlat,  1, 1, 0.50f, 0.0f,   0.07f, 0.30f, 0.0f }, // gusts longer than the loop
@@ -334,6 +335,28 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
     m_now = now;
     const float dt = glm::clamp((float)Globals::time.getDeltaSec(), 0.0f, 0.1f);
 
+    // The ear's frame (heardAt): the camera's axes, and the same right / forward laid flat on the ground.
+    {
+        const glm::mat4 camToWorld = glm::inverse(frame.camera->viewMatrix);
+        m_camPos = frame.camera->position;
+        m_camRight = glm::normalize(glm::vec3(camToWorld[0]));
+        m_camUp = glm::normalize(glm::vec3(camToWorld[1]));
+        m_camForward = glm::normalize(-glm::vec3(camToWorld[2]));
+        m_ear = frame.ear;
+        glm::vec3 forward(m_camForward.x, 0.0f, m_camForward.z);
+        if (glm::dot(forward, forward) < 0.01f) // the camera looks straight down: the top of the screen is forward
+            forward = glm::vec3(m_camUp.x, 0.0f, m_camUp.z);
+        glm::vec3 right(m_camRight.x, 0.0f, m_camRight.z);
+        if (glm::dot(forward, forward) > 1e-6f && glm::dot(right, right) > 1e-6f)
+        {
+            m_earForward = glm::normalize(forward);
+            m_earRight = glm::normalize(right);
+        }
+        for (Voice& v : m_voices) // the player turns while a long sound plays: it stays where it is in the world
+            if (v.positional && v.end > m_now)
+                v.source.setPosition(heardAt(v.pos));
+    }
+
     if (frame.playerHealth >= 0.0f && m_lastPlayerHealth >= 0.0f && frame.playerHealth < m_lastPlayerHealth - 0.5f)
         post2D(EGameSound::PlayerHurt, glm::clamp((m_lastPlayerHealth - frame.playerHealth) * 0.1f, 0.4f, 1.0f));
     m_lastPlayerHealth = frame.playerHealth;
@@ -450,14 +473,37 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
     }
 }
 
+glm::vec3 GameSound::heardAt(const glm::vec3& pos) const
+{
+    const glm::vec3 offset = pos - m_ear;
+    return m_camPos + m_camRight * glm::dot(offset, m_earRight) + m_camUp * (offset.y * m_settings.panHeight)
+        + m_camForward * glm::dot(offset, m_earForward);
+}
+
+void GameSound::applyDistance(AudioSource& source, float dist) const
+{
+    // The send is a share of the sound AFTER its gain, which already falls with the distance: so the share must
+    // rise with it (the square root: at four times the distance, twice the share), or the reverb would die away as
+    // fast as the direct sound and a far sound would be dry.
+    const float full = glm::max(m_settings.fullVolumeDistance, 0.5f);
+    source.setReverbSend(glm::min(m_settings.reverbSend * std::sqrt(glm::max(dist, full) / full), 1.0f));
+    source.setLowpass(18000.0f * std::exp(-dist / glm::max(m_settings.airDistance, 1.0f)));
+}
+
 // THE LOUDNESS LIMIT (see m_duck): the power sum of every one-shot, bed, building loop and water voice at its own gain.
 // The beds, the loops and the water set their gain every frame and take m_duck there; the one-shots get it here.
 void GameSound::updateLoudnessLimit(float dt)
 {
+    // A one-shot dies away: it counts with the part of its time that is left, not at its full gain to its last
+    // moment. (At full gain, every start and every end of a sound was a jump in the sum, and the limit turned
+    // everything else down and up with it: the whole mix pumped.)
     float power = 0.0f;
     for (const Voice& v : m_voices)
         if (v.end > m_now)
-            power += v.gain * v.gain;
+        {
+            const float left = glm::clamp((float)(v.end - m_now) / glm::max(v.length, 0.05f), 0.0f, 1.0f);
+            power += v.gain * v.gain * left;
+        }
     for (const Bed& bed : m_beds)
         if (bed.playing)
             power += bed.level * bed.level;
@@ -470,11 +516,13 @@ void GameSound::updateLoudnessLimit(float dt)
     const float level = std::sqrt(power);
     const float limit = glm::max(m_settings.loudnessLimit, 0.05f);
     const float target = level > limit ? limit / level : 1.0f;
+    // SLOW, both ways (down in about a fifth of a second, up in a second or more): it is a hand on the master fader
+    // for a mix that stays too loud, not a limiter that follows single sounds. A fast one is heard as pumping.
     const float before = m_duck;
-    m_duck += (target - m_duck) * glm::min(dt * (target < m_duck ? 40.0f : 1.5f), 1.0f);
+    m_duck += (target - m_duck) * glm::min(dt * (target < m_duck ? 5.0f : 0.8f), 1.0f);
     m_settings.loudness = level;
-    if (glm::abs(m_duck - before) < 0.002f && m_duck > 0.998f)
-        return; // at rest: nothing to set
+    if (glm::abs(m_duck - before) < 0.002f)
+        return; // no change worth a call (the engine glides over 20 ms; a step under 0.2 % is nothing)
     for (Voice& v : m_voices)
         if (v.end > m_now)
             v.source.setGain(v.gain * m_duck);
@@ -555,22 +603,38 @@ void GameSound::startVoice(EGameSound sound, const glm::vec3& pos, float loudnes
     // pitch, a few are far from it.
     const float pitch = glm::clamp(std::exp2((rand01() + rand01() - 1.0f) * std::log2(1.0f + def.pitchJitter))
         * glm::clamp(std::pow(glm::max(size, 0.05f), -0.4f), 0.55f, 1.3f) * givenPitch, 0.3f, 3.0f);
+    // THE ORDER MATTERS: every value first, the buffer last. The engine glides every volume change over 20 ms, except
+    // the FIRST one of a new sound - and setBuffer makes the new sound and sets its volume from what the source holds.
+    // With the gain set after it, the sound would start at the source's LAST gain and glide to its own: a loud start
+    // on a quiet sound.
     AudioSource& source = voice->source;
+    voice->gain = loudness * volumes[def.group];
     source.setLooping(false);
-    source.setBuffer(buffer);
     source.setRelative(!positional);
     if (positional)
     {
         source.setAttenuation(1.0f, c_noFalloff, 0.0f); // the distance is in the gain already
-        source.setPosition(pos);
+        source.setPosition(heardAt(pos));
     }
-    voice->gain = loudness * volumes[def.group];
+    voice->pos = pos;
+    voice->positional = positional;
+    if (positional && def.place == PlaceWorld)
+        applyDistance(source, glm::distance(pos, m_ear));
+    else
+    {
+        // A far-field sound (thunder) has its distance in its own samples: a fixed share to the reverb, no filter.
+        // A sound with no place stays out of the room.
+        source.setReverbSend(positional ? 0.3f : 0.0f);
+        source.setLowpass(20000.0f);
+    }
     source.setGain(voice->gain * m_duck);
     source.setPitch(pitch);
+    source.setBuffer(buffer);
     source.play();
     voice->sound = sound;
     voice->loudness = loudness;
-    voice->end = m_now + (double)(buffer.getDurationSec() / pitch) + 0.03;
+    voice->length = buffer.getDurationSec() / pitch;
+    voice->end = m_now + (double)voice->length + 0.03;
     m_lastStart[(int)sound] = m_now;
     ++m_statStarts;
 }
@@ -595,9 +659,10 @@ void GameSound::setBed(int index, EGameSound sound, float gain, float dt, float 
             if (!bed.source.isValid())
                 return;
             bed.source.setLooping(true);
-            bed.source.setBuffer(bufferOf(sound, 0));
             bed.source.setRelative(c_soundDefs[(int)sound].place == PlaceFlat);
             bed.source.setAttenuation(1.0f, c_noFalloff, 0.0f);
+            bed.source.setGain(0.0f); // before the buffer: a loop comes up from nothing (see startVoice on the order)
+            bed.source.setBuffer(bufferOf(sound, 0));
         }
         bed.source.play();
         bed.playing = true;
@@ -646,7 +711,10 @@ void GameSound::updateBeds(const Frame& frame, float dt)
     // units on: a bed that is always nearly at full level is a drone, not a crowd that grows.
     setBed(BedBattle, EGameSound::LoopBattle, m_crowdLevel > 0.01f ? crowd * std::pow(m_crowdLevel, 0.8f) : 0.0f, dt, 0.92f + 0.16f * m_crowdLevel);
     if (m_hordePosValid && m_beds[BedHorde].source.isValid())
-        m_beds[BedHorde].source.setPosition(m_hordePos);
+    {
+        m_beds[BedHorde].source.setPosition(heardAt(m_hordePos));
+        applyDistance(m_beds[BedHorde].source, glm::distance(m_hordePos, m_ear));
+    }
     // The horde bed is the horde BEFORE the fight (they come). In the fight the battle bed is the crowd: two crowd
     // loops at full level are one noise, so the horde bed steps back as the battle bed comes up.
     setBed(BedHorde, EGameSound::LoopHorde, m_hordeLevel > 0.01f ? crowd * std::pow(m_hordeLevel, 0.8f) * (1.0f - 0.7f * m_crowdLevel) : 0.0f, dt);
@@ -761,15 +829,15 @@ void GameSound::updateStructureLoops(const Frame& frame, const StructureSystem& 
                 voice.pos = c.pos;
                 voice.gain = 0.0f;
                 voice.wanted = true;
+                // Two buildings of one type must not play in phase: a pitch per building, off its id.
+                voice.pitch = 0.94f + 0.12f * (float)((c.id * 2654435761u) >> 24) / 255.0f;
                 voice.source.setLooping(true);
-                voice.source.setBuffer(bufferOf(c.sound, 0));
                 voice.source.setRelative(false);
                 voice.source.setAttenuation(1.0f, c_noFalloff, 0.0f);
                 voice.source.setPosition(c.pos);
-                voice.source.setGain(0.0f);
-                // Two buildings of one type must not play in phase: a pitch per building, off its id.
-                voice.pitch = 0.94f + 0.12f * (float)((c.id * 2654435761u) >> 24) / 255.0f;
+                voice.source.setGain(0.0f); // every value before the buffer (see startVoice on the order)
                 voice.source.setPitch(voice.pitch);
+                voice.source.setBuffer(bufferOf(c.sound, 0));
                 voice.source.play();
                 break;
             }
@@ -791,6 +859,8 @@ void GameSound::updateStructureLoops(const Frame& frame, const StructureSystem& 
         // Each building's loop drifts by itself (its id is the seed): one fire flares while the one next to it dies down.
         const SoundDef& def = c_soundDefs[(int)voice.sound];
         const float seed = (float)(voice.structureId % 1024u);
+        voice.source.setPosition(heardAt(voice.pos));
+        applyDistance(voice.source, glm::distance(voice.pos, m_ear));
         voice.source.setGain(voice.gain * m_duck * (1.0f + drift(seed, 0.3f) * def.gainJitter));
         voice.source.setPitch(voice.pitch * (1.0f + drift(seed + 11.0f, 0.13f) * def.pitchJitter));
     }
@@ -1039,14 +1109,17 @@ void GameSound::updateWater(const Frame& frame, const StructureSystem& structure
                 if (!voice.source.isValid())
                     continue;
                 voice.source.setLooping(true);
-                voice.source.setBuffer(bufferOf(EGameSound::LoopWater, 0));
                 voice.source.setRelative(false);
                 voice.source.setAttenuation(1.0f, c_noFalloff, 0.0f);
+                voice.source.setPosition(voice.pos);
+                voice.source.setGain(0.0f); // every value before the buffer (see startVoice on the order)
+                voice.source.setBuffer(bufferOf(EGameSound::LoopWater, 0));
             }
             voice.source.play();
             voice.playing = true;
         }
-        voice.source.setPosition(voice.pos);
+        voice.source.setPosition(heardAt(voice.pos));
+        applyDistance(voice.source, glm::distance(voice.pos, m_ear));
         voice.source.setGain(voice.gain * m_duck * (1.0f + drift(40.0f + (float)v * 9.0f, 0.3f) * def.gainJitter));
         // The two voices play one loop: another pitch each, so they are never the same water.
         voice.source.setPitch((v == 0 ? 1.0f : 0.88f) * (1.0f + drift(50.0f + (float)v * 7.0f, 0.13f) * def.pitchJitter));

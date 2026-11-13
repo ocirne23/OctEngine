@@ -114,8 +114,9 @@ void StructureSystem::applyStructureTint(const Ref& s)
 
 // RUBBLE IS NOT BUILT UP UNDER ATTACK: a living enemy unit within "Rubble safe radius (m)" of it (flat, on the map)
 // blocks every way to build it - the Builder's hut, the workers and the players all pay through investMaterials,
-// and the searches for work skip it (blueprintNeed, fundNearbyBlueprint).
-bool StructureSystem::rubbleBlocked(const Ref& s) const
+// and the searches for work skip it (blueprintNeed, fundNearbyBlueprint). A PLAYER is the exception (byPlayer): it
+// builds rubble up with enemies near - it stands there and takes the risk; only a body on the pile stops it.
+bool StructureSystem::rubbleBlocked(const Ref& s, bool byPlayer) const
 {
     if (!s.state->rubble)
         return false;
@@ -123,7 +124,7 @@ bool StructureSystem::rubbleBlocked(const Ref& s) const
     // that comes back would close around whoever stands there - nothing moves a body out of a building.
     if (actorInFootprint(s.type, s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f)))
         return true;
-    if (m_settings.rubbleSafeRadius <= 0.0f)
+    if (byPlayer || m_settings.rubbleSafeRadius <= 0.0f)
         return false;
     const float radius = m_settings.rubbleSafeRadius;
     const glm::vec3 pos = s.entity->pos;
@@ -141,9 +142,9 @@ bool StructureSystem::rubbleBlocked(const Ref& s) const
     return enemy;
 }
 
-float StructureSystem::investMaterials(const Ref& s, float amount, float repairHealCap)
+float StructureSystem::investMaterials(const Ref& s, float amount, float repairHealCap, bool byPlayer)
 {
-    if (rubbleBlocked(s))
+    if (rubbleBlocked(s, byPlayer))
         return 0.0f;
     // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp - the same price builds a
     // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
@@ -198,7 +199,7 @@ float StructureSystem::takeStoredMinerals(const glm::vec3& pos, float radius, ui
 }
 
 float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
-    bool includeRepairs, float repairHealCap)
+    bool includeRepairs, float repairHealCap, bool byPlayer)
 {
     if (amount <= 0.0f)
         return 0.0f;
@@ -212,7 +213,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
         // The Base is never a blueprint, but it IS repairable now that it takes damage.
         const bool wantsMaterials = s.state->blueprint
             || (includeRepairs && s.state->health < s.state->healthMax - 1e-3f);
-        if (!wantsMaterials || rubbleBlocked(s)) // (rubble with an enemy near takes nothing: the next one gets the stone)
+        if (!wantsMaterials || rubbleBlocked(s, byPlayer)) // (rubble with an enemy near takes nothing: the next one gets the stone)
             continue;
         const float dist = glm::distance(glm::vec2(s.entity->pos.x, s.entity->pos.z), glm::vec2(pos.x, pos.z));
         if (dist < bestDist)
@@ -221,7 +222,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
             best = i;
         }
     }
-    return best >= 0 ? investMaterials(m_frame[best], amount, repairHealCap) : 0.0f;
+    return best >= 0 ? investMaterials(m_frame[best], amount, repairHealCap, byPlayer) : 0.0f;
 }
 
 // ---------------------------------------------------------------- production + sweeps
