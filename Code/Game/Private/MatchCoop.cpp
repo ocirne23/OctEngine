@@ -40,6 +40,8 @@ namespace
         { "grunt push",      2, { { ENpcType::Grunt, 0.65f }, { ENpcType::Swarm, 0.35f } }, 1 },
         { "skirmish",        2, { { ENpcType::Swarm, 0.5f }, { ENpcType::Runner, 0.25f },
                                   { ENpcType::Grunt, 0.25f } }, 2 },
+        { "brute pack",      2, { { ENpcType::Brute, 0.15f }, { ENpcType::Grunt, 0.25f },
+                                  { ENpcType::Swarm, 0.6f } } },
         { "runner rush",     3, { { ENpcType::Runner, 1.0f } }, 3 },
         { "spitter probe",   3, { { ENpcType::Spitter, 0.15f }, { ENpcType::Swarm, 0.85f } } }, // no spitter on the first night
         { "warrior scouts",  3, { { ENpcType::Warrior, 0.2f }, { ENpcType::Swarm, 0.8f } }, 4 },

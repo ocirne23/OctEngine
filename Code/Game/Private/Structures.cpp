@@ -24,11 +24,12 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
-    0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f }; // (the Wall and the Gate: 3 m tall)
+    0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f, // (the Wall and the Gate: 3 m tall)
+    StructureSystem::WalkwayDeckHeight + 0.1f };        // the Walkway: its origin is 0.1 over the deck, like the Bridge's
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -111,6 +112,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
         desc = "Builds and repairs nearby structures from its stone stock. Needs no light.";
         line(oc::format("Needs {} workers", m_settings.workersConstructor));
         in(m_settings.constructorBuildRate, "stone", " while building");
+        line(oc::format("Repairs at most {:g} health/s", m_settings.constructorRepairRate));
         range(m_settings.constructorRange);
         break;
     case EStructureType::Battery:
@@ -173,6 +175,10 @@ oc::string StructureSystem::describeType(EStructureType type) const
         break;
     case EStructureType::Bridge:
         desc = "A road on a deck, over a river, a lake or the sea: it lies just over the water surface, on piers down to the bed. It joins the road, and the workers walk it. A road painted over water becomes a bridge by itself.";
+        line("Paint it: hold and drag.");
+        break;
+    case EStructureType::Walkway:
+        desc = oc::format("A road on a scaffold, {:g} m over the ground: stand on it behind a wall and see over the wall. Next to a road it is a flight of stairs down to the ground. It joins the road, and the workers walk it. Nothing passes under it.", WalkwayDeckHeight);
         line("Paint it: hold and drag.");
         break;
     case EStructureType::CablePower:
@@ -416,6 +422,8 @@ void StructureSystem::clear()
         Globals::world.removeRootEntity(s.entity);
         if (s.rubbleVisual)
             Globals::world.removeRootEntity(s.rubbleVisual.get());
+        if (s.walkPiece)
+            Globals::world.removeRootEntity(s.walkPiece.get());
     }
     for (const Walker& walker : m_walkers)
         if (walker.entity)

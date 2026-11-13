@@ -28,6 +28,7 @@ namespace
         Walker_Delivering, // loaded, walking to the target
         Walker_Returning,  // walking back to the pickup (with what the target did not take)
         Walker_Home,       // walking home; it leaves the road there
+        Walker_Working,    // at a blueprint or a damaged structure: its stone goes in over time ("Build rate (stone/s)")
     };
 
     glm::ivec2 cellOf(const glm::vec3& pos)
@@ -53,6 +54,8 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY) const
         if (cableMediumOf(type) == 2 || type == EStructureType::CrossingConveyor) // the Road, the Bridge, the road crossing
         {
             outY = m_frame[index].entity->pos.y;
+            if (m_frame[index].walkDir >= 0) // a Walkway's stairs: the middle of the slope
+                outY -= WalkwayDeckHeight * 0.5f;
             return true;
         }
     }
@@ -383,7 +386,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (w.state == Walker_ToJob || w.state == Walker_Waiting)
                 ++m_frame[job].walkersIdle;
         }
-        if (w.state == Walker_Delivering) // a load on its way: a blueprint needs that much less stone, a building has that much less room
+        if (w.state == Walker_Delivering || w.state == Walker_Working) // a load on its way (or going in): a blueprint needs that much less stone, a building has that much less room
             if (const int target = structureIndexById(w.targetId); target >= 0)
             {
                 if (w.work != CarrierWork_Goods)
@@ -548,6 +551,47 @@ void StructureSystem::tickCarriers(float deltaSec)
             continue;
         }
 
+        // After build / repair work: what is left of the load goes to the NEXT one of the same work from here - a piece
+        // of road that was just built is road for that search, so one walker lays a painted road piece by piece - or
+        // back to the pickup BY ROAD FROM HERE (after a chain the last leg does not lead there).
+        const auto afterWork = [&]
+        {
+            oc::vector<glm::vec3> path;
+            if (w.load > 0.01f)
+                if (const int next = findRoadTarget(home, -1, hereCell, 2, false, w.work, path); next >= 0 && !path.empty())
+                {
+                    m_frame[next].buildIncoming += w.load; // it keeps its whole load: the next one takes what it needs
+                    w.targetId = m_frame[next].state->structureId;
+                    w.path = oc::move(path);
+                    w.along = 0.0f;
+                    w.state = Walker_Delivering;
+                    return;
+                }
+            path.clear();
+            if (job >= 0 && roadSearch(-1, hereCell, [&](int index) { return index == job ? 2 : 0; }, path) >= 0 && !path.empty())
+                w.path = oc::move(path);
+            else
+                oc::reverse(w.path.begin(), w.path.end());
+            w.along = 0.0f;
+            w.state = Walker_Returning;
+        };
+
+        // WORKING: the walker stands at the structure and its stone goes in over time (health is a blueprint's progress;
+        // a repair also has the health rate of investMaterials' cap). It leaves when its load is used up, or when the
+        // structure takes no more: built, whole, gone, or rubble with an enemy near.
+        if (w.state == Walker_Working)
+        {
+            const float rate = glm::max(m_settings.carrierBuildRate, 0.01f);
+            const float repairCap = m_settings.constructorRepairRate * rate / glm::max(m_settings.constructorBuildRate, 0.01f);
+            float spent = 0.0f;
+            if (const int target = structureIndexById(w.targetId); target >= 0 && w.load > 0.01f)
+                spent = investMaterials(m_frame[target], glm::min(w.load, rate * deltaSec), repairCap * deltaSec);
+            w.load -= spent;
+            if (spent <= 0.0f || w.load <= 0.01f)
+                afterWork();
+            continue;
+        }
+
         // Walking: along the leg's polyline at the walk speed.
         w.along += speed * deltaSec;
         float left = w.along;
@@ -587,18 +631,14 @@ void StructureSystem::tickCarriers(float deltaSec)
             break;
         case Walker_Delivering: // at the target: unload what fits, then walk the same road back
         {
-            const bool built = w.work != CarrierWork_Goods; // the load is stone for a blueprint or a repair
+            if (w.work != CarrierWork_Goods) // stone for a blueprint or a repair: it stays and works (Walker_Working)
+            {
+                w.state = Walker_Working;
+                break;
+            }
             if (const int target = structureIndexById(w.targetId); target >= 0)
             {
-                if (built)
-                {
-                    // BUILD / REPAIR: the stone goes into the structure (health is a blueprint's progress; full =
-                    // built or whole). What is left goes to the NEXT one of the same work from here - a piece of
-                    // road that was just built is road for that search, so one walker lays a painted road piece by
-                    // piece.
-                    w.load -= investMaterials(m_frame[target], w.load);
-                }
-                else if (m_frame[target].state->blueprint)
+                if (m_frame[target].state->blueprint)
                 {
                     // goods for a building that is rubble now: nothing is unloaded, the load goes back
                 }
@@ -608,28 +648,6 @@ void StructureSystem::tickCarriers(float deltaSec)
                     const float give = glm::clamp(t.capacity[w.good] - t.store[w.good], 0.0f, w.load);
                     t.store[w.good] += give;
                     w.load -= give;
-                }
-            }
-            if (built)
-            {
-                oc::vector<glm::vec3> path;
-                if (w.load > 0.01f)
-                    if (const int next = findRoadTarget(home, -1, hereCell, 2, false, w.work, path); next >= 0 && !path.empty())
-                    {
-                        m_frame[next].buildIncoming += w.load; // it keeps its whole load: the next one takes what it needs
-                        w.targetId = m_frame[next].state->structureId;
-                        w.path = oc::move(path);
-                        w.along = 0.0f;
-                        break; // still delivering
-                    }
-                // Back to the pickup BY ROAD FROM HERE: after a chain the last leg does not lead there.
-                path.clear();
-                if (job >= 0 && roadSearch(-1, hereCell, [&](int index) { return index == job ? 2 : 0; }, path) >= 0 && !path.empty())
-                {
-                    w.path = oc::move(path);
-                    w.along = 0.0f;
-                    w.state = Walker_Returning;
-                    break;
                 }
             }
             oc::reverse(w.path.begin(), w.path.end());

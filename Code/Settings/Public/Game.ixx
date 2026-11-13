@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 28;
+export constexpr int GameStructureTypeCount = 29;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -200,6 +200,7 @@ export struct GameStructureSettings
         8.0f,   // Gate (per segment)
         40.0f,  // Lens
         60.0f,  // Searchlight
+        4.0f,   // Walkway (per segment)
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -233,6 +234,7 @@ export struct GameStructureSettings
         400.0f,  // Gate: a wall of wood
         100.0f,  // Lens
         250.0f,  // Searchlight
+        120.0f,  // Walkway: a scaffold of wood
     };
     // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
     // rubble: a destroyed building is gone).
@@ -282,6 +284,7 @@ export struct GameStructureSettings
     bool carriers = true;             // off = the old cell flow on pipelines and conveyors
     float carrierLoad = 10.0f;        // goods a walker carries
     float carrierSpeed = 3.5f;        // m/s
+    float carrierBuildRate = 2.0f;    // stone/s a walker puts into the blueprint or the damaged structure it stands at
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
     float internalBuffer = 30.0f;     // several walker loads: a walker only delivers where its whole load fits
     float emitterBuffer = 50.0f;      // the shield emitters' energy stores (their pressure draw spikes)
@@ -307,7 +310,7 @@ export struct GameStructureSettings
     float solarEnergyPerSec = 0.21f;
     float solarDaylight = 1.0f;       // runtime (GameMatch): x the solar yield - the daylight in the sandbox world, else 1
     float fuelBurnRate = 0.5f;
-    float fabricatorMineralsPerSec = 0.5f;
+    float fabricatorMineralsPerSec = 2.0f;
     float fabricatorFuelPerSec = 1.0f;
     float fabricatorEnergyPerSec = 1.0f;
     float pressureDrawTension = 1.5f;
@@ -337,6 +340,7 @@ export struct GameStructureSettings
     float fieldDayAlpha = 0.15f;      // x the shell alpha of a sleeping field (the shell's glow and its light follow it)
     float constructorRange = 27.0f;
     float constructorBuildRate = 4.0f;
+    float constructorRepairRate = 20.0f; // the most health/s one Builder's hut gives a BUILT structure (a blueprint: the stone rate alone)
     float waypointRadius = 3.0f;
     int wallBreachCost = 10;          // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
     bool cheatInstantBuild = false;

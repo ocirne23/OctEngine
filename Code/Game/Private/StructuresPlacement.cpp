@@ -28,7 +28,7 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/crossing.pre", "Entities/Game/house.pre",   // the three crossings share one
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
-    "Entities/Game/searchlight.pre" };
+    "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -288,6 +288,8 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
     const uint32 id = s.state->structureId;
     if (s.rubbleVisual) // its rubble pile goes with it
         Globals::world.removeRootEntity(s.rubbleVisual.get());
+    if (s.walkPiece) // a Walkway's deck or stairs
+        Globals::world.removeRootEntity(s.walkPiece.get());
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     m_frame.erase(m_frame.begin() + index);

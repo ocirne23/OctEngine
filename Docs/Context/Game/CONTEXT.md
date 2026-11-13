@@ -53,6 +53,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Constructor / Medic station | Builder's hut (BUIL) / Healer's hut (HEAL) |
 | Bridge / Gate / Lens | Bridge (BRDG) / Gate (GATE) / Lens (LENS) |
 | Searchlight | Searchlight (SRCH) |
+| Walkway | Walkway (WALK): a road segment on a scaffold, to stand behind a wall and see over it (Economy.md, Grid placement) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |

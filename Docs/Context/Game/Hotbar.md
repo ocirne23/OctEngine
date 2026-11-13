@@ -208,7 +208,9 @@ into minerals; the mineral silo is the team's spendable bank.
 
 ### A / S / D — Cables (root page)
 
-**Conveyor** only (slot A, the "Roads" page): it is the carriers' ROAD. The Power cable and the Pipeline are off the
+The root page shows `c_cableItems` from slot `c_rootCableSlot` (3) up to the Delete slot: Road, House, Storehouse,
+Crystal store, Bridge, **Walkway** (a road piece too: it paints like the road).
+**Conveyor** only (the "Roads" page): it is the carriers' ROAD. The Power cable and the Pipeline are off the
 hotbar: light moves on beams and wood by carrier (see Light on beams and Carriers in [Economy.md](Economy.md)). **The crossings are NOT on the hotbar** —
 only the paint stroke places them (auto-crossing below).
 

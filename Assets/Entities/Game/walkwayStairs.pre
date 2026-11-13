@@ -1,0 +1,15 @@
+# The STAIRS of a built Walkway piece next to a plain road piece: a board with side beams and treads, from the deck's
+# height at one cell edge to the ground at the other. The mesh and the collider are FLAT (the walk surface is y = 0,
+# +Z goes down, 2.83 m long): the game spawns the entity at the middle of the slope, turned toward the road and
+# pitched to the slope (StructureSystem::updateWalkway). The treads are render-only: the collider is a smooth board.
+Prefab gameWalkwayStairs
+	Component Render
+		ObjectContainer walkway
+		Node WalkwayStairs
+		Type StaticMesh
+		Color 0.5 0.36 0.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.98 0.1 1.414
+		Offset 0 -0.1 0

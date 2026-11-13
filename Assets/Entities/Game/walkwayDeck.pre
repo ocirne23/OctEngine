@@ -1,0 +1,14 @@
+# The DECK of a built Walkway piece: the scaffold (legs, rails, ledgers) and the planks. The game puts it on the
+# Walkway's own origin (StructureSystem::updateWalkway), which is 0.1 over the deck top. The collider is the deck
+# alone (0.5 m thick, its top at -0.1): players and units stand on it, and nothing fits under it.
+Prefab gameWalkwayDeck
+	Component Render
+		ObjectContainer walkway
+		Node WalkwayDeck
+		Type StaticMesh
+		Color 0.5 0.36 0.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1 0.25 1
+		Offset 0 -0.35 0

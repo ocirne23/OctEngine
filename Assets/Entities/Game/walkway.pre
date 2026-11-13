@@ -1,0 +1,22 @@
+# Walkway segment: a ROAD segment on a scaffold (a cable of the conveyor medium, isCableType): one 2 m grid cell,
+# painted like the road, in the road's runs, walked by the carriers. Its deck is 2 m over the ground
+# (StructureSystem::WalkwayDeckHeight): the spawned origin is 2.1 above ground, 0.1 over the deck top.
+# THIS prefab is the structure: the sills on the ground (what a blueprint shows) and a collider for PROJECTILES only
+# (Layer Cable), from the ground to the deck. What a body stands on is a second entity the game adds when the piece
+# is built (StructureSystem::updateWalkway): walkwayDeck.pre, or walkwayStairs.pre next to a plain road piece.
+Prefab gameWalkway
+	Component Render
+		ObjectContainer walkway
+		Node WalkwayFoot
+		Type StaticMesh
+		Color 0.42 0.3 0.17
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
+		Shape Box
+		HalfExtents 1 1.05 1
+		Offset 0 -1.05 0
+	Component GameStructure
+		MeleeRadius 1

@@ -436,7 +436,7 @@ exists.
 
 | Min wave | Recipes |
 |---|---|
-| 1–3 | swarm · swarm + runners (2) · grunt push (2) · runner rush (3) |
+| 1–3 | swarm · swarm + runners (2) · grunt push (2) · brute pack (2, the first Brutes) · runner rush (3) |
 | 4–6 | warrior line (4) · spitter siege (4) · brute hammer (5) · shield wall (6) · combined arms (6) |
 | 7–8 | brute wall · **elite guard** (7) · the works · **lobber barrage** (8) |
 | 9–10 | **giant push** · **hive** (9) · siege column (10) |

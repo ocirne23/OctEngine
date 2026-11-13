@@ -118,8 +118,8 @@ pipeline is off the hotbar; the conveyor is the **Road**.
 | The ~1 s pass | `carrierHousePass`: derives `sendReady` (a storage: only with a hungry consumer on its road), then every house sends ONE worker per pass while a job wants one and the team has a free worker. When production takes the worker (free < walkers), the house DISMISSES walkers, the waiting ones first: a dismissed walker goes home when it is next idle. |
 | Waiting | The first walker in line at a pickup (`Ref::waitRank`) loads; it looks for a load about once a second. A walker BEHIND another one looks for other work on its road network (tier 1 or 2). The first in line leaves only for a waiting load elsewhere (tier 2) and only after 8 s idle. After 20 s idle a walker goes home, except the one walker of a producer. |
 | Where to | `findRoadTarget` = `roadSearch` with the takers as the goal: ONE breadth-first search over the road cells from the walker's cell (4096 cells at most). **The first TAKER with room that a road cell touches wins - a storage as much as a consumer**, so a load stops at the nearest storehouse and that storehouse's own carriers feed the consumers farther on (a consumer first, whatever the distance, sent every load past a near storehouse to a far one). Same team, built. **A taker counts only when the WHOLE load fits** (`carrierAccepts`): the load the source would send against the taker's room, less what other walkers already carry to it (`Ref::goodsIncoming`, counted fresh each tick) - a hearth that misses one wood is no target for a full load. That is why the buffers hold several loads ("Internal buffer", "Generator fuel tank", "Generator buffer": 30). The result is also the walking path (cell centres). |
-| BUILD WORK | **A walker with no other load BUILDS**: it carries stone to the BLUEPRINTS on the road - buildings, and pieces of the road itself. `blueprintNeed` = the stone a blueprint still needs (`investMaterials`' price) less what the walkers already carry to it (`Ref::buildIncoming`, counted fresh each tick). The pass sets `Ref::buildReady` on a building that holds stone and is no consumer (`carrierHoldsStone`: a store, the Beacon, a quarry) with a blueprint on its road; that is tier 1 in `carrierJobTier`, so a waiting LOAD (tier 2) always gets the walker first. At the pickup the first in line tries the loads, and only then takes a load of stone to the nearest blueprint (`findRoadTarget` with `blueprints`: `carrierAccepts` then takes ONLY blueprints, never one otherwise). At the blueprint it calls `investMaterials`; what is left goes on to the NEXT blueprint from there (a road piece that was just built is road for that search, so one walker lays a painted road piece by piece), and the rest goes back to the pickup by a new search from there. A blueprint is found only when a BUILT road cell touches it: the first piece next to a building is the player's or the Builder's hut's. |
-| REPAIR WORK | **The last work of all**: the same trip, to a DAMAGED built structure at the road (`repairNeed` over 0.25 stone; `ECarrierWork`: Goods, Build, Repair - `Walker::work` says what a load is for). `Ref::repairReady` is set only while the team has NO build work on any road (it shares the build work's tier 1, so that gate puts it behind), and at the pickup a walker tries the loads, then a blueprint, then a repair. The delivery is `investMaterials` again, and what is left goes on to the next damaged structure. |
+| BUILD WORK | **A walker with no other load BUILDS**: it carries stone to the BLUEPRINTS on the road - buildings, and pieces of the road itself. `blueprintNeed` = the stone a blueprint still needs (`investMaterials`' price) less what the walkers already carry to it (`Ref::buildIncoming`, counted fresh each tick). The pass sets `Ref::buildReady` on a building that holds stone and is no consumer (`carrierHoldsStone`: a store, the Beacon, a quarry) with a blueprint on its road; that is tier 1 in `carrierJobTier`, so a waiting LOAD (tier 2) always gets the walker first. At the pickup the first in line tries the loads, and only then takes a load of stone to the nearest blueprint (`findRoadTarget` with `blueprints`: `carrierAccepts` then takes ONLY blueprints, never one otherwise). At the blueprint it STAYS AND WORKS (`Walker_Working`): its stone goes in through `investMaterials` at "Build rate (stone/s)" (2), until the load is used up or the blueprint takes no more (built, gone, or rubble with an enemy near); `buildIncoming` counts its load during the work too. What is left goes on to the NEXT blueprint from there (a road piece that was just built is road for that search, so one walker lays a painted road piece by piece), and the rest goes back to the pickup by a new search from there. A blueprint is found only when a BUILT road cell touches it: the first piece next to a building is the player's or the Builder's hut's. |
+| REPAIR WORK | **The last work of all**: the same trip, to a DAMAGED built structure at the road (`repairNeed` over 0.25 stone; `ECarrierWork`: Goods, Build, Repair - `Walker::work` says what a load is for). `Ref::repairReady` is set only while the team has NO build work on any road (it shares the build work's tier 1, so that gate puts it behind), and at the pickup a walker tries the loads, then a blueprint, then a repair. The walker works at the structure like at a blueprint, and a repair also has a health rate: the Builder's hut's "Constructor repair health/s" in the ratio of the two stone rates (20 x 2 / 4 = 10 health/s). What is left goes on to the next damaged structure. |
 | The trip | The load leaves the store at departure. The walker goes at "Walk speed (m/s)" (3.5), unloads what fits, walks the same path back to the pickup, and puts the rest back into the job's store. |
 | The walker | `carrier.pre`: render-only, `Global true`, no physics and no unit sim; the tick writes its `pos` / `rot` (it faces its walking direction: an entity's forward is -Z) and shows its LOAD (the prefab's second child, held in front of the body) only while it carries one. Removed when it arrives home, when its house is gone, or when no road leads home. The per-building counters (`Ref::walkers`, `walkersIdle`, `homeWalkers`) are counted from `m_walkers` at the top of every tick, so a removed building needs no bookkeeping. |
 | Badge | "No road": a building that moves wood or stone and touches no road (`attachedMask` bit 2), or a House that touches none (its workers cannot go out). |
@@ -316,8 +316,10 @@ players**) skips the blueprint phase.
 * **The CONSTRUCTOR structure** (Production hotbar; conveyor-fed mineral stock plus powered; amber
   range ring in `drawDebug`, in build mode only - its `buildMode` input, which also rings the Light towers' and the
   Searchlights' ranges), which funds the nearest own-team blueprint **OR damaged structure**
-  within "Constructor range" (27 m) at "Constructor build rate" (4/s). With nothing to build or
-  repair it idles.
+  within "Constructor range" (27 m) at "Constructor build rate" (4/s). A REPAIR (a built structure) is
+  also limited to "Constructor repair health/s" (20, x staffing; `investMaterials`' `repairHealCap`): by the stone price
+  alone a cheap structure with much health (a Wall: 5 stone, 500 health) would repair at 400 health/s. A blueprint has
+  no such limit, and the workers' repair deliveries have none. With nothing to build or repair it idles.
 
 Blueprint state mirrors through a GPl built flag plus a GSt status-bits byte (bit0 powered, bit1
 blueprint).
@@ -333,7 +335,7 @@ Every placement aligns to a
 
 | Footprint | Types |
 |---|---|
-| 1×1 (cables included; the Bridge is one) | Emitter, Lance, Wall, Gate, Lens, Constructor |
+| 1×1 (cables included; the Bridge and the Walkway are cables) | Emitter, Lance, Wall, Gate, Lens, Constructor |
 | 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Searchlight, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation |
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
@@ -390,6 +392,28 @@ sea. Each prefab carries what is under the surface, since `Scale` is uniform and
   cannot tell teams: own units are stopped too, and an enemy PLAYER passes). Nav takes it as a wall (`isBreachable`).
 * Water deeper than the pier / the foot leaves a gap under it. The aim ray hits the BED (the terrain collider), so
   over deep water the ghost is a little past the cursor.
+
+**THE WALKWAY (`walkway.pre`, 1×1; the Logistics page): A ROAD SEGMENT ON A SCAFFOLD**, to stand behind a wall and see
+over it. Like the Bridge it is `isCableType` of the conveyor medium: in the road's runs, walked by the carriers,
+painted by a stroke, cable health, no label, outside GSt. Its deck top is `StructureSystem::WalkwayDeckHeight` (2 m)
+over the ground; the origin is 0.1 over the deck (`spawnHeightOf` = deck + 0.1).
+
+* **Not walk-through** (`isWalkThrough` leaves it out): nothing fits under the deck, so it is a Nav obstacle - a
+  BREACHABLE one (`isBreachable`), so a line of it does not close a base off - and a body in the cell refuses the
+  placement.
+* **Two entities.** The structure (`walkway.pre`) is the sills on the ground plus a projectile-only collider
+  (`Layer Cable`) from the ground to the deck. What a body stands on is `Ref::walkPiece`, a root entity of its own that
+  `updateWalkway` (from `updateArms`, so on every `rebuildNetworks`, on every instance) spawns for a BUILT piece: a
+  blueprint has none.
+* **Deck or stairs** (`Ref::walkDir`): `walkwayDeck.pre` by default. `walkwayStairs.pre` when a PLAIN road piece (a
+  Road or a Bridge, blueprint included) is a neighbour AND the stairs continue the walkway's line (a Walkway on the
+  opposite side) or the piece has no Walkway neighbour. So a walkway's END at a road goes down to the ground, and a
+  walkway that runs ALONG a road keeps its deck. The stairs are one box from the deck's height at the far cell edge to
+  the ground at the road's edge (45°), spawned at the middle of the slope with a yaw toward the road and a pitch - a
+  structure's own collider cannot be pitched, which is why the piece is a second entity.
+* **Carriers:** `roadAt` gives a stairs cell the height of the middle of the slope, so a walker goes up between the
+  road cell and the deck cell (its straight path is up to 0.5 m off the board at the two cell edges).
+* The model is `Models/walkway.obj` (hand-written boxes: `WalkwayFoot`, `WalkwayDeck`, `WalkwayStairs`).
 
 `actorInFootprint` (a spatial query for GameUnitComponents) refuses a placement a UNIT OR A PLAYER is standing in, at
 both seams. **Nothing moves a body out of a building**, so no building may be made around one: the ghost is red

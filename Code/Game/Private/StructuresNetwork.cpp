@@ -407,8 +407,61 @@ void StructureSystem::rebuildNetworks()
         updateArms(s);
 }
 
+// THE WALKWAY'S PIECE: a built Walkway carries a DECK (walkwayDeck.pre), or STAIRS (walkwayStairs.pre) down to a plain
+// road piece next to it - a Road, a Bridge - when the stairs continue the walkway's line (a Walkway on the opposite
+// side) or the piece stands alone. So a walkway's END at a road is stairs, and a walkway that runs ALONG a road keeps
+// its deck. The piece is a root entity of its own: the stairs are a box turned about the horizontal, which a
+// structure's own collider cannot be.
+void StructureSystem::updateWalkway(const Ref& s)
+{
+    static constexpr glm::ivec2 dirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ: a ^ 1 = opposite
+    int want = -2;
+    if (!s.state->blueprint)
+    {
+        want = -1;
+        const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
+        const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
+        bool road[4] = {}, walk[4] = {};
+        bool anyWalk = false;
+        for (int a = 0; a < 4; ++a)
+            if (const int seg = cableSegmentAt(cx + dirs[a].x, cz + dirs[a].y, /*builtOnly*/ false); seg >= 0)
+            {
+                walk[a] = m_frame[seg].type == EStructureType::Walkway;
+                road[a] = !walk[a] && cableMediumOf(m_frame[seg].type) == 2;
+                anyWalk |= walk[a];
+            }
+        for (int a = 0; a < 4 && want < 0; ++a)
+            if (road[a] && (walk[a ^ 1] || !anyWalk))
+                want = a;
+    }
+    if (want == s.walkDir)
+        return;
+    if (s.walkPiece)
+        Globals::world.removeRootEntity(s.walkPiece.get());
+    s.walkPiece = EntityPtr();
+    s.walkDir = (int8)want;
+    if (want == -2)
+        return;
+    if (want == -1)
+        s.walkPiece = Globals::world.spawnAssetFile("Entities/Game/walkwayDeck.pre", Transform(s.entity->pos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), true);
+    else
+    {
+        // The stairs: a board from the deck's height at the far edge of the cell to the ground at the road's edge. Its
+        // origin is the middle of the slope, its +Z points down the slope.
+        const glm::vec2 d(dirs[want]);
+        const glm::quat yaw = glm::angleAxis(std::atan2(d.x, d.y), glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::quat pitch = glm::angleAxis(std::atan2(WalkwayDeckHeight, GridCellSize), glm::vec3(1.0f, 0.0f, 0.0f));
+        const glm::vec3 mid = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type) - WalkwayDeckHeight * 0.5f, 0.0f);
+        s.walkPiece = Globals::world.spawnAssetFile("Entities/Game/walkwayStairs.pre", Transform(mid, 1.0f, yaw * pitch), true);
+    }
+    if (s.walkPiece)
+        Globals::world.addRootEntity(s.walkPiece);
+}
+
 void StructureSystem::updateArms(const Ref& s)
 {
+    if (s.type == EStructureType::Walkway)
+        updateWalkway(s);
     if (!isCableType(s.type))
         return;
     const int medium = cableMediumOf(s.type);

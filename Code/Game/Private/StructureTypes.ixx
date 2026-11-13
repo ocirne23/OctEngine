@@ -10,7 +10,7 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Count };
 
 // LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
 // walk through: its collider is Layer Gate, which leaves the Player layer out).
@@ -24,10 +24,11 @@ export constexpr bool standsOnWater(EStructureType t)
 {
     return t == EStructureType::Bridge || t == EStructureType::Gate;
 }
-// BREACHABLE by the units' flow field (Nav "Wall breach cost"): they walk into it and chew it down.
+// BREACHABLE by the units' flow field (Nav "Wall breach cost"): they walk into it and chew it down. The Walkway too:
+// a line of it behind a wall must not close a base off.
 export constexpr bool isBreachable(EStructureType t)
 {
-    return t == EStructureType::Wall || t == EStructureType::Gate;
+    return t == EStructureType::Wall || t == EStructureType::Gate || t == EStructureType::Walkway;
 }
 
 // THE HARVEST: a Lumberyard makes fuel (wood) from the trees around it, a Quarry minerals (stone) from the rocks. Each
@@ -50,11 +51,14 @@ export constexpr bool isPlaceableType(EStructureType t)
 export constexpr bool isCableType(EStructureType t)
 {
     return t == EStructureType::CablePower || t == EStructureType::CablePipe
-        || t == EStructureType::CableConveyor || t == EStructureType::Bridge;
+        || t == EStructureType::CableConveyor || t == EStructureType::Bridge || t == EStructureType::Walkway;
 }
 // THE BRIDGE IS A ROAD SEGMENT (a cable of the conveyor medium, cableMediumOf) that stands on water: it joins the
 // road's runs, the carriers walk it, and it paints like a road. Unlike the other cable pieces its collider is real
 // (bodies stand on the deck).
+// THE WALKWAY IS A ROAD SEGMENT too, on a scaffold: its deck is StructureSystem::WalkwayDeckHeight over the ground, to
+// stand behind a wall and see over it. Next to a plain road piece its deck is a flight of STAIRS down to the ground
+// (StructureSystem::updateWalkway). It is NOT walk-through: a body cannot pass under the deck.
 export constexpr bool isCrossingType(EStructureType t)
 {
     return t == EStructureType::CrossingPower || t == EStructureType::CrossingPipe
@@ -66,16 +70,16 @@ export constexpr bool isCableOrCrossing(EStructureType t)
 }
 // WALK-THROUGH structures: players and units pass over them (the prefab's collider is Layer Cable,
 // projectiles only - or, the Bridge, a deck they stand on), so they are no nav obstacle, never block a placement by a standing actor,
-// and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab.
+// and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab - never the Walkway.
 export constexpr bool isWalkThrough(EStructureType t)
 {
-    return isCableOrCrossing(t) || t == EStructureType::Solar;
+    return (isCableOrCrossing(t) && t != EStructureType::Walkway) || t == EStructureType::Solar;
 }
 export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 minerals; -1 = not a cable
 {
     return t == EStructureType::CablePower ? 0
          : t == EStructureType::CablePipe ? 1
-         : t == EStructureType::CableConveyor || t == EStructureType::Bridge ? 2 : -1;
+         : t == EStructureType::CableConveyor || t == EStructureType::Bridge || t == EStructureType::Walkway ? 2 : -1;
 }
 export constexpr int crossingMediumOf(EStructureType t) // same scale; -1 = not a crossing
 {

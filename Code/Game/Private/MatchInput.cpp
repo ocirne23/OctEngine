@@ -53,7 +53,8 @@ static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the sl
 // The three cables live on the ROOT page (A/S/D) - no page of their own. Arming one enters Build
 // with this HIDDEN category, which draws and behaves as the root page (see isRootPage).
 static constexpr int c_cableCategory = 2;
-static constexpr int c_rootCableSlot = 4;      // A: c_cableItems[0], S, D follow
+static constexpr int c_rootCableSlot = 3;      // c_cableItems[0], the rest follow (up to the Delete slot)
+static_assert(c_rootCableSlot >= c_numCategories);
 // A category page is just its list of placeable types - the shorthand table (c_structureShortNames,
 // Match.ixx) IS each slot's caption.
 static constexpr EStructureType c_combatItems[] = {
@@ -92,7 +93,9 @@ static constexpr EStructureType c_cableItems[] = {
     EStructureType::MineralSilo, // the Storehouse: stone AND wood (the Fuel tank is off the hotbar)
     EStructureType::Battery,
     EStructureType::Bridge, // a road piece on a deck: it stands on water (the Road's stroke places it there by itself)
+    EStructureType::Walkway, // a road piece on a scaffold: to stand behind a wall and see over it
 };
+static_assert(c_rootCableSlot + (int)oc::size(c_cableItems) <= c_rootDeleteSlot);
 static oc::span<const EStructureType> buildCategoryItems(int category)
 {
     switch (category)

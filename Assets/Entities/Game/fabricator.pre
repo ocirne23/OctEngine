@@ -1,14 +1,17 @@
-# Fabricator: converts energy into Minerals ("Fabricator energy/s" in, "Fabricator minerals/s"
-# out while powered) - build currency without map control, at an energy premium over quarries.
-# Spawned origin 1.0 above ground.
+# Stoneworks (Fabricator): burns wood to make stone ("Fabricator fuel/s" in, "Fabricator minerals/s" out), with
+# workers and no light. A 4x4x4 m box (2x2 cells). Spawned origin 2.0 above ground.
+# SHAPE (uniform scales of the baseshapes variants): a MASONS' YARD - a stone floor (the root), a plastered kiln
+# house with a slate roof, a brick chimney through the roof, a furnace mouth in the front wall, a saw bench with a
+# block on it, a stack of cut blocks and a pile of logs. The child pieces are render-only.
 Prefab gameFabricator
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.6 1 0.3
-		Scale 2
+		Color 0.5 0.5 0.54
+		Position 0 -1.51 0
+		Scale 1.95
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -16,3 +19,144 @@ Prefab gameFabricator
 		HalfExtents 2 2 2
 	Component GameStructure
 		MeleeRadius 2
+	Component Scene
+		Entity
+			Name House
+			Position -0.85 -0.02 -0.85
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.62 0.56 0.46
+				Scale 1.0
+		Entity
+			Name Roof
+			Position -0.85 1.27 -0.85
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.25 0.25 0.3
+				Scale 1.15
+		Entity
+			Name Chimney
+			Position -1.3 2.36 -1.3
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.5 0.25 0.18
+				Scale 0.3
+		Entity
+			Name ChimneyCap
+			Position -1.3 3.3 -1.3
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.12 0.11 0.11
+				Scale 0.38
+		Entity
+			Name FurnaceFrame
+			Position -0.85 -0.62 -0.05
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.16 0.15 0.15
+				Scale 0.4
+		Entity
+			Name FurnaceMouth
+			Position -0.85 -0.72 0.12
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 1.0 0.45 0.1
+				Scale 0.28
+		Entity
+			Name BenchFoot
+			Position 1.0 -0.72 -0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.34 0.24 0.14
+				Scale 0.3
+		Entity
+			Name Bench
+			Position 1.0 -0.27 -0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Scale 0.6
+		Entity
+			Name BenchBlock
+			Position 1.0 0.18 -0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.72 0.72 0.76
+				Rotation 0 15 0
+				Scale 0.3
+		Entity
+			Name Stack1
+			Position 0.6 -0.62 1.1
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.68 0.68 0.72
+				Scale 0.4
+		Entity
+			Name Stack2
+			Position 1.42 -0.62 1.1
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.62 0.62 0.67
+				Scale 0.4
+		Entity
+			Name Stack3
+			Position 1.0 0.18 1.1
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.74 0.74 0.78
+				Rotation 0 8 0
+				Scale 0.4
+		Entity
+			Name Log1
+			Position -1.0 -0.87 1.1
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.16
+				Rotation 0 0 90
+				Scale 0.15
+		Entity
+			Name Log2
+			Position -1.0 -0.87 1.42
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.25 0.14
+				Rotation 0 0 90
+				Scale 0.15
+		Entity
+			Name Log3
+			Position -1.0 -0.57 1.26
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.43 0.3 0.17
+				Rotation 0 0 90
+				Scale 0.15

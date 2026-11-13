@@ -140,7 +140,7 @@ bool StructureSystem::rubbleBlocked(const Ref& s) const
     return enemy;
 }
 
-float StructureSystem::investMaterials(const Ref& s, float amount)
+float StructureSystem::investMaterials(const Ref& s, float amount, float repairHealCap)
 {
     if (rubbleBlocked(s))
         return 0.0f;
@@ -151,7 +151,10 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
         return 0.0f; // the Base is never placed, but it repairs at its m_settings.costs entry like the rest
     const float healthMax = glm::max(s.state->healthMax, 1e-3f);
     const float materialsPerHp = glm::max(m_settings.costs[(int)s.type], 0.01f) / healthMax;
-    const float heal = glm::min(amount / materialsPerHp, healthMax - s.state->health);
+    // A REPAIR has a health rate of its own (repairHealCap): by the stone price alone, a cheap structure with much
+    // health (a Wall: 5 stone, 500 health) would be whole again in a moment.
+    const float heal = glm::min(glm::min(amount / materialsPerHp, healthMax - s.state->health),
+        s.state->blueprint ? FLT_MAX : repairHealCap);
     if (heal <= 0.0f)
         return 0.0f;
     s.state->health += heal;
@@ -193,7 +196,7 @@ float StructureSystem::takeStoredMinerals(const glm::vec3& pos, float radius, ui
 }
 
 float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
-    bool includeRepairs)
+    bool includeRepairs, float repairHealCap)
 {
     if (amount <= 0.0f)
         return 0.0f;
@@ -216,7 +219,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
             best = i;
         }
     }
-    return best >= 0 ? investMaterials(m_frame[best], amount) : 0.0f;
+    return best >= 0 ? investMaterials(m_frame[best], amount, repairHealCap) : 0.0f;
 }
 
 // ---------------------------------------------------------------- production + sweeps
@@ -501,8 +504,10 @@ void StructureSystem::tickConstructors(float deltaSec)
         GameStructureComponent& s = *ref.state;
         if (s.blueprint || ref.type != EStructureType::Constructor || !s.powered || s.store[2] <= 0.0f)
             continue;
-        const float budget = glm::min(m_settings.constructorBuildRate * staffing((uint8)s.team) * deltaSec, s.store[2]);
-        s.store[2] -= fundNearbyBlueprint(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, budget, true);
+        const float staff = staffing((uint8)s.team);
+        const float budget = glm::min(m_settings.constructorBuildRate * staff * deltaSec, s.store[2]);
+        s.store[2] -= fundNearbyBlueprint(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, budget, true,
+            m_settings.constructorRepairRate * staff * deltaSec);
     }
 }
 

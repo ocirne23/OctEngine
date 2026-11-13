@@ -52,6 +52,11 @@ public:
         // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
+        // WALKWAY (updateWalkway): the piece a body stands on - walkwayDeck.pre, or walkwayStairs.pre toward a plain
+        // road piece. A root entity of its own with the collider, owned by the roster entry; a blueprint has none.
+        // walkDir: -2 no piece, -1 the deck, 0..3 stairs down toward +X, -X, +Z, -Z.
+        mutable EntityPtr walkPiece;
+        mutable int8 walkDir = -2;
         // PROBLEM BADGE (the world label's bubble): what GameMatch::structureWarning last found,
         // re-checked on a jittered ~1 s timer instead of every frame - it scans the links, and the
         // states it reports change on the timescale of a player's actions. Lives HERE, so it dies
@@ -433,6 +438,7 @@ public:
 
     // ---- GRID PLACEMENT ----
     static constexpr float GridCellSize = 2.0f;
+    static constexpr float WalkwayDeckHeight = 2.0f; // the Walkway's deck top over its ground (walkwayDeck.pre / walkwayStairs.pre)
     static constexpr int footprintCellsOf(EStructureType t)
     {
         switch (t)
@@ -523,8 +529,9 @@ public:
     // ---- CONSTRUCTION (server) ----
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
     float fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
-        bool includeRepairs = false);
-    float investMaterials(const Ref& s, float amount);
+        bool includeRepairs = false, float repairHealCap = FLT_MAX);
+    // repairHealCap: the most health this call gives a BUILT structure (a repair); a blueprint has no cap.
+    float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX);
     float constructorRange() const { return m_settings.constructorRange; }
 
 private:
@@ -687,6 +694,7 @@ private:
     // segments' arm visuals. Cable fills survive a rebuild by structure id.
     void rebuildNetworks();
     void updateArms(const Ref& s); // enable the arm children pointing at connected neighbours
+    void updateWalkway(const Ref& s); // a Walkway's deck or stairs piece, by its neighbours
 
     // ---- THE CABLE TRANSPORT (Transport.cpp) ----
     // Resources move over the cables as WHOLE CELLS. Every built cable segment and conducting

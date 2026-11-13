@@ -1,0 +1,4 @@
+# The Walkway's pieces (Models/walkway.obj): `WalkwayFoot` (the sills, Entities/Game/walkway.pre), `WalkwayDeck` (the
+# scaffold and the planks, walkwayDeck.pre) and `WalkwayStairs` (walkwayStairs.pre).
+ObjectContainer walkway
+	Path "Models/walkway.obj"
