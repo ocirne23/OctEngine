@@ -48,7 +48,7 @@ namespace
         { "lob_fired",          GroupEffects,    PlaceWorld, 3, 2, 0.70f, 0.10f,  0.08f, 0.20f, 0.5f },
         { "shot_impact",        GroupEffects,    PlaceWorld, 4, 3, 0.50f, 0.06f,  0.14f, 0.30f, 0.5f },
         { "splash_impact",      GroupEffects,    PlaceWorld, 3, 3, 1.00f, 0.12f,  0.10f, 0.20f, 2.0f },
-        { "turret_fire",        GroupEffects,    PlaceWorld, 5, 4, 0.70f, 0.06f,  0.07f, 0.15f, 1.0f }, // a machine: nearly the same every time
+        { "turret_fire",        GroupEffects,    PlaceWorld, 5, 4, 0.35f, 0.06f,0.07f, 0.15f, 1.0f }, // a machine: nearly the same every time
         { "structure_placed",   GroupStructures, PlaceWorld, 4, 2, 0.60f, 0.08f,  0.09f, 0.20f, 0.0f },
         { "structure_built",    GroupStructures, PlaceWorld, 2, 2, 0.60f, 0.25f,  0.00f, 0.10f, 0.0f }, // bells: the note stays
         { "structure_collapse", GroupStructures, PlaceWorld, 3, 2, 1.00f, 0.30f,  0.10f, 0.15f, 0.0f },

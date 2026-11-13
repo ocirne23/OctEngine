@@ -188,7 +188,6 @@ namespace
 
     constexpr Mode c_wood[] = { { 310.0f, 1.0f, 0.07f }, { 795.0f, 0.6f, 0.045f }, { 1420.0f, 0.4f, 0.03f }, { 2310.0f, 0.25f, 0.018f }, { 3400.0f, 0.12f, 0.012f } };
     constexpr Mode c_metal[] = { { 2100.0f, 1.0f, 0.05f }, { 3370.0f, 0.6f, 0.04f }, { 5230.0f, 0.35f, 0.025f }, { 7100.0f, 0.15f, 0.02f } };
-    constexpr Mode c_crystal[] = { { 1175.0f, 0.4f, 0.3f }, { 2350.0f, 0.5f, 0.25f }, { 3520.0f, 0.35f, 0.2f }, { 5280.0f, 0.2f, 0.12f } };
     constexpr Mode c_tube[] = { { 185.0f, 0.6f, 0.09f }, { 430.0f, 0.3f, 0.05f }, { 760.0f, 0.15f, 0.03f } };
     constexpr Mode c_drum[] = { { 92.0f, 1.0f, 0.22f }, { 148.0f, 0.5f, 0.12f }, { 233.0f, 0.3f, 0.07f }, { 410.0f, 0.15f, 0.04f } };
     constexpr Mode c_glow[] = { { 660.0f, 1.0f, 0.5f }, { 990.0f, 0.6f, 0.45f }, { 1320.0f, 0.35f, 0.35f }, { 1980.0f, 0.15f, 0.25f } };
@@ -809,30 +808,48 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
     }
     case EGameSound::TurretFire:
     {
-        // The light tower's strike, as a bolt: the crack, the air that tears (noise through a resonance that falls), the
-        // thump, the crystal that answers, the air after. No tone anywhere. SHORT: about 0.25 s of sound and a small
-        // room - a tower fires again and again, and a long tail runs into the next shot.
-        Canvas c = begin(0.45f, false, false);
-        Buf crack = noise(rng, 0.025f, White, High, 2500.0f, 2500.0f, 0.7f, 0.0002f, rng.range(0.004f, 0.008f));
-        level(crack);
-        c.mix(crack, 0.0f, 0.9f);
-        const float top = rng.range(5500.0f, 7500.0f), bottom = rng.range(600.0f, 1000.0f), narrow = rng.range(2.0f, 4.5f);
-        Buf tear = noise(rng, rng.range(0.08f, 0.13f), White, Band, top, bottom, narrow, 0.001f, rng.range(0.025f, 0.04f));
-        level(tear);
-        c.mix(tear, 0.0f, 0.8f);
-        if (variant & 1) // a second, smaller bolt right behind the first
+        // The light tower's strike, as a BEAM that sweeps past: a SWOOSH. Air (a wide band of noise) whose pitch and
+        // level come up together in a few hundredths of a second and go down again, a brighter band an octave over it,
+        // a narrow band in its middle (the beam's own colour - a breath with a pitch, no tone), a soft low body.
+        // NO ATTACK: nothing starts at full level, so there is no crack, no pop and no thump (tried: a crack, a
+        // tearing noise sweep and a thump - a bolt; it read as harsh, and many towers as a row of pops).
+        // SHORT (under 0.45 s) and in a small room: a tower fires again and again.
+        const auto swoosh = [&](float length, float scale)
         {
-            Buf second = noise(rng, 0.07f, White, Band, top * 0.8f, bottom, narrow, 0.001f, 0.02f);
-            level(second);
-            c.mix(second, rng.range(0.04f, 0.06f), 0.45f);
-            c.mix(crack, rng.range(0.04f, 0.06f), 0.4f);
-        }
-        c.mix(thump(0.12f, rng.range(95.0f, 125.0f), 50.0f, 0.015f, 0.035f, 2.0f), 0.0f, 0.8f);
-        c.mix(modal(c_crystal, 0.22f, rng.range(0.85f, 1.15f), 0.4f, 30.0f), 0.01f, rng.range(0.15f, 0.3f));
-        Buf air = noise(rng, 0.18f, Pink, High, 3000.0f, 5000.0f, 0.7f, 0.01f, 0.05f);
-        level(air);
-        c.mix(air, 0.0f, 0.15f);
-        c.reverb(0.2f, 0.5f, 0.12f);
+            Buf out(framesOf(length));
+            const float peak = rng.range(0.2f, 0.32f);                   // where it is loudest and highest, 0..1
+            const float low = rng.range(700.0f, 1000.0f) * scale, high = rng.range(2600.0f, 3800.0f) * scale;
+            const float colour = rng.range(1700.0f, 2400.0f) * scale;
+            Svf air, bright, beam, body;
+            Noise pink, white;
+            body.set(380.0f, 0.7f);
+            for (size_t i = 0; i < out.size(); ++i)
+            {
+                const float u = (float)i / (float)out.size();
+                const float swell = u < peak ? glm::smoothstep(0.0f, 1.0f, u / peak) : std::pow(1.0f - glm::smoothstep(0.0f, 1.0f, (u - peak) / (1.0f - peak)), 1.5f);
+                if ((i & 7) == 0)
+                {
+                    const float centre = low * std::pow(high / low, swell);
+                    air.set(centre, 1.3f);
+                    bright.set(centre * 2.0f, 1.8f);
+                    beam.set(colour * (0.9f + 0.2f * swell), 7.0f);
+                }
+                const float p = pink.next(rng, Pink), w = white.next(rng, White);
+                air.step(p);
+                bright.step(w);
+                beam.step(p);
+                body.step(p);
+                out[i] = (air.bp + bright.bp * 0.22f + beam.bp * 0.9f + body.lp * 0.35f) * swell;
+            }
+            level(out);
+            return out;
+        };
+        Canvas c = begin(0.45f, false, false);
+        c.mix(swoosh(rng.range(0.3f, 0.4f), 1.0f), 0.0f, 1.0f);
+        if (variant & 1) // a second, smaller one inside the first: the beam flickers
+            c.mix(swoosh(rng.range(0.2f, 0.26f), rng.range(1.15f, 1.35f)), rng.range(0.06f, 0.1f), 0.45f);
+        c.lowpassAll(6500.0f); // no hiss on top
+        c.reverb(0.2f, 0.6f, 0.1f);
         c.finish();
         break;
     }

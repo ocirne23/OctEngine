@@ -202,8 +202,8 @@ that is not finite is made silent and logged).
 | Building block | What it is | Used for |
 |---|---|---|
 | `thump` | a short burst of low noise into a damped low resonance (it rings a cycle or two: a thud, no note, no pitch slide) | the weight of a hit, a shot, an explosion |
-| `noise` | white / pink / brown noise through a filter that glides (`Svf`: stable while its frequency moves) | slaps, air, rumble, crackle, the saw, the light tower's bolt |
-| `modal` | a STRUCK BODY: noise that dies away, through one resonance per mode (`c_wood`, `c_metal`, `c_crystal`, `c_tube`, `c_drum`, `c_glow`, `rockClack`). The noise drives the resonances while they ring, so a mode is a narrow band of noise, never a sine; `maxQ` bounds how near a tone it gets | the mallet, the chisel, stones, the drum, the light tower's crystal |
+| `noise` | white / pink / brown noise through a filter that glides (`Svf`: stable while its frequency moves) | slaps, air, rumble, crackle, the saw |
+| `modal` | a STRUCK BODY: noise that dies away, through one resonance per mode (`c_wood`, `c_metal`, `c_tube`, `c_drum`, `c_glow`, `rockClack`). The noise drives the resonances while they ring, so a mode is a narrow band of noise, never a sine; `maxQ` bounds how near a tone it gets | the mallet, the chisel, stones, the drum |
 | `vocal` | a THROAT: soft pulses whose length and strength change from one to the next, plus breath that gets louder with every pulse, through three wide formants; `VocalKey`s move the pitch, the mouth, the breath and the roughness | the single creature sounds: `makeDeathCry` (the death grunt), the player's grunt (a crowd is not made of these: see A CROWD IS A TEXTURE) |
 | `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch - the only tones in the game | birds, crickets, the owl |
 | `flutter` | an uneven level (random values with straight lines between), where a regular tremolo would sound like a machine | the saw's teeth, a gurgle |
@@ -225,7 +225,14 @@ in a loop is a `LoopLfo` (sines with whole cycles in the loop).
 
 **The variants differ in CHARACTER** (the `kind` argument = the variant index, plus the variant's own random stream
 for every layer's pitch, time and level): a melee hit is blunt, a claw slash, wet, or a crunch; a death grunt falls, is short, is a long breath out, or gurgles;
-the light tower's bolt has its own tear and sometimes a second bolt; thunder is near (cracks first) or far.
+the light tower's swoosh has its own length, peak and colour, and sometimes a second, smaller one inside it; thunder is
+near (cracks first) or far.
+
+**The light tower's strike is a SWOOSH, a beam that sweeps past** (`TurretFire`): a wide band of noise whose pitch and
+level come up together and go down again, a brighter band an octave over it, a narrow band in its middle (the beam's
+colour), a soft low body; low-passed at 6.5 kHz, under 0.45 s. **Nothing in it starts at full level**: no crack, no
+pop, no thump. Tried and dropped: a bolt (a crack, a tearing noise sweep, a thump, a ringing crystal) - harsh, and
+many towers were a row of pops.
 
 **A CROWD IS A TEXTURE, NOT A SUM OF EVENTS** (`LoopBattle`, `LoopHorde`). Many voices at once are heard as ONE sound
 with a colour and a grain, so the two crowd loops are made as that one sound, from streams that never stop:
