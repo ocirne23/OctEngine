@@ -110,7 +110,11 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Player", "Base heal/s", &s.baseHealRate, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Melee damage/s", &s.meleeDps, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Melee radius", &s.meleeRadius, 0.0f, 12.0f, 0.25f);
-    Tweak::floatVar("Game/Nav", "Group cluster radius", &s.selectionClusterRadius, 2.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Staff beam range (m)", &s.staffBeamRange, 2.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Staff beam half angle (deg)", &s.staffBeamHalfAngleDeg, 0.5f, 45.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Staff beam damage/s", &s.staffBeamDps, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Staff beam light/s", &s.staffBeamLightPerSec, 0.0f, 100.0f, 0.5f);    Tweak::floatVar("Game/Friendlies", "Follow radius (m)", &s.followRadius, 1.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Follow leash (m)", &s.followLeash, 5.0f, 200.0f, 1.0f);    Tweak::floatVar("Game/Nav", "Group cluster radius", &s.selectionClusterRadius, 2.0f, 60.0f, 0.5f);
 }
 
 static void registerCamera(GameCameraSettings& s)
@@ -179,42 +183,42 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Emitter cost", &s.costs[0], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Generator cost", &s.costs[1], 0.0f, 500.0f, 1.0f);
     // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
-    // Solar 5, Fabricator 6, Bastion 7, Lance 8, Barracks 9, Wall 10, Turret 11, MineralSilo 12, Constructor 13, Base 14,
-    // CablePower 15, CablePipe 16, CableConveyor 17, CrossingPower 18, CrossingPipe 19, CrossingConveyor 20, House 21,
-    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26, Searchlight 27, Walkway 28, Armory 29.
-    Tweak::floatVar("Game/Economy", "Armory cost", &s.costs[29], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[27], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Walkway cost (per segment)", &s.costs[28], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Lens cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
+    // Solar 5, Fabricator 6, Bastion 7, Barracks 8, Wall 9, Turret 10, MineralSilo 11, Constructor 12, Base 13,
+    // CablePower 14, CablePipe 15, CableConveyor 16, CrossingPower 17, CrossingPipe 18, CrossingConveyor 19, House 20,
+    // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29.
+    Tweak::floatVar("Game/Economy", "Armory cost", &s.costs[28], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Mage tower cost", &s.costs[29], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Walkway cost (per segment)", &s.costs[27], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Lens cost", &s.costs[25], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Lumberyard cost", &s.costs[2], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Quarry cost", &s.costs[23], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Bridge cost (per segment)", &s.costs[24], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Gate cost (per segment)", &s.costs[25], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Quarry cost", &s.costs[22], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Bridge cost (per segment)", &s.costs[23], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Gate cost (per segment)", &s.costs[24], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Battery cost", &s.costs[3], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Fuel tank cost", &s.costs[4], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Solar cost", &s.costs[5], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Fabricator cost", &s.costs[6], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion cost", &s.costs[7], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Lance cost", &s.costs[8], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Barracks cost", &s.costs[9], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "House cost", &s.costs[21], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Medic station cost", &s.costs[22], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Mineral silo cost", &s.costs[12], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Constructor cost", &s.costs[13], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Power cable cost", &s.costs[15], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Pipeline cost", &s.costs[16], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Conveyor cost", &s.costs[17], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Power crossing cost", &s.costs[18], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Pipe crossing cost", &s.costs[19], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Conveyor crossing cost", &s.costs[20], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Barracks cost", &s.costs[8], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "House cost", &s.costs[20], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Medic station cost", &s.costs[21], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Mineral silo cost", &s.costs[11], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Constructor cost", &s.costs[12], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Power cable cost", &s.costs[14], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Pipeline cost", &s.costs[15], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Conveyor cost", &s.costs[16], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Power crossing cost", &s.costs[17], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Pipe crossing cost", &s.costs[18], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Conveyor crossing cost", &s.costs[19], 0.0f, 100.0f, 0.5f);
     {
         // Health per type, in EStructureType order (the player-facing names where the game has one).
         static constexpr const char* c_healthNames[GameStructureTypeCount] = { "Lantern health", "Hearth health", "Lumberyard health",
-            "Crystal store health", "Woodshed health", "Mirror health", "Stoneworks health", "Great lantern health", "Lance health",
+            "Crystal store health", "Woodshed health", "Mirror health", "Stoneworks health", "Great lantern health",
             "Barracks health", "Wall health", "Light tower health", "Storehouse health", "Builder's hut health", "Beacon health",
             "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
-            "Lens health", "Searchlight health", "Walkway health", "Armory health" };
+            "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -243,6 +247,11 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Armory", "Guard range (m)", &s.guardRange, 2.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Armory", "Guard damage", &s.guardDamage, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Armory", "Guard shot interval (s)", &s.guardInterval, 0.1f, 10.0f, 0.05f);
+    Tweak::intVar("Game/Armory", "Mages per tower", &s.mageCount, 0, 32, 1);
+    Tweak::floatVar("Game/Armory", "Mage range (m)", &s.mageRange, 2.0f, 80.0f, 0.5f);
+    Tweak::floatVar("Game/Armory", "Mage cone half angle (deg)", &s.mageHalfAngleDeg, 2.0f, 80.0f, 0.5f);
+    Tweak::floatVar("Game/Armory", "Mage damage/s", &s.mageDps, 0.0f, 200.0f, 0.1f);
+    Tweak::floatVar("Game/Armory", "Mage light brightness (x)", &s.mageLightIntensity, 0.0f, 5.0f, 0.05f);
     Tweak::intVar("Game/Carriers", "Max walkers per building", &s.carriersPerBuilding, 1, 32, 1);
     Tweak::floatVar("Game/Structures", "Constructor range", &s.constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &s.constructorBuildRate, 0.5f, 50.0f, 0.25f);
@@ -252,10 +261,9 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &s.mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &s.mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Barracks energy intake/s", &s.barracksEnergyIntake, 0.1f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &s.costs[10], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Turret cost", &s.costs[11], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &s.costs[9], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Turret cost", &s.costs[10], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion energy/s", &s.bastionEnergyPerSec, 0.1f, 30.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Lance energy/s", &s.lanceEnergyPerSec, 0.1f, 30.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Solar energy/s", &s.solarEnergyPerSec, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Fabricator energy/s", &s.fabricatorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Fabricator fuel/s", &s.fabricatorFuelPerSec, 0.0f, 20.0f, 0.05f);
@@ -273,7 +281,6 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Internal buffer", &s.internalBuffer, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Emitter buffer", &s.emitterBuffer, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion buffer", &s.bastionBuffer, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Lance buffer", &s.lanceBuffer, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Generator buffer", &s.generatorBuffer, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Cable throughput", &s.cableThroughput[0], 0.5f, 100.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Pipeline throughput", &s.cableThroughput[1], 0.5f, 100.0f, 0.25f);
@@ -295,10 +302,6 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Structures", "Emitter reach", &s.emitterReach, 2.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Bastion output", &s.bastionOutput, 0.2f, 8.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Bastion reach", &s.bastionReach, 2.0f, 200.0f, 0.5f);
-    // The lance's Width 0.2 + Focus 0.85 concentrate a CONSERVED total (~25x+ local density), so its useful output
-    // range sits far below the other emitters' - hence the tiny floor.
-    Tweak::floatVar("Game/Structures", "Lance output", &s.lanceOutput, 0.01f, 8.0f, 0.01f);
-    Tweak::floatVar("Game/Structures", "Lance reach", &s.lanceReach, 2.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter shrink time", &s.emitterShrinkTime, 0.05f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter grow time", &s.emitterGrowTime, 0.05f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter restart charge", &s.emitterRestartCharge, 0.0f, 100.0f, 0.5f);
@@ -314,6 +317,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::intVar("Game/Population", "Workers: constructor", &s.workersConstructor, 0, 50, 1);
     Tweak::intVar("Game/Population", "Workers: generator", &s.workersGenerator, 0, 50, 1);
     Tweak::intVar("Game/Friendlies", "Barracks population", &s.barracksPopulation, 0, 200, 1);
+    Tweak::floatVar("Game/Friendlies", "Barracks unit health (x)", &s.barracksUnitHealthMult, 0.1f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Barracks unit damage (x)", &s.barracksUnitDamageMult, 0.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Friendlies", "House population", &s.housePopulation, 0, 100, 1);
     Tweak::floatVar("Game/Friendlies", "House link radius", &s.houseLinkRadius, 2.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Medic energy/s", &s.medicEnergyPerSec, 0.0f, 20.0f, 0.1f);

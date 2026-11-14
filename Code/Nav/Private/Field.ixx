@@ -31,7 +31,14 @@ export namespace Nav
         // longer - the game's walls, which units then chew through. Steering/density still treat
         // only Blocked as a wall, so a unit walks into it and the bite lands.
         uint8 cost = 0;
-        uint8 pad[3] = {}; // explicit: the obstacle list is change-detected by a byte hash
+        // OPEN FOR these teams (a bit per team): in a team field that those teams WALK (the field of any other team) the
+        // obstacle is not there at all - the game's gates, which the own army walks through. 0 = for no team.
+        uint8 openFor = 0;
+        // A WALL FOR these teams: Blocked (cost 0) in the fields those teams walk AND in the raster and the goals - the
+        // game's walkways, which the own army cannot pass under, while the enemy still breaches them (its field keeps the
+        // cost). 0 = for no team.
+        uint8 wallFor = 0;
+        uint8 pad[1] = {}; // explicit: the obstacle list is change-detected by a byte hash
     };
 
     class TeamField final
@@ -64,6 +71,7 @@ export namespace Nav
         {
             float radius = 120.0f;   // propagation stops past this (metres of path)
             uint8 clearanceCost = 3; // extra multiplier on the ring of cells touching a blocked one
+            int fieldTeam = -1;      // the team whose field this is (-1: the raster, a goal): NavObstacle::openFor
         };
 
         struct Sample
@@ -214,13 +222,14 @@ export namespace Nav
         Chunk& chunkAt(const glm::ivec2& cell) { return m_chunks.getOrCreate(chunkKey(chunkOf(cell))); }
         const Chunk* findChunk(const glm::ivec2& cell) const { return m_chunks.find(chunkKey(chunkOf(cell))); }
         uint8 costAt(const glm::ivec2& cell) const;
-        void rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 clearanceCost);
+        void rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 clearanceCost, int fieldTeam = -1);
 
         ChunkMap<Chunk> m_chunks;
         oc::vector<NavSource> m_sources;
         uint32 m_cellsReached = 0;
         // rasterizeObstacles' clearance-ring work list, kept across builds (the field is pooled via
         // TeamSlot::retired) so a rebuild allocates nothing: it was two chunk-count-sized vectors per build.
+        oc::vector<NavObstacle> m_filteredObstacles; // a team field's obstacles without the ones open for its walkers (kept like the ring lists)
         oc::vector<Chunk*> m_ringChunks;
         oc::vector<uint64> m_ringKeys;
     };

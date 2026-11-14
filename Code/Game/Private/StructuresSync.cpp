@@ -131,7 +131,7 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Id", oc::to_string(s.state->structureId));
         n.set("Type", oc::to_string((int)s.type));
         n.set("Position", s.entity->pos);
-        const glm::vec3 forward = s.type == EStructureType::Lance || isCrossingType(s.type)
+        const glm::vec3 forward = isCrossingType(s.type)
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         if (glm::dot(glm::vec2(forward.x, forward.z), glm::vec2(forward.x, forward.z)) > 1e-4f)
             n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));

@@ -148,7 +148,17 @@ many guards as one Armory, so a base has guards before the first Armory is built
 | Shooting | `Walker_Guarding`: every "Guard shot interval (s)" (1.2) the nearest living enemy unit within "Guard range (m)" (20, flat) takes "Guard damage" (12) through `GameUnitComponent::damage`. It never misses (no projectile). **ON A WALKWAY DECK** (`walkwayDeckAt`) nothing blocks it: the guard shoots over the walls. **On any other road cell it needs a CLEAR LINE** from its eyes (1.3 m) to the unit: `nearestEnemyUnit`'s `sightFrom` casts one ray at static bodies only (layers Default, Gate, Terrain, Vegetation: buildings, walls, gates, the ground, trees and rocks; units and the Walkway scaffold do not block), for the 6 nearest units at most, and takes the nearest one in sight. The shot is a `GuardShot` record; the match draws it as a hit line (`NpcSystem::addBeam`, `MeleeHit`, so GLt sends it to clients). |
 | A new post | With nothing to shoot for 4 s a guard runs `guardPost` again and walks to a better cell (the threat moved). |
 | Stand down | The alarm is over, the Armory is gone or rubble, or production took the worker (`dismissed`): the guard gets its `carrier.pre` look back and takes carrier work from where it stands, or goes home. |
-| Badge | "No road" on an Armory that touches no road. |
+| Badge | "No road" on an Armory (or a Mage tower) that touches no road. |
+
+**THE MAGE TOWER** (`EStructureType::MageTower`, `magetower.pre`, 2x2, the Defence page) is an armory of STAFFS:
+`armsGuards` includes it, so the alarm, the call, the posts, the stand-down and the road rules above are the same.
+Its walkers are MAGES (`Walker::mage`, set when the job is a Mage tower; the look is `mage.pre`), "Mages per tower"
+(3) at most. A mage does not shoot: every 0.25 s it picks the nearest enemy unit within "Mage range (m)" (16) by the
+guard's sight rule (anything from a deck, a clear line elsewhere) and turns its CONE to it (`Walker::yaw`,
+`Walker::lit`). `publishSearchlights` writes each lit mage's cone into `GameUnitParams::lightCones` - a small
+Searchlight: "Mage cone half angle (deg)" (14), "Mage damage/s" (1.5) to each enemy unit in it, which is solid there -
+and a SpotLight at "Mage light brightness (x)" (0.3) of the Searchlight's. Mages exist on the authority only, so a
+client sees neither them nor their light. They need no light store.
 
 ### The cable transport (three media, one model)
 
@@ -202,7 +212,7 @@ plus the ~2 s throughput average as a fraction of the rate, so clients draw the 
 and label numbers).
 
 **Buffers:** the lumberyard (fuel), the quarry (minerals) and the other consumers "Internal buffer" 10; the shield emitters hold deeper
-stores — "Emitter buffer" 50, "Bastion buffer" 150, "Lance buffer" 100 (the emitter restart charge
+stores — "Emitter buffer" 50, "Bastion buffer" 150 (the emitter restart charge
 clamps to each) — "Generator buffer" 10, "Battery capacity" 200. **A barracks' energy capacity is the
 selected unit's spawn energy** (stamped per instance in `stampTuning`; `energyCapacityOf` returns a
 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its transport slot meters
@@ -361,12 +371,12 @@ Every placement aligns to a
 
 | Footprint | Types |
 |---|---|
-| 1×1 (cables included; the Bridge and the Walkway are cables) | Emitter, Lance, Wall, Gate, Lens, Constructor |
-| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Searchlight, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation, Armory |
+| 1×1 (cables included; the Bridge and the Walkway are cables) | Emitter, Wall, Gate, Lens, Constructor |
+| 2×2 | FuelTank, Generator, Battery, Bastion, Turret, Searchlight, Solar, Lumberyard, Quarry, Fabricator, MineralSilo, House, MedicStation, Armory, MageTower |
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 
-> A crossing's facing is quantized to ±X/±Z at `placeStructure` like the Lance, and carried on GPl
+> A crossing's facing is quantized to ±X/±Z at `placeStructure`, and carried on GPl
 > and in the save's `Facing` — **otherwise client derivation diverges on which cells it covers.**
 > Prefab `Scale` / `HalfExtents` = footprint half, so boxes fill their cells.
 
@@ -427,8 +437,11 @@ over the ground; the origin is 0.1 over the deck (`spawnHeightOf` = deck + 0.1).
 over the water), on a pier of three render-only pieces down to 11 m under the sills (in the ground on land).
 
 * **Not walk-through** (`isWalkThrough` leaves it out): nothing fits under the deck, so it is a Nav obstacle - a
-  BREACHABLE one (`isBreachable`), so a line of it does not close a base off - and a body in the cell refuses the
-  placement.
+  BREACHABLE one (`isBreachable`) for the enemy, so a line of it does not close a base off - and a body in the cell
+  refuses the placement. **For its OWN team it is a wall** (Nav `wallFor`, `submitNavFeed`): Nav is flat and has no way
+  up the stairs, so the own army paths around it (it also is Blocked in the raster: steering and lanes go around).
+  A barracks unit's spawn point (`freeSpawnPointAround`) tries 4 rings out, 2 m apart, and only then a walkway DECK
+  cell next to the barracks, where it spawns on top.
 * **Two entities.** The structure (`walkway.pre`) is the sills on the ground plus a projectile-only collider
   (`Layer Cable`) from the ground to the deck. What a body stands on is `Ref::walkPiece`, a root entity of its own that
   `updateWalkway` (from `updateArms`, so on every `rebuildNetworks`, on every instance) spawns for a BUILT piece: a

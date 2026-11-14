@@ -129,15 +129,29 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
                                  : glm::linearRand(0.0f, glm::two_pi<float>());
     // 1 m over the ground: the y = 0 plane on the flat maps, the terrain under the point in the sandbox world.
     const auto onGround = [&](float x, float z) { return glm::vec3(x, structures.groundHeightAt(x, z, center.y) + 1.0f, z); };
+    // Rings farther out when the near one is full (walls and walkways around the barracks), and a WALKWAY DECK as the
+    // last choice: the unit spawns ON it (1 m over its origin), never inside the scaffold.
+    constexpr int c_rings = 4;
+    constexpr float c_ringStep = 2.0f;
+    for (int ring = 0; ring < c_rings; ++ring)
+        for (int k = 0; k < 8; ++k)
+        {
+            // k -> 0, +1, -1, +2, -2, +3, -3, +4 steps of 45 degrees from the start angle
+            const int step = (k + 1) / 2 * ((k & 1) ? 1 : -1);
+            const float a = start + (float)step * glm::two_pi<float>() / 8.0f;
+            const float r = ringRadius + c_ringStep * (float)ring;
+            const glm::vec3 p(center.x + std::cos(a) * r, 1.0f, center.z + std::sin(a) * r);
+            if (structures.cellsFree(EStructureType::Emitter, p,
+                glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true)) // 1x1 probe; cables are walk-through
+                return onGround(p.x, p.z);
+        }
     for (int k = 0; k < 8; ++k)
     {
-        // k -> 0, +1, -1, +2, -2, +3, -3, +4 steps of 45 degrees from the start angle
-        const int step = (k + 1) / 2 * ((k & 1) ? 1 : -1);
-        const float a = start + (float)step * glm::two_pi<float>() / 8.0f;
-        const glm::vec3 p(center.x + std::cos(a) * ringRadius, 1.0f, center.z + std::sin(a) * ringRadius);
-        if (structures.cellsFree(EStructureType::Emitter, p,
-            glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true)) // 1x1 probe; cables are walk-through
-            return onGround(p.x, p.z);
+        const float a = start + (float)k * glm::two_pi<float>() / 8.0f;
+        const glm::vec3 p(center.x + std::cos(a) * ringRadius, 0.0f, center.z + std::sin(a) * ringRadius);
+        float deckY = 0.0f;
+        if (structures.walkwayDeckTop(p, deckY))
+            return glm::vec3(p.x, deckY + 1.0f, p.z);
     }
     return onGround(center.x + std::cos(start) * ringRadius, center.z + std::sin(start) * ringRadius);
 }
@@ -228,17 +242,29 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     unit->popCost = (uint8)glm::clamp(structures.unitPopulation((int)type), 0, 255);
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 1 - units carry their builder's team
-    // Copy the barracks route in AT SPAWN (orders tier): the unit marches it before its AI
-    // (still engaging enemy units that come within "Route engage radius" on the way).
-    if (const int source = structures.structureIndexById(sourceId); source >= 0)
+    // A BARRACKS unit is a FOLLOWER: it goes with its team's nearest player (GameMatch::tickFollowers), no route.
+    if (sourceId != 0 && structures.structureIndexById(sourceId) >= 0)
     {
-        const oc::span<const glm::vec3> route = structures.structureRoute(source);
-        unit->routeCount = (uint8)glm::min(route.size(), (size_t)GameUnitComponent::MaxRoutePoints);
-        for (int i = 0; i < unit->routeCount; ++i)
-            unit->route[i] = route[i];
-        unit->routeIndex = 0;
+        m_followers.push_back(entity);
+        // x "Barracks unit health (x)": the player's own army is far tougher than the demons of its type.
+        unit->healthMax *= glm::max(Globals::settings.game.structures.barracksUnitHealthMult, 0.01f);
+        unit->health = unit->healthMax;
+        // x "Barracks unit damage (x)": its melee hits on units and on structures (the barracks types are all melee).
+        const float damageMult = glm::max(Globals::settings.game.structures.barracksUnitDamageMult, 0.0f);
+        unit->attackDamage *= damageMult;
+        unit->structureDamage *= damageMult;
+        // THE FRIEND LAYER: the gate's collider leaves it out of its mask (gate.pre), so the own army walks through the
+        // gates like the players do. The prefabs are the demons' too, so the layer is set here, per body.
+        if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()); pc && pc->body.isValid())
+        {
+            const uint64 friendBit = PhysicsLayers::bit("Friend");
+            int index = 0;
+            while (index < 63 && (friendBit >> index) != 1ull)
+                ++index;
+            Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLayer, glm::vec3((float)index, 0.0f, 0.0f));
+        }
     }
-    return entity.get(); // owned by the World's root list - no roster
+    return entity.get(); // owned by the World's root list (m_followers holds the barracks ones too)
 }
 
 Entity* NpcSystem::spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos,
@@ -408,12 +434,9 @@ void NpcSystem::service(StructureSystem& structures)
             continue; // the barracks died between deciding and servicing - its units died with it
         const StructureSystem::Ref& s = structures.structures()[index];
         const ENpcType unitType = (ENpcType)glm::min((int)s.state->barracks.unitType, (int)ENpcType::Count - 1);
-        // Spawn on the side facing the route's first waypoint (random side without a route).
-        const oc::span<const glm::vec3> route = structures.structureRoute(index);
-        const glm::vec2 toWaypoint = route.empty() ? glm::vec2(0.0f)
-            : glm::vec2(route[0].x - s.entity->pos.x, route[0].z - s.entity->pos.z);
-        if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius(),
-            route.empty() ? nullptr : &toWaypoint), barracksId, (uint8)s.state->team, unitType))
+        // A random free side: the unit then goes to its team's nearest player (GameMatch::tickFollowers).
+        if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius()),
+            barracksId, (uint8)s.state->team, unitType))
         {
             s.state->store[0] = glm::min(s.state->store[0] + s.state->barracks.spawnCost,
                 s.state->capacity[0]);
@@ -511,6 +534,7 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
 {
     despawnUnitsAndShots(); // projectiles are transient, not saved
     discardQueued();
+    m_followers.clear(); // the despawned units: the loaded barracks units come back through spawnUnit
     // Population tallies are maintained by the spawn/death edges, so a load has to re-seed them:
     // the structures were just rebuilt (all zero) and every unit below re-registers as it spawns.
     for (const StructureSystem::Ref& s : structures.structures())

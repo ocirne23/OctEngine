@@ -207,6 +207,7 @@ Reads meanwhile see pre-write values: one frame of latency.
 | `ApplyImpulseAtPoint`, `ApplyForceAtPoint` | `a` = vector, `b` = world point |
 | `SetGravityScale`, `SetLinearDamping`, `SetAngularDamping`, `SetAwake` | scalar in `a.x` |
 | `SetEnabled` | `a.x` 0 = `b3Body_Disable` (out of the broadphase AND solver entirely, pose kept), else Enable. **The pass-safe form of `PhysicsBody::setEnabled`.** |
+| `SetLayer` | `a.x` = a layer's BIT INDEX (`PhysicsLayers::bit`): every shape of the body (up to 8) gets that one layer as its `categoryBits`, mask kept (`b3Shape_SetFilter`). The game's barracks units go to "Friend" this way (their prefabs are the demons' too). |
 | `SetWorldGravity` | `a` (no body) |
 | `NudgeVelocity` | `a` = target linear velocity, `b` = target angular velocity, `c.x`/`c.y` = max linear/angular change THIS drain |
 

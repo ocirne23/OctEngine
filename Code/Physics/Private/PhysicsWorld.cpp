@@ -280,6 +280,21 @@ void PhysicsWorldState::applyQueuedCommands()
             if (command.a.x != 0.0f) { if (!b3Body_IsEnabled(id)) b3Body_Enable(id); }
             else                     { if (b3Body_IsEnabled(id))  b3Body_Disable(id); }
             break;
+        case EBodyCommand::SetLayer:
+        {
+            const int bit = (int)command.a.x;
+            if (bit < 0 || bit >= 64)
+                break;
+            b3ShapeId shapes[8];
+            const int count = b3Body_GetShapes(id, shapes, 8);
+            for (int s = 0; s < count; ++s)
+            {
+                b3Filter filter = b3Shape_GetFilter(shapes[s]);
+                filter.categoryBits = 1ull << bit;
+                b3Shape_SetFilter(shapes[s], filter, true);
+            }
+            break;
+        }
         case EBodyCommand::NudgeVelocity:
         {
             const auto capped = [](const glm::vec3& delta, float maxLen)

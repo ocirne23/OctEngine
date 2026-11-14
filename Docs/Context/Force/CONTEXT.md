@@ -404,7 +404,7 @@ Emitters that are **mergeable and have a bubble above iso** cluster per TEAM int
 `MergeGroup`s, each carried by ONE GPU sphere emitter (focus 0.5, axis up).
 
 > **Mergeable is DEFAULT ON for every emitter.** `setMergeable(false)`, or `Mergeable false` in a
-> `Component Force`, opts out. **A merged group is always a SPHERE**, so a cone-shaped Lance that
+> `Component Force`, opts out. **A merged group is always a SPHERE**, so a cone-shaped emitter that
 > merges loses its shape — opt such prefabs out.
 
 Cover math:

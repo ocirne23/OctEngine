@@ -135,6 +135,9 @@ export enum class EPhysicsBodyCommand : uint8
     // sim like any hit); the angular half is the exact result the ideal angular impulse I*dw would
     // produce, applied as a capped velocity add (the inertia tensor cancels out of the math).
     NudgeVelocity,
+    // a.x = a layer's bit index (PhysicsLayers): every shape of the body moves to that ONE layer (its categoryBits),
+    // its mask kept - the pass-safe way to give a spawned body another layer than its prefab's.
+    SetLayer,
 };
 
 // ---- Inline bodies ----

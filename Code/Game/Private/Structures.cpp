@@ -21,16 +21,17 @@ import :Structures;
 // The PLAYER-FACING names are the setting's (Docs/GDD.md): light, wood and stone for energy, fuel and minerals. The
 // code, the tweaks and the save keys keep the old words.
 static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberyard",
-    "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
+    "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+    2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
     0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f, // (the Wall and the Gate: 3 m tall)
     StructureSystem::WalkwayDeckHeight + 0.1f,          // the Walkway: its origin is 0.1 over the deck, like the Bridge's
-    2.0f };                                             // the Armory
+    2.0f,                                               // the Armory
+    2.0f };                                             // the Mage tower
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -71,10 +72,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
     {
     case EStructureType::Emitter:
     case EStructureType::Bastion:
-    case EStructureType::Lance:
-        desc = type == EStructureType::Lance
-            ? "A CONE of hardened light along its aimed facing. Demons inside it are solid and burn."
-            : "A lantern bubble of hardened light. Demons inside it are solid and burn, and they drain it.";
+        desc = "A lantern bubble of hardened light. Demons inside it are solid and burn, and they drain it.";
         line("Sleeps by day: faint, and it uses no light until dark or until a demon is on it");
         in(emitterDrawOf(type), "light");
         in(m_settings.emitterPressureDraw, "light", " more at full pressure");
@@ -136,7 +134,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
         banks(m_settings.fuelTankCapacity, "wood");
         break;
     case EStructureType::Barracks:
-        desc = "Trains units. Its light draw IS the build bar.";
+        desc = "Trains units, and they follow you. Its light draw IS the build bar. Aim at it and click to select it, then the number keys pick the unit it trains.";
         in(m_settings.barracksEnergyIntake, "light");
         line(oc::format("Build time = the unit's light cost / {:g}", m_settings.barracksEnergyIntake));
         line(oc::format("Population {} (+{} per linked house)", m_settings.barracksPopulation, m_settings.housePopulation));
@@ -186,6 +184,12 @@ oc::string StructureSystem::describeType(EStructureType type) const
         desc = "Bows for the workers. While a demon is in its range, free workers come by road, take a bow and stand guard on the walkways (or on the road) nearest to the demons. They go back to work when the demons are gone. It must touch a road.";
         line(oc::format("Up to {} guards", m_settings.armoryGuards));
         line(oc::format("A guard: {:g} damage every {:g} s, {:g} m", m_settings.guardDamage, m_settings.guardInterval, m_settings.guardRange));
+        range(m_settings.armoryRange);
+        break;
+    case EStructureType::MageTower:
+        desc = "Staffs for the workers. While a demon is in its range, free workers come by road, take a staff and stand on the walkways (or on the road) nearest to the demons. Each turns a small cone of light on a demon: in it a demon is solid and burns. They go back to work when the demons are gone. It must touch a road.";
+        line(oc::format("Up to {} mages", m_settings.mageCount));
+        line(oc::format("A mage: {:g} damage/s to each demon in its cone, {:g} m", m_settings.mageDps, m_settings.mageRange));
         range(m_settings.armoryRange);
         break;
     case EStructureType::CablePower:
@@ -272,9 +276,9 @@ glm::vec3 StructureSystem::structureLabelAnchor(int index) const
 
 glm::vec2 StructureSystem::structureFacing(int index) const
 {
-    // Lance + crossings carry an authored facing (join replay + save); a crossing's decides which
-    // cells its 1x3 footprint covers, so it MUST survive the wire or client derivation diverges.
-    if (m_frame[index].type != EStructureType::Lance && !isCrossingType(m_frame[index].type))
+    // Crossings carry an authored facing (join replay + save); it decides which cells their 1x3 footprint covers,
+    // so it MUST survive the wire or client derivation diverges.
+    if (!isCrossingType(m_frame[index].type))
         return glm::vec2(0.0f);
     const glm::vec3 forward = m_frame[index].entity->rot * glm::vec3(0.0f, 0.0f, -1.0f);
     return glm::vec2(forward.x, forward.z);

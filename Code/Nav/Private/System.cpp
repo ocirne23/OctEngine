@@ -284,8 +284,10 @@ void NavSystem::kickBuild(TeamSlot& slot, float deltaSec)
     slot.building = true;
     slot.sourcesDirty = false;
     slot.timer = m_settings.rebuildInterval;
+    const int slotIndex = int(&slot - m_teams);
     const TeamField::BuildParams params{ slot.radius > 0.0f ? slot.radius : m_settings.fieldRadius,
-        uint8(glm::clamp(m_settings.clearanceCost, 0, 254)) };
+        uint8(glm::clamp(m_settings.clearanceCost, 0, 254)),
+        slotIndex >= 0 && slotIndex < int(MaxTeams) ? slotIndex : -1 }; // a team field knows its team (the raster and the goals: -1)
     NavSystem* self = this;
     TeamSlot* slotPtr = &slot;
     const uint32 chunks = buildStepBudget(slot, deltaSec);

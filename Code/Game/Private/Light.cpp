@@ -236,6 +236,8 @@ void StructureSystem::publishSearchlights() const
             cone[4] = dir.y;
             cone[5] = cosHalf;
             cone[6] = (float)ref.state->team;
+            cone[7] = params.searchlightDps;
+            cone[10] = 0.0f; // a flat wedge
         }
         // The lamp stands ~5.4 m over the ground: the axis leans down so the cone's far end is on the ground.
         const float lean = (spawnHeightOf(ref.type) + c_searchlightLamp) / glm::max(params.searchlightRange, 1.0f);
@@ -247,8 +249,36 @@ void StructureSystem::publishSearchlights() const
         Globals::rendererVK.addLightInfo(SpotLight(source, params.searchlightRange * 1.15f, color, params.searchlightIntensity, axis, halfAngle, 0.15f));
         // (No beam column for a shaft in the air: a column is a cylinder, and it did not read as this cone.)
     }
+    // THE MAGES (walkers of a Mage tower, the authority only): a small Searchlight cone each, from the staff, while it has
+    // a target (Walker::lit, aimed in tickCarriers). The same flat wedge for the units, a weaker light.
+    const float mageHalf = glm::radians(glm::clamp(m_settings.mageHalfAngleDeg, 1.0f, 85.0f));
+    const float mageCos = std::cos(mageHalf);
+    const glm::vec3 mageColor(0.7f, 0.8f, 1.0f);
+    for (const Walker& w : m_walkers)
+    {
+        if (!w.lit || !w.entity)
+            continue;
+        const glm::vec2 dir(std::cos(w.yaw), std::sin(w.yaw));
+        const glm::vec3 staff = w.entity->pos + glm::vec3(0.0f, 1.4f, 0.0f);
+        if (count < GameUnitParams::MaxLightCones)
+        {
+            float* cone = unit.lightCones[count++];
+            cone[0] = staff.x;
+            cone[1] = staff.z;
+            cone[2] = m_settings.mageRange;
+            cone[3] = dir.x;
+            cone[4] = dir.y;
+            cone[5] = mageCos;
+            cone[6] = (float)w.team;
+            cone[7] = m_settings.mageDps;
+            cone[10] = 0.0f; // a flat wedge
+        }
+        const float lean = 1.4f / glm::max(m_settings.mageRange, 1.0f);
+        const glm::vec3 axis = glm::normalize(glm::vec3(dir.x, -lean, dir.y));
+        Globals::rendererVK.addLightInfo(SpotLight(staff + axis * 0.3f, m_settings.mageRange * 1.15f, mageColor,
+            params.searchlightIntensity * m_settings.mageLightIntensity, axis, mageHalf, 0.15f));
+    }
     unit.lightConeCount = count;
-    unit.lightConeDps = params.searchlightDps;
 }
 
 // The beams: a link shows ONLY WHILE IT MOVES LIGHT (a producer with light in its buffer, a consumer that is not

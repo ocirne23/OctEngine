@@ -119,6 +119,14 @@ export struct GameMatchSettings
     float baseHealRate = 15.0f;       // health/s inside the radius
     float meleeDps = 10.0f;           // player melee aura: health/s to enemy units in melee range
     float meleeRadius = 2.5f;         // melee range (m, XZ from the capsule)
+    // THE STAFF BEAM (the sandbox world, PLAY, LMB held): a narrow cone of light along the aim, from the player. A demon
+    // in it is solid and burns (a light cone like the Searchlight's); it costs the player's staff light.
+    float staffBeamRange = 22.0f;     // m
+    float staffBeamHalfAngleDeg = 4.0f;
+    float staffBeamDps = 30.0f;       // health/s to each demon in the beam
+    float staffBeamLightPerSec = 6.0f; // staff light/s while it shines (no light left: no beam)    // THE FOLLOWERS (GameMatch::tickFollowers): a barracks unit goes with its team's nearest player.
+    float followRadius = 6.0f;        // m: an idle follower farther than this from its place by the player walks back
+    float followLeash = 30.0f;        // m: a follower that hunts farther than this from the player comes back anyway
     float selectionClusterRadius = 12.0f; // link radius of the selection's cluster centroid
 };
 
@@ -181,7 +189,6 @@ export struct GameStructureSettings
         40.0f,  // Solar
         60.0f,  // Fabricator
         70.0f,  // Bastion
-        45.0f,  // Lance
         150.0f, // Barracks
         5.0f,   // Wall (per segment)
         75.0f,  // Turret
@@ -203,6 +210,7 @@ export struct GameStructureSettings
         60.0f,  // Searchlight
         4.0f,   // Walkway (per segment)
         40.0f,  // Armory
+        50.0f,  // MageTower
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -218,7 +226,6 @@ export struct GameStructureSettings
         100.0f,  // Solar (the Mirror): a thin slab
         250.0f,  // Fabricator
         400.0f,  // Bastion (the Great lantern)
-        250.0f,  // Lance
         400.0f,  // Barracks
         1000.0f, // Wall: made to be bitten
         300.0f,  // Turret (the Light tower)
@@ -240,6 +247,7 @@ export struct GameStructureSettings
         250.0f,  // Searchlight
         120.0f,  // Walkway: a scaffold of wood
         250.0f,  // Armory
+        250.0f,  // MageTower
     };
     // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
     // rubble: a destroyed building is gone).
@@ -297,12 +305,17 @@ export struct GameStructureSettings
     float guardRange = 20.0f;         // m: a guard shoots the nearest enemy unit within this
     float guardDamage = 12.0f;        // per shot (it never misses, and nothing blocks it)
     float guardInterval = 1.2f;       // s between a guard's shots
+    // THE MAGES (the Mage tower: walkers like the guards): each turns a small Searchlight cone on the nearest enemy unit.
+    int   mageCount = 3;              // mages one Mage tower arms at most
+    float mageRange = 16.0f;          // m: the cone's length (and the reach it picks a target in)
+    float mageHalfAngleDeg = 14.0f;
+    float mageDps = 1.5f;             // health/s to each enemy unit in the cone (the Searchlight: 3.2)
+    float mageLightIntensity = 0.3f;  // x the Searchlight's brightness
     float carrierBuildRate = 2.0f;    // stone/s a walker puts into the blueprint or the damaged structure it stands at
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
     float internalBuffer = 30.0f;     // several walker loads: a walker only delivers where its whole load fits
     float emitterBuffer = 50.0f;      // the shield emitters' energy stores (their pressure draw spikes)
     float bastionBuffer = 150.0f;
-    float lanceBuffer = 100.0f;
     float generatorBuffer = 30.0f;
     // THE CRYSTAL STORE: one full store runs TWO field generators through one night. A night is ~640 s (the sun cycle
     // at 60x, the default latitude and day), a generator draws 0.75 light/s awake: 2 x 480 = 960, plus room for the extra
@@ -314,6 +327,8 @@ export struct GameStructureSettings
     float mineralBaseCapacity = 200.0f;
     float medicEnergyPerSec = 1.5f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
+    float barracksUnitHealthMult = 5.0f;  // x the prefab's HealthMax for a unit a barracks makes (the demons keep theirs)
+    float barracksUnitDamageMult = 2.0f;  // x its AttackDamage and StructureDamage
     // THE LIGHT BALANCE (the default sun cycle: a day gives a Mirror ~780 s of full daylight, a night keeps a field
     // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 0.75 light/s awake (480 a night), a
     // Great lantern 2 (1280 a night).
@@ -338,9 +353,6 @@ export struct GameStructureSettings
     float bastionEnergyPerSec = 2.0f; // (see THE LIGHT BALANCE)
     float bastionOutput = 2.6f;
     float bastionReach = 90.0f;
-    float lanceEnergyPerSec = 3.0f;
-    float lanceOutput = 0.08f;
-    float lanceReach = 52.0f;
     float emitterPressureDraw = 3.0f;
     float emitterShrinkTime = 1.5f;
     float emitterGrowTime = 0.5f;
@@ -444,13 +456,15 @@ export struct GameUnitParams
     float farLift = 2.5f;
     float lightPoints[8][4]{};
     int lightPointCount = 0;
-    // THE SEARCHLIGHT CONES (runtime, StructureSystem::publishSearchlights): the shining searchlights as FLAT wedges on
-    // the map - x, z of the lamp, the range, the unit direction (x, z), the cosine of the half angle, the owner's team.
-    // A unit of another team in one is solid (as in a field) and loses lightConeDps health/s per cone.
-    static constexpr int MaxLightCones = 32;
-    float lightCones[MaxLightCones][7]{};
+    // THE LIGHT CONES (runtime, StructureSystem::publishSearchlights - the shining searchlights and mages - plus the
+    // players' staff beams, GameMatch): FLAT wedges on the map - x, z of the source, the range, the unit direction
+    // (x, z), the cosine of the half angle, the owner's team, the health/s; then [8] the source's y, [9] the direction's
+    // y and [10] the kind: 0 = a FLAT wedge on the map (the searchlights and mages: the ground's height does not count),
+    // 1 = a 3D CONE (the staff beam: the direction (x, [9], z) is a unit vector, the distance and the angle are 3D). A
+    // unit of another team in one is solid (as in a field) and loses that cone's health/s.
+    static constexpr int MaxLightCones = 48;
+    float lightCones[MaxLightCones][11]{};
     int lightConeCount = 0;
-    float lightConeDps = 0.0f;
     // THE FIELD ZONES (runtime, GameMatch, the terrain world): the bubbles of fieldZoneTeam's field buildings as
     // spheres (x, y, z, radius). A unit of another team inside one, measured FLAT on the map, is in the field
     // whatever the force bake's height slice reads (GameUnitComponent::tickField).
@@ -510,7 +524,7 @@ export struct GameStructureParams
     float searchlightTurnDegPerSec = 30.0f;
     float searchlightIntensity = 2500.0f;   // the spot light on the ground and the demons
     float medicRange = 12.0f;
-    float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
+    float medicHealRate = 40.0f;   // health/s AND battery energy/s per body (stations stack)
 };
 
 // THE FACTION LAYER (Game:Faction, the sandbox world): whose land each cell is, and how that spreads.

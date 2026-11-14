@@ -37,12 +37,14 @@ namespace
         Walker_Guarding,      // at its post: it shoots the nearest enemy unit in "Guard range (m)"
     };
     constexpr const char* c_guardPrefab = "Entities/Game/guard.pre";
+    constexpr const char* c_magePrefab = "Entities/Game/mage.pre";
     constexpr float c_guardRepost = 4.0f; // s with nothing to shoot before a guard looks for a better post
+    constexpr float c_mageAimSeconds = 0.25f; // a mage re-aims its cone this often
 
-    // The buildings that hand out bows: the Armory, and the Beacon (as many guards as one Armory).
+    // The buildings that ARM workers: the Armory and the Beacon (bows: guards), the Mage tower (staffs: mages).
     constexpr bool armsGuards(EStructureType t)
     {
-        return t == EStructureType::Armory || t == EStructureType::Base;
+        return t == EStructureType::Armory || t == EStructureType::Base || t == EStructureType::MageTower;
     }
 
     glm::ivec2 cellOf(const glm::vec3& pos)
@@ -216,6 +218,16 @@ GameUnitComponent* StructureSystem::nearestEnemyUnit(const glm::vec3& pos, float
     return nullptr;
 }
 
+bool StructureSystem::walkwayDeckTop(const glm::vec3& pos, float& outY) const
+{
+    const glm::ivec2 cell = cellOf(pos);
+    if (!walkwayDeckAt(cell.x, cell.y))
+        return false;
+    const auto it = m_cells.find(cellKey(cell.x, cell.y));
+    outY = m_frame[structureIndexById(it->second.id)].entity->pos.y;
+    return true;
+}
+
 // A built Walkway DECK in the cell (not its stairs): a guard on it shoots over the walls.
 bool StructureSystem::walkwayDeckAt(int cx, int cz) const
 {
@@ -229,7 +241,7 @@ bool StructureSystem::guardWanted(int index, uint8 team) const
 {
     const Ref& ref = m_frame[index];
     return armsGuards(ref.type) && !ref.state->blueprint && ref.state->team == team && ref.alarm > 0.0f
-        && (int)ref.guards < m_settings.armoryGuards;
+        && (int)ref.guards < (ref.type == EStructureType::MageTower ? m_settings.mageCount : m_settings.armoryGuards);
 }
 
 // A guard's POST, by road from fromCell: a road cell within the Armory's range that no other guard has. A Walkway DECK
@@ -288,10 +300,11 @@ void StructureSystem::setGuardLook(Walker& w, bool guard)
         return;
     const Transform at(w.entity->pos, 1.0f, w.entity->rot);
     Globals::world.removeRootEntity(w.entity.get());
-    w.entity = Globals::world.spawnAssetFile(guard ? c_guardPrefab : c_carrierPrefab, at, true);
+    w.entity = Globals::world.spawnAssetFile(!guard ? c_carrierPrefab : w.mage ? c_magePrefab : c_guardPrefab, at, true);
     if (w.entity)
         Globals::world.addRootEntity(w.entity);
     w.guard = guard;
+    w.lit = false;
 }
 
 int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const
@@ -533,6 +546,8 @@ void StructureSystem::carrierHousePass()
             continue;
         Globals::world.addRootEntity(w.entity);
         w.homeId = homeId;
+        w.team = team;
+        w.mage = guard && m_frame[job].type == EStructureType::MageTower;
         w.jobId = m_frame[job].state->structureId;
         w.state = guard ? Walker_GuardToArmory : Walker_ToJob;
         if (guard)
@@ -690,6 +705,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             leaveJob();
             job = found;
             w.jobId = m_frame[found].state->structureId;
+            w.mage = m_frame[found].type == EStructureType::MageTower;
             ++m_frame[found].guards;
             w.path = oc::move(path);
             w.along = 0.0f;
@@ -757,6 +773,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (job < 0 || m_frame[job].alarm <= 0.0f || w.dismissed)
             {
                 setGuardLook(w, false);
+                w.mage = false;
                 if (!((!w.dismissed && seekJob(1)) || goHome()))
                     removeWalker(k--);
                 continue;
@@ -764,21 +781,32 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.wait -= deltaSec;
             if (w.wait > 0.0f)
                 continue;
-            w.wait = glm::max(m_settings.guardInterval, 0.1f);
+            w.wait = w.mage ? c_mageAimSeconds : glm::max(m_settings.guardInterval, 0.1f);
             // ON A WALKWAY DECK it shoots over the walls: anything in range. On any other road cell it needs a CLEAR LINE
-            // from its eyes to the unit (nearestEnemyUnit's sightFrom).
+            // from its eyes to the unit (nearestEnemyUnit's sightFrom). A MAGE picks its target by the same rule and turns
+            // its cone to it: the cone itself is the damage (publishSearchlights, the units' light cones).
             glm::vec3 victimPos;
             const glm::vec3 eyes = here + glm::vec3(0.0f, 1.3f, 0.0f);
-            if (GameUnitComponent* victim = nearestEnemyUnit(here, m_settings.guardRange, team, victimPos,
+            if (GameUnitComponent* victim = nearestEnemyUnit(here, w.mage ? m_settings.mageRange : m_settings.guardRange, team, victimPos,
                 walkwayDeckAt(hereCell.x, hereCell.y) ? nullptr : &eyes))
             {
-                victim->damage(m_settings.guardDamage, team);
-                m_guardShots.push_back({ eyes, victimPos });
-                if (const glm::vec3 d = victimPos - here; w.entity && d.x * d.x + d.z * d.z > 1e-6f)
+                const glm::vec3 d = victimPos - here;
+                if (w.mage)
+                {
+                    w.yaw = std::atan2(d.z, d.x);
+                    w.lit = true;
+                }
+                else
+                {
+                    victim->damage(m_settings.guardDamage, team);
+                    m_guardShots.push_back({ eyes, victimPos });
+                }
+                if (w.entity && d.x * d.x + d.z * d.z > 1e-6f)
                     w.entity->rot = glm::angleAxis(std::atan2(-d.x, -d.z), glm::vec3(0.0f, 1.0f, 0.0f));
                 w.idle = 0.0f;
                 continue;
             }
+            w.lit = false;
             w.idle += w.wait;
             if (w.idle >= c_guardRepost)
             {

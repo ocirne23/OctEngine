@@ -86,7 +86,8 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
 
 ### Q — Combat
 
-**Emitter · Bastion · Lance · Wall · Gate · Turret · Searchlight · Barracks · Armory** (the Armory: see The Armory in [Economy.md](Economy.md); the Bridge is with the Road, on the Logistics page)
+**Emitter · Bastion · Wall · Gate · Turret · Searchlight · Barracks · Armory · Mage tower** (the Armory and the Mage
+tower: see The Armory in [Economy.md](Economy.md); the Bridge is with the Road, on the Logistics page)
 
 * **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (26 m), a
   shadow too. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed
@@ -103,12 +104,14 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
   > map (the ground's height does not count) - in one, the unit is solid and burns. A unit on the far tick is not
   > tested.
 
-* **Bastion** — a big, hungry anchor bubble. **Lance** — a focused cone; **TWO-CLICK placement**: the
-  first click anchors, the second aims the facing.
+* **Bastion** — a big, hungry anchor bubble.
 * **Wall** — a DRAG line of square segments every 2 m (`c_wallSegmentSpacing`): the press anchors, the
   release places. Per-segment cost, `c_wallMaxSegments` 16. **The Gate places the same way**
   (`isLineType`) and stands on water (ON WATER in [Economy.md](Economy.md)): a wall the players walk
-  through. (The Bridge is a road piece: it paints like the road.)
+  through. **The own army walks and paths through it too:** a barracks unit's body is on the "Friend" physics layer
+  (`spawnUnit` queues `EBodyCommand::SetLayer`), which the gate's mask (`CollidesWith Default Projectile`) leaves out,
+  and a BUILT gate is a Nav obstacle `openFor` its team, so the fields that team walks (every other team's field) have
+  no gate in them. The demons still bump into it and breach it. (The Bridge is a road piece: it paints like the road.)
   > **A BUILT wall (or gate, `isBreachable`) is fed to Nav as a BREACHABLE obstacle** at "Wall breach cost" (10) — one 2 m cell
   > costs (1+cost)× the walking distance, so enemies route through a wall rather than take a longer
   > detour, walk into it and bite it down. **Blueprint walls and every other building stay
@@ -154,7 +157,13 @@ Selecting an OWN barracks shows a UNIT-TYPE PICKER popup above it (`HudPopup` in
 by GameHudOverlay; clicks resolve in `updateGameInput` through `popupButtonAtScreenPos` **before** the
 hotbar). Options (`c_barracksMenu`): **Grunt / Warrior / Brute / Runner / Swarm**.
 
-**The pick is an ORDER, like the route**: `queueUnitTypeRequest` → validated in `tickAuthority` →
+**THE SANDBOX WORLD'S PLAY: THE NUMBER KEYS PICK.** The mouse is the camera there, so the popup cannot be clicked:
+aim the crosshair at the barracks and click (the press selects it), then **1 .. 5** pick in the popup's order
+(`updateModeSwitching`: with an own barracks selected and the build UI closed, a number key is
+`requestSetUnitType`, not a build slot). The popup's title and button labels name the keys there. With the build UI
+open (the cursor is free) the buttons are clicked as on the flat maps.
+
+**The pick is an ORDER**: `queueUnitTypeRequest` → validated in `tickAuthority` →
 `onUnitTypeChanged` → GBu broadcast plus join replay. Clients request through GqU; saved as
 `UnitType`.
 
@@ -168,22 +177,31 @@ It holds the type's "\<Type\> population" against the **POPULATION CAP = "Barrac
 "House population" (10) per linked house**. A spawn only happens while `population + cost <= cap`
 (`BarracksData`, tallied by the spawn and death edges — the unit's `popCost` rides its DeathRecord).
 **The population rides GSt in the barracks' otherwise-unused output byte.** Spawns land on a free
-cell on a ring around the building, on the side facing the route's first waypoint.
+cell on a ring around the building, on a random side.
 
-#### Barracks routes
+#### Barracks units FOLLOW the player
 
-In Select mode (or Build with nothing armed) with an own-team barracks selected, **RIGHT-click on
-ground sets a waypoint**; SHIFT+RMB appends, max `MaxRouteWaypoints` (6) — **bounded by the 64 B GqW
-request.**
+**There are no barracks routes to set** (no RMB waypoint). A barracks unit has "Barracks unit health (x)" (5) times its
+prefab's `HealthMax` and "Barracks unit damage (x)" (2) times its `AttackDamage` and `StructureDamage` (`spawnUnit`;
+the demons of the same type keep theirs), and walks through its team's gates (the
+Wall / Gate entry above). Every unit a barracks makes is a FOLLOWER
+(`NpcSystem::followers`, filled by `spawnUnit` for a unit with a barracks source, a load included; the dead drop off).
+`GameMatch::tickFollowers` (authority, every 0.5 s) gives each one the NEAREST PLAYER of its team as its leader (the
+own capsule and the client twins) and its own PLACE by that player: a stable angle and a 2.5 - 5.5 m radius from its
+address, so the group stands in a loose ring. Then:
 
-Spawned units march the waypoints (advancing on touching each "Waypoint radius" circle, **no combat
-mid-march** — except an enemy unit within "Route engage radius" (5 m), which diverts the walk target
-and resumes after) before their AI takes over. The barracks route is copied onto the unit at spawn AND
-**re-pushed to its live units when the route changes** — the march index is kept and clamped, so
-appended routes continue. Every route change also seeds a Nav lane, leg by leg (`seedRouteLane`).
+| The unit | What happens |
+|---|---|
+| has a move order | the order follows the place (re-issued when the place moved over 3 m) |
+| hunts (the AI has a target, no lock) | it fights; past "Follow leash (m)" (30) from the player it is ordered back |
+| idles | farther than "Follow radius (m)" (6) from its place, it is ordered there |
 
-Server-validated (own-team barracks only), mirrored through GRt plus the join replay, drawn as a green
-line chain with circles for the own team.
+The order is `orderMove(place, fresh false)`: the unit's own plan requests keep the lane fresh. **An RMB order to a
+selected barracks unit lasts only to the next follow tick** (the order follows the place again). A unit with no
+player of its team keeps its AI.
+
+> The route plumbing (`Structure::route`, GRt / GqW, the save key `Route`, `seedRouteLane`, the green route lines) is
+> still in the code, but nothing sets a route any more and no unit takes one.
 
 ### W — Production
 
@@ -196,7 +214,7 @@ into minerals; the mineral silo is the team's spendable bank.
 
 * **Medic station** — 2×2, a plain powered consumer ("Medic energy/s" 1.5 from its internal buffer,
   unpowered = red ring). While built AND powered it heals every body inside "Medic heal radius"
-  (12 m, green ring) at "Medic heal/s" (4) — **HEALTH and the SHIELD BATTERY both**, the same rate
+  (12 m, green ring) at "Medic heal/s" (40) — **HEALTH and the SHIELD BATTERY both**, the same rate
   each. **UNITS: the station's own component update** (`EMachineKind::Medic`, the turret pattern —
   one spatial query of the radius per powered station inside the parallel pass, banking
   `GameUnitComponent::heal` into the unit's heal inbox; the unit's own tick applies it to health and
@@ -307,7 +325,8 @@ whose screen position is inside (`NpcSystem::queryVisibleUnits` — a camera FRU
 death, drawn with a green ring.
 
 **EVERY RMB MOVE ORDER** — ground, held re-aim, or building face — **also goes to the selected
-units**: `orderMove` = a LOCKED target with `moveOrder` set (dropping the route), auto-cleared within
+units** (a barracks unit only until the next follow tick, see above): `orderMove` = a LOCKED target with
+`moveOrder` set, auto-cleared within
 `waypointRadius` so the AI resumes. A DSL `setTarget` lock never clears. **CTRL + RMB = units ONLY**
 — the player stays put (`m_rmbUnitsOnly`, latched on the press for the whole hold). A FRESH order
 seeds one Nav lane from the centroid of the selection's largest cluster ("Game/Nav/Group cluster
@@ -318,14 +337,15 @@ cannot pull it back — **0 by default, since a fresh order SEEDS its own lane.*
 
 ### Interaction modes (`EPlayerMode`)
 
-**Neutral / default = SELECT.** Click to inspect (highlight ring plus overhead info); RIGHT-click
-GROUND with an own barracks selected = a waypoint; RIGHT-click a building = a MOVE ORDER to it.
+**Neutral / default = SELECT.** Click to inspect (highlight ring plus overhead info); RIGHT-click a building = a
+MOVE ORDER to it. In the sandbox world's PLAY, HOLDING LMB is also the STAFF BEAM (The player in
+[Modes.md](Modes.md)); the press still selects what is under the crosshair.
 
 **Q/W on the root page = Build** with that category, **A/S/D = Build with a cable armed** — **the
 hotbar page doubles as the mode indicator.**
 
 **Build mode ALSO click-selects** (`updateSelectionClick`, shared with Select mode): with nothing armed
-every LMB inspects (and box-selects / sets routes as in Select), and **with a ghost armed, a click the
+every LMB inspects (and box-selects as in Select), and **with a ghost armed, a click the
 placement refuses — occupied cells, i.e. on a building — selects it instead of doing nothing**, while
 any click that CAN place still places.
 
@@ -333,12 +353,9 @@ any click that CAN place still places.
 
 Cancelling rides along on the SAME press:
 
-1. **Whatever step is pending is cancelled, one level at a time.** A half-finished two-click flow
-   (Lance aim, Wall line, cable paint stroke) drops first; the next RMB disarms the item.
-2. **With an own barracks selected and the cursor on GROUND**, the press is instead a route waypoint
-   (SHIFT appends). **This is the ONLY consumer that sets `m_rmbConsumed`**, because a rally point is a
-   positive order, not a cancel, and pairing it with a move would drag the player to every waypoint.
-3. **Everything else becomes a MOVE ORDER** (green destination ring). On GROUND the capsule walks to
+1. **Whatever step is pending is cancelled, one level at a time.** A half-finished flow
+   (Wall line, cable paint stroke) drops first; the next RMB disarms the item.
+2. **Everything else becomes a MOVE ORDER** (green destination ring). On GROUND the capsule walks to
    the clicked point and **HOLDING RMB keeps re-aiming at the cursor**. On a BUILDING the destination
    is the CLICKED ground point pushed out to the nearest face of the inflated footprint (half
    footprint + 1.2 m) when it fell inside — **so you walk to the side you clicked instead of grinding

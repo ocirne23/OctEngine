@@ -31,7 +31,7 @@ documentation lives in topic files in this folder — read the ones for the area
 | [Modes.md](Modes.md) | Game modes: co-op (the sandbox world: Base site, nodes, the third-person player, crosshair aim; the generated map, teams, shield-less bodies, ambient scatter, waves, the spawn blob, unit types and archetypes, targeting range gates) and PvP (the arenas, teams, structure damage) |
 | [Sync.md](Sync.md) | Multiplayer sync: the three layers (structure mirror, network entities, capsule adoption), the game blob, puppets, client intents, settings, shadow preset, scene focus, detach camera |
 | [Economy.md](Economy.md) | Economy: the cable transport, physical cables and crossings, derived networks, the cell hash, construction, grid placement |
-| [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, routes), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
+| [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, followers), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
 | [Units.md](Units.md) | Units and the player: the unit sim / NpcSystem split, targets, melee, damage, the far tick, parked loose units, friction; the player shield, problem bubbles, world labels, HUD |
 | [Sound.md](Sound.md) | Sound: cues (posted, never played), the limits for crowds, the battle and horde beds, ambience, building loops, the synthesized sounds and their file overrides |
 
@@ -46,7 +46,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 |---|---|
 | energy / fuel / minerals | light / wood / stone |
 | Base | Beacon (BEACN) |
-| Emitter / Bastion / Lance | Lantern (LNTN) / Great lantern (GLNT) / Lance |
+| Emitter / Bastion | Lantern (LNTN) / Great lantern (GLNT) |
 | Turret | Light tower (TOWR) |
 | Solar / Generator / Battery | Mirror (MIRR) / Hearth (HRTH) / Crystal store (CRYS) |
 | Lumberyard / Quarry / Fabricator | Lumberyard (LMBR) / Quarry (QRRY) / Stoneworks (STNW) |
@@ -56,6 +56,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Searchlight | Searchlight (SRCH) |
 | Walkway | Walkway (WALK): a road segment on a scaffold, to stand behind a wall and see over it (Economy.md, Grid placement) |
 | Armory | Armory (ARMR): free workers take a bow and stand guard while enemies are near (Economy.md, The Armory) |
+| MageTower | Mage tower (MAGE): free workers take a staff and turn small light cones on the enemies (Economy.md, The Armory) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |

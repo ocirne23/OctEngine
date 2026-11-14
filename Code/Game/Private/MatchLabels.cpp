@@ -90,7 +90,8 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
             // building (the Hearth, the Lumberyard) never had it and always showed the badge.
             // The House: its workers cannot go out to carry.
             // The Armory: the workers cannot come for a bow.
-            if ((fuel || minerals || type == EStructureType::House || type == EStructureType::Armory) && !m_structures.structureOnRoad(index))
+            if ((fuel || minerals || type == EStructureType::House || type == EStructureType::Armory
+                || type == EStructureType::MageTower) && !m_structures.structureOnRoad(index))
             {
                 color = c_amber;
                 return "No road";
@@ -332,13 +333,16 @@ void GameMatch::buildWorldLabels()
             {
                 popup.active = true;
                 popup.screenPos = label.screenPos;
-                popup.title = "Produce";
+                // The sandbox world's PLAY: the number keys pick (the mouse is the camera) - the labels name them.
+                const bool keys = m_sandboxWorld && !m_buildUi;
+                popup.title = keys ? "Produce (number keys)" : "Produce";
                 popup.buttons.reserve(oc::size(c_barracksMenu));
                 const uint8 produced = m_structures.structureUnitType(i);
+                int key = 0;
                 for (const uint8 t : c_barracksMenu)
                 {
                     HudPopupButton& b = popup.buttons.emplace_back();
-                    b.label = c_unitTypeNames[t];
+                    b.label = keys ? oc::format("{}  {}", ++key, c_unitTypeNames[t]) : oc::string(c_unitTypeNames[t]);
                     char sub[32];
                     snprintf(sub, sizeof(sub), "%d pop  %.0f light", m_structures.unitPopulation(t),
                         m_structures.unitSpawnEnergy(t));

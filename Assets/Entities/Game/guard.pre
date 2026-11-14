@@ -32,9 +32,19 @@ Prefab gameGuard
 				Type StaticMesh
 				Color 0.55 0.55 0.6
 				Scale 0.2
+		# The bow: two Pillar3 pieces (0.42 m each at scale 0.07) stacked from 0.33 to 1.17 m.
 		Entity
-			Name Bow
-			Position 0.12 0.75 -0.32
+			Name Bow1
+			Position 0.12 0.54 -0.32
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.36 0.24 0.12
+				Scale 0.07
+		Entity
+			Name Bow2
+			Position 0.12 0.96 -0.32
 			Component Render
 				ObjectContainer baseshapes
 				Node Pillar3

@@ -129,7 +129,7 @@ public:
     }
     void tickMirror(float deltaSec); // client per-frame: refresh + ease emitter outputs
 
-    glm::vec2 structureFacing(int index) const; // from the entity's rotation (Lance/Crossing replay)
+    glm::vec2 structureFacing(int index) const; // from the entity's rotation (Crossing replay)
     float structureYield(int index) const { return m_frame[index].yield; } // Lumberyard / Quarry (1 elsewhere)
     float structureOutputFrac(int index) const // union: the emitter variant (Base included)
     {
@@ -350,7 +350,6 @@ public:
         {
         case EStructureType::Emitter:     return m_settings.emitterBuffer; // shield emitters hold a deeper charge:
         case EStructureType::Bastion:     return m_settings.bastionBuffer; // pressure draw spikes under a push
-        case EStructureType::Lance:       return m_settings.lanceBuffer;
         // (The Lumberyard, the Quarry, the Fabricator and the Constructor hold no light: production runs on WORKERS, see staffing.)
         case EStructureType::Solar:
         case EStructureType::MedicStation:
@@ -436,7 +435,6 @@ public:
     float emitterReachOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_settings.bastionReach
-             : t == EStructureType::Lance ? m_settings.lanceReach
              : t == EStructureType::Base ? m_settings.baseShieldReach : m_settings.emitterReach;
     }
     float placeRange() const { return m_settings.placeRange; }
@@ -459,6 +457,7 @@ public:
         case EStructureType::Quarry:
         case EStructureType::Fabricator:
         case EStructureType::Armory:
+        case EStructureType::MageTower:
         case EStructureType::House:
         case EStructureType::MedicStation:
         case EStructureType::MineralSilo: return 2;
@@ -541,6 +540,8 @@ public:
     float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX, bool byPlayer = false);
     float constructorRange() const { return m_settings.constructorRange; }
 
+    // A built Walkway DECK (not its stairs) in the grid cell under pos: outY = its origin (0.1 over the deck top).
+    bool walkwayDeckTop(const glm::vec3& pos, float& outY) const;
     // The guards' shots of this tick (tickCarriers): the match draws one line each and clears the list.
     struct GuardShot { glm::vec3 from, to; };
     oc::vector<GuardShot>& guardShots() { return m_guardShots; }
@@ -588,7 +589,7 @@ private:
         const glm::vec3& facing, uint8 team);
     void spendMinerals(uint8 team, float amount); // drains the team's Silos first, the Base last
     // The one placement path: spawns the prefab, stamps the component, registers into the frame.
-    // Returns the frame index or -1. rot = authored orientation (Lance facing).
+    // Returns the frame index or -1. rot = authored orientation (a crossing's facing).
     int spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos, const glm::quat& rot,
         uint8 team, bool built, float yield = 1.0f);
     void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
@@ -637,7 +638,11 @@ private:
         uint8 state = 0;             // EWalkerState (Carriers.cpp)
         uint8 work = 0;              // ECarrierWork: what its load is for
         bool dismissed = false;      // its worker is needed elsewhere: it walks home when it is next idle
-        bool guard = false;          // its entity is guard.pre (it has a bow): setGuardLook
+        bool guard = false;          // its entity is guard.pre / mage.pre (it is armed): setGuardLook
+        bool mage = false;           // its job is a Mage tower: armed with a staff, not a bow
+        bool lit = false;            // a mage at its post with a target: its cone shines (publishSearchlights)
+        uint8 team = 0;              // its house's team
+        float yaw = 0.0f;            // a mage's cone direction on the map (atan2 z, x)
     };
     oc::vector<Walker> m_walkers;
     // THE ARMORY'S GUARDS: walkers too. While an enemy unit is in an Armory's range (Ref::alarm), free workers walk to
@@ -816,13 +821,11 @@ private:
     float emitterOutputOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_settings.bastionOutput
-             : t == EStructureType::Lance ? m_settings.lanceOutput
              : t == EStructureType::Base ? m_settings.baseShieldOutput : m_settings.emitterOutput;
     }
     float emitterDrawOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_settings.bastionEnergyPerSec
-             : t == EStructureType::Lance ? m_settings.lanceEnergyPerSec
              : t == EStructureType::Base ? m_settings.baseShieldEnergyPerSec : m_settings.emitterEnergyPerSec;
     }
 

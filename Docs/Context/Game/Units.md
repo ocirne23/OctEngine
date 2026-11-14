@@ -232,7 +232,7 @@ spreads over the interval instead of re-checking in lockstep. The result rides t
 
 **The STORE bars are opt-in.** A structure's energy/fuel/mineral bars show unselected only when its
 prefab authors **`AlwaysShowResources true`** — the Base, Battery, Fuel tank, Mineral silo, Emitter,
-Bastion, Lance, Barracks and Turret, the stores a player watches at a glance. Every other structure
+Bastion, Barracks and Turret, the stores a player watches at a glance. Every other structure
 shows them while SELECTED. The HEALTH bar is separate: damage (or blueprint progress, or selection, or
 `AlwaysDisplayHealth`) always draws one.
 

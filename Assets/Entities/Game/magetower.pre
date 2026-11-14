@@ -1,0 +1,78 @@
+# Mage tower: while an enemy unit is in its range, free workers come by road, take a staff and stand on the walkways
+# (or on the road) nearest to the demons, each turning a small cone of light on a demon (StructureSystem::tickCarriers,
+# the guard states with Walker::mage). No light, no stores. A 4x4 m footprint (2x2 cells), spawned origin 2.0 above
+# the ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants, boxes and a ball only): a stone plinth (the root),
+# a stone drum, a slim blue tower on it, a stepped dark roof of three slabs and a pale crystal ball on top. The child
+# pieces are render-only.
+Prefab gameMageTower
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeQuarter
+		Type StaticMesh
+		Color 0.45 0.45 0.5
+		Position 0 -1.51 0
+		Scale 1.95
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 2 2 2
+	Component GameStructure
+		MeleeRadius 2
+	Component Scene
+		Entity
+			Name Drum
+			Position 0 -0.17 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.52 0.52 0.58
+				Scale 0.85
+		Entity
+			Name Tower
+			Position 0 2.48 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.3 0.36 0.62
+				Scale 0.6
+		Entity
+			Name Roof1
+			Position 0 4.5 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.14 0.15 0.3
+				Scale 0.9
+		Entity
+			Name Roof2
+			Position 0 4.87 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.16 0.17 0.34
+				Scale 0.6
+		Entity
+			Name Roof3
+			Position 0 5.1 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.18 0.19 0.38
+				Scale 0.35
+		Entity
+			Name Crystal
+			Position 0 5.55 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Sphere
+				Type StaticMesh
+				Color 0.75 0.85 1.0
+				Scale 0.3

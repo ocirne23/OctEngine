@@ -425,7 +425,7 @@ void GameMatch::spawnWorld()
                   "Q / E pick the item, LMB places, RMB or Esc cancels, X deletes. The number row arms a slot "
                   "directly. Buildings need flat, dry ground without trees or rocks");
     else
-        Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
+        Log::info("Game mode: SELECT by default (click inspects, RMB moves the "
                   "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
                   "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
                   "(press + drag) a run between buildings to connect them");
@@ -543,6 +543,38 @@ void GameMatch::updatePlayer(float deltaSec)
     }
     // (No building ever stands on a player: a player in the footprint refuses the placement, StructureSystem::actorInFootprint.)
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
+    // THE STAFF LIGHT COMES BACK FROM LIGHT, NOT BY ITSELF (the sandbox world): by day as the daylight, and near a light
+    // store - a Crystal store or the Beacon of the own team within "Hub reach (m)" that holds light - as a building
+    // takes it: the authority pays the regen from that store. (A client's own capsule regens there too, but the server's
+    // store does not pay for it.) The other modes keep the plain regen.
+    if (m_sandboxWorld && m_player.entity())
+    {
+        float scale = daylight();
+        if (scale < 1.0f)
+        {
+            const glm::vec3 pos = m_player.bodyPos();
+            const float reach = m_structures.lightHubReach();
+            const float rate = Globals::settings.game.player.energyRegenRate * deltaSec;
+            const float room = glm::max(m_player.energyMax() - m_player.energy(), 0.0f);
+            for (const StructureSystem::Ref& s : m_structures.structures())
+            {
+                if ((s.type != EStructureType::Battery && s.type != EStructureType::Base) || s.state->blueprint
+                    || s.state->team != (uint32)m_team || s.state->store[0] <= 0.01f)
+                    continue;
+                if (glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(s.entity->pos.x, s.entity->pos.z)) > reach)
+                    continue;
+                const float want = glm::min(rate * (1.0f - scale), room);
+                const float paid = m_isClient ? want : glm::min(want, s.state->store[0]);
+                if (!m_isClient)
+                    s.state->store[0] -= paid;
+                scale += rate > 0.0f ? paid / rate : 0.0f;
+                break;
+            }
+        }
+        m_player.setRegenScale(scale);
+    }
+    else
+        m_player.setRegenScale(1.0f);
     m_player.tickShieldAndHealth(deltaSec); // body writes too: the shield push impulse, the death stop
 }
 
@@ -676,6 +708,7 @@ void GameMatch::update(float deltaSec)
     m_matchTime += deltaSec; // the HUD clock: authority sim time (a pause stops the sim delta)
     stampLightRules();
     m_structures.tickAuthority(playerPos, deltaSec);
+    tickStaffBeam(deltaSec); // after the structures' cones (publishSearchlights resets the list)
     m_npcs.drawBeamLights(); // HERE, not in the windowed pass: a light record added before the begin-frame job is reset by it
     tickBaseHealing(deltaSec);
     tickMedicHealing(deltaSec);
@@ -689,6 +722,7 @@ void GameMatch::update(float deltaSec)
             { "Ambient wander", EProfileCategory::Game }, EJobPriority::Normal, 0, JobSystem::EPostUpdateBatch::Sim);
     }
     tickPlayerMelee(deltaSec);
+    tickFollowers(deltaSec);
 
     // (No player-target publish step: units find enemy players - puppet GameUnitComponents -
     // through the same spatial queries as structures, and damage them through the same damage().)
@@ -901,7 +935,14 @@ void GameMatch::gatherNavFeed(float deltaSec)
         // the detour is longer, the units walk into it and chew it down instead of skirting it.
         const uint8 breach = isBreachable(s.type) && !s.state->blueprint
             ? (uint8)glm::clamp(m_structures.wallBreachCost(), 1, 254) : (uint8)0;
-        m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach });
+        // A BUILT GATE is OPEN for its own team: its army walks through (the Friend physics layer) and paths through it
+        // (Nav leaves it out of the fields that team walks); the enemy still has to breach it.
+        const uint8 ownBit = s.state->team < Nav::MaxTeams ? uint8(1u << s.state->team) : uint8(0);
+        const uint8 openFor = s.type == EStructureType::Gate && !s.state->blueprint ? ownBit : uint8(0);
+        // A WALKWAY is a WALL for its own team (nothing passes under the deck, and Nav is flat: no way up the stairs),
+        // and for the raster and the goals; the enemy's field keeps it breachable.
+        const uint8 wallFor = s.type == EStructureType::Walkway ? ownBit : uint8(0);
+        m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach, openFor, wallFor });
         // Sources: what units of OTHER teams walk toward - the same filter the local search used
         // (alive, not the invulnerable Base). Clients run no unit sim: obstacles only, for the
         // local player's goal field.
@@ -975,6 +1016,98 @@ void GameMatch::tickPlayerMelee(float deltaSec)
         if (p)
             if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
                 meleeAround(pc->body.getPosition(), requestTeam(id));
+}
+
+void GameMatch::tickStaffBeam(float deltaSec)
+{
+    if (!m_beamHeld || !m_player.entity() || m_player.energy() <= 0.0f || m_settings.staffBeamRange <= 0.0f)
+        return;
+    GameUnitParams& unit = Globals::settings.game.unitParams;
+    if (glm::dot(m_beamDir, m_beamDir) < 1e-4f || unit.lightConeCount >= GameUnitParams::MaxLightCones)
+        return;
+    m_player.drain(m_settings.staffBeamLightPerSec * deltaSec);
+    // ONE 3D CONE along the aim (the camera's forward, its pitch included) is both the damage area and the light.
+    const glm::vec3 axis = glm::normalize(m_beamDir);
+    const glm::vec3 staff = m_player.bodyPos() + glm::vec3(0.0f, 1.2f, 0.0f);
+    const glm::vec3 from = staff + axis * 0.6f;
+    const float halfAngle = glm::radians(glm::clamp(m_settings.staffBeamHalfAngleDeg, 0.5f, 85.0f));
+    float* cone = unit.lightCones[unit.lightConeCount++];
+    cone[0] = from.x;
+    cone[1] = from.z;
+    cone[2] = m_settings.staffBeamRange;
+    cone[3] = axis.x;
+    cone[4] = axis.z;
+    cone[5] = std::cos(halfAngle);
+    cone[6] = (float)m_team;
+    cone[7] = m_settings.staffBeamDps;
+    cone[8] = from.y;
+    cone[9] = axis.y;
+    cone[10] = 1.0f; // a 3D cone
+    // The light of the cone: a SpotLight with the cone's own apex, axis, half angle and range.
+    const glm::vec3 color(1.0f, 0.92f, 0.7f);
+    Globals::rendererVK.addLightInfo(SpotLight(from, m_settings.staffBeamRange, color,
+        Globals::settings.game.structureParams.searchlightIntensity * 0.4f, axis, halfAngle, 0.15f));
+    // Its core: a thin column on the axis. The column is turned 180 degrees about its middle (the same segment, the
+    // other way): drawn with `axis` its fade read as a beam coming toward the camera.
+    Globals::rendererVK.addLightInfo(BeamLight(from + axis * (m_settings.staffBeamRange * 0.5f), 5.0f, color, 2.0f,
+        -axis, 0.08f, m_settings.staffBeamRange, m_settings.staffBeamRange * 0.3f));
+}
+
+void GameMatch::tickFollowers(float deltaSec)
+{
+    m_followTimer -= deltaSec;
+    if (m_followTimer > 0.0f)
+        return;
+    m_followTimer = 0.5f;
+    ProfileScope scope("Followers", EProfileCategory::Game);
+    struct Leader { glm::vec3 pos; uint8 team; };
+    oc::small_vector<Leader, 8> leaders;
+    if (m_player.entity())
+        leaders.push_back({ m_player.bodyPos(), (uint8)m_team });
+    for (const auto& [id, p] : m_clientPlayers)
+        if (p)
+            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
+                leaders.push_back({ pc->body.getPosition(), requestTeam(id) });
+    oc::vector<EntityPtr>& followers = m_npcs.followers();
+    for (size_t i = 0; i < followers.size(); ++i)
+    {
+        GameUnitComponent* u = getComponent<GameUnitComponent>(followers[i].get());
+        if (!u || !u->alive())
+        {
+            followers[i] = oc::move(followers.back()); // dead: off the list (its entity goes with the death drain)
+            followers.pop_back();
+            --i;
+            continue;
+        }
+        const glm::vec3 pos = followers[i]->pos;
+        const Leader* leader = nullptr;
+        float bestSq = FLT_MAX;
+        for (const Leader& l : leaders)
+            if (l.team == u->team)
+                if (const float dSq = glm::dot(glm::vec2(l.pos.x - pos.x, l.pos.z - pos.z), glm::vec2(l.pos.x - pos.x, l.pos.z - pos.z)); dSq < bestSq)
+                {
+                    bestSq = dSq;
+                    leader = &l;
+                }
+        if (!leader)
+            continue; // no player of its team: its AI holds
+        // Its OWN place by the player: a stable angle and radius from its address, so the group stands in a loose ring
+        // around the player instead of in one heap.
+        const uint32 hash = (uint32)(reinterpret_cast<uintptr_t>(followers[i].get()) >> 4) * 2654435761u;
+        const float angle = (float)(hash >> 8) / (float)(1u << 24) * glm::two_pi<float>();
+        const float ring = 2.5f + (float)(hash & 3u) * 1.0f;
+        const glm::vec3 place = clampToOpenGround(glm::vec3(leader->pos.x + std::cos(angle) * ring, 0.0f, leader->pos.z + std::sin(angle) * ring));
+        const float leaderDist = std::sqrt(bestSq);
+        const bool hunting = u->hasTarget && !u->targetLocked; // the AI has an enemy: let it fight near the player
+        const float placeDist = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(place.x, place.z));
+        if (u->moveOrder && u->targetLocked)
+        {
+            if (glm::distance(glm::vec2(u->targetPos.x, u->targetPos.z), glm::vec2(place.x, place.z)) > 3.0f)
+                u->orderMove(place, /*fresh*/ false); // the player moved on: the order follows
+        }
+        else if (hunting ? leaderDist > m_settings.followLeash : placeDist > m_settings.followRadius)
+            u->orderMove(place, /*fresh*/ false);
+    }
 }
 
 void GameMatch::tickBaseHealing(float deltaSec)
@@ -1126,6 +1259,11 @@ void GameMatch::updateGameInput(const Camera& camera)
         rmbEdge = false;
     }
     const bool confirmEdge = lmbEdge;
+    // THE STAFF BEAM: LMB held in PLAY (the sandbox world, the build UI closed, Select mode) shines along the crosshair.
+    // The press still picks what is under the crosshair (a barracks, to set its unit type with the number keys).
+    m_beamHeld = m_sandboxWorld && !m_buildUi && m_mode == EPlayerMode::Select && m_lmbDown && m_player.entity();
+    if (m_beamHeld)
+        m_beamDir = glm::normalize(glm::vec3(glm::inverse(camera.viewMatrix) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
     refreshBuildHotbar(); // page + counts + highlight, every frame
 
     switch (m_mode)
@@ -1140,11 +1278,9 @@ void GameMatch::updateGameInput(const Camera& camera)
     showYield(m_frameYield);
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
-    // same press - disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
+    // same press - disarming a ghost, dropping a Wall anchor or a picked link endpoint, or
     // leaving a link tool all happen AND the capsule starts walking, because a cancel that also
-    // ate the movement felt like a dropped input. Only the barracks ROUTE waypoint consumes the
-    // press (m_rmbConsumed): it is a positive order, not a cancel, and pairing it with a move
-    // would send the player off toward every rally point.
+    // ate the movement felt like a dropped input.
     // CTRL held on the press = UNITS ONLY: the selected units take the order and the player stays
     // put (latched for the whole hold, so a held re-aim keeps excluding the capsule).
     if (!m_rmbDown)

@@ -23,249 +23,249 @@ AmbientTrickle
 PlayerPos -3483.48 5.4071975 -10853.083
 Structure
 	Id 1
-	Type 14
+	Type 13
 	Position -3493 7.3554688 -10861
 	Charge 1496.8635
 	Minerals 34.58032
 	OutputFrac 0.99588054
 Structure
 	Id 2
-	Type 23
+	Type 22
 	Position -3506 6.838867 -10850
 	Yield 0.502711
 	Minerals 7.518077
 Structure
 	Id 3
-	Type 17
+	Type 16
 	Position -3495 4.8310547 -10857
 Structure
 	Id 4
-	Type 17
+	Type 16
 	Position -3497 4.849121 -10857
 Structure
 	Id 5
-	Type 17
+	Type 16
 	Position -3499 4.8930664 -10857
 Structure
 	Id 6
-	Type 17
+	Type 16
 	Position -3501 4.96875 -10857
 Structure
 	Id 7
-	Type 17
+	Type 16
 	Position -3503 5.0444336 -10857
 Structure
 	Id 8
-	Type 17
+	Type 16
 	Position -3503 5.065918 -10855
 Structure
 	Id 9
-	Type 17
+	Type 16
 	Position -3503 5.067871 -10853
 Structure
 	Id 10
-	Type 17
+	Type 16
 	Position -3503 5.0878906 -10851
 Structure
 	Id 11
-	Type 21
+	Type 20
 	Position -3498 5.915039 -10860
 Structure
 	Id 12
-	Type 21
+	Type 20
 	Position -3502 5.996582 -10860
 Structure
 	Id 13
-	Type 17
+	Type 16
 	Position -3493 4.8134766 -10857
 Structure
 	Id 14
-	Type 17
+	Type 16
 	Position -3491 4.8129883 -10857
 Structure
 	Id 15
-	Type 17
+	Type 16
 	Position -3489 4.8129883 -10857
 Structure
 	Id 16
-	Type 17
+	Type 16
 	Position -3487 4.8129883 -10857
 Structure
 	Id 17
-	Type 17
+	Type 16
 	Position -3485 4.814453 -10857
 Structure
 	Id 18
-	Type 17
+	Type 16
 	Position -3483 4.8183594 -10857
 Structure
 	Id 19
-	Type 17
+	Type 16
 	Position -3481 4.879883 -10857
 Structure
 	Id 20
-	Type 17
+	Type 16
 	Position -3479 4.9418945 -10857
 Structure
 	Id 21
-	Type 17
+	Type 16
 	Position -3477 4.9868164 -10857
 Structure
 	Id 22
-	Type 17
+	Type 16
 	Position -3475 5.0180664 -10857
 Structure
 	Id 23
-	Type 17
+	Type 16
 	Position -3473 5.0498047 -10857
 Structure
 	Id 24
-	Type 24
+	Type 23
 	Position -3471 4.5061345 -10857
 Structure
 	Id 25
-	Type 24
+	Type 23
 	Position -3469 4.5061345 -10857
 Structure
 	Id 26
-	Type 17
+	Type 16
 	Position -3467 4.591797 -10857
 Structure
 	Id 27
-	Type 17
+	Type 16
 	Position -3465 5.1845703 -10857
 Structure
 	Id 28
-	Type 17
+	Type 16
 	Position -3463 5.258301 -10857
 Structure
 	Id 29
-	Type 17
+	Type 16
 	Position -3461 5.2231445 -10857
 Structure
 	Id 30
-	Type 17
+	Type 16
 	Position -3459 5.1875 -10857
 Structure
 	Id 31
-	Type 17
+	Type 16
 	Position -3457 5.158203 -10857
 Structure
 	Id 32
-	Type 17
+	Type 16
 	Position -3455 5.1347656 -10857
 Structure
 	Id 33
-	Type 17
+	Type 16
 	Position -3453 5.1118164 -10857
 Structure
 	Id 34
-	Type 23
+	Type 22
 	Position -3428 6.955078 -10854
 	Minerals 1.5895419
 Structure
 	Id 35
-	Type 17
+	Type 16
 	Position -3451 5.1015625 -10857
 Structure
 	Id 36
-	Type 17
+	Type 16
 	Position -3449 5.0913086 -10857
 Structure
 	Id 37
-	Type 17
+	Type 16
 	Position -3447 5.158203 -10857
 Structure
 	Id 38
-	Type 17
+	Type 16
 	Position -3445 5.288086 -10857
 Structure
 	Id 39
-	Type 17
+	Type 16
 	Position -3443 5.4125977 -10857
 Structure
 	Id 40
-	Type 17
+	Type 16
 	Position -3441 5.4208984 -10857
 Structure
 	Id 41
-	Type 17
+	Type 16
 	Position -3439 5.429199 -10857
 Structure
 	Id 42
-	Type 17
+	Type 16
 	Position -3437 5.4057617 -10857
 Structure
 	Id 43
-	Type 17
+	Type 16
 	Position -3435 5.3564453 -10857
 Structure
 	Id 44
-	Type 17
+	Type 16
 	Position -3433 5.307129 -10857
 Structure
 	Id 45
-	Type 17
+	Type 16
 	Position -3431 5.258789 -10857
 Structure
 	Id 46
-	Type 17
+	Type 16
 	Position -3429 5.210449 -10857
 Structure
 	Id 47
-	Type 12
+	Type 11
 	Position -3432 8.011719 -10854
 	Fuel 120
 	Minerals 100
 Structure
 	Id 48
-	Type 23
+	Type 22
 	Position -3406 6.7666016 -10854
 	Yield 0.6621383
 	Minerals 14.232849
 Structure
 	Id 49
-	Type 17
+	Type 16
 	Position -3427 5.192383 -10857
 Structure
 	Id 50
-	Type 17
+	Type 16
 	Position -3425 5.1992188 -10857
 Structure
 	Id 51
-	Type 17
+	Type 16
 	Position -3423 5.20459 -10857
 Structure
 	Id 52
-	Type 17
+	Type 16
 	Position -3421 5.176758 -10857
 Structure
 	Id 53
-	Type 17
+	Type 16
 	Position -3419 5.149414 -10857
 Structure
 	Id 54
-	Type 17
+	Type 16
 	Position -3417 5.109375 -10857
 Structure
 	Id 55
-	Type 17
+	Type 16
 	Position -3415 5.0585938 -10857
 Structure
 	Id 56
-	Type 17
+	Type 16
 	Position -3413 5.0097656 -10857
 Structure
 	Id 57
-	Type 17
+	Type 16
 	Position -3411 5.0024414 -10857
 Structure
 	Id 58
-	Type 17
+	Type 16
 	Position -3409 4.994629 -10857
 Structure
 	Id 59
-	Type 17
+	Type 16
 	Position -3407 4.989746 -10857
 Structure
 	Id 61
@@ -274,27 +274,27 @@ Structure
 	Fuel 8.988936
 Structure
 	Id 62
-	Type 17
+	Type 16
 	Position -3409 5.054199 -10855
 Structure
 	Id 63
-	Type 17
+	Type 16
 	Position -3409 5.1225586 -10853
 Structure
 	Id 64
-	Type 17
+	Type 16
 	Position -3409 5.188965 -10851
 Structure
 	Id 65
-	Type 17
+	Type 16
 	Position -3407 5.1875 -10851
 Structure
 	Id 66
-	Type 17
+	Type 16
 	Position -3411 5.1992188 -10851
 Structure
 	Id 67
-	Type 17
+	Type 16
 	Position -3413 5.2089844 -10851
 Structure
 	Id 68
@@ -310,104 +310,104 @@ Structure
 	Fuel 29.11253
 Structure
 	Id 70
-	Type 21
+	Type 20
 	Position -3498 5.7753906 -10864
 Structure
 	Id 71
-	Type 21
+	Type 20
 	Position -3502 5.841797 -10864
 Structure
 	Id 72
-	Type 17
+	Type 16
 	Position -3505 5.055176 -10857
 Structure
 	Id 73
-	Type 17
+	Type 16
 	Position -3505 4.9975586 -10859
 Structure
 	Id 74
-	Type 17
+	Type 16
 	Position -3505 4.939453 -10861
 Structure
 	Id 75
-	Type 17
+	Type 16
 	Position -3505 4.870117 -10863
 Structure
 	Id 76
-	Type 17
+	Type 16
 	Position -3505 4.7978516 -10865
 Structure
 	Id 77
-	Type 17
+	Type 16
 	Position -3505 4.754883 -10867
 Structure
 	Id 78
-	Type 17
+	Type 16
 	Position -3489 4.779297 -10859
 Structure
 	Id 79
-	Type 17
+	Type 16
 	Position -3489 4.7460938 -10861
 Structure
 	Id 80
-	Type 17
+	Type 16
 	Position -3489 4.680664 -10863
 Structure
 	Id 81
-	Type 17
+	Type 16
 	Position -3489 4.6064453 -10865
 Structure
 	Id 82
-	Type 17
+	Type 16
 	Position -3503 4.6835938 -10867
 Structure
 	Id 83
-	Type 17
+	Type 16
 	Position -3501 4.6171875 -10867
 Structure
 	Id 84
-	Type 17
+	Type 16
 	Position -3499 4.5512695 -10867
 Structure
 	Id 85
-	Type 17
+	Type 16
 	Position -3497 4.526367 -10867
 Structure
 	Id 86
-	Type 17
+	Type 16
 	Position -3495 4.536133 -10867
 Structure
 	Id 87
-	Type 17
+	Type 16
 	Position -3493 4.544922 -10867
 Structure
 	Id 88
-	Type 17
+	Type 16
 	Position -3491 4.5351562 -10867
 Structure
 	Id 89
-	Type 17
+	Type 16
 	Position -3489 4.525879 -10867
 Structure
 	Id 90
-	Type 13
+	Type 12
 	Position -3491 5.315918 -10865
 	Minerals 21.670187
 Structure
 	Id 91
-	Type 21
+	Type 20
 	Position -3502 5.855957 -10870
 Structure
 	Id 92
-	Type 21
+	Type 20
 	Position -3498 5.788574 -10870
 Structure
 	Id 93
-	Type 21
+	Type 20
 	Position -3494 5.7006836 -10870
 Structure
 	Id 94
-	Type 21
+	Type 20
 	Position -3490 5.5200195 -10870
 Structure
 	Id 95
@@ -416,44 +416,44 @@ Structure
 	Charge 1499.2615
 Structure
 	Id 96
-	Type 29
+	Type 28
 	Position -3428 6.838867 -10860
 Structure
 	Id 97
-	Type 10
+	Type 9
 	Position -3401 6.1884766 -10855
 Structure
 	Id 98
-	Type 10
+	Type 9
 	Position -3401 6.2319336 -10853
 Structure
 	Id 99
-	Type 10
+	Type 9
 	Position -3401 6.275879 -10851
 Structure
 	Id 100
-	Type 10
+	Type 9
 	Position -3401 5.9814453 -10863
 Structure
 	Id 101
-	Type 10
+	Type 9
 	Position -3401 5.9746094 -10865
 Structure
 	Id 102
-	Type 13
+	Type 12
 	Position -3407 5.6464844 -10859
 	Minerals 30
 Structure
 	Id 103
-	Type 10
+	Type 9
 	Position -3399 6.0771484 -10857
 Structure
 	Id 104
-	Type 10
+	Type 9
 	Position -3399 6.020996 -10859
 Structure
 	Id 105
-	Type 10
+	Type 9
 	Position -3399 5.9746094 -10861
 Structure
 	Id 106
@@ -463,1526 +463,1526 @@ Structure
 	OutputFrac 0.99588054
 Structure
 	Id 107
-	Type 21
+	Type 20
 	Position -3432 6.338867 -10860
 Structure
 	Id 108
-	Type 21
+	Type 20
 	Position -3436 6.3632812 -10860
 Structure
 	Id 109
-	Type 28
+	Type 27
 	Position -3403 7.0438476 -10851
 Structure
 	Id 110
-	Type 28
+	Type 27
 	Position -3403 6.9759765 -10853
 Structure
 	Id 111
-	Type 28
+	Type 27
 	Position -3403 6.90957 -10855
 Structure
 	Id 112
-	Type 28
+	Type 27
 	Position -3405 7.042871 -10851
 Structure
 	Id 113
-	Type 17
+	Type 16
 	Position -3405 4.9868164 -10857
 Structure
 	Id 114
-	Type 17
+	Type 16
 	Position -3405 4.9106445 -10859
 Structure
 	Id 116
-	Type 28
+	Type 27
 	Position -3403 6.6166015 -10863
 Structure
 	Id 117
-	Type 28
+	Type 27
 	Position -3403 6.6273437 -10865
 Structure
 	Id 119
-	Type 17
+	Type 16
 	Position -3409 4.9570312 -10859
 Structure
 	Id 120
-	Type 17
+	Type 16
 	Position -3409 4.9194336 -10861
 Structure
 	Id 121
-	Type 17
+	Type 16
 	Position -3409 4.8876953 -10863
 Structure
 	Id 122
-	Type 17
+	Type 16
 	Position -3407 4.866699 -10863
 Structure
 	Id 123
-	Type 28
+	Type 27
 	Position -3405 6.665918 -10863
 Structure
 	Id 124
-	Type 13
+	Type 12
 	Position -3407 5.599121 -10861
 	Minerals 30
 Structure
 	Id 125
-	Type 27
+	Type 26
 	Position -3412 6.6367188 -10860
 	Charge 30
 Structure
 	Id 126
-	Type 17
+	Type 16
 	Position -3505 4.779785 -10869
 Structure
 	Id 127
-	Type 17
+	Type 16
 	Position -3505 4.8046875 -10871
 Structure
 	Id 128
-	Type 17
+	Type 16
 	Position -3505 4.8398438 -10873
 Structure
 	Id 129
-	Type 17
+	Type 16
 	Position -3505 4.8779297 -10875
 Structure
 	Id 131
-	Type 21
+	Type 20
 	Position -3502 5.9404297 -10874
 Structure
 	Id 132
-	Type 10
+	Type 9
 	Position -3505 6.0161133 -10881
 Structure
 	Id 133
-	Type 10
+	Type 9
 	Position -3507 6.036621 -10879
 Structure
 	Id 134
-	Type 10
+	Type 9
 	Position -3509 6.057617 -10877
 Structure
 	Id 135
-	Type 10
+	Type 9
 	Position -3511 6.0703125 -10875
 Structure
 	Id 136
-	Type 10
+	Type 9
 	Position -3513 6.09375 -10873
 Structure
 	Id 137
-	Type 28
+	Type 27
 	Position -3505 6.69375 -10879
 Structure
 	Id 138
-	Type 28
+	Type 27
 	Position -3507 6.7274413 -10877
 Structure
 	Id 139
-	Type 28
+	Type 27
 	Position -3507 6.7313476 -10875
 Structure
 	Id 140
-	Type 28
+	Type 27
 	Position -3509 6.72207 -10875
 Structure
 	Id 143
-	Type 13
+	Type 12
 	Position -3493 5.307617 -10865
 	Minerals 22.044132
 Structure
 	Id 144
-	Type 10
+	Type 9
 	Position -3501 6.0131836 -10883
 Structure
 	Id 145
-	Type 10
+	Type 9
 	Position -3499 5.9799805 -10883
 Structure
 	Id 146
-	Type 10
+	Type 9
 	Position -3503 6.0429688 -10881
 Structure
 	Id 147
-	Type 28
+	Type 27
 	Position -3503 6.7103515 -10879
 Structure
 	Id 148
-	Type 28
+	Type 27
 	Position -3501 6.662988 -10879
 Structure
 	Id 149
-	Type 28
+	Type 27
 	Position -3501 6.6336913 -10881
 Structure
 	Id 150
-	Type 28
+	Type 27
 	Position -3499 6.596582 -10881
 Structure
 	Id 151
-	Type 28
+	Type 27
 	Position -3505 6.7401366 -10877
 Structure
 	Id 152
-	Type 10
+	Type 9
 	Position -3497 5.8686523 -10883
 Structure
 	Id 153
-	Type 10
+	Type 9
 	Position -3495 5.755371 -10883
 Structure
 	Id 154
-	Type 10
+	Type 9
 	Position -3493 5.6743164 -10883
 Structure
 	Id 155
-	Type 10
+	Type 9
 	Position -3491 5.6245117 -10883
 Structure
 	Id 156
-	Type 10
+	Type 9
 	Position -3489 5.574707 -10883
 Structure
 	Id 157
-	Type 10
+	Type 9
 	Position -3487 5.536133 -10883
 Structure
 	Id 158
-	Type 10
+	Type 9
 	Position -3485 5.498535 -10883
 Structure
 	Id 159
-	Type 28
+	Type 27
 	Position -3497 6.5145507 -10881
 Structure
 	Id 160
-	Type 28
+	Type 27
 	Position -3495 6.393945 -10881
 Structure
 	Id 161
-	Type 28
+	Type 27
 	Position -3493 6.277246 -10881
 Structure
 	Id 162
-	Type 28
+	Type 27
 	Position -3491 6.223047 -10881
 Structure
 	Id 163
-	Type 28
+	Type 27
 	Position -3489 6.1683593 -10881
 Structure
 	Id 164
-	Type 28
+	Type 27
 	Position -3487 6.1273437 -10881
 Structure
 	Id 165
-	Type 28
+	Type 27
 	Position -3485 6.096582 -10881
 Structure
 	Id 166
-	Type 17
+	Type 16
 	Position -3487 4.561035 -10867
 Structure
 	Id 167
-	Type 17
+	Type 16
 	Position -3487 4.458496 -10869
 Structure
 	Id 168
-	Type 17
+	Type 16
 	Position -3487 4.355957 -10871
 Structure
 	Id 169
-	Type 17
+	Type 16
 	Position -3487 4.2973633 -10873
 Structure
 	Id 170
-	Type 17
+	Type 16
 	Position -3487 4.2504883 -10875
 Structure
 	Id 171
-	Type 17
+	Type 16
 	Position -3487 4.225586 -10877
 Structure
 	Id 172
-	Type 28
+	Type 27
 	Position -3487 6.1014647 -10879
 Structure
 	Id 173
-	Type 10
+	Type 9
 	Position -3507 6.536621 -10847
 Structure
 	Id 174
-	Type 10
+	Type 9
 	Position -3509 6.4750977 -10849
 Structure
 	Id 175
-	Type 10
+	Type 9
 	Position -3505 6.5878906 -10845
 Structure
 	Id 176
-	Type 10
+	Type 9
 	Position -3503 6.5498047 -10845
 Structure
 	Id 177
-	Type 10
+	Type 9
 	Position -3501 6.508301 -10845
 Structure
 	Id 178
-	Type 10
+	Type 9
 	Position -3499 6.470703 -10845
 Structure
 	Id 179
-	Type 10
+	Type 9
 	Position -3499 6.51416 -10843
 Structure
 	Id 180
-	Type 10
+	Type 9
 	Position -3497 6.513672 -10843
 Structure
 	Id 181
-	Type 10
+	Type 9
 	Position -3495 6.552246 -10843
 Structure
 	Id 182
-	Type 10
+	Type 9
 	Position -3493 6.5898438 -10843
 Structure
 	Id 183
-	Type 10
+	Type 9
 	Position -3491 6.584961 -10843
 Structure
 	Id 184
-	Type 10
+	Type 9
 	Position -3489 6.5688477 -10843
 Structure
 	Id 185
-	Type 10
+	Type 9
 	Position -3487 6.5029297 -10843
 Structure
 	Id 186
-	Type 10
+	Type 9
 	Position -3487 6.4375 -10845
 Structure
 	Id 187
-	Type 10
+	Type 9
 	Position -3485 6.3657227 -10845
 Structure
 	Id 188
-	Type 10
+	Type 9
 	Position -3483 6.320801 -10845
 Structure
 	Id 189
-	Type 10
+	Type 9
 	Position -3481 6.300293 -10845
 Structure
 	Id 190
-	Type 10
+	Type 9
 	Position -3513 6.133789 -10871
 Structure
 	Id 191
-	Type 10
+	Type 9
 	Position -3513 6.1655273 -10869
 Structure
 	Id 192
-	Type 10
+	Type 9
 	Position -3513 6.196289 -10867
 Structure
 	Id 193
-	Type 10
+	Type 9
 	Position -3513 6.227051 -10865
 Structure
 	Id 194
-	Type 10
+	Type 9
 	Position -3513 6.2578125 -10863
 Structure
 	Id 195
-	Type 10
+	Type 9
 	Position -3513 6.288574 -10861
 Structure
 	Id 196
-	Type 10
+	Type 9
 	Position -3513 6.3061523 -10859
 Structure
 	Id 197
-	Type 10
+	Type 9
 	Position -3513 6.3120117 -10857
 Structure
 	Id 198
-	Type 10
+	Type 9
 	Position -3511 6.383301 -10851
 Structure
 	Id 199
-	Type 10
+	Type 9
 	Position -3511 6.36084 -10853
 Structure
 	Id 200
-	Type 10
+	Type 9
 	Position -3511 6.338379 -10855
 Structure
 	Id 201
-	Type 17
+	Type 16
 	Position -3505 5.098633 -10853
 Structure
 	Id 202
-	Type 28
+	Type 27
 	Position -3507 6.978906 -10853
 Structure
 	Id 203
-	Type 28
+	Type 27
 	Position -3509 7.035547 -10851
 Structure
 	Id 204
-	Type 28
+	Type 27
 	Position -3509 6.9896483 -10853
 Structure
 	Id 205
-	Type 28
+	Type 27
 	Position -3509 6.9549804 -10855
 Structure
 	Id 206
-	Type 28
+	Type 27
 	Position -3509 6.919824 -10857
 Structure
 	Id 207
-	Type 28
+	Type 27
 	Position -3511 6.92666 -10857
 Structure
 	Id 208
-	Type 28
+	Type 27
 	Position -3511 6.9051757 -10859
 Structure
 	Id 209
-	Type 28
+	Type 27
 	Position -3511 6.883203 -10861
 Structure
 	Id 210
-	Type 28
+	Type 27
 	Position -3511 6.8514647 -10863
 Structure
 	Id 211
-	Type 28
+	Type 27
 	Position -3511 6.816797 -10865
 Structure
 	Id 212
-	Type 28
+	Type 27
 	Position -3511 6.786035 -10867
 Structure
 	Id 213
-	Type 28
+	Type 27
 	Position -3511 6.7640624 -10869
 Structure
 	Id 214
-	Type 28
+	Type 27
 	Position -3511 6.7420897 -10871
 Structure
 	Id 215
-	Type 28
+	Type 27
 	Position -3511 6.719629 -10873
 Structure
 	Id 216
-	Type 28
+	Type 27
 	Position -3509 6.725 -10873
 Structure
 	Id 218
-	Type 17
+	Type 16
 	Position -3425 5.229492 -10855
 Structure
 	Id 219
-	Type 17
+	Type 16
 	Position -3425 5.2529297 -10853
 Structure
 	Id 220
-	Type 17
+	Type 16
 	Position -3425 5.2807617 -10851
 Structure
 	Id 221
-	Type 17
+	Type 16
 	Position -3425 5.3286133 -10849
 Structure
 	Id 222
-	Type 17
+	Type 16
 	Position -3425 5.376953 -10847
 Structure
 	Id 223
-	Type 17
+	Type 16
 	Position -3425 5.4140625 -10845
 Structure
 	Id 224
-	Type 17
+	Type 16
 	Position -3425 5.446289 -10843
 Structure
 	Id 226
-	Type 13
+	Type 12
 	Position -3427 6.117676 -10847
 	Minerals 10
 Structure
 	Id 227
-	Type 10
+	Type 9
 	Position -3415 6.7856445 -10835
 Structure
 	Id 228
-	Type 10
+	Type 9
 	Position -3417 6.79834 -10835
 Structure
 	Id 229
-	Type 10
+	Type 9
 	Position -3419 6.8115234 -10835
 Structure
 	Id 230
-	Type 10
+	Type 9
 	Position -3421 6.821289 -10835
 Structure
 	Id 231
-	Type 10
+	Type 9
 	Position -3423 6.8164062 -10835
 Structure
 	Id 232
-	Type 10
+	Type 9
 	Position -3425 6.7685547 -10835
 Structure
 	Id 233
-	Type 10
+	Type 9
 	Position -3427 6.715332 -10835
 Structure
 	Id 234
-	Type 10
+	Type 9
 	Position -3429 6.7109375 -10835
 Structure
 	Id 235
-	Type 10
+	Type 9
 	Position -3431 6.7036133 -10835
 Structure
 	Id 236
-	Type 10
+	Type 9
 	Position -3433 6.692871 -10835
 Structure
 	Id 237
-	Type 10
+	Type 9
 	Position -3435 6.6777344 -10835
 Structure
 	Id 241
-	Type 10
+	Type 9
 	Position -3407 6.6875 -10839
 Structure
 	Id 242
-	Type 10
+	Type 9
 	Position -3401 6.3310547 -10849
 Structure
 	Id 243
-	Type 10
+	Type 9
 	Position -3401 6.390625 -10847
 Structure
 	Id 244
-	Type 10
+	Type 9
 	Position -3403 6.5595703 -10845
 Structure
 	Id 245
-	Type 10
+	Type 9
 	Position -3403 6.5771484 -10843
 Structure
 	Id 246
-	Type 10
+	Type 9
 	Position -3405 6.6503906 -10841
 Structure
 	Id 247
-	Type 10
+	Type 9
 	Position -3401 5.973633 -10867
 Structure
 	Id 248
-	Type 10
+	Type 9
 	Position -3403 6.0195312 -10869
 Structure
 	Id 249
-	Type 10
+	Type 9
 	Position -3405 6.0117188 -10871
 Structure
 	Id 250
-	Type 10
+	Type 9
 	Position -3407 5.9555664 -10873
 Structure
 	Id 251
-	Type 10
+	Type 9
 	Position -3409 5.92334 -10875
 Structure
 	Id 252
-	Type 10
+	Type 9
 	Position -3411 5.90625 -10877
 Structure
 	Id 253
-	Type 10
+	Type 9
 	Position -3413 5.911133 -10877
 Structure
 	Id 254
-	Type 10
+	Type 9
 	Position -3415 5.930176 -10877
 Structure
 	Id 255
-	Type 10
+	Type 9
 	Position -3417 5.9658203 -10877
 Structure
 	Id 256
-	Type 10
+	Type 9
 	Position -3419 5.995117 -10877
 Structure
 	Id 257
-	Type 10
+	Type 9
 	Position -3421 6.0439453 -10877
 Structure
 	Id 258
-	Type 10
+	Type 9
 	Position -3423 6.0932617 -10877
 Structure
 	Id 259
-	Type 10
+	Type 9
 	Position -3425 6.1557617 -10877
 Structure
 	Id 260
-	Type 10
+	Type 9
 	Position -3427 6.2333984 -10877
 Structure
 	Id 264
-	Type 17
+	Type 16
 	Position -3425 5.151367 -10859
 Structure
 	Id 265
-	Type 17
+	Type 16
 	Position -3425 5.104004 -10861
 Structure
 	Id 266
-	Type 17
+	Type 16
 	Position -3425 5.065918 -10863
 Structure
 	Id 267
-	Type 17
+	Type 16
 	Position -3425 5.0307617 -10865
 Structure
 	Id 268
-	Type 13
+	Type 12
 	Position -3423 5.7666016 -10863
 	Minerals 23.00113
 Structure
 	Id 269
-	Type 29
+	Type 28
 	Position -3500 6.6450195 -10854
 Structure
 	Id 270
-	Type 28
+	Type 27
 	Position -3503 7.1253905 -10847
 Structure
 	Id 271
-	Type 28
+	Type 27
 	Position -3505 7.160547 -10847
 Structure
 	Id 272
-	Type 28
+	Type 27
 	Position -3501 7.088281 -10847
 Structure
 	Id 273
-	Type 28
+	Type 27
 	Position -3503 7.0316405 -10849
 Structure
 	Id 274
-	Type 28
+	Type 27
 	Position -3499 7.05166 -10847
 Structure
 	Id 275
-	Type 28
+	Type 27
 	Position -3497 7.060449 -10847
 Structure
 	Id 276
-	Type 28
+	Type 27
 	Position -3497 7.112207 -10845
 Structure
 	Id 277
-	Type 28
+	Type 27
 	Position -3495 7.1561522 -10845
 Structure
 	Id 278
-	Type 28
+	Type 27
 	Position -3493 7.1966796 -10845
 Structure
 	Id 279
-	Type 28
+	Type 27
 	Position -3491 7.1737304 -10845
 Structure
 	Id 280
-	Type 28
+	Type 27
 	Position -3489 7.150293 -10845
 Structure
 	Id 281
-	Type 28
+	Type 27
 	Position -3425 6.800195 -10875
 Structure
 	Id 282
-	Type 28
+	Type 27
 	Position -3425 6.8041015 -10873
 Structure
 	Id 283
-	Type 17
+	Type 16
 	Position -3425 5 -10867
 Structure
 	Id 284
-	Type 17
+	Type 16
 	Position -3425 4.980957 -10869
 Structure
 	Id 285
-	Type 17
+	Type 16
 	Position -3425 4.961914 -10871
 Structure
 	Id 286
-	Type 17
+	Type 16
 	Position -3423 4.876953 -10871
 Structure
 	Id 287
-	Type 17
+	Type 16
 	Position -3421 4.828125 -10871
 Structure
 	Id 288
-	Type 17
+	Type 16
 	Position -3419 4.7788086 -10871
 Structure
 	Id 290
-	Type 28
+	Type 27
 	Position -3419 6.6180663 -10875
 Structure
 	Id 291
-	Type 28
+	Type 27
 	Position -3419 6.6180663 -10873
 Structure
 	Id 292
-	Type 28
+	Type 27
 	Position -3417 6.580957 -10875
 Structure
 	Id 293
-	Type 28
+	Type 27
 	Position -3415 6.5545897 -10875
 Structure
 	Id 294
-	Type 28
+	Type 27
 	Position -3413 6.529199 -10875
 Structure
 	Id 295
-	Type 28
+	Type 27
 	Position -3411 6.532617 -10875
 Structure
 	Id 296
-	Type 28
+	Type 27
 	Position -3411 6.5453124 -10873
 Structure
 	Id 297
-	Type 28
+	Type 27
 	Position -3409 6.5609374 -10873
 Structure
 	Id 298
-	Type 28
+	Type 27
 	Position -3409 6.589746 -10871
 Structure
 	Id 299
-	Type 28
+	Type 27
 	Position -3407 6.612695 -10871
 Structure
 	Id 300
-	Type 28
+	Type 27
 	Position -3407 6.643945 -10869
 Structure
 	Id 301
-	Type 28
+	Type 27
 	Position -3405 6.64541 -10869
 Structure
 	Id 302
-	Type 28
+	Type 27
 	Position -3405 6.6561522 -10867
 Structure
 	Id 303
-	Type 28
+	Type 27
 	Position -3403 6.6371093 -10867
 Structure
 	Id 304
-	Type 29
+	Type 28
 	Position -3416 6.6469727 -10860
 Structure
 	Id 305
-	Type 28
+	Type 27
 	Position -3429 7.3177733 -10837
 Structure
 	Id 306
-	Type 28
+	Type 27
 	Position -3431 7.3060546 -10837
 Structure
 	Id 307
-	Type 28
+	Type 27
 	Position -3433 7.2938476 -10837
 Structure
 	Id 308
-	Type 28
+	Type 27
 	Position -3435 7.272363 -10837
 Structure
 	Id 309
-	Type 28
+	Type 27
 	Position -3427 7.343164 -10837
 Structure
 	Id 310
-	Type 28
+	Type 27
 	Position -3421 7.4027343 -10837
 Structure
 	Id 311
-	Type 28
+	Type 27
 	Position -3419 7.3910155 -10837
 Structure
 	Id 312
-	Type 28
+	Type 27
 	Position -3417 7.3788085 -10837
 Structure
 	Id 319
-	Type 28
+	Type 27
 	Position -3407 7.2811522 -10841
 Structure
 	Id 320
-	Type 28
+	Type 27
 	Position -3407 7.247461 -10843
 Structure
 	Id 321
-	Type 28
+	Type 27
 	Position -3405 7.242578 -10843
 Structure
 	Id 322
-	Type 28
+	Type 27
 	Position -3405 7.2191405 -10845
 Structure
 	Id 323
-	Type 28
+	Type 27
 	Position -3403 7.190332 -10847
 Structure
 	Id 324
-	Type 28
+	Type 27
 	Position -3403 7.1170897 -10849
 Structure
 	Id 328
-	Type 27
+	Type 26
 	Position -3428 7.1689453 -10844
 	Charge 30
 Structure
 	Id 329
-	Type 28
+	Type 27
 	Position -3425 7.353906 -10839
 Structure
 	Id 330
-	Type 17
+	Type 16
 	Position -3425 5.477051 -10841
 Structure
 	Id 332
-	Type 17
+	Type 16
 	Position -3503 4.899414 -10877
 Structure
 	Id 333
-	Type 17
+	Type 16
 	Position -3501 4.841797 -10877
 Structure
 	Id 334
-	Type 17
+	Type 16
 	Position -3499 4.7836914 -10877
 Structure
 	Id 336
-	Type 27
+	Type 26
 	Position -3496 6.2524414 -10878
 	Charge 30
 Structure
 	Id 337
-	Type 27
+	Type 26
 	Position -3500 6.751465 -10850
 	Charge 30
 Structure
 	Id 338
-	Type 29
+	Type 28
 	Position -3490 5.955078 -10878
 Structure
 	Id 339
-	Type 11
+	Type 10
 	Position -3494 6.192383 -10874
 	Charge 0.5
 Structure
 	Id 340
-	Type 21
+	Type 20
 	Position -3490 5.4555664 -10874
 Structure
 	Id 341
-	Type 10
+	Type 9
 	Position -3427 6.225586 -10879
 Structure
 	Id 342
-	Type 10
+	Type 9
 	Position -3427 6.2211914 -10881
 Structure
 	Id 343
-	Type 10
+	Type 9
 	Position -3427 6.2246094 -10883
 Structure
 	Id 344
-	Type 10
+	Type 9
 	Position -3427 6.241211 -10885
 Structure
 	Id 345
-	Type 10
+	Type 9
 	Position -3429 6.3427734 -10885
 Structure
 	Id 346
-	Type 10
+	Type 9
 	Position -3431 6.421875 -10885
 Structure
 	Id 347
-	Type 10
+	Type 9
 	Position -3433 6.4995117 -10885
 Structure
 	Id 348
-	Type 10
+	Type 9
 	Position -3435 6.4194336 -10885
 Structure
 	Id 349
-	Type 10
+	Type 9
 	Position -3437 6.3310547 -10885
 Structure
 	Id 350
-	Type 10
+	Type 9
 	Position -3439 6.150879 -10885
 Structure
 	Id 351
-	Type 10
+	Type 9
 	Position -3441 5.9628906 -10885
 Structure
 	Id 352
-	Type 10
+	Type 9
 	Position -3443 5.864258 -10885
 Structure
 	Id 353
-	Type 10
+	Type 9
 	Position -3445 5.873047 -10885
 Structure
 	Id 354
-	Type 10
+	Type 9
 	Position -3447 5.911133 -10885
 Structure
 	Id 355
-	Type 10
+	Type 9
 	Position -3449 5.919922 -10885
 Structure
 	Id 356
-	Type 10
+	Type 9
 	Position -3451 5.9086914 -10885
 	Health 994.5
 Structure
 	Id 357
-	Type 10
+	Type 9
 	Position -3451 5.9086914 -10883
 Structure
 	Id 358
-	Type 10
+	Type 9
 	Position -3453 5.9033203 -10883
 Structure
 	Id 359
-	Type 10
+	Type 9
 	Position -3455 5.938965 -10883
 	Health 997.5
 Structure
 	Id 361
-	Type 10
+	Type 9
 	Position -3457 6.07959 -10881
 Structure
 	Id 362
-	Type 10
+	Type 9
 	Position -3459 6.1342773 -10879
 Structure
 	Id 363
-	Type 10
+	Type 9
 	Position -3461 6.104492 -10877
 Structure
 	Id 364
-	Type 10
+	Type 9
 	Position -3463 6.0664062 -10875
 Structure
 	Id 365
-	Type 10
+	Type 9
 	Position -3465 5.918457 -10873
 Structure
 	Id 366
-	Type 17
+	Type 16
 	Position -3453 5.123535 -10859
 Structure
 	Id 367
-	Type 17
+	Type 16
 	Position -3453 5.1347656 -10861
 Structure
 	Id 368
-	Type 17
+	Type 16
 	Position -3453 5.102051 -10863
 Structure
 	Id 369
-	Type 17
+	Type 16
 	Position -3453 5.0581055 -10865
 Structure
 	Id 370
-	Type 17
+	Type 16
 	Position -3453 5.004883 -10867
 Structure
 	Id 371
-	Type 17
+	Type 16
 	Position -3453 4.929199 -10869
 Structure
 	Id 372
-	Type 17
+	Type 16
 	Position -3453 4.8530273 -10871
 Structure
 	Id 373
-	Type 17
+	Type 16
 	Position -3453 4.782715 -10873
 Structure
 	Id 375
-	Type 28
+	Type 27
 	Position -3427 6.885156 -10875
 Structure
 	Id 376
-	Type 28
+	Type 27
 	Position -3429 6.964746 -10875
 Structure
 	Id 377
-	Type 28
+	Type 27
 	Position -3429 6.9549804 -10877
 Structure
 	Id 378
-	Type 28
+	Type 27
 	Position -3429 6.945703 -10879
 Structure
 	Id 379
-	Type 28
+	Type 27
 	Position -3429 6.9359374 -10881
 Structure
 	Id 380
-	Type 28
+	Type 27
 	Position -3429 6.9623046 -10883
 Structure
 	Id 381
-	Type 28
+	Type 27
 	Position -3431 7.047754 -10883
 Structure
 	Id 382
-	Type 28
+	Type 27
 	Position -3433 7.133203 -10883
 Structure
 	Id 383
-	Type 28
+	Type 27
 	Position -3435 7.1024413 -10883
 Structure
 	Id 384
-	Type 28
+	Type 27
 	Position -3437 7.06582 -10883
 Structure
 	Id 385
-	Type 28
+	Type 27
 	Position -3439 6.9535155 -10883
 Structure
 	Id 386
-	Type 28
+	Type 27
 	Position -3441 6.7484374 -10883
 Structure
 	Id 387
-	Type 28
+	Type 27
 	Position -3443 6.542871 -10883
 Structure
 	Id 388
-	Type 28
+	Type 27
 	Position -3445 6.528711 -10883
 Structure
 	Id 389
-	Type 28
+	Type 27
 	Position -3447 6.5233397 -10883
 Structure
 	Id 390
-	Type 28
+	Type 27
 	Position -3449 6.5174804 -10883
 Structure
 	Id 391
-	Type 28
+	Type 27
 	Position -3453 6.510156 -10881
 Structure
 	Id 392
-	Type 28
+	Type 27
 	Position -3455 6.62832 -10881
 Structure
 	Id 393
-	Type 28
+	Type 27
 	Position -3457 6.7142577 -10879
 Structure
 	Id 394
-	Type 28
+	Type 27
 	Position -3455 6.610742 -10879
 Structure
 	Id 395
-	Type 28
+	Type 27
 	Position -3457 6.67666 -10877
 Structure
 	Id 396
-	Type 28
+	Type 27
 	Position -3459 6.7191405 -10877
 Structure
 	Id 397
-	Type 28
+	Type 27
 	Position -3459 6.7259765 -10875
 Structure
 	Id 398
-	Type 28
+	Type 27
 	Position -3461 6.723535 -10875
 Structure
 	Id 399
-	Type 28
+	Type 27
 	Position -3461 6.7572265 -10873
 Structure
 	Id 400
-	Type 28
+	Type 27
 	Position -3463 6.7591796 -10873
 Structure
 	Id 401
-	Type 28
+	Type 27
 	Position -3463 6.7992187 -10871
 Structure
 	Id 402
-	Type 28
+	Type 27
 	Position -3465 6.7293944 -10871
 Structure
 	Id 403
-	Type 10
+	Type 9
 	Position -3467 5.2788086 -10873
 Structure
 	Id 404
-	Type 25
+	Type 24
 	Position -3469 5.4340706 -10873
 Structure
 	Id 405
-	Type 25
+	Type 24
 	Position -3471 5.4355936 -10873
 Structure
 	Id 406
-	Type 28
+	Type 27
 	Position -3467 6.3617187 -10871
 Structure
 	Id 410
-	Type 28
+	Type 27
 	Position -3451 6.513086 -10881
 Structure
 	Id 411
-	Type 28
+	Type 27
 	Position -3449 6.5160155 -10881
 Structure
 	Id 413
-	Type 28
+	Type 27
 	Position -3453 6.5121093 -10879
 Structure
 	Id 414
-	Type 17
+	Type 16
 	Position -3453 4.713867 -10875
 Structure
 	Id 415
-	Type 17
+	Type 16
 	Position -3453 4.665039 -10877
 Structure
 	Id 416
-	Type 17
+	Type 16
 	Position -3473 5.054199 -10859
 Structure
 	Id 417
-	Type 17
+	Type 16
 	Position -3473 5.025879 -10861
 Structure
 	Id 418
-	Type 17
+	Type 16
 	Position -3473 4.951172 -10863
 Structure
 	Id 419
-	Type 17
+	Type 16
 	Position -3473 4.914551 -10865
 Structure
 	Id 420
-	Type 17
+	Type 16
 	Position -3473 4.862793 -10867
 Structure
 	Id 421
-	Type 28
+	Type 27
 	Position -3473 6.6512694 -10869
 Structure
 	Id 422
-	Type 28
+	Type 27
 	Position -3473 6.6151366 -10871
 Structure
 	Id 423
-	Type 10
+	Type 9
 	Position -3473 5.630371 -10873
 Structure
 	Id 424
-	Type 10
+	Type 9
 	Position -3475 5.984375 -10873
 Structure
 	Id 425
-	Type 10
+	Type 9
 	Position -3477 5.852539 -10875
 Structure
 	Id 426
-	Type 10
+	Type 9
 	Position -3479 5.6445312 -10877
 Structure
 	Id 427
-	Type 10
+	Type 9
 	Position -3481 5.507324 -10879
 Structure
 	Id 428
-	Type 10
+	Type 9
 	Position -3483 5.4682617 -10881
 Structure
 	Id 429
-	Type 28
+	Type 27
 	Position -3483 6.107324 -10879
 Structure
 	Id 430
-	Type 28
+	Type 27
 	Position -3485 6.103418 -10879
 Structure
 	Id 431
-	Type 28
+	Type 27
 	Position -3483 6.146875 -10877
 Structure
 	Id 432
-	Type 28
+	Type 27
 	Position -3481 6.242578 -10877
 Structure
 	Id 433
-	Type 28
+	Type 27
 	Position -3481 6.3441405 -10875
 Structure
 	Id 434
-	Type 28
+	Type 27
 	Position -3479 6.4554687 -10875
 Structure
 	Id 435
-	Type 28
+	Type 27
 	Position -3479 6.5711913 -10873
 Structure
 	Id 436
-	Type 28
+	Type 27
 	Position -3477 6.6273437 -10873
 Structure
 	Id 437
-	Type 28
+	Type 27
 	Position -3477 6.725488 -10871
 Structure
 	Id 438
-	Type 28
+	Type 27
 	Position -3475 6.716699 -10871
 Structure
 	Id 439
-	Type 28
+	Type 27
 	Position -3489 7.0838866 -10847
 Structure
 	Id 440
-	Type 28
+	Type 27
 	Position -3487 7.0296874 -10847
 Structure
 	Id 441
-	Type 28
+	Type 27
 	Position -3485 6.9588866 -10847
 Structure
 	Id 442
-	Type 28
+	Type 27
 	Position -3483 6.8905272 -10847
 Structure
 	Id 443
-	Type 28
+	Type 27
 	Position -3481 6.8827147 -10847
 Structure
 	Id 444
-	Type 29
+	Type 28
 	Position -3476 6.64209 -10868
 Structure
 	Id 445
-	Type 29
+	Type 28
 	Position -3450 6.436035 -10876
 Structure
 	Id 446
-	Type 10
+	Type 9
 	Position -3477 6.2460938 -10845
 Structure
 	Id 447
-	Type 10
+	Type 9
 	Position -3479 6.279297 -10845
 Structure
 	Id 448
-	Type 10
+	Type 9
 	Position -3475 6.1899414 -10845
 Structure
 	Id 449
-	Type 10
+	Type 9
 	Position -3437 6.6621094 -10835
 Structure
 	Id 450
-	Type 10
+	Type 9
 	Position -3439 6.642578 -10835
 Structure
 	Id 451
-	Type 10
+	Type 9
 	Position -3441 6.6137695 -10835
 Structure
 	Id 452
-	Type 10
+	Type 9
 	Position -3443 6.567383 -10835
 Structure
 	Id 453
-	Type 10
+	Type 9
 	Position -3445 6.5004883 -10835
 Structure
 	Id 454
-	Type 10
+	Type 9
 	Position -3447 6.432617 -10835
 Structure
 	Id 455
-	Type 10
+	Type 9
 	Position -3449 6.4316406 -10835
 Structure
 	Id 456
-	Type 10
+	Type 9
 	Position -3451 6.4833984 -10835
 Structure
 	Id 457
-	Type 10
+	Type 9
 	Position -3453 6.540039 -10835
 Structure
 	Id 458
-	Type 10
+	Type 9
 	Position -3455 6.4882812 -10835
 Structure
 	Id 459
-	Type 10
+	Type 9
 	Position -3473 6.135254 -10845
 Structure
 	Id 460
-	Type 10
+	Type 9
 	Position -3471 6.0839844 -10845
 Structure
 	Id 461
-	Type 10
+	Type 9
 	Position -3469 5.9492188 -10845
 Structure
 	Id 462
-	Type 10
+	Type 9
 	Position -3467 5.3691406 -10845
 Structure
 	Id 463
-	Type 10
+	Type 9
 	Position -3461 6.11084 -10845
 Structure
 	Id 464
-	Type 25
+	Type 24
 	Position -3465 5.781751 -10845
 Structure
 	Id 465
-	Type 25
+	Type 24
 	Position -3463 5.7834716 -10845
 Structure
 	Id 466
-	Type 10
+	Type 9
 	Position -3457 6.2836914 -10837
 Structure
 	Id 467
-	Type 10
+	Type 9
 	Position -3459 5.953125 -10839
 Structure
 	Id 468
-	Type 10
+	Type 9
 	Position -3459 6.2001953 -10841
 Structure
 	Id 469
-	Type 10
+	Type 9
 	Position -3459 6.397949 -10843
 Structure
 	Id 470
-	Type 10
+	Type 9
 	Position -3459 6.45459 -10845
 Structure
 	Id 471
-	Type 28
+	Type 27
 	Position -3437 7.2499022 -10837
 Structure
 	Id 472
-	Type 28
+	Type 27
 	Position -3439 7.233789 -10837
 Structure
 	Id 473
-	Type 28
+	Type 27
 	Position -3441 7.225 -10837
 Structure
 	Id 474
-	Type 28
+	Type 27
 	Position -3443 7.216211 -10837
 Structure
 	Id 475
-	Type 28
+	Type 27
 	Position -3447 7.1205077 -10837
 Structure
 	Id 476
-	Type 28
+	Type 27
 	Position -3443 7.2171874 -10839
 Structure
 	Id 477
-	Type 28
+	Type 27
 	Position -3445 7.1742187 -10839
 Structure
 	Id 478
-	Type 28
+	Type 27
 	Position -3447 7.127832 -10839
 Structure
 	Id 479
-	Type 28
+	Type 27
 	Position -3449 7.112695 -10837
 Structure
 	Id 480
-	Type 28
+	Type 27
 	Position -3451 7.1546874 -10837
 Structure
 	Id 481
-	Type 28
+	Type 27
 	Position -3453 7.1966796 -10837
 Structure
 	Id 482
-	Type 28
+	Type 27
 	Position -3455 7.1927733 -10837
 Structure
 	Id 483
-	Type 28
+	Type 27
 	Position -3455 7.1478515 -10839
 Structure
 	Id 484
-	Type 28
+	Type 27
 	Position -3457 7.152246 -10839
 Structure
 	Id 485
-	Type 28
+	Type 27
 	Position -3457 7.119043 -10841
 Structure
 	Id 486
-	Type 28
+	Type 27
 	Position -3457 7.1327147 -10843
 Structure
 	Id 487
-	Type 28
+	Type 27
 	Position -3457 7.1581054 -10845
 Structure
 	Id 488
-	Type 28
+	Type 27
 	Position -3457 7.1620116 -10847
 Structure
 	Id 489
-	Type 28
+	Type 27
 	Position -3459 7.1390624 -10847
 Structure
 	Id 490
-	Type 28
+	Type 27
 	Position -3461 7.0731444 -10847
 Structure
 	Id 493
-	Type 28
+	Type 27
 	Position -3467 6.36973 -10847
 Structure
 	Id 494
-	Type 28
+	Type 27
 	Position -3469 6.7225585 -10847
 Structure
 	Id 495
-	Type 28
+	Type 27
 	Position -3471 6.790918 -10847
 Structure
 	Id 496
-	Type 28
+	Type 27
 	Position -3473 6.8094726 -10847
 Structure
 	Id 497
-	Type 28
+	Type 27
 	Position -3475 6.8333983 -10847
 Structure
 	Id 498
-	Type 28
+	Type 27
 	Position -3477 6.8578124 -10847
 Structure
 	Id 499
-	Type 28
+	Type 27
 	Position -3479 6.874414 -10847
 Structure
 	Id 500
-	Type 28
+	Type 27
 	Position -3457 7.11416 -10849
 Structure
 	Id 501
-	Type 28
+	Type 27
 	Position -3473 6.829004 -10849
 Structure
 	Id 502
-	Type 17
+	Type 16
 	Position -3473 4.9990234 -10851
 Structure
 	Id 503
-	Type 17
+	Type 16
 	Position -3473 5.0166016 -10853
 Structure
 	Id 504
-	Type 17
+	Type 16
 	Position -3473 5.033203 -10855
 Structure
 	Id 505
-	Type 17
+	Type 16
 	Position -3457 5.2163086 -10851
 Structure
 	Id 506
-	Type 17
+	Type 16
 	Position -3457 5.190918 -10853
 Structure
 	Id 507
-	Type 17
+	Type 16
 	Position -3457 5.17041 -10855
 Structure
 	Id 508
-	Type 13
+	Type 12
 	Position -3449 5.838379 -10855
 	Minerals 10.228233
 Structure
 	Id 510
-	Type 29
+	Type 28
 	Position -3460 6.925293 -10854
 Structure
 	Id 511
-	Type 27
+	Type 26
 	Position -3460 6.958008 -10850
 	Charge 30
 Structure
 	Id 512
-	Type 11
+	Type 10
 	Position -3408 6.5429688 -10866
 	Charge 0.5
 Structure
 	Id 513
-	Type 26
+	Type 25
 	Position -3409 6 -10869
 	Charge 40
 Structure
 	Id 514
-	Type 17
+	Type 16
 	Position -3507 4.82666 -10867
 Structure
 	Id 515
-	Type 28
+	Type 27
 	Position -3509 6.737695 -10867
 Structure
 	Id 516
-	Type 29
+	Type 28
 	Position -3508 6.551758 -10870
 Structure
 	Id 517
-	Type 13
+	Type 12
 	Position -3507 5.5898438 -10873
 	Minerals 30
 Structure
@@ -2085,12 +2085,12 @@ Structure
 	Position -3448 5.3876953 -10850
 Structure
 	Id 542
-	Type 13
+	Type 12
 	Position -3447 5.84375 -10855
 	Minerals 2.969245
 Structure
 	Id 543
-	Type 11
+	Type 10
 	Position -3452 6.991699 -10840
 	Charge 0.5
 Structure
@@ -2139,35 +2139,35 @@ Structure
 	Position -3448 5.330078 -10864
 Structure
 	Id 555
-	Type 21
+	Type 20
 	Position -3440 6.4780273 -10860
 Structure
 	Id 556
-	Type 21
+	Type 20
 	Position -3444 6.48291 -10860
 Structure
 	Id 557
-	Type 21
+	Type 20
 	Position -3448 6.3598633 -10860
 Structure
 	Id 558
-	Type 13
+	Type 12
 	Position -3455 5.4526367 -10877
 Structure
 	Id 559
-	Type 17
+	Type 16
 	Position -3463 4.8862305 -10847
 Structure
 	Id 560
-	Type 24
+	Type 23
 	Position -3465 4.52317 -10847
 Structure
 	Id 561
-	Type 24
+	Type 23
 	Position -3471 4.267924 -10871
 Structure
 	Id 562
-	Type 24
+	Type 23
 	Position -3469 4.266401 -10871
 Structure
 	Id 563
@@ -2176,104 +2176,104 @@ Structure
 	Fuel 30
 Structure
 	Id 564
-	Type 17
+	Type 16
 	Position -3407 5.36084 -10845
 Structure
 	Id 565
-	Type 17
+	Type 16
 	Position -3409 5.3549805 -10845
 Structure
 	Id 566
-	Type 17
+	Type 16
 	Position -3409 5.3969727 -10843
 Structure
 	Id 567
-	Type 17
+	Type 16
 	Position -3409 5.4370117 -10841
 Structure
 	Id 568
-	Type 17
+	Type 16
 	Position -3409 5.465332 -10839
 Structure
 	Id 569
-	Type 13
+	Type 12
 	Position -3411 6.1206055 -10843
 	Minerals 30
 Structure
 	Id 570
-	Type 17
+	Type 16
 	Position -3409 5.4941406 -10837
 Structure
 	Id 571
-	Type 17
+	Type 16
 	Position -3407 5.48291 -10837
 Structure
 	Id 572
-	Type 17
+	Type 16
 	Position -3405 5.465332 -10837
 Structure
 	Id 573
-	Type 17
+	Type 16
 	Position -3403 5.445801 -10837
 Structure
 	Id 574
-	Type 17
+	Type 16
 	Position -3403 5.486328 -10835
 Structure
 	Id 575
-	Type 17
+	Type 16
 	Position -3403 5.5341797 -10833
 Structure
 	Id 576
-	Type 17
+	Type 16
 	Position -3403 5.583008 -10831
 Structure
 	Id 577
-	Type 17
+	Type 16
 	Position -3403 5.6347656 -10829
 Structure
 	Id 578
-	Type 17
+	Type 16
 	Position -3403 5.686035 -10827
 Structure
 	Id 579
-	Type 17
+	Type 16
 	Position -3401 5.6835938 -10827
 Structure
 	Id 581
-	Type 17
+	Type 16
 	Position -3399 5.6816406 -10827
 Structure
 	Id 582
-	Type 17
+	Type 16
 	Position -3397 5.675293 -10827
 Structure
 	Id 583
-	Type 10
+	Type 9
 	Position -3407 6.741699 -10835
 Structure
 	Id 584
-	Type 10
+	Type 9
 	Position -3409 6.7592773 -10835
 Structure
 	Id 585
-	Type 10
+	Type 9
 	Position -3411 6.7680664 -10835
 Structure
 	Id 586
-	Type 10
+	Type 9
 	Position -3413 6.7753906 -10835
 Structure
 	Id 587
-	Type 28
+	Type 27
 	Position -3415 7.3651366 -10837
 Structure
 	Id 588
-	Type 28
+	Type 27
 	Position -3413 7.351953 -10837
 Structure
 	Id 589
-	Type 28
+	Type 27
 	Position -3411 7.348047 -10837
 Structure
 	Id 590
@@ -2282,86 +2282,86 @@ Structure
 	Charge 1496.8634
 Structure
 	Id 591
-	Type 11
+	Type 10
 	Position -3508 6.677246 -10860
 	Charge 0.5
 Structure
 	Id 592
-	Type 27
+	Type 26
 	Position -3508 6.5512695 -10864
 	Charge 30
 Structure
 	Id 593
-	Type 29
+	Type 28
 	Position -3476 6.729004 -10850
 Structure
 	Id 594
-	Type 11
+	Type 10
 	Position -3480 6.6401367 -10850
 	Charge 0.5
 Structure
 	Id 595
-	Type 21
+	Type 20
 	Position -3456 6.378418 -10860
 Structure
 	Id 596
-	Type 21
+	Type 20
 	Position -3456 6.305176 -10864
 Structure
 	Id 597
-	Type 21
+	Type 20
 	Position -3456 6.1572266 -10868
 Structure
 	Id 598
-	Type 21
+	Type 20
 	Position -3456 6.0234375 -10872
 Structure
 	Id 599
-	Type 21
+	Type 20
 	Position -3460 6.373535 -10860
 Structure
 	Id 600
-	Type 21
+	Type 20
 	Position -3460 6.3222656 -10864
 Structure
 	Id 601
-	Type 21
+	Type 20
 	Position -3460 6.2246094 -10868
 Structure
 	Id 602
-	Type 17
+	Type 16
 	Position -3463 5.194336 -10859
 Structure
 	Id 603
-	Type 17
+	Type 16
 	Position -3463 5.129883 -10861
 Structure
 	Id 604
-	Type 17
+	Type 16
 	Position -3463 5.095215 -10863
 Structure
 	Id 605
-	Type 17
+	Type 16
 	Position -3463 5.0683594 -10865
 Structure
 	Id 606
-	Type 17
+	Type 16
 	Position -3463 5.036133 -10867
 Structure
 	Id 607
-	Type 17
+	Type 16
 	Position -3463 4.992676 -10869
 Structure
 	Id 608
-	Type 21
+	Type 20
 	Position -3466 5.5932617 -10860
 Structure
 	Id 609
-	Type 21
+	Type 20
 	Position -3466 5.6875 -10864
 Structure
 	Id 610
-	Type 21
+	Type 20
 	Position -3466 5.4711914 -10868
 Structure
 	Id 611
@@ -2385,46 +2385,46 @@ Structure
 	Position -3444 5.2055664 -10872
 Structure
 	Id 616
-	Type 27
+	Type 26
 	Position -3432 6.888672 -10880
 	Charge 30
 Structure
 	Id 617
-	Type 11
+	Type 10
 	Position -3414 6.434082 -10872
 	Charge 0.5
 Structure
 	Id 618
-	Type 11
+	Type 10
 	Position -3436 6.989746 -10880
 	Charge 0.5
 Structure
 	Id 619
-	Type 17
+	Type 16
 	Position -3413 5.2578125 -10849
 Structure
 	Id 620
-	Type 17
+	Type 16
 	Position -3413 5.3066406 -10847
 Structure
 	Id 621
-	Type 17
+	Type 16
 	Position -3413 5.3481445 -10845
 Structure
 	Id 622
-	Type 17
+	Type 16
 	Position -3411 5.3515625 -10845
 Structure
 	Id 623
-	Type 17
+	Type 16
 	Position -3407 5.251953 -10849
 Structure
 	Id 624
-	Type 17
+	Type 16
 	Position -3407 5.315918 -10847
 Structure
 	Id 625
-	Type 13
+	Type 12
 	Position -3405 5.9750977 -10849
 	Minerals 29.138819
 Structure
@@ -2440,22 +2440,22 @@ Structure
 	Fuel 20.589813
 Structure
 	Id 628
-	Type 27
+	Type 26
 	Position -3412 7.1601562 -10840
 	Charge 30
 Structure
 	Id 629
-	Type 11
+	Type 10
 	Position -3416 7.1640625 -10840
 	Charge 0.5
 Structure
 	Id 630
-	Type 11
+	Type 10
 	Position -3428 7.2143555 -10840
 	Charge 0.5
 Structure
 	Id 631
-	Type 27
+	Type 26
 	Position -3440 7.0185547 -10840
 	Charge 30
 Structure
@@ -2508,53 +2508,53 @@ Structure
 	Position -3420 5.5791016 -10846
 Structure
 	Id 645
-	Type 27
+	Type 26
 	Position -3450 6.543457 -10872
 	Charge 30
 Structure
 	Id 646
-	Type 12
+	Type 11
 	Position -3450 7.686035 -10868
 	Fuel 65
 Structure
 	Id 647
-	Type 13
+	Type 12
 	Position -3451 5.801758 -10865
 Structure
 	Id 648
-	Type 13
+	Type 12
 	Position -3451 5.841797 -10863
 Structure
 	Id 649
-	Type 13
+	Type 12
 	Position -3505 5.8222656 -10855
 	Minerals 22.412666
 Structure
 	Id 650
-	Type 13
+	Type 12
 	Position -3507 5.7836914 -10857
 	Minerals 22.562668
 Structure
 	Id 651
-	Type 13
+	Type 12
 	Position -3495 5.291504 -10865
 	Minerals 30
 Structure
 	Id 652
-	Type 21
+	Type 20
 	Position -3484 5.630371 -10870
 Structure
 	Id 653
-	Type 21
+	Type 20
 	Position -3484 5.504883 -10874
 Structure
 	Id 654
-	Type 11
+	Type 10
 	Position -3480 6.354492 -10870
 	Charge 0.5
 Structure
 	Id 655
-	Type 27
+	Type 26
 	Position -3476 6.7490234 -10864
 	Charge 30
 Structure
@@ -2571,41 +2571,41 @@ Structure
 	Minerals 2.477947
 Structure
 	Id 658
-	Type 12
+	Type 11
 	Position -3482 7.4536133 -10864
 	Fuel 35
 	Minerals 110.05453
 Structure
 	Id 659
-	Type 17
+	Type 16
 	Position -3485 4.6328125 -10867
 Structure
 	Id 660
-	Type 17
+	Type 16
 	Position -3483 4.706543 -10867
 Structure
 	Id 661
-	Type 17
+	Type 16
 	Position -3481 4.822754 -10867
 Structure
 	Id 662
-	Type 17
+	Type 16
 	Position -3479 4.9379883 -10867
 Structure
 	Id 663
-	Type 17
+	Type 16
 	Position -3479 4.96875 -10865
 Structure
 	Id 664
-	Type 17
+	Type 16
 	Position -3479 4.9882812 -10863
 Structure
 	Id 665
-	Type 17
+	Type 16
 	Position -3479 4.998535 -10861
 Structure
 	Id 666
-	Type 17
+	Type 16
 	Position -3479 4.9697266 -10859
 Structure
 	Id 667
@@ -2615,14 +2615,14 @@ Structure
 	Minerals 2.23226
 Structure
 	Id 668
-	Type 14
+	Type 13
 	Position -3493 7.3554688 -10861
 	Charge 1496.8634
 	Minerals 200
 	OutputFrac 0.99588054
 Structure
 	Id 669
-	Type 21
+	Type 20
 	Position -3498 5.8256836 -10874
 Unit
 	Type 4

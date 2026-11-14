@@ -183,7 +183,7 @@ public:
 
     bool escWouldCancel() const
     {
-        return m_lanceAiming || m_wallPlacing || m_cablePainting
+        return m_wallPlacing || m_cablePainting
             || m_buildSelection >= 0 || m_buildCategory >= 0 || m_mode != EPlayerMode::Select;
     }
 
@@ -249,8 +249,6 @@ private:
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge);
     // Shared click-to-select (Select mode, and Build mode wherever the click can't place).
     void updateSelectionClick(const Camera& camera, bool confirmEdge, bool allowPick);
-    // Shared RMB handling (both modes): barracks route on ground (linking is the CONN tool now).
-    void updateRightClickActions(const Camera& camera, bool rmbEdge);
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
     EStructureType armedType() const; // the type on the build ghost; Count = nothing armed
     uint32 m_labelsHoverId = 0; // the structure under the aim this frame (0 = none): only it and the selected one show their name
@@ -281,6 +279,17 @@ private:
     float m_wanderSelectedFrac = 0.05f;    // smoothed share of the roster inside the SIM LOD selection (from the probes)
     std::mt19937 m_wanderRng{ 0x5eedu };   // the job's own generator (never the shared C rand from a worker)
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
+    // THE STAFF BEAM (the sandbox world, PLAY, LMB held - updateGameInput sets the two below): a light cone along the aim
+    // into GameUnitParams::lightCones, after the structures published theirs; it costs the player's staff light.
+    // The authority's own player only (a client's press does not reach the server).
+    void tickStaffBeam(float deltaSec);
+    bool m_beamHeld = false;
+    glm::vec3 m_beamDir{ 0.0f, 0.0f, -1.0f }; // the camera's forward at the press frame
+    // THE FOLLOWERS (AUTHORITY, every 0.5 s): every barracks unit (NpcSystem::followers) goes with its team's nearest
+    // player - to its own place on a ring around it - while it does not fight; a hunt that takes it past "Follow leash"
+    // calls it back. No routes, no waypoints.
+    void tickFollowers(float deltaSec);
+    float m_followTimer = 0.0f;
     void requestPlace(EStructureType type, const glm::vec3& pos, float yield, const glm::vec3& facing);
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
@@ -469,8 +478,6 @@ private:
     bool isRootPage() const;     // the hotbar shows the root layout (categories, cables, Delete)
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
     bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled - one per hotbar slot)
-    bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
-    glm::vec3 m_lancePendingPos{ 0.0f };
     bool m_wallPlacing = false;  // Wall drag placement: the press anchored the line start, release places
     glm::vec3 m_wallStart{ 0.0f };
     bool m_rmbUnitsOnly = false;   // CTRL was held on the RMB press: the move order skips the player
@@ -721,8 +728,8 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2
 // 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
-    "WOOD", "MIRR", "STNW", "GLNT", "LNC", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR" };
+    "WOOD", "MIRR", "STNW", "GLNT", "BRK", "WALL", "TOWR", "STOR",
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

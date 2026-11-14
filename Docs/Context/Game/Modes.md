@@ -44,7 +44,23 @@ rock or a unit between the two does not move the camera: the player may be hidde
 "Third person min height" over the terrain under it (0 = off), and the clip planes are the fly
 camera's ("Editor/Camera Near / Far") so the view reaches the horizon. **Aim = the crosshair** (GameHud
 `setCrosshair`): `m_mousePos` is the viewport center, so placement, hover and picking all ray through it, and the aim
-ray hits the TERRAIN layer only. RMB orders only the selected units (the player walks with WASD). **Building has its
+ray hits the TERRAIN layer only. RMB orders only the selected units (the player walks with WASD).
+**THE STAFF BEAM: HOLD LMB** (PLAY: the build UI closed, Select mode; `m_beamHeld` from `updateGameInput`,
+`GameMatch::tickStaffBeam` on the authority after the structures' tick). It is a 3D LIGHT CONE along the camera's
+forward (its pitch included), from the staff (1.2 m over the player, + 0.6 m along the aim): one entry of kind 1 (3D)
+in `GameUnitParams::lightCones`, "Staff beam range (m)" (22), "Staff beam half angle (deg)" (4), "Staff beam damage/s"
+(30) - each demon in it, or with its body on the axis (perpendicular distance under 2 body radii), is solid and burns.
+It costs "Staff beam light/s" (6) of the player's STAFF LIGHT (`GamePlayer::drain`, the shield battery) and stops at
+none. **The look is the same cone**: a `SpotLight` with its apex, axis, half angle and range, plus a thin `BeamLight`
+core on the axis - that one is given the axis turned 180 degrees about its middle (with the plain axis its tip fade
+read as a beam coming toward the camera). The press still selects what is under the crosshair. **The authority's own
+player only**: a client's LMB does not reach the server (no intent).
+
+**THE STAFF LIGHT COMES BACK FROM LIGHT** (`GameMatch::updatePlayer` → `GamePlayer::setRegenScale`, x "Energy regen"):
+by day as the daylight (`daylight()`), and near a light store - a built own Crystal store or the Beacon within "Hub
+reach (m)" (30) that holds light - for the rest, as a building takes light: the authority pays that share from the
+store (`store[0]`; a client's own capsule regens there but its server store does not pay). At night away from the
+stores it does not come back. The other modes keep the plain regen. **Building has its
 own state, the BUILD UI: the cursor is free and is the aim, and the middle button turns the camera** - see The
 sandbox world: PLAY and the BUILD UI in [Hotbar.md](Hotbar.md).
 

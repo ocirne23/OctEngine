@@ -100,8 +100,32 @@ glm::vec2 TeamField::CostWindow::wallPush(const glm::vec2& xz, float range) cons
     return push;
 }
 
-void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 clearanceCost)
+void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uint8 clearanceCost, int fieldTeam)
 {
+    // TEAM RULES (NavObstacle::openFor / wallFor): the field of team T is walked by the OTHER teams, so an obstacle open
+    // for any team but T is left out of it, and one that is a wall for any team but T is Blocked in it. The raster and
+    // the goals (fieldTeam -1) keep every obstacle, and Block every wallFor one. A filtered copy of the list, built only
+    // when a rule applies.
+    oc::span<const NavObstacle> obstacles = allObstacles;
+    const uint8 walkers = fieldTeam >= 0 ? uint8(~(1u << fieldTeam)) : uint8(0xFF);
+    const auto opens = [&](const NavObstacle& o) { return fieldTeam >= 0 && (o.openFor & walkers) != 0; };
+    const auto walls = [&](const NavObstacle& o) { return (o.wallFor & walkers) != 0 && o.cost != 0; };
+    bool any = false;
+    for (const NavObstacle& o : allObstacles)
+        any = any || opens(o) || walls(o);
+    if (any)
+    {
+        m_filteredObstacles.clear();
+        for (const NavObstacle& o : allObstacles)
+        {
+            if (opens(o))
+                continue;
+            m_filteredObstacles.push_back(o);
+            if (walls(o))
+                m_filteredObstacles.back().cost = 0; // Blocked
+        }
+        obstacles = m_filteredObstacles;
+    }
     // Blocked cells first, then a clearance ring: cells touching a blocked one cost extra so the
     // descent hugs the middle of a gap instead of scraping the wall (units have a body radius).
     // MULTITHREADED (this runs inside the navFieldBuild jobs): every chunk any obstacle (inflated
@@ -240,7 +264,7 @@ void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const
     m_chunks.reset(64);
     m_sources.assign(sources.begin(), sources.end());
     m_cellsReached = 0;
-    rasterizeObstacles(obstacles, params.clearanceCost);
+    rasterizeObstacles(obstacles, params.clearanceCost, params.fieldTeam);
     Globals::jobSystem.preemptionPoint(); // raster complete, seeding not started
 
     // CHUNK-WAVE multi-source Dijkstra: instead of one global heap, each WAVE solves every dirty

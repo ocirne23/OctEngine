@@ -19,8 +19,7 @@ import :Player;
 import :Structures;
 import :Npc;
 
-// INTERACTION: the grid hotbar, the modes (Build / Delete / Select), placement (ghosts, the Lance
-// two-click, the Wall drag, the cable paint stroke), click-to-select, the unit box selection and
+// INTERACTION: the grid hotbar, the modes (Build / Delete / Select), placement (ghosts, the Wall drag, the cable paint stroke), click-to-select, the unit box selection and
 // the RMB orders. Everything here runs in updateWindowed (main thread, windowed instances).
 
 // GRID HOTKEYS (RTS style): the 12 hotbar slots map onto QWER / ASDF / ZXCV, row-major. The ROOT
@@ -60,13 +59,13 @@ static_assert(c_rootCableSlot >= c_numCategories);
 static constexpr EStructureType c_combatItems[] = {
     EStructureType::Emitter,
     EStructureType::Bastion,
-    EStructureType::Lance,
     EStructureType::Wall,
     EStructureType::Gate,
     EStructureType::Turret,
     EStructureType::Searchlight,
     EStructureType::Barracks,
     EStructureType::Armory,
+    EStructureType::MageTower,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
@@ -328,7 +327,6 @@ void GameMatch::setMode(EPlayerMode mode)
     m_mode = mode;
     m_boxSelectBlocked = m_lmbDown; // a press that changed the mode (a demolish click) is not the start of a box select
     m_selectedId = 0;
-    m_lanceAiming = false;
     m_wallPlacing = false;
     m_cablePainting = false;
     m_buildSelection = -1;
@@ -350,9 +348,8 @@ void GameMatch::cancelOneLevel()
 {
     if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
     {
-        if (m_lanceAiming || m_wallPlacing || m_cablePainting)
+        if (m_wallPlacing || m_cablePainting)
         {
-            m_lanceAiming = false;
             m_wallPlacing = false;
             m_cablePainting = false;
         }
@@ -376,7 +373,6 @@ void GameMatch::activateSlot(int slot)
             setMode(EPlayerMode::Build);
             m_buildCategory = slot;
             m_buildSelection = -1;
-            m_lanceAiming = false;
             m_wallPlacing = false;
             m_cablePainting = false;
             m_cablePendingValid = false;
@@ -404,7 +400,6 @@ void GameMatch::activateSlot(int slot)
             // A cable arms straight from the root page (the hidden cable category).
             setMode(EPlayerMode::Build);
             m_buildCategory = c_cableCategory;
-            m_lanceAiming = false;
             m_wallPlacing = false;
             m_cablePainting = false;
             m_cablePendingValid = false;
@@ -430,8 +425,7 @@ void GameMatch::activateSlot(int slot)
     }
     if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_rootDeleteSlot)
         return; // empty slot
-    m_lanceAiming = false; // switching items drops half-done aims/flows
-    m_wallPlacing = false;
+    m_wallPlacing = false; // switching items drops half-done flows
     m_cablePainting = false;
     m_cablePendingValid = false;
     m_buildSelection = slot;
@@ -445,8 +439,7 @@ void GameMatch::armPageItem(int category, int selection)
         return;
     setMode(EPlayerMode::Build);
     m_buildCategory = category;
-    m_lanceAiming = false; // switching items drops half-done aims/flows
-    m_wallPlacing = false;
+    m_wallPlacing = false; // switching items drops half-done flows
     m_cablePainting = false;
     m_cablePendingValid = false;
     m_buildSelection = glm::clamp(selection, 0, count - 1);
@@ -588,7 +581,13 @@ void GameMatch::updateModeSwitching()
         const bool down = focused && input.isKeyDown(gridKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
         if (down && !m_gridKeyWasDown[k])
         {
-            if (!m_sandboxWorld)
+            // A SELECTED OWN BARRACKS in PLAY (the sandbox world, build UI closed): the number keys pick what it makes,
+            // in the order of its popup (c_barracksMenu). The mouse is the camera there, so the popup cannot be clicked.
+            const int sel = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
+            if (m_sandboxWorld && !m_buildUi && sel >= 0 && isBarracksType(m_structures.structureType(sel))
+                && m_structures.structureTeam(sel) == (uint8)m_team && k < (int)oc::size(c_barracksMenu))
+                requestSetUnitType(m_selectedId, c_barracksMenu[k]);
+            else if (!m_sandboxWorld)
                 activateSlot(k);
             else if (k < GameHud::NumSlots - c_buildBarTabs) // the build bar: 1..9 are its item slots
                 activateSlot(c_buildBarTabs + k);
@@ -649,7 +648,6 @@ void GameMatch::showYield(int percent)
 void GameMatch::disarmBuild()
 {
     m_buildSelection = -1;
-    m_lanceAiming = false;
     m_wallPlacing = false;
     m_cablePainting = false;
     m_cablePendingValid = false;
@@ -786,15 +784,12 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     if (m_buildCategory < 0 || m_buildSelection < 0)
     {
         // Nothing armed - browsing the category: clicks inspect, LMB drag box-selects units and
-        // RMB sets barracks routes / orders, exactly as Select mode. Only an ARMED item takes the
-        // clicks away.
-        updateRightClickActions(camera, cancelEdge);
+        // RMB orders them, exactly as Select mode. Only an ARMED item takes the clicks away.
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         updateUnitSelection(camera);
         return;
     }
-    // RMB CANCELS, one step at a time: a half-finished flow (Lance aim, Wall line, cable paint
-    // stroke, Crossing aim) drops first, and the next RMB disarms the item itself. Only once nothing
+    // RMB CANCELS, one step at a time: a half-finished flow (Wall line, cable paint stroke) drops first, and the next RMB disarms the item itself. Only once nothing
     // is armed does RMB go back to its Select-mode meaning (barracks route / move order) above.
     const EStructureType armed = buildCategoryItems(m_buildCategory)[m_buildSelection];
 
@@ -814,43 +809,6 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
 
     // (Crossings are never armed: the paint stroke places them - placeCableLine.)
-
-    // Lance second click: the position is anchored - the cursor now aims the cone's facing
-    // (relative to the anchor); confirm places, too-close clicks just keep waiting. RIGHT-click
-    // cancels the anchor before the confirm.
-    if (m_lanceAiming)
-    {
-        if (cancelEdge)
-        {
-            m_lanceAiming = false;
-            return; // NOT consumed: the same press also walks the player (see the RMB chain)
-        }
-        const glm::vec3 up(0.0f, 0.3f, 0.0f);
-        const uint32 color = packColor(glm::vec3(0.3f, 1.0f, 0.4f));
-        drawStructureGhost(EStructureType::Lance, m_lancePendingPos, color);
-        glm::vec3 target;
-        glm::vec3 facing(0.0f);
-        if (aimGroundPoint(camera, target))
-        {
-            const glm::vec2 d(target.x - m_lancePendingPos.x, target.z - m_lancePendingPos.z);
-            if (glm::dot(d, d) > 0.25f)
-            {
-                const glm::vec2 dir = glm::normalize(d);
-                facing = glm::vec3(dir.x, 0.0f, dir.y);
-                // Preview: the aim line plus the lobe extent along the chosen facing.
-                Globals::rendererVK.addDebugLine(m_lancePendingPos + up, target + up, color);
-                Globals::rendererVK.addDebugLine(m_lancePendingPos + up,
-                    m_lancePendingPos + facing * m_structures.emitterReachOf(EStructureType::Lance) + up,
-                    packColor(glm::vec3(0.3f, 0.8f, 1.0f)));
-            }
-        }
-        if (confirmEdge && glm::dot(facing, facing) > 0.5f)
-        {
-            requestPlace(EStructureType::Lance, m_lancePendingPos, -1, facing);
-            m_lanceAiming = false;
-        }
-        return;
-    }
 
     // LINE DRAG (the Wall, the Gate - isLineType): the press anchored the line start; while held,
     // segments preview along the line to the cursor, and the RELEASE queues one placement per segment.
@@ -957,12 +915,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
     if (confirmEdge && aim.affordable)
     {
-        if (aim.type == EStructureType::Lance)
-        {
-            m_lanceAiming = true; // first click anchors; the next click aims the cone
-            m_lancePendingPos = aim.pos;
-        }
-        else if (isLineType(aim.type))
+        if (isLineType(aim.type))
         {
             m_wallPlacing = true; // the press anchors the line start; the release ends it
             m_wallStart = aim.pos;
@@ -990,9 +943,8 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
     }
 }
 
-void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge)
+void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool /*rmbEdge*/)
 {
-    updateRightClickActions(camera, rmbEdge);
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
     updateUnitSelection(camera);
 }
@@ -1213,34 +1165,6 @@ bool GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
     return laneSeeded;
 }
 
-// RIGHT-CLICK actions with a selection, shared by Select AND Build mode: on a structure = SMART
-// CONNECT (below); on GROUND with an own-team BARRACKS selected = set its unit ROUTE waypoint
-// (SHIFT appends, a plain click restarts the route).
-void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
-{
-    if (!rmbEdge || m_selectedId == 0)
-        return;
-    if (const int hover = hoveredStructure(camera);
-        hover >= 0 && !isWalkThrough(m_structures.structureType(hover)))
-        return; // on a building: the caller turns it into a MOVE order (walk-through pieces are ground)
-    const int sel = m_structures.structureIndexById(m_selectedId);
-    glm::vec3 ground;
-    if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
-        || m_structures.structureTeam(sel) != (uint8)m_team || !aimGroundPoint(camera, ground))
-        return; // not a route click either: the caller turns it into a MOVE order
-    ground.y = 0.0f;
-    ground = clampToOpenGround(ground); // a waypoint inside co-op rock would stall every marcher
-    m_rmbConsumed = true;
-    oc::vector<glm::vec3> route;
-    if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
-    {
-        const oc::span<const glm::vec3> current = m_structures.structureRoute(sel);
-        route.assign(current.begin(), current.end()); // hold shift: extend the route
-    }
-    if ((int)route.size() < StructureSystem::MaxRouteWaypoints)
-        route.push_back(ground);
-    requestSetRoute(m_selectedId, route);
-}
 
 // Click-to-select, shared by Select AND Build mode so inspecting a building never needs a mode
 // switch: hover ring, LMB picks (empty ground deselects), and the selection keeps its highlight.

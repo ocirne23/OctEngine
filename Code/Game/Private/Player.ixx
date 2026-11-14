@@ -74,6 +74,11 @@ public:
     // Shield battery top-up (a medic station). The shield tick's reboot latch reopens a collapsed
     // shield once the battery passes "Reboot energy", so this needs no state of its own.
     void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), energyMax()); }
+    void drain(float amount) { m_energy = glm::max(m_energy - glm::max(amount, 0.0f), 0.0f); } // the staff beam's cost
+    // x "Energy regen" this tick (GameMatch::updatePlayer: the sandbox world's daylight, or a light store in reach;
+    // 1 elsewhere). 0 = the staff light does not come back by itself.
+    void setRegenScale(float scale) { m_regenScale = glm::clamp(scale, 0.0f, 1.0f); }
+    float regenScale() const { return m_regenScale; }
 
     // Hard move of the capsule (F10 load). Follows the respawn TELEPORT CONTRACT: physics
     // teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed -
@@ -126,6 +131,7 @@ private:
     uint32 m_team = 0;
     float m_health = 100.0f;
     float m_energy = 100.0f;
+    float m_regenScale = 1.0f;
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
     float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks - the applied-force

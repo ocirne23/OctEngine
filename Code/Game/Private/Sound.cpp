@@ -110,7 +110,6 @@ namespace
         {
         case EStructureType::Emitter:
         case EStructureType::Bastion:
-        case EStructureType::Lance:
         case EStructureType::Base:
             return EGameSound::LoopHum; // the buildings that make a FIELD: the hum is the field's (a store and a lens are silent)
         case EStructureType::Generator:

@@ -22,14 +22,15 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre",
     "Entities/Game/lumberyard.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
     "Entities/Game/solar.pre", "Entities/Game/fabricator.pre", "Entities/Game/bastion.pre",
-    "Entities/Game/lance.pre", "Entities/Game/barracks.pre", "Entities/Game/wall.pre",
+    "Entities/Game/barracks.pre", "Entities/Game/wall.pre",
     "Entities/Game/turret.pre", "Entities/Game/mineralstorage.pre", "Entities/Game/constructor.pre",
     "Entities/Game/base.pre", "Entities/Game/cablePower.pre", "Entities/Game/cablePipe.pre",
     "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre", "Entities/Game/crossing.pre",
     "Entities/Game/crossing.pre", "Entities/Game/house.pre",   // the three crossings share one
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
-    "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre" };
+    "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre",
+    "Entities/Game/magetower.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -358,8 +359,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     if (!isPlaceableType(type) || (int)team >= GameMaxTeams)
         return; // the Base only enters through spawnBase
     // Orientation FIRST (a crossing's footprint depends on it), then the grid validation.
-    // Lance: the AIMED facing from the two-click placement when given, else auto - away from the
-    // own Base. Crossings: the facing quantized to an axis (default +X).
+    // Crossings: the facing quantized to an axis (default +X).
     glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
     if (isCrossingType(type))
     {
@@ -395,24 +395,6 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     else if (fit != EGroundFit::Ok)
         return;
     const glm::vec3 pos = snappedGround + glm::vec3(0.0f, groundY + spawnHeightOf(type), 0.0f);
-    if (type == EStructureType::Lance)
-    {
-        glm::vec2 dir(0.0f);
-        if (glm::dot(glm::vec2(facing.x, facing.z), glm::vec2(facing.x, facing.z)) > 1e-4f)
-            dir = glm::normalize(glm::vec2(facing.x, facing.z));
-        else
-            for (const Ref& other : m_frame)
-                if (other.type == EStructureType::Base && other.state->team == team)
-                {
-                    const glm::vec2 d = glm::vec2(pos.x, pos.z)
-                        - glm::vec2(other.entity->pos.x, other.entity->pos.z);
-                    if (glm::dot(d, d) > 1e-4f)
-                        dir = glm::normalize(d);
-                    break;
-                }
-        if (glm::dot(dir, dir) > 0.5f)
-            rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
-    }
     // The crossing's END cells give way to it: the own-medium segments they held are redundant
     // (an end conducts that medium) and would refuse the placement. Their networks re-derive.
     for (const uint32 id : crossing.replace)

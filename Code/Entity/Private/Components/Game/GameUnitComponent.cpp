@@ -935,33 +935,51 @@ void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
         const glm::vec3 d = t.pos - glm::vec3(light[0], light[1], light[2]);
         now = glm::dot(d, d) < light[3] * light[3];
     }
-    // THE SEARCHLIGHT CONES of another team (flat wedges, see GameUnitParams::lightCones): in one, the unit is solid as
-    // in a field, and it burns - once per cone, so two crossed cones burn twice as fast. Every tickField path ends in
+    // THE LIGHT CONES of another team (flat wedges, see GameUnitParams::lightCones): in one, the unit is solid as in a
+    // field, and it burns at each cone's own rate - so two crossed cones burn twice as fast. Every tickField path ends in
     // one setSolid call, so this is once a tick.
     {
         int cones = 0;
+        float coneDps = 0.0f;
         uint32 coneTeam = 0;
         for (int i = 0; i < glm::min(params.lightConeCount, (int)GameUnitParams::MaxLightCones); ++i)
         {
             const float* cone = params.lightCones[i];
             if ((uint32)cone[6] == team)
                 continue;
-            const glm::vec2 d(t.pos.x - cone[0], t.pos.z - cone[1]);
-            const float distSq = glm::dot(d, d);
-            if (distSq > cone[2] * cone[2])
-                continue;
-            // Inside the wedge: the angle to the axis is under the half angle (dot >= cos x distance); the lamp's own
-            // foot (under 1.5 m) always counts.
-            if (distSq < 2.25f || d.x * cone[3] + d.y * cone[4] >= cone[5] * std::sqrt(distSq))
+            bool inside;
+            if (cone[10] > 0.5f) // a 3D cone (the staff beam): from the source along (x, y, z)
+            {
+                const glm::vec3 d(t.pos.x - cone[0], t.pos.y - cone[8], t.pos.z - cone[1]);
+                const float distSq = glm::dot(d, d);
+                if (distSq > cone[2] * cone[2])
+                    continue;
+                // In the cone, or with its BODY on the axis (a beam aimed at a unit's middle: its origin may be under the
+                // axis by more than the narrow cone is wide there).
+                const float along = d.x * cone[3] + d.y * cone[9] + d.z * cone[4];
+                inside = along > 0.0f && (along >= cone[5] * std::sqrt(distSq) || distSq - along * along <= bodyRadius * bodyRadius * 4.0f);
+            }
+            else
+            {
+                const glm::vec2 d(t.pos.x - cone[0], t.pos.z - cone[1]);
+                const float distSq = glm::dot(d, d);
+                if (distSq > cone[2] * cone[2])
+                    continue;
+                // Inside the wedge: the angle to the axis is under the half angle (dot >= cos x distance); the lamp's
+                // own foot (under 1.5 m) always counts.
+                inside = distSq < 2.25f || d.x * cone[3] + d.y * cone[4] >= cone[5] * std::sqrt(distSq);
+            }
+            if (inside)
             {
                 ++cones;
+                coneDps += cone[7];
                 coneTeam = (uint32)cone[6];
             }
         }
         if (cones > 0)
         {
             now = true;
-            health = glm::max(0.0f, health - params.lightConeDps * (float)cones * t.deltaSec);
+            health = glm::max(0.0f, health - coneDps * t.deltaSec);
             noteHurtTeam(coneTeam);
         }
     }

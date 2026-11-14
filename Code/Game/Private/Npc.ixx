@@ -88,8 +88,12 @@ public:
     // a load clears them). loadUnits despawns the live units + shots first (a root walk).
     void saveUnits(AssetNode& root) const;
     void loadUnits(const AssetNode& root, StructureSystem& structures); // re-seeds roster counts
+    // THE FOLLOWERS: the units a barracks made (authority). GameMatch::tickFollowers walks them (and drops the dead
+    // ones), so it never walks every unit of the world.
+    oc::vector<EntityPtr>& followers() { return m_followers; }
 
 private:
+    oc::vector<EntityPtr> m_followers;
     Entity* spawnUnit(const StructureSystem& structures, const glm::vec3& pos, uint32 sourceId,
         uint8 team, ENpcType type); // spawn + team/source/route setup on the component
     void fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from,

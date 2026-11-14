@@ -262,7 +262,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     // push-out below, so shoving deep into a bubble both resists harder and drains faster.
     const float tension = 1.0f + s.shieldTension * pressure;
     m_energy = glm::clamp(m_energy - pressure * tension * s.energyDrainRate * drainMult * deltaSec
-        + s.energyRegenRate * deltaSec, 0.0f, s.energyMax);
+        + s.energyRegenRate * m_regenScale * deltaSec, 0.0f, s.energyMax);
     if (m_energy <= 0.0f)
         m_shieldCollapsed = true;
     else if (m_shieldCollapsed && m_energy >= glm::min(s.rebootEnergy, s.energyMax))

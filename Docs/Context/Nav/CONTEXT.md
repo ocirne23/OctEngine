@@ -46,6 +46,15 @@ consumed at that cadence.
   a second pass after the Blocked stamping and never overriding Blocked. So the Dijkstra routes
   THROUGH it where the detour around is longer, while steering, density and line-of-sight treat only
   Blocked as a wall — **the game's walls, which units then walk into and chew down.**
+* **`openFor`** (a bit per team): the obstacle is OPEN for those teams. The field of team T is walked by the other
+  teams, so `rasterizeObstacles` leaves out of it every obstacle open for a team other than T (`BuildParams::fieldTeam`,
+  the slot index of a team field; a filtered copy, `m_filteredObstacles`). The raster and the goals (`fieldTeam` -1)
+  keep every obstacle, so a lane's A* still pays a gate's breach cost (its line-of-sight shortcut passes it anyway).
+  **The game's gates:** open for their own team.
+* **`wallFor`** (a bit per team): a breachable obstacle that is a WALL (Blocked) in the fields those teams walk AND in
+  the raster and the goals; only the other teams' walking keeps its breach cost. So steering, line of sight and the
+  lane A* all go around it. **The game's walkways:** a wall for their own team (the enemy still routes through and
+  bites them).
 
 **`NavSource`** — `pos`, `stopRadius` (footprint half; it seeds every cell it covers, so a wall is a
 target too), `id`, `kind`:

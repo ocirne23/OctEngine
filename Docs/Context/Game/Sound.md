@@ -218,7 +218,7 @@ first every 1.5 - 5 s. No water in 40 m: both fade out.
 ## Building loops
 
 "Max building loops" (6) voices. Every 0.25 s the nearest built, powered, non-rubble structures with a loop within
-60 m get them (`loopSoundOf`): hum (the buildings that make a field: the Emitter, Bastion, Lance, Base; within 30 m),
+60 m get them (`loopSoundOf`): hum (the buildings that make a field: the Emitter, Bastion, Base; within 30 m),
 fire (the Generator), works (the Lumberyard, Quarry, Fabricator). A voice keeps its structure by id; one that lost it
 fades out before it takes another. Every loop plays at pitch 1 (The random feel); two of one type start at other
 moments, so they are not in step.
