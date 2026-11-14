@@ -315,7 +315,10 @@ spawn.
 
 ## The profiling scenario
 
-`runScenario(savePath)` — authority only, called once at `--scenario-at`. PvP: the select-all +
+`runScenario(savePath)` — authority only, called once at `--scenario-at`. **In the sandbox world the load WAITS for
+the Base site** (`m_scenarioWaitsForSite`): before `tickBaseSite` there is no player capsule to move and no Base, so
+`tickBaseSite` runs the load right after it spawns both — the save then replaces that Base and puts the player at
+`PlayerPos`, as F10 does. PvP: the select-all +
 move order on the other team's Base runs from the next `update()` (`issueScenarioOrder`, retried up
 to 600 frames until units, the enemy Base and the Nav raster exist). Co-op: no order — the session is
 measured as saved. See **Profiling** in [`Docs/Context/Core/CONTEXT.md`](../Core/CONTEXT.md) for the

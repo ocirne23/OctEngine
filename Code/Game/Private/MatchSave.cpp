@@ -165,7 +165,20 @@ bool GameMatch::runScenario(oc::string_view savePath)
         Log::warning("Scenario: needs --game on the authority (single player or server)");
         return false;
     }
-    loadGame(savePath);
+    // THE SANDBOX WORLD has no Base and no player until the terrain is in under the anchor (tickBaseSite). A load before
+    // that would leave the player where the session puts it later (no capsule to move yet), and the session would add
+    // its own Base to the save's. So the load WAITS for the site: tickBaseSite runs it right after it spawns the player.
+    if (m_sandboxWorld && !m_siteFound)
+    {
+        m_scenarioWaitsForSite = true;
+        m_scenarioSave = oc::string(savePath);
+        Log::info("Scenario: waits for the Base site");
+        return true;
+    }
+    {
+        const FileSystem::AllowMainThreadIO scenarioIo; // the deferred load runs from the game tick, not from main's timer
+        loadGame(savePath);
+    }
     Log::info(oc::format("Scenario: loaded '{}'", savePath.empty() ? oc::string_view(c_gameSavePath) : savePath));
     // PvP: the loaded units' spatial entries link at the next commitFrame - the select-all query
     // runs from the next update() (issueScenarioOrder), marching everything on the other Base.

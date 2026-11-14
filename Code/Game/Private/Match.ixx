@@ -437,6 +437,8 @@ private:
     glm::vec3 pointOutsideFootprint(const glm::vec3& clicked, int structure) const; // a click on a building -> the reachable point at its face
     bool m_scenarioOrderPending = false; // runScenario loaded; issueScenarioOrder retries each update until units are queryable
     uint32 m_scenarioOrderTries = 0;
+    bool m_scenarioWaitsForSite = false; // the sandbox world: runScenario came before the Base site - tickBaseSite runs it
+    oc::string m_scenarioSave;           // ... with this save path
     void issueScenarioOrder();           // select ALL own units + move order on the other Base
     void seedRouteLane(uint32 structureId); // barracks route -> a planned lane in the flow field
     // (While an ordered group walks, its lane is kept fresh by the UNITS' own periodic plan

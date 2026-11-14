@@ -504,6 +504,11 @@ void GameMatch::tickBaseSite(float deltaSec)
     m_player.setRespawnPos(m_playerStart);
     spawnLocalPlayer();
     Log::info(oc::format("Sandbox world: the Base stands at ({:.0f}, {:.1f}, {:.0f})", m_basePos.x, m_basePos.y, m_basePos.z));
+    if (m_scenarioWaitsForSite) // a --scenario that came before the site: the load replaces this Base and moves the player
+    {
+        m_scenarioWaitsForSite = false;
+        runScenario(m_scenarioSave);
+    }
 }
 
 // main.cpp calls this where the tree records are readable (see setHarvestSource): the answer to the ghost's probe.
