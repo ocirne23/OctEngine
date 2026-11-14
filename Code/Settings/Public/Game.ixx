@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 29;
+export constexpr int GameStructureTypeCount = 30;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -202,6 +202,7 @@ export struct GameStructureSettings
         40.0f,  // Lens
         60.0f,  // Searchlight
         4.0f,   // Walkway (per segment)
+        40.0f,  // Armory
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -238,6 +239,7 @@ export struct GameStructureSettings
         100.0f,  // Lens
         250.0f,  // Searchlight
         120.0f,  // Walkway: a scaffold of wood
+        250.0f,  // Armory
     };
     // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
     // rubble: a destroyed building is gone).
@@ -288,6 +290,13 @@ export struct GameStructureSettings
     float carrierLoad = 10.0f;        // goods a walker carries
     float carrierCartLoad = 100.0f;   // goods in a CART: a transport trip between two storages (it evens out their fill)
     float carrierSpeed = 3.5f;        // m/s
+    // THE ARMORY'S GUARDS (Carriers.cpp): free workers with a bow, while an enemy unit is in the Armory's range.
+    float armoryRange = 60.0f;        // m: an enemy unit this near calls the guards out, and the posts lie in this range
+    int   armoryGuards = 6;           // guards one Armory arms at most (the Beacon arms as many: it is an armory too)
+    float armoryStandDown = 10.0f;    // s with no enemy in range before the guards go back to work
+    float guardRange = 20.0f;         // m: a guard shoots the nearest enemy unit within this
+    float guardDamage = 12.0f;        // per shot (it never misses, and nothing blocks it)
+    float guardInterval = 1.2f;       // s between a guard's shots
     float carrierBuildRate = 2.0f;    // stone/s a walker puts into the blueprint or the damaged structure it stands at
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
     float internalBuffer = 30.0f;     // several walker loads: a walker only delivers where its whole load fits
@@ -300,8 +309,8 @@ export struct GameStructureSettings
     // draw under pressure. Filled by day: a Mirror makes ~780 light in one day, so two Mirrors fill one store.
     float batteryCapacity = 1500.0f;
     float generatorFuelTank = 30.0f;
-    float fuelTankCapacity = 500.0f;    // wood: the Storehouse's (and the Woodshed's)
-    float mineralSiloCapacity = 500.0f; // stone: the Storehouse's
+    float fuelTankCapacity = 1000.0f;    // wood: the Storehouse's (and the Woodshed's)
+    float mineralSiloCapacity = 1000.0f; // stone: the Storehouse's
     float mineralBaseCapacity = 200.0f;
     float medicEnergyPerSec = 1.5f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
@@ -391,7 +400,7 @@ export struct GameUnitParams
 {
     float energyDrainRate = 25.0f; // energy/s per unit of pressure (player shield rule, no regen)
     float tension = 1.5f;          // drain + push scale by (1 + tension*pressure)
-    float fieldDps = 2.0f;        // health/s while squished below damageRadius under pressure
+    float fieldDps = 0.0f;        // health/s while squished below damageRadius under pressure (0: a field does not hurt a unit)
     float fieldDpsMult = 1.0f;
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe

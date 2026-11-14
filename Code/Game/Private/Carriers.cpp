@@ -4,6 +4,8 @@ import Core;
 import Core.glm;
 import Core.Transform;
 import Entity;
+import Physics;
+import Spatial;
 import :Structures;
 
 // THE CARRIERS (see Structures.ixx): wood (store 1) and stone (store 2) move by WALKERS on the road, not as cells on
@@ -29,7 +31,19 @@ namespace
         Walker_Returning,  // walking back to the pickup (with what the target did not take)
         Walker_Home,       // walking home; it leaves the road there
         Walker_Working,    // at a blueprint or a damaged structure: its stone goes in over time ("Build rate (stone/s)")
+        // THE GUARD states (its job is an alarmed Armory), all from here on:
+        Walker_GuardToArmory, // walking to the Armory for its bow
+        Walker_GuardToPost,   // armed, walking to its post
+        Walker_Guarding,      // at its post: it shoots the nearest enemy unit in "Guard range (m)"
     };
+    constexpr const char* c_guardPrefab = "Entities/Game/guard.pre";
+    constexpr float c_guardRepost = 4.0f; // s with nothing to shoot before a guard looks for a better post
+
+    // The buildings that hand out bows: the Armory, and the Beacon (as many guards as one Armory).
+    constexpr bool armsGuards(EStructureType t)
+    {
+        return t == EStructureType::Armory || t == EStructureType::Base;
+    }
 
     glm::ivec2 cellOf(const glm::vec3& pos)
     {
@@ -100,7 +114,7 @@ float StructureSystem::repairNeed(const Ref& ref) const
 
 float StructureSystem::transportAmount(int sourceIdx, int targetIdx, int good) const
 {
-    constexpr float c_minFillGap = 0.2f; // of a full store: closer fills are even enough
+    constexpr float c_minFillGap = 0.15f; // of a full store: closer fills are even enough
     constexpr float c_minCart = 0.2f;    // of a cart: a smaller load is no trip
     const Ref& source = m_frame[sourceIdx];
     const Ref& target = m_frame[targetIdx];
@@ -159,6 +173,125 @@ bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, boo
     if (consumersOnly)
         return isConsumer && fits && t.store[good] < t.capacity[good] * 0.5f;
     return fits;
+}
+
+// ---- The Armory's guards ----
+
+// The nearest living enemy unit of `team` within `radius` of pos (flat, on the map); null = none.
+// sightFrom: the unit must also be IN SIGHT of that point - no static body (a building, a wall, a gate, the terrain, a
+// tree or a rock) on the line to it. Only the c_sightTries nearest ones are tried: one ray each, not one per unit of a horde.
+GameUnitComponent* StructureSystem::nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
+    const glm::vec3* sightFrom) const
+{
+    constexpr int c_sightTries = 6;
+    struct Candidate { GameUnitComponent* unit; glm::vec3 pos; float distSq; };
+    Candidate nearest[c_sightTries];
+    int count = 0;
+    const int keep = sightFrom ? c_sightTries : 1;
+    Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), radius, SpatialLayer_Render, [&](uint64 user)
+    {
+        Entity* other = reinterpret_cast<Entity*>(user);
+        GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+        if (!unit || unit->puppet || unit->team == team || !unit->alive())
+            return;
+        const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+        const float distSq = glm::dot(d, d);
+        if (distSq > radius * radius || (count == keep && distSq >= nearest[count - 1].distSq))
+            return;
+        int at = count < keep ? count++ : count - 1; // sorted by distance: the new one goes in at its place
+        for (; at > 0 && nearest[at - 1].distSq > distSq; --at)
+            nearest[at] = nearest[at - 1];
+        nearest[at] = { unit, other->pos, distSq };
+    });
+    const uint64 sightMask = !sightFrom ? 0 :PhysicsLayers::bit("Default") | PhysicsLayers::bit("Gate") | PhysicsLayers::bit("Terrain")
+        | PhysicsLayers::bit("Vegetation");
+    for (int i = 0; i < count; ++i)
+    {
+        const glm::vec3 to = nearest[i].pos + glm::vec3(0.0f, 0.5f, 0.0f);
+        if (sightFrom && Globals::physics.castRayClosest(*sightFrom, to - *sightFrom, sightMask, nullptr, true).hit)
+            continue;
+        outPos = nearest[i].pos;
+        return nearest[i].unit;
+    }
+    return nullptr;
+}
+
+// A built Walkway DECK in the cell (not its stairs): a guard on it shoots over the walls.
+bool StructureSystem::walkwayDeckAt(int cx, int cz) const
+{
+    const auto it = m_cells.find(cellKey(cx, cz));
+    const int index = it != m_cells.end() ? structureIndexById(it->second.id) : -1;
+    return index >= 0 && m_frame[index].type == EStructureType::Walkway && !m_frame[index].state->blueprint && m_frame[index].walkDir == -1;
+}
+
+// An alarmed, built Armory of the team that has fewer guards than "Guards".
+bool StructureSystem::guardWanted(int index, uint8 team) const
+{
+    const Ref& ref = m_frame[index];
+    return armsGuards(ref.type) && !ref.state->blueprint && ref.state->team == team && ref.alarm > 0.0f
+        && (int)ref.guards < m_settings.armoryGuards;
+}
+
+// A guard's POST, by road from fromCell: a road cell within the Armory's range that no other guard has. A Walkway DECK
+// cell first (the place behind a wall), then any road cell; among those, the one nearest to the Armory's threat. One
+// breadth-first search over the road (like roadSearch); outPath = the walk there (one point: it stands on the post).
+bool StructureSystem::guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const
+{
+    const Ref& armory = m_frame[armoryIdx];
+    const glm::vec2 centre(armory.entity->pos.x, armory.entity->pos.z), threat(armory.threat.x, armory.threat.z);
+    const float rangeSq = m_settings.armoryRange * m_settings.armoryRange;
+    oc::small_vector<uint64, 32> taken;
+    for (size_t k = 0; k < m_walkers.size(); ++k)
+        if (const Walker& w = m_walkers[k]; k != self && (w.state == Walker_GuardToPost || w.state == Walker_Guarding) && !w.path.empty())
+            taken.push_back(cellKey(cellOf(w.path.back()).x, cellOf(w.path.back()).y));
+
+    struct Visit { int cx, cz, parent; float y; };
+    oc::vector<Visit> open;
+    oc::unordered_map<uint64, int> seen;
+    const auto visit = [&](int cx, int cz, int parent)
+    {
+        float y;
+        if ((int)open.size() >= c_maxRoadCells || seen.count(cellKey(cx, cz)) || !roadAt(cx, cz, y))
+            return;
+        seen[cellKey(cx, cz)] = (int)open.size();
+        open.push_back({ cx, cz, parent, y });
+    };
+    visit(fromCell.x, fromCell.y, -1);
+    int best = -1;
+    float bestScore = FLT_MAX;
+    for (int i = 0; i < (int)open.size(); ++i)
+    {
+        const Visit cell = open[i]; // a copy: visit() grows the vector
+        const glm::vec2 pos(((float)cell.cx + 0.5f) * GridCellSize, ((float)cell.cz + 0.5f) * GridCellSize);
+        if (glm::dot(pos - centre, pos - centre) <= rangeSq && oc::find(taken.begin(), taken.end(), cellKey(cell.cx, cell.cz)) == taken.end())
+            if (const float score = glm::distance(pos, threat) - (walkwayDeckAt(cell.cx, cell.cz) ? 10000.0f : 0.0f); score < bestScore)
+            {
+                bestScore = score;
+                best = i;
+            }
+        for (const glm::ivec2& n : c_neighbours)
+            visit(cell.cx + n.x, cell.cz + n.y, i);
+    }
+    if (best < 0)
+        return false;
+    outPath.clear();
+    for (int i = best; i >= 0; i = open[i].parent)
+        outPath.push_back(glm::vec3(((float)open[i].cx + 0.5f) * GridCellSize, open[i].y + c_walkHeight, ((float)open[i].cz + 0.5f) * GridCellSize));
+    oc::reverse(outPath.begin(), outPath.end());
+    return true;
+}
+
+// The walker's look: carrier.pre, or guard.pre while it has a bow. The entity is replaced where it stands.
+void StructureSystem::setGuardLook(Walker& w, bool guard)
+{
+    if (w.guard == guard || !w.entity)
+        return;
+    const Transform at(w.entity->pos, 1.0f, w.entity->rot);
+    Globals::world.removeRootEntity(w.entity.get());
+    w.entity = Globals::world.spawnAssetFile(guard ? c_guardPrefab : c_carrierPrefab, at, true);
+    if (w.entity)
+        Globals::world.addRootEntity(w.entity);
+    w.guard = guard;
 }
 
 int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const
@@ -284,6 +417,23 @@ int StructureSystem::carrierJobTier(int index, uint8 team) const
 // workers (workers - production jobs) while a job wants one, or calls them back when production took the worker.
 void StructureSystem::carrierHousePass()
 {
+    // THE ALARM: an enemy unit within "Range (m)" of a built Armory calls its guards out, and holds them for "Stand down
+    // after (s)" (tickCarriers counts it down). The nearest one is the THREAT the posts are picked by.
+    bool guardsWanted[GameMaxTeams] = {};
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        Ref& ref = m_frame[i];
+        if (!armsGuards(ref.type) || ref.state->blueprint || ref.state->team >= GameMaxTeams)
+            continue;
+        glm::vec3 threat;
+        if (nearestEnemyUnit(ref.entity->pos, m_settings.armoryRange, ref.state->team, threat))
+        {
+            ref.alarm = glm::max(m_settings.armoryStandDown, c_passSeconds * 1.5f);
+            ref.threat = threat;
+        }
+        guardsWanted[ref.state->team] |= guardWanted(i, (uint8)ref.state->team);
+    }
+
     oc::vector<glm::vec3> scratch;
     bool blueprintWaits[GameMaxTeams] = {}; // a team with no blueprint to build needs no search for one
     bool repairWaits[GameMaxTeams] = {};    // the same for a damaged structure
@@ -371,7 +521,11 @@ void StructureSystem::carrierHousePass()
         if (active >= allowed || freeLeft[team] <= 0)
             continue;
         Walker w;
-        const int job = roadSearch(i, glm::ivec2(0), [&](int index) { return carrierJobTier(index, team); }, w.path);
+        // A GUARD first: an alarmed Armory on this road that is short of guards. Then the carrier jobs.
+        int job = guardsWanted[team] ? roadSearch(i, glm::ivec2(0), [&](int index) { return guardWanted(index, team) ? 2 : 0; }, w.path) : -1;
+        const bool guard = job >= 0 && !w.path.empty();
+        if (!guard)
+            job = roadSearch(i, glm::ivec2(0), [&](int index) { return carrierJobTier(index, team); }, w.path);
         if (job < 0 || w.path.empty())
             continue;
         w.entity = Globals::world.spawnAssetFile(c_carrierPrefab, Transform(w.path.front()), true);
@@ -380,9 +534,14 @@ void StructureSystem::carrierHousePass()
         Globals::world.addRootEntity(w.entity);
         w.homeId = homeId;
         w.jobId = m_frame[job].state->structureId;
-        w.state = Walker_ToJob;
-        ++m_frame[job].walkers;
-        ++m_frame[job].walkersIdle;
+        w.state = guard ? Walker_GuardToArmory : Walker_ToJob;
+        if (guard)
+            ++m_frame[job].guards;
+        else
+        {
+            ++m_frame[job].walkers;
+            ++m_frame[job].walkersIdle;
+        }
         ++ref.homeWalkers;
         ++m_carrierCount[team];
         --freeLeft[team];
@@ -407,7 +566,8 @@ void StructureSystem::tickCarriers(float deltaSec)
     // The roster's view of the walkers, counted fresh: a removed building takes its walkers along.
     for (Ref& ref : m_frame)
     {
-        ref.walkers = ref.walkersIdle = ref.waitRank = ref.homeWalkers = 0;
+        ref.walkers = ref.walkersIdle = ref.waitRank = ref.homeWalkers = ref.guards = 0;
+        ref.alarm = glm::max(ref.alarm - deltaSec, 0.0f);
         ref.buildIncoming = 0.0f;
         ref.goodsIncoming[1] = ref.goodsIncoming[2] = 0.0f;
     }
@@ -427,9 +587,14 @@ void StructureSystem::tickCarriers(float deltaSec)
             ++m_carrierCount[m_frame[home].state->team];
         if (const int job = w.state != Walker_Home ? structureIndexById(w.jobId) : -1; job >= 0)
         {
-            ++m_frame[job].walkers;
-            if (w.state == Walker_ToJob || w.state == Walker_Waiting)
-                ++m_frame[job].walkersIdle;
+            if (w.state >= Walker_GuardToArmory)
+                ++m_frame[job].guards;
+            else
+            {
+                ++m_frame[job].walkers;
+                if (w.state == Walker_ToJob || w.state == Walker_Waiting)
+                    ++m_frame[job].walkersIdle;
+            }
         }
         if (w.state == Walker_Delivering || w.state == Walker_Working) // a load on its way (or going in): a blueprint needs that much less stone, a building has that much less room
             if (const int target = structureIndexById(w.targetId); target >= 0)
@@ -442,6 +607,10 @@ void StructureSystem::tickCarriers(float deltaSec)
     }
     if (!m_settings.carriers)
         return;
+    bool guardsWanted[GameMaxTeams] = {}; // a waiting walker looks for an Armory only while one of its team wants a guard
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+        if (armsGuards(m_frame[i].type) && m_frame[i].state->team < GameMaxTeams)
+            guardsWanted[m_frame[i].state->team] |= guardWanted(i, (uint8)m_frame[i].state->team);
 
     m_carrierPassTimer -= deltaSec;
     if (m_carrierPassTimer <= 0.0f)
@@ -458,7 +627,7 @@ void StructureSystem::tickCarriers(float deltaSec)
         const int home = structureIndexById(w.homeId);
         const uint8 team = (uint8)m_frame[home].state->team;
         const glm::vec3 here = w.entity ? w.entity->pos : (w.path.empty() ? glm::vec3(0.0f) : w.path.back());
-        const glm::ivec2 hereCell = w.path.empty() ? cellOf(here) : cellOf(w.path.back()); // waiting: the leg's last cell
+        glm::ivec2 hereCell = w.path.empty() ? cellOf(here) : cellOf(w.path.back()); // waiting: the leg's last cell
         int job = w.state != Walker_Home ? structureIndexById(w.jobId) : -1;
         if (job >= 0 && m_frame[job].state->blueprint)
             job = -1;
@@ -468,7 +637,9 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (job >= 0)
             {
                 Ref& old = m_frame[job];
-                if (old.walkers > 0)
+                if (w.state >= Walker_GuardToArmory)
+                    old.guards -= old.guards > 0 ? 1 : 0;
+                else if (old.walkers > 0)
                     --old.walkers;
                 if ((w.state == Walker_ToJob || w.state == Walker_Waiting) && old.walkersIdle > 0)
                     --old.walkersIdle;
@@ -509,6 +680,119 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.state = Walker_Home;
             return true;
         };
+        // An alarmed Armory on this road that is short of guards: the walker goes there for a bow.
+        const auto seekArmory = [&]
+        {
+            oc::vector<glm::vec3> path;
+            const int found = roadSearch(-1, hereCell, [&](int index) { return guardWanted(index, team) ? 2 : 0; }, path);
+            if (found < 0 || path.empty())
+                return false;
+            leaveJob();
+            job = found;
+            w.jobId = m_frame[found].state->structureId;
+            ++m_frame[found].guards;
+            w.path = oc::move(path);
+            w.along = 0.0f;
+            w.state = Walker_GuardToArmory;
+            return true;
+        };
+
+        // THE ROAD UNDER IT IS GONE (destroyed to rubble, or removed): the walker moves to a road cell next to it and
+        // goes on from there - a standing one stands there, a walking one finds a new way to where it was going (or
+        // home). No road cell next to it: the walker is gone, and its house sends a worker again.
+        {
+            const bool standing = w.state == Walker_Waiting || w.state == Walker_Working || w.state == Walker_Guarding;
+            const glm::ivec2 at = standing ? hereCell : cellOf(here);
+            float roadY = 0.0f;
+            if (!roadAt(at.x, at.y, roadY))
+            {
+                bool found = false;
+                for (const glm::ivec2& n : c_neighbours)
+                    if (!found && roadAt(at.x + n.x, at.y + n.y, roadY))
+                    {
+                        hereCell = at + n;
+                        found = true;
+                    }
+                if (!found)
+                {
+                    removeWalker(k--);
+                    continue;
+                }
+                const glm::vec3 nextTo(((float)hereCell.x + 0.5f) * GridCellSize, roadY + c_walkHeight, ((float)hereCell.y + 0.5f) * GridCellSize);
+                if (standing)
+                {
+                    w.path.assign(1, nextTo);
+                    if (w.entity)
+                        w.entity->pos = nextTo;
+                }
+                else
+                {
+                    const int dest = w.state == Walker_Delivering ? structureIndexById(w.targetId) : w.state == Walker_Home ? home : job;
+                    oc::vector<glm::vec3> path;
+                    const bool way = w.state == Walker_GuardToPost ? job >= 0 && guardPost(hereCell, job, k, path)
+                        : dest >= 0 && roadSearch(-1, hereCell, [&](int index) { return index == dest ? 2 : 0; }, path) >= 0;
+                    if (w.entity) // onto the road cell at once: the next tick must find it on a road
+                        w.entity->pos = nextTo;
+                    if (way && !path.empty())
+                    {
+                        w.path = oc::move(path); // (it starts at that cell)
+                        w.along = 0.0f;
+                    }
+                    else
+                    {
+                        if (w.state == Walker_Home || !goHome())
+                            removeWalker(k--);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // GUARDING: at its post, it shoots the nearest enemy unit in range every "Guard shot interval (s)" - a hit that
+        // never misses, through anything. With nothing to shoot for a while it looks for a better post (the threat
+        // moved). The alarm is over, the Armory is gone, or production took its worker: it puts the bow down and
+        // takes other work, or goes home.
+        if (w.state == Walker_Guarding)
+        {
+            if (job < 0 || m_frame[job].alarm <= 0.0f || w.dismissed)
+            {
+                setGuardLook(w, false);
+                if (!((!w.dismissed && seekJob(1)) || goHome()))
+                    removeWalker(k--);
+                continue;
+            }
+            w.wait -= deltaSec;
+            if (w.wait > 0.0f)
+                continue;
+            w.wait = glm::max(m_settings.guardInterval, 0.1f);
+            // ON A WALKWAY DECK it shoots over the walls: anything in range. On any other road cell it needs a CLEAR LINE
+            // from its eyes to the unit (nearestEnemyUnit's sightFrom).
+            glm::vec3 victimPos;
+            const glm::vec3 eyes = here + glm::vec3(0.0f, 1.3f, 0.0f);
+            if (GameUnitComponent* victim = nearestEnemyUnit(here, m_settings.guardRange, team, victimPos,
+                walkwayDeckAt(hereCell.x, hereCell.y) ? nullptr : &eyes))
+            {
+                victim->damage(m_settings.guardDamage, team);
+                m_guardShots.push_back({ eyes, victimPos });
+                if (const glm::vec3 d = victimPos - here; w.entity && d.x * d.x + d.z * d.z > 1e-6f)
+                    w.entity->rot = glm::angleAxis(std::atan2(-d.x, -d.z), glm::vec3(0.0f, 1.0f, 0.0f));
+                w.idle = 0.0f;
+                continue;
+            }
+            w.idle += w.wait;
+            if (w.idle >= c_guardRepost)
+            {
+                w.idle = 0.0f;
+                oc::vector<glm::vec3> path;
+                if (guardPost(hereCell, job, k, path) && path.size() > 1)
+                {
+                    w.path = oc::move(path);
+                    w.along = 0.0f;
+                    w.state = Walker_GuardToPost;
+                }
+            }
+            continue;
+        }
 
         if (w.state == Walker_Waiting)
         {
@@ -532,6 +816,8 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (w.wait > 0.0f)
                 continue;
             w.wait = c_retrySeconds;
+            if (guardsWanted[team] && seekArmory()) // the alarm: a waiting worker goes for a bow before any load
+                continue;
             if (rank == 0) // the first in line loads
             {
                 GameStructureComponent& s = *jobRef.state;
@@ -683,7 +969,7 @@ void StructureSystem::tickCarriers(float deltaSec)
                 w.entity->rot = glm::angleAxis(std::atan2(-dir.x, -dir.z), glm::vec3(0.0f, 1.0f, 0.0f));
             // carrier.pre's children: [1] the LOAD in its hands, only while it carries one on foot; [2] the cart's load and
             // [3..] the CART, on a transport trip (the cart comes back with it, empty).
-            if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()))
+            if (const SceneComponent* scene = w.guard ? nullptr : getComponent<SceneComponent>(w.entity.get())) // (guard.pre: all shown)
             {
                 const bool cart = w.work == CarrierWork_Transport;
                 for (size_t c = 1; c < scene->children.size(); ++c)
@@ -736,6 +1022,27 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.load = 0.0f;
             w.work = CarrierWork_Goods;
             w.state = Walker_Waiting;
+            w.wait = 0.0f;
+            w.idle = 0.0f;
+            break;
+        case Walker_GuardToArmory: // at the Armory: the bow, then the walk to a post (none free: it guards here)
+        {
+            setGuardLook(w, true);
+            oc::vector<glm::vec3> path;
+            if (job >= 0 && guardPost(hereCell, job, k, path) && path.size() > 1)
+            {
+                w.path = oc::move(path);
+                w.along = 0.0f;
+                w.state = Walker_GuardToPost;
+            }
+            else
+                w.state = Walker_Guarding;
+            w.wait = 0.0f;
+            w.idle = 0.0f;
+            break;
+        }
+        case Walker_GuardToPost:
+            w.state = Walker_Guarding;
             w.wait = 0.0f;
             w.idle = 0.0f;
             break;

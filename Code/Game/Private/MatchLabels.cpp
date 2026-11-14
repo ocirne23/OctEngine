@@ -89,7 +89,8 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
             // conveyor medium's attach bit: that bit is stamped only on a building that holds MINERALS, so a wood-only
             // building (the Hearth, the Lumberyard) never had it and always showed the badge.
             // The House: its workers cannot go out to carry.
-            if ((fuel || minerals || type == EStructureType::House) && !m_structures.structureOnRoad(index))
+            // The Armory: the workers cannot come for a bow.
+            if ((fuel || minerals || type == EStructureType::House || type == EStructureType::Armory) && !m_structures.structureOnRoad(index))
             {
                 color = c_amber;
                 return "No road";

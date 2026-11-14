@@ -399,9 +399,9 @@ void StructureSystem::tickProduction(float deltaSec)
         m = 0.0f;
     for (const Ref& s : m_frame)
     {
-        // The HUD's "energy stored" counts DEDICATED storage only (Battery) - production buffers
-        // and consumer trickle buffers are working charge, not reserves.
-        if (s.type == EStructureType::Battery)
+        // The HUD's "energy stored" counts DEDICATED storage only (the Crystal store, and the Beacon's own store) -
+        // production buffers and consumer trickle buffers are working charge, not reserves.
+        if (s.type == EStructureType::Battery || s.type == EStructureType::Base)
         {
             m_gridEnergyTotal += s.state->store[0];
             m_gridCapacityTotal += s.state->capacity[0];

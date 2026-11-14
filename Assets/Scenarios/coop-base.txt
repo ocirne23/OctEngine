@@ -1,212 +1,234 @@
-WaveIndex 28
-WaveTimer 8.939444
-NightIndex 3
+WaveIndex 17
+WaveTimer 37.229298
+NightIndex 2
 Night true
-TimeOfDay 19.82836
-NightWave 1
-WaveScale 1.2864523
-MatchTime 2866.6013
+TimeOfDay 20.824402
+NightWave 3
+WaveScale 3.2003415
+MatchTime 2269.487
 WaveTrickle
 	Pending 0
-	Origin -3524.46 4.3554688 -11015.836
-	Dest -3494.1946 4.3554688 -10866.88
-	Radius 34.673927
-	LastArchetype 1
-	Mix 4 0.944970
-	Mix 2 0.226847
+	Origin -3566.0303 4.3554688 -10729.979
+	Dest -3495.9211 4.3554688 -10855.759
+	Radius 9.151888
+	LastArchetype 4
+	Mix 1 0.141972
+	Mix 0 0.317779
+	Mix 4 0.663189
+	Mix 10 0.182323
 AmbientTrickle
 	Pending 0
 	Center 0 0 0
 	Radius 6
 	Remaining 0
 	Archetype 0
-PlayerPos -3495.3994 5.149343 -10874.504
+PlayerPos -3483.526 5.393717 -10854.5205
 Structure
 	Id 1
 	Type 14
 	Position -3493 7.3554688 -10861
-	Charge 1185.2069
-	Minerals 200
-	OutputFrac 0.995708
+	Charge 1495.2952
+	Minerals 26.656332
+	OutputFrac 1
 Structure
 	Id 2
-	Type 17
-	Position -3491 4.8129883 -10857
+	Type 23
+	Position -3506 6.838867 -10850
+	Yield 0.502711
+	Minerals 30
 Structure
 	Id 3
 	Type 17
-	Position -3489 4.8129883 -10857
+	Position -3495 4.8310547 -10857
 Structure
 	Id 4
 	Type 17
-	Position -3487 4.8129883 -10857
+	Position -3497 4.849121 -10857
 Structure
 	Id 5
 	Type 17
-	Position -3485 4.814453 -10857
+	Position -3499 4.8930664 -10857
 Structure
 	Id 6
 	Type 17
-	Position -3483 4.8183594 -10857
+	Position -3501 4.96875 -10857
 Structure
 	Id 7
 	Type 17
-	Position -3481 4.879883 -10857
+	Position -3503 5.0444336 -10857
 Structure
 	Id 8
 	Type 17
-	Position -3479 4.9418945 -10857
+	Position -3503 5.065918 -10855
 Structure
 	Id 9
 	Type 17
-	Position -3477 4.9868164 -10857
+	Position -3503 5.067871 -10853
 Structure
 	Id 10
 	Type 17
-	Position -3475 5.0180664 -10857
+	Position -3503 5.0878906 -10851
 Structure
 	Id 11
-	Type 17
-	Position -3473 5.0498047 -10857
+	Type 21
+	Position -3498 5.915039 -10860
 Structure
 	Id 12
-	Type 24
-	Position -3471 4.5061345 -10857
+	Type 21
+	Position -3502 5.996582 -10860
 Structure
 	Id 13
-	Type 24
-	Position -3469 4.5061345 -10857
+	Type 17
+	Position -3493 4.8134766 -10857
+Structure
+	Id 14
+	Type 17
+	Position -3491 4.8129883 -10857
+Structure
+	Id 15
+	Type 17
+	Position -3489 4.8129883 -10857
+Structure
+	Id 16
+	Type 17
+	Position -3487 4.8129883 -10857
+Structure
+	Id 17
+	Type 17
+	Position -3485 4.814453 -10857
 Structure
 	Id 18
 	Type 17
-	Position -3459 5.1875 -10857
+	Position -3483 4.8183594 -10857
 Structure
 	Id 19
 	Type 17
-	Position -3457 5.158203 -10857
+	Position -3481 4.879883 -10857
 Structure
 	Id 20
+	Type 17
+	Position -3479 4.9418945 -10857
+Structure
+	Id 21
+	Type 17
+	Position -3477 4.9868164 -10857
+Structure
+	Id 22
+	Type 17
+	Position -3475 5.0180664 -10857
+Structure
+	Id 23
+	Type 17
+	Position -3473 5.0498047 -10857
+Structure
+	Id 24
+	Type 24
+	Position -3471 4.5061345 -10857
+Structure
+	Id 25
+	Type 24
+	Position -3469 4.5061345 -10857
+Structure
+	Id 26
+	Type 17
+	Position -3467 4.591797 -10857
+Structure
+	Id 27
+	Type 17
+	Position -3465 5.1845703 -10857
+Structure
+	Id 28
+	Type 17
+	Position -3463 5.258301 -10857
+Structure
+	Id 29
+	Type 17
+	Position -3461 5.2231445 -10857
+Structure
+	Id 30
+	Type 17
+	Position -3459 5.1875 -10857
+Structure
+	Id 31
+	Type 17
+	Position -3457 5.158203 -10857
+Structure
+	Id 32
+	Type 17
+	Position -3455 5.1347656 -10857
+Structure
+	Id 33
+	Type 17
+	Position -3453 5.1118164 -10857
+Structure
+	Id 34
 	Type 23
 	Position -3428 6.955078 -10854
 	Minerals 30
 Structure
-	Id 21
-	Type 17
-	Position -3455 5.1347656 -10857
-Structure
-	Id 22
-	Type 17
-	Position -3453 5.1118164 -10857
-Structure
-	Id 23
+	Id 35
 	Type 17
 	Position -3451 5.1015625 -10857
 Structure
-	Id 24
+	Id 36
 	Type 17
 	Position -3449 5.0913086 -10857
 Structure
-	Id 25
+	Id 37
 	Type 17
 	Position -3447 5.158203 -10857
 Structure
-	Id 26
+	Id 38
 	Type 17
 	Position -3445 5.288086 -10857
 Structure
-	Id 27
+	Id 39
 	Type 17
 	Position -3443 5.4125977 -10857
 Structure
-	Id 28
+	Id 40
 	Type 17
 	Position -3441 5.4208984 -10857
 Structure
-	Id 29
+	Id 41
 	Type 17
 	Position -3439 5.429199 -10857
 Structure
-	Id 30
+	Id 42
 	Type 17
 	Position -3437 5.4057617 -10857
 Structure
-	Id 31
+	Id 43
 	Type 17
 	Position -3435 5.3564453 -10857
 Structure
-	Id 32
+	Id 44
 	Type 17
 	Position -3433 5.307129 -10857
 Structure
-	Id 33
+	Id 45
 	Type 17
 	Position -3431 5.258789 -10857
 Structure
-	Id 34
+	Id 46
 	Type 17
 	Position -3429 5.210449 -10857
 Structure
-	Id 35
-	Type 23
-	Position -3406 7.086914 -10844
-	Yield 0.66213834
+	Id 47
+	Type 12
+	Position -3432 8.011719 -10854
+	Fuel 110
 	Minerals 30
 Structure
-	Id 36
-	Type 17
-	Position -3407 5.315918 -10847
-Structure
-	Id 37
-	Type 17
-	Position -3409 5.307617 -10847
-Structure
-	Id 38
-	Type 17
-	Position -3411 5.307129 -10847
-Structure
-	Id 39
-	Type 17
-	Position -3413 5.3066406 -10847
-Structure
-	Id 40
-	Type 17
-	Position -3415 5.3242188 -10847
-Structure
-	Id 41
-	Type 17
-	Position -3417 5.3432617 -10847
-Structure
-	Id 42
-	Type 17
-	Position -3419 5.3515625 -10847
-Structure
-	Id 43
-	Type 17
-	Position -3421 5.347168 -10847
-Structure
-	Id 44
-	Type 17
-	Position -3423 5.3432617 -10847
-Structure
-	Id 45
-	Type 17
-	Position -3425 5.376953 -10847
-Structure
-	Id 46
-	Type 17
-	Position -3425 5.3286133 -10849
-Structure
-	Id 47
-	Type 17
-	Position -3425 5.2807617 -10851
-Structure
 	Id 48
-	Type 17
-	Position -3425 5.2529297 -10853
+	Type 23
+	Position -3406 6.7666016 -10854
+	Yield 0.6621383
+	Minerals 30
 Structure
 	Id 49
 	Type 17
-	Position -3425 5.229492 -10855
+	Position -3427 5.192383 -10857
 Structure
 	Id 50
 	Type 17
@@ -214,4371 +236,2617 @@ Structure
 Structure
 	Id 51
 	Type 17
-	Position -3427 5.192383 -10857
+	Position -3423 5.20459 -10857
 Structure
 	Id 52
-	Type 21
-	Position -3432 6.5117188 -10854
+	Type 17
+	Position -3421 5.176758 -10857
 Structure
 	Id 53
-	Type 21
-	Position -3428 6.4975586 -10850
+	Type 17
+	Position -3419 5.149414 -10857
 Structure
 	Id 54
-	Type 21
-	Position -3432 6.572754 -10850
+	Type 17
+	Position -3417 5.109375 -10857
 Structure
 	Id 55
 	Type 17
-	Position -3435 5.413086 -10855
+	Position -3415 5.0585938 -10857
 Structure
 	Id 56
 	Type 17
-	Position -3435 5.4521484 -10853
+	Position -3413 5.0097656 -10857
 Structure
 	Id 57
 	Type 17
-	Position -3435 5.4868164 -10851
+	Position -3411 5.0024414 -10857
 Structure
 	Id 58
 	Type 17
-	Position -3435 5.5004883 -10849
+	Position -3409 4.994629 -10857
 Structure
 	Id 59
 	Type 17
-	Position -3435 5.5146484 -10847
-Structure
-	Id 60
-	Type 12
-	Position -3422 9.002441 -10850
-	Fuel 470
-	Minerals 495.87006
+	Position -3407 4.989746 -10857
 Structure
 	Id 61
-	Type 3
-	Position -3438 7.168457 -10854
-	Charge 1286.5945
+	Type 2
+	Position -3410 6.967285 -10848
+	Fuel 30
 Structure
 	Id 62
-	Type 7
-	Position -3438 7.2402344 -10850
-	Charge 150
-	OutputFrac 0.995708
-Structure
-	Id 63
-	Type 17
-	Position -3489 4.779297 -10859
-Structure
-	Id 64
-	Type 17
-	Position -3489 4.7460938 -10861
-Structure
-	Id 65
-	Type 17
-	Position -3489 4.680664 -10863
-Structure
-	Id 66
-	Type 17
-	Position -3489 4.6064453 -10865
-Structure
-	Id 67
-	Type 17
-	Position -3491 4.599121 -10865
-Structure
-	Id 68
-	Type 17
-	Position -3493 4.5913086 -10865
-Structure
-	Id 69
-	Type 17
-	Position -3495 4.5786133 -10865
-Structure
-	Id 71
-	Type 17
-	Position -3497 4.632324 -10863
-Structure
-	Id 72
-	Type 17
-	Position -3497 4.7006836 -10861
-Structure
-	Id 73
-	Type 17
-	Position -3497 4.7749023 -10859
-Structure
-	Id 74
-	Type 17
-	Position -3497 4.849121 -10857
-Structure
-	Id 75
-	Type 17
-	Position -3495 4.8310547 -10857
-Structure
-	Id 76
-	Type 17
-	Position -3493 4.8134766 -10857
-Structure
-	Id 78
-	Type 21
-	Position -3488 5.6083984 -10868
-Structure
-	Id 79
-	Type 21
-	Position -3486 5.8276367 -10864
-Structure
-	Id 80
-	Type 21
-	Position -3486 5.980957 -10860
-Structure
-	Id 81
-	Type 5
-	Position -3442 5.614746 -10854
-Structure
-	Id 82
-	Type 5
-	Position -3442 5.67334 -10850
-Structure
-	Id 83
-	Type 5
-	Position -3446 5.34375 -10854
-Structure
-	Id 84
-	Type 5
-	Position -3438 5.4208984 -10860
-Structure
-	Id 85
-	Type 5
-	Position -3442 5.5307617 -10860
-Structure
-	Id 86
-	Type 5
-	Position -3446 5.3632812 -10860
-Structure
-	Id 87
-	Type 5
-	Position -3450 5.3598633 -10860
-Structure
-	Id 88
-	Type 5
-	Position -3450 5.3398438 -10854
-Structure
-	Id 89
-	Type 2
-	Position -3406 6.9033203 -10850
-	Fuel 6.5273595
-Structure
-	Id 90
-	Type 1
-	Position -3412 6.913574 -10850
-	Fuel 19.046083
-Structure
-	Id 91
-	Type 1
-	Position -3412 6.7768555 -10854
-	Fuel 17.513098
-Structure
-	Id 92
-	Type 17
-	Position -3409 5.248535 -10849
-Structure
-	Id 93
-	Type 17
-	Position -3409 5.188965 -10851
-Structure
-	Id 94
-	Type 17
-	Position -3409 5.1225586 -10853
-Structure
-	Id 95
 	Type 17
 	Position -3409 5.054199 -10855
 Structure
-	Id 99
+	Id 63
 	Type 17
-	Position -3413 5.755371 -10825
+	Position -3409 5.1225586 -10853
 Structure
-	Id 100
+	Id 64
 	Type 17
-	Position -3413 5.7543945 -10827
+	Position -3409 5.188965 -10851
 Structure
-	Id 101
+	Id 65
 	Type 17
-	Position -3413 5.7246094 -10829
+	Position -3407 5.1875 -10851
 Structure
-	Id 102
+	Id 66
 	Type 17
-	Position -3413 5.694824 -10831
+	Position -3411 5.1992188 -10851
 Structure
-	Id 103
+	Id 67
 	Type 17
-	Position -3413 5.6328125 -10833
+	Position -3413 5.2089844 -10851
 Structure
-	Id 104
-	Type 17
-	Position -3413 5.5629883 -10835
-Structure
-	Id 105
-	Type 17
-	Position -3413 5.501953 -10837
-Structure
-	Id 106
-	Type 17
-	Position -3413 5.463867 -10839
-Structure
-	Id 107
-	Type 17
-	Position -3413 5.425293 -10841
-Structure
-	Id 108
-	Type 17
-	Position -3413 5.3867188 -10843
-Structure
-	Id 109
-	Type 17
-	Position -3413 5.3481445 -10845
-Structure
-	Id 110
+	Id 68
 	Type 1
-	Position -3410 7.0810547 -10844
-	Fuel 12.897992
+	Position -3412 6.7768555 -10854
+	Charge 30
+	Fuel 28.362745
 Structure
-	Id 111
+	Id 69
 	Type 1
-	Position -3416 7.088379 -10844
-	Fuel 25.354425
-Structure
-	Id 112
-	Type 23
-	Position -3378 6.34375 -10868
-	Yield 0.7293981
-	Minerals 30
-Structure
-	Id 113
-	Type 17
-	Position -3381 4.6748047 -10867
-Structure
-	Id 114
-	Type 17
-	Position -3383 4.647949 -10867
-Structure
-	Id 115
-	Type 17
-	Position -3385 4.6435547 -10867
-Structure
-	Id 116
-	Type 17
-	Position -3387 4.6411133 -10867
-Structure
-	Id 117
-	Type 17
-	Position -3389 4.650879 -10867
-Structure
-	Id 118
-	Type 17
-	Position -3391 4.676758 -10867
-Structure
-	Id 119
-	Type 17
-	Position -3393 4.7026367 -10867
-Structure
-	Id 120
-	Type 17
-	Position -3395 4.6953125 -10867
-Structure
-	Id 121
-	Type 17
-	Position -3397 4.6865234 -10867
-Structure
-	Id 122
-	Type 17
-	Position -3399 4.70166 -10867
-Structure
-	Id 123
-	Type 17
-	Position -3401 4.7441406 -10867
-Structure
-	Id 125
-	Type 17
-	Position -3403 4.7871094 -10867
-Structure
-	Id 126
-	Type 17
-	Position -3405 4.8061523 -10867
-Structure
-	Id 127
-	Type 17
-	Position -3407 4.824707 -10867
-Structure
-	Id 128
-	Type 17
-	Position -3409 4.824707 -10867
-Structure
-	Id 130
-	Type 17
-	Position -3409 4.85791 -10865
-Structure
-	Id 131
-	Type 17
-	Position -3409 4.8876953 -10863
-Structure
-	Id 132
-	Type 17
-	Position -3409 4.9194336 -10861
-Structure
-	Id 133
-	Type 17
-	Position -3409 4.9570312 -10859
-Structure
-	Id 134
-	Type 17
-	Position -3409 4.994629 -10857
-Structure
-	Id 135
-	Type 13
-	Position -3433 5.9018555 -10859
-	Minerals 25.160162
-Structure
-	Id 136
-	Type 13
-	Position -3431 5.8930664 -10859
-	Minerals 29.150806
-Structure
-	Id 137
-	Type 17
-	Position -3435 5.2592773 -10859
-Structure
-	Id 138
-	Type 17
-	Position -3435 5.1625977 -10861
-Structure
-	Id 139
-	Type 5
-	Position -3438 5.3691406 -10864
-Structure
-	Id 140
-	Type 5
-	Position -3442 5.4311523 -10864
-Structure
-	Id 141
-	Type 5
-	Position -3446 5.3603516 -10864
-Structure
-	Id 142
-	Type 5
-	Position -3450 5.301758 -10864
-Structure
-	Id 143
-	Type 5
-	Position -3450 5.186035 -10868
-Structure
-	Id 144
-	Type 5
-	Position -3446 5.3461914 -10868
-Structure
-	Id 145
-	Type 5
-	Position -3442 5.397461 -10868
-Structure
-	Id 146
-	Type 5
-	Position -3438 5.368164 -10868
-Structure
-	Id 147
-	Type 5
-	Position -3446 5.4160156 -10850
-Structure
-	Id 148
-	Type 5
-	Position -3450 5.366699 -10850
-Structure
-	Id 149
-	Type 5
-	Position -3450 5.470703 -10846
-Structure
-	Id 150
-	Type 5
-	Position -3446 5.473633 -10846
-Structure
-	Id 151
-	Type 5
-	Position -3442 5.6777344 -10846
-Structure
-	Id 152
-	Type 5
-	Position -3438 5.6367188 -10846
-Structure
-	Id 153
-	Type 17
-	Position -3435 5.133789 -10863
-Structure
-	Id 154
-	Type 17
-	Position -3435 5.1220703 -10865
-Structure
-	Id 155
-	Type 17
-	Position -3435 5.1293945 -10867
-Structure
-	Id 156
-	Type 17
-	Position -3435 5.182129 -10869
-Structure
-	Id 157
-	Type 21
-	Position -3482 6.055176 -10860
-Structure
-	Id 158
-	Type 21
-	Position -3482 5.9536133 -10864
-Structure
-	Id 159
-	Type 17
-	Position -3479 4.9697266 -10859
-Structure
-	Id 160
-	Type 17
-	Position -3479 4.998535 -10861
-Structure
-	Id 161
-	Type 17
-	Position -3479 4.9882812 -10863
-Structure
-	Id 162
-	Type 17
-	Position -3479 4.96875 -10865
-Structure
-	Id 163
-	Type 17
-	Position -3479 4.9379883 -10867
-Structure
-	Id 164
-	Type 17
-	Position -3479 4.8808594 -10869
-Structure
-	Id 165
-	Type 21
-	Position -3482 5.815918 -10868
-Structure
-	Id 166
-	Type 17
-	Position -3479 4.8251953 -10871
-Structure
-	Id 167
-	Type 17
-	Position -3481 4.7036133 -10871
-Structure
-	Id 168
-	Type 17
-	Position -3483 4.5825195 -10871
-Structure
-	Id 169
-	Type 21
-	Position -3496 5.774414 -10868
-Structure
-	Id 176
-	Type 21
-	Position -3500 5.847168 -10862
-Structure
-	Id 177
-	Type 21
-	Position -3500 5.993164 -10858
-Structure
-	Id 178
-	Type 0
-	Position -3393 5.4575195 -10865
-	Charge 50
-	OutputFrac 0.995708
-Structure
-	Id 179
-	Type 26
-	Position -3407 6.099121 -10861
-	Charge 34.322792
-Structure
-	Id 180
-	Type 10
-	Position -3375 5.940918 -10867
-Structure
-	Id 181
-	Type 10
-	Position -3375 5.899414 -10869
-Structure
-	Id 182
-	Type 10
-	Position -3377 5.845215 -10871
-Structure
-	Id 183
-	Type 10
-	Position -3377 5.9750977 -10865
-Structure
-	Id 184
-	Type 13
-	Position -3391 5.436035 -10865
-	Minerals 26.819357
-Structure
-	Id 185
-	Type 27
-	Position -3500 6.6450195 -10854
+	Position -3416 6.8154297 -10854
 	Charge 30
+	Fuel 20.286055
 Structure
-	Id 186
-	Type 17
-	Position -3497 4.9140625 -10855
-Structure
-	Id 187
-	Type 2
-	Position -3416 7.498047 -10822
-	Fuel 30
-Structure
-	Id 188
-	Type 13
-	Position -3415 6.4248047 -10831
-	Minerals 28.631393
-Structure
-	Id 189
-	Type 10
-	Position -3415 7.001465 -10819
-Structure
-	Id 190
-	Type 10
-	Position -3417 7.0200195 -10819
-Structure
-	Id 191
-	Type 10
-	Position -3413 6.98584 -10821
-Structure
-	Id 192
-	Type 10
-	Position -3411 7.001953 -10821
-Structure
-	Id 193
-	Type 10
-	Position -3411 7.0009766 -10823
-Structure
-	Id 194
-	Type 10
-	Position -3419 7.0307617 -10819
-Structure
-	Id 195
-	Type 10
-	Position -3419 7.01416 -10821
-Structure
-	Id 197
-	Type 13
-	Position -3497 5.6953125 -10853
-	Minerals 20.31925
-Structure
-	Id 198
-	Type 10
-	Position -3507 6.051758 -10869
-Structure
-	Id 199
-	Type 10
-	Position -3507 6.0424805 -10867
-Structure
-	Id 200
-	Type 10
-	Position -3507 6.0512695 -10865
-Structure
-	Id 201
-	Type 10
-	Position -3507 6.114258 -10863
-Structure
-	Id 202
-	Type 10
-	Position -3507 6.177246 -10861
-Structure
-	Id 203
-	Type 10
-	Position -3507 6.2319336 -10859
-Structure
-	Id 204
-	Type 10
-	Position -3507 6.2836914 -10857
-Structure
-	Id 205
-	Type 17
-	Position -3497 4.5654297 -10865
-Structure
-	Id 206
-	Type 17
-	Position -3499 4.5908203 -10865
-Structure
-	Id 207
-	Type 17
-	Position -3501 4.6625977 -10865
-Structure
-	Id 210
-	Type 11
-	Position -3500 6.2749023 -10868
-	Charge 0.5
-Structure
-	Id 211
-	Type 11
-	Position -3416 7.463379 -10828
-	Charge 0.5
-Structure
-	Id 212
-	Type 26
-	Position -3415 6.7021484 -10839
-	Charge 34.3159
-Structure
-	Id 213
-	Type 27
-	Position -3416 6.4418945 -10870
-	Charge 30
-Structure
-	Id 214
-	Type 17
-	Position -3411 4.801758 -10867
-Structure
-	Id 215
-	Type 17
-	Position -3413 4.779785 -10867
-Structure
-	Id 216
-	Type 17
-	Position -3415 4.8129883 -10867
-Structure
-	Id 217
-	Type 10
-	Position -3425 6.1523438 -10879
-Structure
-	Id 218
-	Type 10
-	Position -3423 6.0942383 -10879
-Structure
-	Id 219
-	Type 10
-	Position -3421 6.0478516 -10879
-Structure
-	Id 220
-	Type 10
-	Position -3419 6.001953 -10879
-Structure
-	Id 221
-	Type 10
-	Position -3417 5.9628906 -10879
-Structure
-	Id 222
-	Type 10
-	Position -3415 5.9160156 -10879
-Structure
-	Id 223
-	Type 10
-	Position -3413 5.8916016 -10879
-Structure
-	Id 224
-	Type 10
-	Position -3411 5.8876953 -10879
-Structure
-	Id 225
-	Type 10
-	Position -3409 5.8847656 -10879
-Structure
-	Id 226
-	Type 10
-	Position -3407 5.8847656 -10879
-Structure
-	Id 227
-	Type 10
-	Position -3405 5.8964844 -10879
-Structure
-	Id 228
-	Type 10
-	Position -3403 5.9067383 -10879
-Structure
-	Id 229
-	Type 10
-	Position -3401 5.9072266 -10879
-Structure
-	Id 230
-	Type 10
-	Position -3399 5.902832 -10879
-Structure
-	Id 231
-	Type 10
-	Position -3397 5.8588867 -10879
-Structure
-	Id 232
-	Type 10
-	Position -3395 5.814453 -10879
-Structure
-	Id 233
-	Type 10
-	Position -3393 5.7504883 -10879
-Structure
-	Id 234
-	Type 10
-	Position -3391 5.6689453 -10879
-Structure
-	Id 235
-	Type 10
-	Position -3389 5.590332 -10879
-Structure
-	Id 236
-	Type 10
-	Position -3387 5.5771484 -10879
-Structure
-	Id 237
-	Type 10
-	Position -3379 5.7421875 -10873
-Structure
-	Id 238
-	Type 10
-	Position -3381 5.6245117 -10875
-Structure
-	Id 239
-	Type 10
-	Position -3383 5.5688477 -10877
-Structure
-	Id 240
-	Type 10
-	Position -3385 5.5654297 -10879
-Structure
-	Id 241
-	Type 10
-	Position -3379 5.979004 -10863
-Structure
-	Id 242
-	Type 10
-	Position -3379 5.995117 -10861
-Structure
-	Id 243
-	Type 10
-	Position -3381 6.008789 -10859
-Structure
-	Id 244
-	Type 10
-	Position -3381 6.020508 -10857
-Structure
-	Id 245
-	Type 10
-	Position -3383 6.0458984 -10857
-Structure
-	Id 246
-	Type 10
-	Position -3383 6.073242 -10855
-Structure
-	Id 247
-	Type 10
-	Position -3385 6.099121 -10853
-Structure
-	Id 248
-	Type 10
-	Position -3385 6.1152344 -10851
-Structure
-	Id 249
-	Type 10
-	Position -3387 6.147461 -10849
-Structure
-	Id 250
-	Type 10
-	Position -3389 6.1191406 -10849
-Structure
-	Id 251
-	Type 10
-	Position -3391 6.0913086 -10849
-Structure
-	Id 252
-	Type 10
-	Position -3393 6.0776367 -10849
-Structure
-	Id 253
-	Type 10
-	Position -3395 6.1567383 -10847
-Structure
-	Id 254
-	Type 10
-	Position -3397 6.2182617 -10847
-Structure
-	Id 255
-	Type 10
-	Position -3397 6.265625 -10845
-Structure
-	Id 256
-	Type 10
-	Position -3399 6.3657227 -10843
-Structure
-	Id 257
-	Type 10
-	Position -3399 6.402832 -10841
-Structure
-	Id 258
-	Type 10
-	Position -3401 6.498047 -10841
-Structure
-	Id 259
-	Type 10
-	Position -3403 6.5947266 -10841
-Structure
-	Id 260
-	Type 10
-	Position -3405 6.6503906 -10841
-Structure
-	Id 261
-	Type 10
-	Position -3407 6.6875 -10839
-Structure
-	Id 262
-	Type 10
-	Position -3407 6.7124023 -10837
-Structure
-	Id 263
-	Type 10
-	Position -3407 6.741699 -10835
-Structure
-	Id 264
-	Type 10
-	Position -3409 6.802246 -10833
-Structure
-	Id 265
-	Type 10
-	Position -3411 6.9814453 -10825
-Structure
-	Id 266
-	Type 10
-	Position -3411 6.9492188 -10827
-Structure
-	Id 267
-	Type 10
-	Position -3411 6.915039 -10829
-Structure
-	Id 268
-	Type 10
-	Position -3411 6.8745117 -10831
-Structure
-	Id 269
-	Type 10
-	Position -3421 7.019043 -10819
-Structure
-	Id 270
-	Type 10
-	Position -3423 6.989746 -10819
-Structure
-	Id 271
-	Type 10
-	Position -3425 6.9404297 -10819
-Structure
-	Id 272
-	Type 10
-	Position -3427 6.8911133 -10819
-Structure
-	Id 273
-	Type 10
-	Position -3429 6.8549805 -10819
-Structure
-	Id 281
-	Type 17
-	Position -3461 5.2231445 -10857
-Structure
-	Id 282
-	Type 17
-	Position -3463 5.258301 -10857
-Structure
-	Id 283
-	Type 17
-	Position -3465 5.1845703 -10857
-Structure
-	Id 284
-	Type 17
-	Position -3467 4.591797 -10857
-Structure
-	Id 285
-	Type 10
-	Position -3427 6.225586 -10879
-Structure
-	Id 286
-	Type 10
-	Position -3429 6.29834 -10879
-Structure
-	Id 287
-	Type 10
-	Position -3431 6.3881836 -10879
-Structure
-	Id 288
-	Type 10
-	Position -3433 6.476074 -10879
-Structure
-	Id 289
-	Type 10
-	Position -3435 6.5117188 -10879
-Structure
-	Id 290
-	Type 10
-	Position -3437 6.505371 -10879
-Structure
-	Id 291
-	Type 10
-	Position -3439 6.3188477 -10879
-Structure
-	Id 292
-	Type 10
-	Position -3441 6.1152344 -10879
-Structure
-	Id 293
-	Type 13
-	Position -3467 5.0932617 -10859
-	Minerals 20.69565
-Structure
-	Id 294
-	Type 5
-	Position -3432 5.314453 -10868
-Structure
-	Id 295
-	Type 5
-	Position -3432 5.3134766 -10864
-Structure
-	Id 296
-	Type 5
-	Position -3428 5.270508 -10864
-Structure
-	Id 297
-	Type 5
-	Position -3428 5.2578125 -10868
-Structure
-	Id 298
-	Type 5
-	Position -3424 5.1308594 -10868
-Structure
-	Id 299
-	Type 5
-	Position -3424 5.229004 -10864
-Structure
-	Id 300
-	Type 5
-	Position -3420 5.1435547 -10864
-Structure
-	Id 301
-	Type 5
-	Position -3420 5.0356445 -10868
-Structure
-	Id 302
-	Type 5
-	Position -3428 5.338867 -10860
-Structure
-	Id 303
-	Type 5
-	Position -3424 5.304199 -10860
-Structure
-	Id 304
-	Type 5
-	Position -3420 5.2192383 -10860
-Structure
-	Id 305
-	Type 3
-	Position -3454 6.8530273 -10854
-	Charge 1286.6024
-Structure
-	Id 306
-	Type 10
-	Position -3443 5.9921875 -10879
-Structure
-	Id 307
-	Type 10
-	Position -3445 5.9726562 -10879
-Structure
-	Id 308
-	Type 10
-	Position -3447 5.953125 -10879
-Structure
-	Id 310
-	Type 10
-	Position -3449 5.9785156 -10877
-Structure
-	Id 311
-	Type 10
-	Position -3451 5.919922 -10879
-Structure
-	Id 312
-	Type 10
-	Position -3453 5.911133 -10879
-Structure
-	Id 313
-	Type 10
-	Position -3455 5.956543 -10879
-Structure
-	Id 314
-	Type 10
-	Position -3457 6.0512695 -10879
-Structure
-	Id 315
-	Type 10
-	Position -3459 6.1342773 -10879
-Structure
-	Id 316
-	Type 10
-	Position -3461 6.1186523 -10879
-Structure
-	Id 317
-	Type 10
-	Position -3463 6.0532227 -10879
-Structure
-	Id 318
-	Type 10
-	Position -3465 5.470215 -10879
-Structure
-	Id 319
-	Type 10
-	Position -3465 5.6152344 -10877
-Structure
-	Id 320
-	Type 10
-	Position -3465 5.7856445 -10875
-Structure
-	Id 321
-	Type 25
-	Position -3467 5.2788086 -10873
-Structure
-	Id 322
-	Type 25
-	Position -3469 5.4340706 -10873
-Structure
-	Id 323
-	Type 25
-	Position -3471 5.4355936 -10873
-Structure
-	Id 324
-	Type 10
-	Position -3465 5.918457 -10873
-Structure
-	Id 325
-	Type 10
-	Position -3473 5.630371 -10873
-Structure
-	Id 326
-	Type 10
-	Position -3475 5.984375 -10873
-Structure
-	Id 327
-	Type 10
-	Position -3477 5.9692383 -10873
-Structure
-	Id 328
-	Type 10
-	Position -3479 5.7490234 -10875
-Structure
-	Id 329
-	Type 10
-	Position -3481 5.567871 -10877
-Structure
-	Id 330
-	Type 10
-	Position -3483 5.4887695 -10879
-Structure
-	Id 331
-	Type 10
-	Position -3485 5.482422 -10881
-Structure
-	Id 332
-	Type 10
-	Position -3487 5.5078125 -10881
-Structure
-	Id 333
-	Type 10
-	Position -3489 5.523926 -10881
-Structure
-	Id 334
-	Type 10
-	Position -3491 5.590332 -10881
-Structure
-	Id 335
-	Type 10
-	Position -3493 5.651367 -10881
-Structure
-	Id 336
-	Type 10
-	Position -3495 5.7368164 -10881
-Structure
-	Id 337
-	Type 10
-	Position -3497 5.857422 -10881
-Structure
-	Id 338
-	Type 10
-	Position -3499 5.9750977 -10881
-Structure
-	Id 339
-	Type 10
-	Position -3501 6.0131836 -10881
-Structure
-	Id 340
-	Type 10
-	Position -3503 6.0429688 -10881
-Structure
-	Id 341
-	Type 10
-	Position -3505 6.0161133 -10881
-Structure
-	Id 342
-	Type 10
-	Position -3507 5.986328 -10881
-Structure
-	Id 343
-	Type 10
-	Position -3507 6.036621 -10879
-Structure
-	Id 344
-	Type 10
-	Position -3507 6.0942383 -10877
-Structure
-	Id 345
-	Type 10
-	Position -3507 6.116699 -10875
-Structure
-	Id 346
-	Type 10
-	Position -3507 6.0898438 -10873
-Structure
-	Id 347
-	Type 10
-	Position -3507 6.069336 -10871
-Structure
-	Id 348
-	Type 10
-	Position -3507 6.3305664 -10855
-Structure
-	Id 349
-	Type 10
-	Position -3507 6.3535156 -10853
-Structure
-	Id 350
-	Type 10
-	Position -3507 6.3774414 -10851
-Structure
-	Id 351
-	Type 10
-	Position -3507 6.4472656 -10849
-Structure
-	Id 352
-	Type 10
-	Position -3507 6.536621 -10847
-Structure
-	Id 353
-	Type 10
-	Position -3507 6.623047 -10845
-Structure
-	Id 354
-	Type 10
-	Position -3507 6.6987305 -10843
-Structure
-	Id 355
-	Type 10
-	Position -3505 6.661621 -10843
-Structure
-	Id 356
-	Type 10
-	Position -3503 6.616699 -10843
-Structure
-	Id 357
-	Type 10
-	Position -3501 6.5634766 -10843
-Structure
-	Id 358
-	Type 10
-	Position -3499 6.51416 -10843
-Structure
-	Id 359
-	Type 10
-	Position -3497 6.513672 -10843
-Structure
-	Id 360
-	Type 10
-	Position -3495 6.552246 -10843
-Structure
-	Id 361
-	Type 10
-	Position -3493 6.5898438 -10843
-Structure
-	Id 362
-	Type 10
-	Position -3491 6.584961 -10843
-Structure
-	Id 363
-	Type 10
-	Position -3489 6.508789 -10845
-Structure
-	Id 364
-	Type 10
-	Position -3487 6.5029297 -10843
-Structure
-	Id 365
-	Type 10
-	Position -3485 6.436035 -10843
-Structure
-	Id 366
-	Type 10
-	Position -3483 6.3842773 -10843
-Structure
-	Id 367
-	Type 10
-	Position -3481 6.3461914 -10843
-Structure
-	Id 368
-	Type 10
-	Position -3479 6.3066406 -10843
-Structure
-	Id 369
-	Type 10
-	Position -3477 6.248047 -10843
-Structure
-	Id 370
-	Type 10
-	Position -3475 6.1660156 -10843
-Structure
-	Id 371
-	Type 10
-	Position -3473 6.0878906 -10843
-Structure
-	Id 372
-	Type 10
-	Position -3471 6.01416 -10843
-Structure
-	Id 373
-	Type 10
-	Position -3469 5.947754 -10843
-Structure
-	Id 374
-	Type 10
-	Position -3467 5.611328 -10843
-Structure
-	Id 376
-	Type 10
-	Position -3467 5.852539 -10841
-Structure
-	Id 377
-	Type 25
-	Position -3465 5.8448777 -10841
-Structure
-	Id 378
-	Type 25
-	Position -3463 5.8742537 -10841
-Structure
-	Id 379
-	Type 25
-	Position -3461 5.5908203 -10841
-Structure
-	Id 380
-	Type 10
-	Position -3459 6.2001953 -10841
-Structure
-	Id 381
-	Type 10
-	Position -3457 6.5117188 -10841
-Structure
-	Id 382
-	Type 10
-	Position -3455 6.495117 -10841
-Structure
-	Id 383
-	Type 10
-	Position -3453 6.4873047 -10841
-Structure
-	Id 384
-	Type 10
-	Position -3451 6.491699 -10841
-Structure
-	Id 385
-	Type 10
-	Position -3449 6.5009766 -10841
-Structure
-	Id 386
-	Type 10
-	Position -3447 6.510254 -10841
-Structure
-	Id 387
-	Type 10
-	Position -3445 6.5546875 -10841
-Structure
-	Id 388
-	Type 10
-	Position -3443 6.5942383 -10841
-Structure
-	Id 389
-	Type 10
-	Position -3441 6.5439453 -10841
-Structure
-	Id 390
-	Type 10
-	Position -3439 6.4990234 -10841
-Structure
-	Id 391
-	Type 10
-	Position -3437 6.5 -10841
-Structure
-	Id 392
-	Type 10
-	Position -3429 6.8427734 -10821
-Structure
-	Id 393
-	Type 10
-	Position -3429 6.788086 -10825
-Structure
-	Id 394
-	Type 10
-	Position -3429 6.757324 -10827
-Structure
-	Id 395
-	Type 10
-	Position -3429 6.727051 -10829
-Structure
-	Id 396
-	Type 10
-	Position -3429 6.7070312 -10831
-Structure
-	Id 397
-	Type 10
-	Position -3429 6.706543 -10833
-Structure
-	Id 398
-	Type 10
-	Position -3429 6.7109375 -10835
-Structure
-	Id 399
-	Type 10
-	Position -3429 6.7109375 -10837
-Structure
-	Id 400
-	Type 10
-	Position -3429 6.7143555 -10839
-Structure
-	Id 401
-	Type 10
-	Position -3429 6.7197266 -10841
-Structure
-	Id 402
-	Type 10
-	Position -3435 6.5751953 -10841
-Structure
-	Id 403
-	Type 10
-	Position -3433 6.6503906 -10841
-Structure
-	Id 404
-	Type 10
-	Position -3431 6.6967773 -10841
-Structure
-	Id 405
-	Type 27
-	Position -3458 6.9282227 -10850
-	Charge 30
-Structure
-	Id 406
-	Type 17
-	Position -3457 5.17041 -10855
-Structure
-	Id 407
-	Type 17
-	Position -3457 5.190918 -10853
-Structure
-	Id 408
-	Type 13
-	Position -3459 5.951172 -10853
-	Minerals 22.949402
-Structure
-	Id 409
-	Type 13
-	Position -3459 5.925293 -10855
-	Minerals 22.809782
-Structure
-	Id 410
-	Type 27
-	Position -3462 6.7373047 -10866
-	Charge 30
-Structure
-	Id 411
-	Type 17
-	Position -3463 5.095215 -10863
-Structure
-	Id 412
-	Type 17
-	Position -3463 5.129883 -10861
-Structure
-	Id 413
-	Type 17
-	Position -3463 5.194336 -10859
-Structure
-	Id 414
-	Type 11
-	Position -3460 6.873535 -10860
-	Charge 0.5
-Structure
-	Id 415
-	Type 2
-	Position -3384 6.1967773 -10870
-	Fuel 26.63794
-Structure
-	Id 416
-	Type 27
-	Position -3386 6.416504 -10864
-	Charge 30
-Structure
-	Id 417
-	Type 11
-	Position -3390 6.4570312 -10862
-	Charge 0.5
-Structure
-	Id 418
-	Type 17
-	Position -3389 4.6933594 -10865
-Structure
-	Id 419
-	Type 27
-	Position -3418 7.366211 -10832
-	Charge 30
-Structure
-	Id 420
-	Type 17
-	Position -3415 5.6435547 -10833
-Structure
-	Id 421
-	Type 3
-	Position -3454 6.8652344 -10860
-	Charge 1286.6024
-Structure
-	Id 422
-	Type 5
-	Position -3454 5.3657227 -10850
-Structure
-	Id 423
-	Type 5
-	Position -3454 5.4868164 -10846
-Structure
-	Id 424
-	Type 5
-	Position -3458 5.45459 -10846
-Structure
-	Id 425
-	Type 5
-	Position -3454 5.300293 -10864
-Structure
-	Id 426
-	Type 5
-	Position -3454 5.15625 -10868
-Structure
-	Id 427
-	Type 5
-	Position -3458 5.1953125 -10868
-Structure
-	Id 428
-	Type 5
-	Position -3458 5.3442383 -10864
-Structure
-	Id 429
+	Id 70
 	Type 21
-	Position -3486 6.0717773 -10854
+	Position -3498 5.7753906 -10864
 Structure
-	Id 430
+	Id 71
 	Type 21
-	Position -3482 6.071289 -10854
+	Position -3502 5.841797 -10864
 Structure
-	Id 431
-	Type 21
-	Position -3492 6.0927734 -10854
-Structure
-	Id 432
-	Type 21
-	Position -3482 6.1308594 -10850
-Structure
-	Id 433
-	Type 21
-	Position -3486 6.1328125 -10850
-Structure
-	Id 434
+	Id 72
 	Type 17
-	Position -3489 4.876953 -10855
+	Position -3505 5.055176 -10857
 Structure
-	Id 435
+	Id 73
 	Type 17
-	Position -3489 4.9536133 -10853
+	Position -3505 4.9975586 -10859
 Structure
-	Id 436
+	Id 74
 	Type 17
-	Position -3489 5.0351562 -10851
+	Position -3505 4.939453 -10861
 Structure
-	Id 437
+	Id 75
 	Type 17
-	Position -3489 5.1342773 -10849
+	Position -3505 4.870117 -10863
 Structure
-	Id 438
+	Id 76
 	Type 17
-	Position -3479 4.944824 -10855
+	Position -3505 4.7978516 -10865
 Structure
-	Id 439
+	Id 77
 	Type 17
-	Position -3479 4.961914 -10853
+	Position -3505 4.754883 -10867
 Structure
-	Id 440
+	Id 78
 	Type 17
-	Position -3479 4.9799805 -10851
+	Position -3489 4.779297 -10859
 Structure
-	Id 441
+	Id 79
 	Type 17
-	Position -3479 5.001953 -10849
+	Position -3489 4.7460938 -10861
 Structure
-	Id 442
-	Type 21
-	Position -3492 6.2543945 -10850
-Structure
-	Id 443
-	Type 21
-	Position -3476 6.2158203 -10854
-Structure
-	Id 444
-	Type 21
-	Position -3476 6.229004 -10850
-Structure
-	Id 445
-	Type 21
-	Position -3476 6.2387695 -10860
-Structure
-	Id 446
-	Type 21
-	Position -3476 6.2490234 -10864
-Structure
-	Id 448
-	Type 27
-	Position -3484 6.004883 -10874
-	Charge 29.993563
-Structure
-	Id 450
+	Id 80
 	Type 17
-	Position -3465 5.0629883 -10863
+	Position -3489 4.680664 -10863
 Structure
-	Id 451
+	Id 81
 	Type 17
-	Position -3465 5.0219727 -10865
+	Position -3489 4.6064453 -10865
 Structure
-	Id 452
-	Type 17
-	Position -3465 4.9780273 -10867
-Structure
-	Id 453
-	Type 11
-	Position -3476 6.5786133 -10870
-	Charge 0.5
-Structure
-	Id 454
-	Type 14
-	Position -3493 7.3554688 -10861
-	Charge 1185.2035
-	Minerals 198.11154
-	OutputFrac 0.995708
-Structure
-	Id 455
-	Type 11
-	Position -3472 6.4296875 -10850
-	Charge 0.5
-Structure
-	Id 456
-	Type 17
-	Position -3473 5.033203 -10855
-Structure
-	Id 457
-	Type 17
-	Position -3473 5.0166016 -10853
-Structure
-	Id 458
-	Type 14
-	Position -3493 7.3554688 -10861
-	Charge 1185.2004
-	Minerals 200
-	OutputFrac 0.995708
-Structure
-	Id 459
-	Type 27
-	Position -3438 6.8779297 -10872
-	Charge 30
-Structure
-	Id 460
-	Type 11
-	Position -3432 6.888672 -10872
-	Charge 0.5
-Structure
-	Id 461
-	Type 17
-	Position -3435 5.2348633 -10871
-Structure
-	Id 462
-	Type 13
-	Position -3435 5.9853516 -10873
-	Minerals 24.553963
-Structure
-	Id 463
-	Type 13
-	Position -3461 5.8476562 -10863
-	Minerals 21.703543
-Structure
-	Id 464
-	Type 13
-	Position -3479 5.3618164 -10873
-	Minerals 28.832615
-Structure
-	Id 466
-	Type 17
-	Position -3503 4.734375 -10865
-Structure
-	Id 467
+	Id 82
 	Type 17
 	Position -3503 4.6835938 -10867
 Structure
-	Id 468
+	Id 83
 	Type 17
-	Position -3503 4.7216797 -10869
+	Position -3501 4.6171875 -10867
 Structure
-	Id 469
-	Type 13
-	Position -3505 5.470703 -10867
-	Minerals 28.750011
-Structure
-	Id 471
-	Type 27
-	Position -3500 6.3310547 -10872
-	Charge 29.993563
-Structure
-	Id 472
+	Id 84
 	Type 17
-	Position -3503 4.760254 -10871
+	Position -3499 4.5512695 -10867
 Structure
-	Id 474
-	Type 13
-	Position -3505 5.4873047 -10869
-	Minerals 29.850002
-Structure
-	Id 475
-	Type 11
-	Position -3500 6.751465 -10850
-	Charge 0.5
-Structure
-	Id 476
+	Id 85
 	Type 17
-	Position -3495 4.904297 -10855
+	Position -3497 4.526367 -10867
 Structure
-	Id 477
+	Id 86
 	Type 17
-	Position -3495 4.980957 -10853
+	Position -3495 4.536133 -10867
 Structure
-	Id 478
-	Type 17
-	Position -3495 5.0615234 -10851
-Structure
-	Id 479
-	Type 17
-	Position -3497 5.041504 -10851
-Structure
-	Id 480
-	Type 13
-	Position -3497 5.8222656 -10849
-	Minerals 29.69109
-Structure
-	Id 481
-	Type 27
-	Position -3482 6.755371 -10846
-	Charge 30
-Structure
-	Id 482
-	Type 17
-	Position -3479 5.024414 -10847
-Structure
-	Id 483
-	Type 17
-	Position -3479 5.0566406 -10845
-Structure
-	Id 484
-	Type 13
-	Position -3489 5.92041 -10847
-	Minerals 24.07329
-Structure
-	Id 485
-	Type 11
-	Position -3504 6.495117 -10862
-	Charge 0.5
-Structure
-	Id 486
-	Type 11
-	Position -3492 6.069824 -10876
-	Charge 0.5
-Structure
-	Id 487
-	Type 17
-	Position -3485 4.46875 -10871
-Structure
-	Id 488
-	Type 17
-	Position -3487 4.355957 -10871
-Structure
-	Id 489
-	Type 17
-	Position -3489 4.3320312 -10871
-Structure
-	Id 490
-	Type 17
-	Position -3491 4.4160156 -10871
-Structure
-	Id 491
-	Type 17
-	Position -3493 4.5004883 -10871
-Structure
-	Id 492
+	Id 87
 	Type 17
 	Position -3493 4.544922 -10867
 Structure
-	Id 493
+	Id 88
 	Type 17
-	Position -3493 4.522461 -10869
+	Position -3491 4.5351562 -10867
 Structure
-	Id 494
+	Id 89
 	Type 17
-	Position -3493 4.4975586 -10873
+	Position -3489 4.525879 -10867
 Structure
-	Id 495
+	Id 90
 	Type 13
-	Position -3491 5.1660156 -10869
+	Position -3491 5.315918 -10865
+Structure
+	Id 91
+	Type 21
+	Position -3502 5.855957 -10870
+Structure
+	Id 92
+	Type 21
+	Position -3498 5.788574 -10870
+Structure
+	Id 93
+	Type 21
+	Position -3494 5.7006836 -10870
+Structure
+	Id 94
+	Type 21
+	Position -3490 5.5200195 -10870
+Structure
+	Id 95
+	Type 3
+	Position -3436 7.1220703 -10854
+	Charge 1500
+Structure
+	Id 96
+	Type 29
+	Position -3428 6.838867 -10860
+Structure
+	Id 97
+	Type 10
+	Position -3401 6.1884766 -10855
+Structure
+	Id 98
+	Type 10
+	Position -3401 6.2319336 -10853
+Structure
+	Id 99
+	Type 10
+	Position -3401 6.275879 -10851
+Structure
+	Id 100
+	Type 10
+	Position -3401 5.9814453 -10863
+Structure
+	Id 101
+	Type 10
+	Position -3401 5.9746094 -10865
+Structure
+	Id 102
+	Type 13
+	Position -3407 5.6464844 -10859
 	Minerals 30
 Structure
-	Id 496
-	Type 13
-	Position -3491 5.2436523 -10867
-	Minerals 27.65446
-Structure
-	Id 497
-	Type 13
-	Position -3415 6.2856445 -10835
-	Minerals 27.652164
-Structure
-	Id 498
-	Type 13
-	Position -3411 6.1601562 -10841
-	Minerals 25.431263
-Structure
-	Id 499
+	Id 103
 	Type 10
-	Position -3415 7.0043945 -10825
+	Position -3399 6.0771484 -10857
 Structure
-	Id 500
+	Id 104
+	Type 10
+	Position -3399 6.020996 -10859
+Structure
+	Id 105
+	Type 10
+	Position -3399 5.9746094 -10861
+Structure
+	Id 106
+	Type 7
+	Position -3436 7.2060547 -10850
+	Charge 150
+	OutputFrac 0.99579024
+Structure
+	Id 107
+	Type 21
+	Position -3432 6.338867 -10860
+Structure
+	Id 108
+	Type 21
+	Position -3436 6.3632812 -10860
+Structure
+	Id 109
+	Type 28
+	Position -3403 7.0438476 -10851
+Structure
+	Id 110
+	Type 28
+	Position -3403 6.9759765 -10853
+Structure
+	Id 111
+	Type 28
+	Position -3403 6.90957 -10855
+Structure
+	Id 112
+	Type 28
+	Position -3405 7.042871 -10851
+Structure
+	Id 113
+	Type 17
+	Position -3405 4.9868164 -10857
+Structure
+	Id 114
+	Type 17
+	Position -3405 4.9106445 -10859
+Structure
+	Id 116
+	Type 28
+	Position -3403 6.6166015 -10863
+Structure
+	Id 117
+	Type 28
+	Position -3403 6.6273437 -10865
+Structure
+	Id 119
+	Type 17
+	Position -3409 4.9570312 -10859
+Structure
+	Id 120
+	Type 17
+	Position -3409 4.9194336 -10861
+Structure
+	Id 121
+	Type 17
+	Position -3409 4.8876953 -10863
+Structure
+	Id 122
+	Type 17
+	Position -3407 4.866699 -10863
+Structure
+	Id 123
+	Type 28
+	Position -3405 6.665918 -10863
+Structure
+	Id 124
+	Type 13
+	Position -3407 5.599121 -10861
+	Minerals 30
+Structure
+	Id 125
+	Type 27
+	Position -3412 6.6367188 -10860
+	Charge 30
+Structure
+	Id 126
+	Type 17
+	Position -3505 4.779785 -10869
+Structure
+	Id 127
+	Type 17
+	Position -3505 4.8046875 -10871
+Structure
+	Id 128
+	Type 17
+	Position -3505 4.8398438 -10873
+Structure
+	Id 129
+	Type 17
+	Position -3505 4.8779297 -10875
+Structure
+	Id 131
+	Type 21
+	Position -3502 5.9404297 -10874
+Structure
+	Id 132
+	Type 10
+	Position -3505 6.0161133 -10881
+Structure
+	Id 133
+	Type 10
+	Position -3507 6.036621 -10879
+Structure
+	Id 134
+	Type 10
+	Position -3509 6.057617 -10877
+Structure
+	Id 135
+	Type 10
+	Position -3511 6.0703125 -10875
+Structure
+	Id 136
+	Type 10
+	Position -3513 6.09375 -10873
+Structure
+	Id 137
+	Type 28
+	Position -3505 6.69375 -10879
+Structure
+	Id 138
+	Type 28
+	Position -3507 6.7274413 -10877
+Structure
+	Id 139
+	Type 28
+	Position -3507 6.7313476 -10875
+Structure
+	Id 140
+	Type 28
+	Position -3509 6.72207 -10875
+Structure
+	Id 143
+	Type 13
+	Position -3493 5.307617 -10865
+Structure
+	Id 144
+	Type 10
+	Position -3501 6.0131836 -10883
+Structure
+	Id 145
+	Type 10
+	Position -3499 5.9799805 -10883
+Structure
+	Id 146
+	Type 10
+	Position -3503 6.0429688 -10881
+Structure
+	Id 147
+	Type 28
+	Position -3503 6.7103515 -10879
+Structure
+	Id 148
+	Type 28
+	Position -3501 6.662988 -10879
+Structure
+	Id 149
+	Type 28
+	Position -3501 6.6336913 -10881
+Structure
+	Id 150
+	Type 28
+	Position -3499 6.596582 -10881
+Structure
+	Id 151
+	Type 28
+	Position -3505 6.7401366 -10877
+Structure
+	Id 152
+	Type 10
+	Position -3497 5.8686523 -10883
+Structure
+	Id 153
+	Type 10
+	Position -3495 5.755371 -10883
+Structure
+	Id 154
+	Type 10
+	Position -3493 5.6743164 -10883
+Structure
+	Id 155
+	Type 10
+	Position -3491 5.6245117 -10883
+Structure
+	Id 156
+	Type 10
+	Position -3489 5.574707 -10883
+Structure
+	Id 157
+	Type 10
+	Position -3487 5.536133 -10883
+Structure
+	Id 158
+	Type 10
+	Position -3485 5.498535 -10883
+	Health 937.5
+Structure
+	Id 159
+	Type 28
+	Position -3497 6.5145507 -10881
+Structure
+	Id 160
+	Type 28
+	Position -3495 6.393945 -10881
+Structure
+	Id 161
+	Type 28
+	Position -3493 6.277246 -10881
+Structure
+	Id 162
+	Type 28
+	Position -3491 6.223047 -10881
+Structure
+	Id 163
+	Type 28
+	Position -3489 6.1683593 -10881
+Structure
+	Id 164
+	Type 28
+	Position -3487 6.1273437 -10881
+Structure
+	Id 165
+	Type 28
+	Position -3485 6.096582 -10881
+Structure
+	Id 166
+	Type 17
+	Position -3487 4.561035 -10867
+Structure
+	Id 167
+	Type 17
+	Position -3487 4.458496 -10869
+Structure
+	Id 168
+	Type 17
+	Position -3487 4.355957 -10871
+Structure
+	Id 169
+	Type 17
+	Position -3487 4.2973633 -10873
+Structure
+	Id 170
+	Type 17
+	Position -3487 4.2504883 -10875
+Structure
+	Id 171
+	Type 17
+	Position -3487 4.225586 -10877
+Structure
+	Id 172
+	Type 28
+	Position -3487 6.1014647 -10879
+Structure
+	Id 173
+	Type 10
+	Position -3507 6.536621 -10847
+Structure
+	Id 174
+	Type 10
+	Position -3509 6.4750977 -10849
+Structure
+	Id 175
+	Type 10
+	Position -3505 6.5878906 -10845
+Structure
+	Id 176
+	Type 10
+	Position -3503 6.5498047 -10845
+Structure
+	Id 177
+	Type 10
+	Position -3501 6.508301 -10845
+Structure
+	Id 178
+	Type 10
+	Position -3499 6.470703 -10845
+Structure
+	Id 179
+	Type 10
+	Position -3499 6.51416 -10843
+Structure
+	Id 180
+	Type 10
+	Position -3497 6.513672 -10843
+Structure
+	Id 181
+	Type 10
+	Position -3495 6.552246 -10843
+Structure
+	Id 182
+	Type 10
+	Position -3493 6.5898438 -10843
+Structure
+	Id 183
+	Type 10
+	Position -3491 6.584961 -10843
+Structure
+	Id 184
+	Type 10
+	Position -3489 6.5688477 -10843
+Structure
+	Id 185
+	Type 10
+	Position -3487 6.5029297 -10843
+Structure
+	Id 186
+	Type 10
+	Position -3487 6.4375 -10845
+Structure
+	Id 187
+	Type 10
+	Position -3485 6.3657227 -10845
+Structure
+	Id 188
+	Type 10
+	Position -3483 6.320801 -10845
+Structure
+	Id 189
+	Type 10
+	Position -3481 6.300293 -10845
+Structure
+	Id 190
+	Type 10
+	Position -3513 6.133789 -10871
+Structure
+	Id 191
+	Type 10
+	Position -3513 6.1655273 -10869
+Structure
+	Id 192
+	Type 10
+	Position -3513 6.196289 -10867
+Structure
+	Id 193
+	Type 10
+	Position -3513 6.227051 -10865
+Structure
+	Id 194
+	Type 10
+	Position -3513 6.2578125 -10863
+Structure
+	Id 195
+	Type 10
+	Position -3513 6.288574 -10861
+Structure
+	Id 196
+	Type 10
+	Position -3513 6.3061523 -10859
+Structure
+	Id 197
+	Type 10
+	Position -3513 6.3120117 -10857
+Structure
+	Id 198
+	Type 10
+	Position -3511 6.383301 -10851
+Structure
+	Id 199
+	Type 10
+	Position -3511 6.36084 -10853
+Structure
+	Id 200
+	Type 10
+	Position -3511 6.338379 -10855
+Structure
+	Id 201
+	Type 17
+	Position -3505 5.098633 -10853
+Structure
+	Id 202
+	Type 28
+	Position -3507 6.978906 -10853
+Structure
+	Id 203
+	Type 28
+	Position -3509 7.035547 -10851
+Structure
+	Id 204
+	Type 28
+	Position -3509 6.9896483 -10853
+Structure
+	Id 205
+	Type 28
+	Position -3509 6.9549804 -10855
+Structure
+	Id 206
+	Type 28
+	Position -3509 6.919824 -10857
+Structure
+	Id 207
+	Type 28
+	Position -3511 6.92666 -10857
+Structure
+	Id 208
+	Type 28
+	Position -3511 6.9051757 -10859
+Structure
+	Id 209
+	Type 28
+	Position -3511 6.883203 -10861
+Structure
+	Id 210
+	Type 28
+	Position -3511 6.8514647 -10863
+Structure
+	Id 211
+	Type 28
+	Position -3511 6.816797 -10865
+Structure
+	Id 212
+	Type 28
+	Position -3511 6.786035 -10867
+Structure
+	Id 213
+	Type 28
+	Position -3511 6.7640624 -10869
+Structure
+	Id 214
+	Type 28
+	Position -3511 6.7420897 -10871
+Structure
+	Id 215
+	Type 28
+	Position -3511 6.719629 -10873
+Structure
+	Id 216
+	Type 28
+	Position -3509 6.725 -10873
+Structure
+	Id 218
+	Type 17
+	Position -3425 5.229492 -10855
+Structure
+	Id 219
+	Type 17
+	Position -3425 5.2529297 -10853
+Structure
+	Id 220
+	Type 17
+	Position -3425 5.2807617 -10851
+Structure
+	Id 221
+	Type 17
+	Position -3425 5.3286133 -10849
+Structure
+	Id 222
+	Type 17
+	Position -3425 5.376953 -10847
+Structure
+	Id 223
+	Type 17
+	Position -3425 5.4140625 -10845
+Structure
+	Id 224
+	Type 17
+	Position -3425 5.446289 -10843
+Structure
+	Id 226
+	Type 13
+	Position -3427 6.117676 -10847
+Structure
+	Id 227
+	Type 10
+	Position -3415 6.7856445 -10835
+Structure
+	Id 228
+	Type 10
+	Position -3417 6.79834 -10835
+Structure
+	Id 229
+	Type 10
+	Position -3419 6.8115234 -10835
+Structure
+	Id 230
+	Type 10
+	Position -3421 6.821289 -10835
+Structure
+	Id 231
+	Type 10
+	Position -3423 6.8164062 -10835
+Structure
+	Id 232
+	Type 10
+	Position -3425 6.7685547 -10835
+Structure
+	Id 233
+	Type 10
+	Position -3427 6.715332 -10835
+Structure
+	Id 234
+	Type 10
+	Position -3429 6.7109375 -10835
+Structure
+	Id 235
+	Type 10
+	Position -3431 6.7036133 -10835
+Structure
+	Id 236
+	Type 10
+	Position -3433 6.692871 -10835
+Structure
+	Id 237
+	Type 10
+	Position -3435 6.6777344 -10835
+Structure
+	Id 241
+	Type 10
+	Position -3407 6.6875 -10839
+Structure
+	Id 242
+	Type 10
+	Position -3401 6.3310547 -10849
+Structure
+	Id 243
+	Type 10
+	Position -3401 6.390625 -10847
+Structure
+	Id 244
+	Type 10
+	Position -3403 6.5595703 -10845
+Structure
+	Id 245
+	Type 10
+	Position -3403 6.5771484 -10843
+Structure
+	Id 246
+	Type 10
+	Position -3405 6.6503906 -10841
+Structure
+	Id 247
+	Type 10
+	Position -3401 5.973633 -10867
+Structure
+	Id 248
+	Type 10
+	Position -3403 6.0195312 -10869
+Structure
+	Id 249
+	Type 10
+	Position -3405 6.0117188 -10871
+Structure
+	Id 250
+	Type 10
+	Position -3407 5.9555664 -10873
+Structure
+	Id 251
+	Type 10
+	Position -3409 5.92334 -10875
+Structure
+	Id 252
+	Type 10
+	Position -3411 5.90625 -10877
+Structure
+	Id 253
+	Type 10
+	Position -3413 5.911133 -10877
+Structure
+	Id 254
+	Type 10
+	Position -3415 5.930176 -10877
+Structure
+	Id 255
+	Type 10
+	Position -3417 5.9658203 -10877
+Structure
+	Id 256
+	Type 10
+	Position -3419 5.995117 -10877
+Structure
+	Id 257
+	Type 10
+	Position -3421 6.0439453 -10877
+Structure
+	Id 258
+	Type 10
+	Position -3423 6.0932617 -10877
+Structure
+	Id 259
+	Type 10
+	Position -3425 6.1557617 -10877
+Structure
+	Id 260
+	Type 10
+	Position -3427 6.2333984 -10877
+Structure
+	Id 264
+	Type 17
+	Position -3425 5.151367 -10859
+Structure
+	Id 265
+	Type 17
+	Position -3425 5.104004 -10861
+Structure
+	Id 266
+	Type 17
+	Position -3425 5.065918 -10863
+Structure
+	Id 267
+	Type 17
+	Position -3425 5.0307617 -10865
+Structure
+	Id 268
+	Type 13
+	Position -3423 5.7666016 -10863
+	Minerals 23.00113
+Structure
+	Id 269
+	Type 29
+	Position -3500 6.6450195 -10854
+Structure
+	Id 270
+	Type 28
+	Position -3503 7.1253905 -10847
+Structure
+	Id 271
+	Type 28
+	Position -3505 7.160547 -10847
+Structure
+	Id 272
+	Type 28
+	Position -3501 7.088281 -10847
+Structure
+	Id 273
+	Type 28
+	Position -3503 7.0316405 -10849
+Structure
+	Id 274
+	Type 28
+	Position -3499 7.05166 -10847
+Structure
+	Id 275
+	Type 28
+	Position -3497 7.060449 -10847
+Structure
+	Id 276
+	Type 28
+	Position -3497 7.112207 -10845
+Structure
+	Id 277
+	Type 28
+	Position -3495 7.1561522 -10845
+Structure
+	Id 278
+	Type 28
+	Position -3493 7.1966796 -10845
+Structure
+	Id 279
+	Type 28
+	Position -3491 7.1737304 -10845
+Structure
+	Id 280
+	Type 28
+	Position -3489 7.150293 -10845
+Structure
+	Id 281
+	Type 28
+	Position -3425 6.800195 -10875
+Structure
+	Id 282
+	Type 28
+	Position -3425 6.8041015 -10873
+Structure
+	Id 283
+	Type 17
+	Position -3425 5 -10867
+Structure
+	Id 284
+	Type 17
+	Position -3425 4.980957 -10869
+Structure
+	Id 285
+	Type 17
+	Position -3425 4.961914 -10871
+Structure
+	Id 286
+	Type 17
+	Position -3423 4.876953 -10871
+Structure
+	Id 287
+	Type 17
+	Position -3421 4.828125 -10871
+Structure
+	Id 288
+	Type 17
+	Position -3419 4.7788086 -10871
+Structure
+	Id 290
+	Type 28
+	Position -3419 6.6180663 -10875
+Structure
+	Id 291
+	Type 28
+	Position -3419 6.6180663 -10873
+Structure
+	Id 292
+	Type 28
+	Position -3417 6.580957 -10875
+Structure
+	Id 293
+	Type 28
+	Position -3415 6.5545897 -10875
+Structure
+	Id 294
+	Type 28
+	Position -3413 6.529199 -10875
+Structure
+	Id 295
+	Type 28
+	Position -3411 6.532617 -10875
+Structure
+	Id 296
+	Type 28
+	Position -3411 6.5453124 -10873
+Structure
+	Id 297
+	Type 28
+	Position -3409 6.5609374 -10873
+Structure
+	Id 298
+	Type 28
+	Position -3409 6.589746 -10871
+Structure
+	Id 299
+	Type 28
+	Position -3407 6.612695 -10871
+Structure
+	Id 300
+	Type 28
+	Position -3407 6.643945 -10869
+Structure
+	Id 301
+	Type 28
+	Position -3405 6.64541 -10869
+Structure
+	Id 302
+	Type 28
+	Position -3405 6.6561522 -10867
+Structure
+	Id 303
+	Type 28
+	Position -3403 6.6371093 -10867
+Structure
+	Id 304
+	Type 29
+	Position -3416 6.6469727 -10860
+Structure
+	Id 305
+	Type 28
+	Position -3429 7.3177733 -10837
+Structure
+	Id 306
+	Type 28
+	Position -3431 7.3060546 -10837
+Structure
+	Id 307
+	Type 28
+	Position -3433 7.2938476 -10837
+Structure
+	Id 308
+	Type 28
+	Position -3435 7.272363 -10837
+Structure
+	Id 309
+	Type 28
+	Position -3427 7.343164 -10837
+Structure
+	Id 310
+	Type 28
+	Position -3421 7.4027343 -10837
+Structure
+	Id 311
+	Type 28
+	Position -3419 7.3910155 -10837
+Structure
+	Id 312
+	Type 28
+	Position -3417 7.3788085 -10837
+Structure
+	Id 319
+	Type 28
+	Position -3407 7.2811522 -10841
+Structure
+	Id 320
+	Type 28
+	Position -3407 7.247461 -10843
+Structure
+	Id 321
+	Type 28
+	Position -3405 7.242578 -10843
+Structure
+	Id 322
+	Type 28
+	Position -3405 7.2191405 -10845
+Structure
+	Id 323
+	Type 28
+	Position -3403 7.190332 -10847
+Structure
+	Id 324
+	Type 28
+	Position -3403 7.1170897 -10849
+Structure
+	Id 328
+	Type 27
+	Position -3428 7.1689453 -10844
+	Charge 30
+Structure
+	Id 329
+	Type 28
+	Position -3425 7.353906 -10839
+Structure
+	Id 330
+	Type 17
+	Position -3425 5.477051 -10841
+Structure
+	Id 331
+	Type 21
+	Position -3498 5.8256836 -10874
+Structure
+	Id 332
+	Type 17
+	Position -3503 4.899414 -10877
+Structure
+	Id 333
+	Type 17
+	Position -3501 4.841797 -10877
+Structure
+	Id 334
+	Type 17
+	Position -3499 4.7836914 -10877
+Structure
+	Id 336
+	Type 27
+	Position -3496 6.2524414 -10878
+	Charge 30
+Structure
+	Id 337
+	Type 27
+	Position -3500 6.751465 -10850
+	Charge 30
+Structure
+	Id 338
+	Type 29
+	Position -3490 5.955078 -10878
+Structure
+	Id 339
 	Type 11
-	Position -3422 7.366699 -10830
+	Position -3494 6.192383 -10874
 	Charge 0.5
 Structure
-	Id 501
+	Id 340
+	Type 21
+	Position -3490 5.4555664 -10874
+Structure
+	Id 341
+	Type 10
+	Position -3427 6.225586 -10879
+Structure
+	Id 342
+	Type 10
+	Position -3427 6.2211914 -10881
+Structure
+	Id 343
+	Type 10
+	Position -3427 6.2246094 -10883
+Structure
+	Id 344
+	Type 10
+	Position -3427 6.241211 -10885
+Structure
+	Id 345
+	Type 10
+	Position -3429 6.3427734 -10885
+Structure
+	Id 346
+	Type 10
+	Position -3431 6.421875 -10885
+Structure
+	Id 347
+	Type 10
+	Position -3433 6.4995117 -10885
+Structure
+	Id 348
+	Type 10
+	Position -3435 6.4194336 -10885
+Structure
+	Id 349
+	Type 10
+	Position -3437 6.3310547 -10885
+Structure
+	Id 350
+	Type 10
+	Position -3439 6.150879 -10885
+Structure
+	Id 351
+	Type 10
+	Position -3441 5.9628906 -10885
+Structure
+	Id 352
+	Type 10
+	Position -3443 5.864258 -10885
+Structure
+	Id 353
+	Type 10
+	Position -3445 5.873047 -10885
+Structure
+	Id 354
+	Type 10
+	Position -3447 5.911133 -10885
+Structure
+	Id 355
+	Type 10
+	Position -3449 5.919922 -10885
+Structure
+	Id 356
+	Type 10
+	Position -3451 5.9086914 -10885
+	Health 994.5
+Structure
+	Id 357
+	Type 10
+	Position -3451 5.9086914 -10883
+Structure
+	Id 358
+	Type 10
+	Position -3453 5.9033203 -10883
+Structure
+	Id 359
+	Type 10
+	Position -3455 5.938965 -10883
+	Health 997.5
+Structure
+	Id 361
+	Type 10
+	Position -3457 6.07959 -10881
+Structure
+	Id 362
+	Type 10
+	Position -3459 6.1342773 -10879
+Structure
+	Id 363
+	Type 10
+	Position -3461 6.104492 -10877
+Structure
+	Id 364
+	Type 10
+	Position -3463 6.0664062 -10875
+Structure
+	Id 365
+	Type 10
+	Position -3465 5.918457 -10873
+Structure
+	Id 366
 	Type 17
-	Position -3415 5.5151367 -10837
+	Position -3453 5.123535 -10859
+Structure
+	Id 367
+	Type 17
+	Position -3453 5.1347656 -10861
+Structure
+	Id 368
+	Type 17
+	Position -3453 5.102051 -10863
+Structure
+	Id 369
+	Type 17
+	Position -3453 5.0581055 -10865
+Structure
+	Id 370
+	Type 17
+	Position -3453 5.004883 -10867
+Structure
+	Id 371
+	Type 17
+	Position -3453 4.929199 -10869
+Structure
+	Id 372
+	Type 17
+	Position -3453 4.8530273 -10871
+Structure
+	Id 373
+	Type 17
+	Position -3453 4.782715 -10873
+Structure
+	Id 375
+	Type 28
+	Position -3427 6.885156 -10875
+Structure
+	Id 376
+	Type 28
+	Position -3429 6.964746 -10875
+Structure
+	Id 377
+	Type 28
+	Position -3429 6.9549804 -10877
+Structure
+	Id 378
+	Type 28
+	Position -3429 6.945703 -10879
+Structure
+	Id 379
+	Type 28
+	Position -3429 6.9359374 -10881
+Structure
+	Id 380
+	Type 28
+	Position -3429 6.9623046 -10883
+Structure
+	Id 381
+	Type 28
+	Position -3431 7.047754 -10883
+Structure
+	Id 382
+	Type 28
+	Position -3433 7.133203 -10883
+Structure
+	Id 383
+	Type 28
+	Position -3435 7.1024413 -10883
+Structure
+	Id 384
+	Type 28
+	Position -3437 7.06582 -10883
+Structure
+	Id 385
+	Type 28
+	Position -3439 6.9535155 -10883
+Structure
+	Id 386
+	Type 28
+	Position -3441 6.7484374 -10883
+Structure
+	Id 387
+	Type 28
+	Position -3443 6.542871 -10883
+Structure
+	Id 388
+	Type 28
+	Position -3445 6.528711 -10883
+Structure
+	Id 389
+	Type 28
+	Position -3447 6.5233397 -10883
+Structure
+	Id 390
+	Type 28
+	Position -3449 6.5174804 -10883
+Structure
+	Id 391
+	Type 28
+	Position -3453 6.510156 -10881
+Structure
+	Id 392
+	Type 28
+	Position -3455 6.62832 -10881
+Structure
+	Id 393
+	Type 28
+	Position -3457 6.7142577 -10879
+Structure
+	Id 394
+	Type 28
+	Position -3455 6.610742 -10879
+Structure
+	Id 395
+	Type 28
+	Position -3457 6.67666 -10877
+Structure
+	Id 396
+	Type 28
+	Position -3459 6.7191405 -10877
+Structure
+	Id 397
+	Type 28
+	Position -3459 6.7259765 -10875
+Structure
+	Id 398
+	Type 28
+	Position -3461 6.723535 -10875
+Structure
+	Id 399
+	Type 28
+	Position -3461 6.7572265 -10873
+Structure
+	Id 400
+	Type 28
+	Position -3463 6.7591796 -10873
+Structure
+	Id 401
+	Type 28
+	Position -3463 6.7992187 -10871
+Structure
+	Id 402
+	Type 28
+	Position -3465 6.7293944 -10871
+Structure
+	Id 403
+	Type 10
+	Position -3467 5.2788086 -10873
+Structure
+	Id 404
+	Type 25
+	Position -3469 5.4340706 -10873
+Structure
+	Id 405
+	Type 25
+	Position -3471 5.4355936 -10873
+Structure
+	Id 406
+	Type 28
+	Position -3467 6.3617187 -10871
+Structure
+	Id 410
+	Type 28
+	Position -3451 6.513086 -10881
+Structure
+	Id 411
+	Type 28
+	Position -3449 6.5160155 -10881
+Structure
+	Id 413
+	Type 28
+	Position -3453 6.5121093 -10879
+Structure
+	Id 414
+	Type 17
+	Position -3453 4.713867 -10875
+Structure
+	Id 415
+	Type 17
+	Position -3453 4.665039 -10877
+Structure
+	Id 416
+	Type 17
+	Position -3473 5.054199 -10859
+Structure
+	Id 417
+	Type 17
+	Position -3473 5.025879 -10861
+Structure
+	Id 418
+	Type 17
+	Position -3473 4.951172 -10863
+Structure
+	Id 419
+	Type 17
+	Position -3473 4.914551 -10865
+Structure
+	Id 420
+	Type 17
+	Position -3473 4.862793 -10867
+Structure
+	Id 421
+	Type 28
+	Position -3473 6.6512694 -10869
+Structure
+	Id 422
+	Type 28
+	Position -3473 6.6151366 -10871
+Structure
+	Id 423
+	Type 10
+	Position -3473 5.630371 -10873
+Structure
+	Id 424
+	Type 10
+	Position -3475 5.984375 -10873
+Structure
+	Id 425
+	Type 10
+	Position -3477 5.852539 -10875
+Structure
+	Id 426
+	Type 10
+	Position -3479 5.6445312 -10877
+Structure
+	Id 427
+	Type 10
+	Position -3481 5.507324 -10879
+	Health 934
+Structure
+	Id 428
+	Type 10
+	Position -3483 5.4682617 -10881
+	Health 871.5
+Structure
+	Id 429
+	Type 28
+	Position -3483 6.107324 -10879
+Structure
+	Id 430
+	Type 28
+	Position -3485 6.103418 -10879
+Structure
+	Id 431
+	Type 28
+	Position -3483 6.146875 -10877
+Structure
+	Id 432
+	Type 28
+	Position -3481 6.242578 -10877
+Structure
+	Id 433
+	Type 28
+	Position -3481 6.3441405 -10875
+Structure
+	Id 434
+	Type 28
+	Position -3479 6.4554687 -10875
+Structure
+	Id 435
+	Type 28
+	Position -3479 6.5711913 -10873
+Structure
+	Id 436
+	Type 28
+	Position -3477 6.6273437 -10873
+Structure
+	Id 437
+	Type 28
+	Position -3477 6.725488 -10871
+Structure
+	Id 438
+	Type 28
+	Position -3475 6.716699 -10871
+Structure
+	Id 439
+	Type 28
+	Position -3489 7.0838866 -10847
+Structure
+	Id 440
+	Type 28
+	Position -3487 7.0296874 -10847
+Structure
+	Id 441
+	Type 28
+	Position -3485 6.9588866 -10847
+Structure
+	Id 442
+	Type 28
+	Position -3483 6.8905272 -10847
+Structure
+	Id 443
+	Type 28
+	Position -3481 6.8827147 -10847
+Structure
+	Id 444
+	Type 29
+	Position -3476 6.64209 -10868
+Structure
+	Id 445
+	Type 29
+	Position -3450 6.436035 -10876
+Structure
+	Id 446
+	Type 10
+	Position -3477 6.2460938 -10845
+Structure
+	Id 447
+	Type 10
+	Position -3479 6.279297 -10845
+	Health 982.5
+Structure
+	Id 448
+	Type 10
+	Position -3475 6.1899414 -10845
+Structure
+	Id 449
+	Type 10
+	Position -3437 6.6621094 -10835
+Structure
+	Id 450
+	Type 10
+	Position -3439 6.642578 -10835
+Structure
+	Id 451
+	Type 10
+	Position -3441 6.6137695 -10835
+Structure
+	Id 452
+	Type 10
+	Position -3443 6.567383 -10835
+Structure
+	Id 453
+	Type 10
+	Position -3445 6.5004883 -10835
+Structure
+	Id 454
+	Type 10
+	Position -3447 6.432617 -10835
+Structure
+	Id 455
+	Type 10
+	Position -3449 6.4316406 -10835
+Structure
+	Id 456
+	Type 10
+	Position -3451 6.4833984 -10835
+Structure
+	Id 457
+	Type 10
+	Position -3453 6.540039 -10835
+Structure
+	Id 458
+	Type 10
+	Position -3455 6.4882812 -10835
+Structure
+	Id 459
+	Type 10
+	Position -3473 6.135254 -10845
+Structure
+	Id 460
+	Type 10
+	Position -3471 6.0839844 -10845
+Structure
+	Id 461
+	Type 10
+	Position -3469 5.9492188 -10845
+Structure
+	Id 462
+	Type 10
+	Position -3467 5.3691406 -10845
+Structure
+	Id 463
+	Type 10
+	Position -3461 6.11084 -10845
+Structure
+	Id 464
+	Type 25
+	Position -3465 5.781751 -10845
+Structure
+	Id 465
+	Type 25
+	Position -3463 5.7834716 -10845
+Structure
+	Id 466
+	Type 10
+	Position -3457 6.2836914 -10837
+Structure
+	Id 467
+	Type 10
+	Position -3459 5.953125 -10839
+Structure
+	Id 468
+	Type 10
+	Position -3459 6.2001953 -10841
+Structure
+	Id 469
+	Type 10
+	Position -3459 6.397949 -10843
+Structure
+	Id 470
+	Type 10
+	Position -3459 6.45459 -10845
+Structure
+	Id 471
+	Type 28
+	Position -3437 7.2499022 -10837
+Structure
+	Id 472
+	Type 28
+	Position -3439 7.233789 -10837
+Structure
+	Id 473
+	Type 28
+	Position -3441 7.225 -10837
+Structure
+	Id 474
+	Type 28
+	Position -3443 7.216211 -10837
+Structure
+	Id 475
+	Type 28
+	Position -3447 7.1205077 -10837
+Structure
+	Id 476
+	Type 28
+	Position -3443 7.2171874 -10839
+Structure
+	Id 477
+	Type 28
+	Position -3445 7.1742187 -10839
+Structure
+	Id 478
+	Type 28
+	Position -3447 7.127832 -10839
+Structure
+	Id 479
+	Type 28
+	Position -3449 7.112695 -10837
+Structure
+	Id 480
+	Type 28
+	Position -3451 7.1546874 -10837
+Structure
+	Id 481
+	Type 28
+	Position -3453 7.1966796 -10837
+Structure
+	Id 482
+	Type 28
+	Position -3455 7.1927733 -10837
+Structure
+	Id 483
+	Type 28
+	Position -3455 7.1478515 -10839
+Structure
+	Id 484
+	Type 28
+	Position -3457 7.152246 -10839
+Structure
+	Id 485
+	Type 28
+	Position -3457 7.119043 -10841
+Structure
+	Id 486
+	Type 28
+	Position -3457 7.1327147 -10843
+Structure
+	Id 487
+	Type 28
+	Position -3457 7.1581054 -10845
+Structure
+	Id 488
+	Type 28
+	Position -3457 7.1620116 -10847
+Structure
+	Id 489
+	Type 28
+	Position -3459 7.1390624 -10847
+Structure
+	Id 490
+	Type 28
+	Position -3461 7.0731444 -10847
+Structure
+	Id 493
+	Type 28
+	Position -3467 6.36973 -10847
+Structure
+	Id 494
+	Type 28
+	Position -3469 6.7225585 -10847
+Structure
+	Id 495
+	Type 28
+	Position -3471 6.790918 -10847
+Structure
+	Id 496
+	Type 28
+	Position -3473 6.8094726 -10847
+Structure
+	Id 497
+	Type 28
+	Position -3475 6.8333983 -10847
+Structure
+	Id 498
+	Type 28
+	Position -3477 6.8578124 -10847
+Structure
+	Id 499
+	Type 28
+	Position -3479 6.874414 -10847
+Structure
+	Id 500
+	Type 28
+	Position -3457 7.11416 -10849
+Structure
+	Id 501
+	Type 28
+	Position -3473 6.829004 -10849
 Structure
 	Id 502
 	Type 17
-	Position -3417 5.5288086 -10837
+	Position -3473 4.9990234 -10851
 Structure
 	Id 503
 	Type 17
-	Position -3419 5.5410156 -10837
+	Position -3473 5.0166016 -10853
 Structure
 	Id 504
 	Type 17
-	Position -3419 5.595215 -10835
+	Position -3473 5.033203 -10855
 Structure
 	Id 505
 	Type 17
-	Position -3421 5.598633 -10835
+	Position -3457 5.2163086 -10851
 Structure
 	Id 506
 	Type 17
-	Position -3421 5.6445312 -10833
+	Position -3457 5.190918 -10853
 Structure
 	Id 507
-	Type 27
-	Position -3432 7.1831055 -10846
-	Charge 30
+	Type 17
+	Position -3457 5.17041 -10855
 Structure
 	Id 508
-	Type 17
-	Position -3471 4.7353516 -10855
-Structure
-	Id 509
-	Type 24
-	Position -3469 4.5061345 -10855
+	Type 13
+	Position -3449 5.838379 -10855
 Structure
 	Id 510
-	Type 24
-	Position -3467 4.5061345 -10855
+	Type 29
+	Position -3460 6.925293 -10854
 Structure
 	Id 511
-	Type 17
-	Position -3465 5.078125 -10855
+	Type 27
+	Position -3460 6.958008 -10850
+	Charge 30
 Structure
 	Id 512
-	Type 14
-	Position -3493 7.3554688 -10861
-	Charge 1185.2003
-	Minerals 200
-	OutputFrac 0.995708
-Unit
-	Type 2
-	Position -3506.9172 5.2074604 -10957.269
-	Order -3491.5005 4.3554688 -10870.751
-Unit
-	Type 2
-	Position -3515.0479 4.178991 -10925.432
-	Order -3494.7178 4.3554688 -10868.396
-Unit
-	Type 4
-	Position -3512.224 4.3980017 -10947.889
-	Order -3496.0398 4.3554688 -10868.907
-Unit
-	Type 2
-	Position -3504.9963 4.9727125 -10953.073
-	Order -3495.7778 4.3554688 -10869.233
-Unit
-	Type 4
-	Position -3517.1707 4.0451202 -10939.399
-	Order -3493.7725 4.3554688 -10866.879
-Unit
-	Type 4
-	Position -3517.494 4.8526735 -10966.301
-	Order -3495.0835 4.3554688 -10867.931
-Unit
-	Type 4
-	Position -3515.4194 4.1306233 -10943.978
-	Order -3494.0605 4.3554688 -10867.603
-Unit
-	Type 2
-	Position -3512.0369 4.9531307 -10962.011
-	Order -3491.9475 4.3554688 -10869.804
-Unit
-	Type 4
-	Position -3508.6204 5.514966 -10992.319
-	Order -3493.0916 4.3554688 -10870.14
-Unit
-	Type 4
-	Position -3520.3572 4.9327965 -10982.134
-	Order -3497.8254 4.3554688 -10867.068
-Unit
-	Type 4
-	Position -3518.2551 5.1017423 -10990.624
-	Order -3490.3376 4.3554688 -10863.114
-Unit
-	Type 4
-	Position -3519.432 4.588383 -10961.455
-	Order -3494.4785 4.3554688 -10870.334
-Unit
-	Type 4
-	Position -3500.7805 4.899676 -10949.132
-	Order -3496.518 4.3554688 -10865.998
-Unit
-	Type 4
-	Position -3505.9646 5.218463 -10968.493
-	Order -3495.7852 4.3554688 -10863.57
-Unit
-	Type 4
-	Position -3518.5596 4.149689 -10953.645
-	Order -3493.1948 4.3554688 -10866.088
-Unit
-	Type 2
-	Position -3519.5713 4.378423 -10958.383
-	Order -3492.7903 4.3554688 -10870.596
-Unit
-	Type 4
-	Position -3508.5356 5.3921947 -10986.506
-	Order -3491.5908 4.3554688 -10866.475
-Unit
-	Type 4
-	Position -3522.316 4.1289062 -10954.694
-	Order -3490.7463 4.3554688 -10869.03
-Unit
-	Type 4
-	Position -3516.0935 4.7263465 -10961.566
-	Order -3495.071 4.3554688 -10866.016
-Unit
-	Type 4
-	Position -3512.939 4.7840014 -10958.495
-	Order -3497.0508 4.3554688 -10867.835
-Unit
-	Type 4
-	Position -3512.9888 4.0673676 -10928.788
-	Order -3493.3804 4.3554688 -10870.241
-Unit
-	Type 4
-	Position -3512.4346 5.098244 -10976.2295
-	Order -3493.0813 4.3554688 -10870.235
-Unit
-	Type 4
-	Position -3491.994 4.8797126 -10949.962
-	Order -3494.4177 4.3554688 -10869.465
-Unit
-	Type 4
-	Position -3518.6655 4.054185 -10942.168
-	Order -3495.2183 4.3554688 -10867.746
-Unit
-	Type 2
-	Position -3494.5234 4.7943764 -10900.939
-	Order -3491.6042 4.3554688 -10869.679
-Unit
-	Type 4
-	Position -3518.5796 4.794344 -10965.497
-	Order -3491.545 4.3554688 -10866.803
-Unit
-	Type 4
-	Position -3516.6377 4.8940425 -10968.255
-	Order -3490.4177 4.3554688 -10863.512
-Unit
-	Type 4
-	Position -3515.8438 4.495883 -10956.868
-	Order -3497.7368 4.3554688 -10870.013
-Unit
-	Type 4
-	Position -3509.7542 5.3605943 -10987.769
-	Order -3497.6118 4.3554688 -10870.625
-Unit
-	Type 4
-	Position -3492.3486 4.9283285 -10946.885
-	Order -3493.7402 4.3554688 -10867.032
-Unit
-	Type 4
-	Position -3517.618 4.8505793 -10996.536
-	Order -3497.0093 4.3554688 -10867.968
-Unit
-	Type 4
-	Position -3520.2573 4.754695 -10965.955
-	Order -3494.5806 4.3554688 -10865.712
-Unit
-	Type 4
-	Position -3527.201 4.6111283 -10971.429
-	Order -3495.8484 4.3554688 -10868.658
-Unit
-	Type 4
-	Position -3516.97 4.3123507 -10955.072
-	Order -3490.4917 4.3554688 -10868.37
-Unit
-	Type 4
-	Position -3510.8982 5.2892528 -10993.238
-	Order -3490.9712 4.3554688 -10867.78
-Unit
-	Type 4
-	Position -3524.896 4.6710925 -10990.206
-	Order -3490.4934 4.3554688 -10867.546
-Unit
-	Type 4
-	Position -3505.9504 4.738397 -10943.929
-	Order -3493.4153 4.3554688 -10865.63
-Unit
-	Type 2
-	Position -3508.5745 4.5565367 -10926.078
-	Order -3493.0312 4.3554688 -10870.101
-Unit
-	Type 4
-	Position -3505.5042 5.7002378 -10981.818
-	Order -3492.9832 4.3554688 -10869.66
-Unit
-	Type 4
-	Position -3504.5164 5.0660663 -10954.42
-	Order -3496.3142 4.3554688 -10864.669
-Unit
-	Type 4
-	Position -3507.2935 5.191031 -10956.691
-	Order -3497.8923 4.3554688 -10867.631
-Unit
-	Type 2
-	Position -3513.114 4.331124 -10947.688
-	Order -3491.9531 4.3554688 -10868.497
-Unit
-	Type 4
-	Position -3520.3794 4.7668123 -10969.626
-	Order -3494.7295 4.3554688 -10868.313
-Unit
-	Type 4
-	Position -3516.4922 4.0531077 -10934.906
-	Order -3494.29 4.3554688 -10870.126
-Unit
-	Type 4
-	Position -3520.5967 4.758903 -10971.946
-	Order -3495.0657 4.3554688 -10869.702
-Unit
-	Type 2
-	Position -3508.0933 5.0622687 -10914.163
-	Order -3497.0198 4.3554688 -10863.379
-Unit
-	Type 4
-	Position -3521.4812 4.2095966 -10944
-	Order -3493.9856 4.3554688 -10866.952
-Unit
-	Type 4
-	Position -3529.9497 4.527196 -10964.901
-	Order -3493.579 4.3554688 -10868.508
-Unit
-	Type 4
-	Position -3514.771 4.437838 -10953.909
-	Order -3496.3232 4.3554688 -10863.33
-Unit
-	Type 4
-	Position -3501.136 4.9550624 -10941.935
-	Order -3492.652 4.3554688 -10869.806
-Unit
-	Type 4
-	Position -3531.6191 4.7375197 -10979.001
-	Order -3497.9055 4.3554688 -10869.025
-Unit
-	Type 4
-	Position -3522.0647 4.541735 -10962.248
-	Order -3493.6196 4.3554688 -10867.452
-Unit
-	Type 4
-	Position -3510.794 5.1672006 -10975.45
-	Order -3490.5667 4.3554688 -10867.586
-Unit
-	Type 2
-	Position -3512.7007 4.2481003 -10923.829
-	Order -3497.216 4.3554688 -10865.836
-Unit
-	Type 4
-	Position -3529.2925 4.4765778 -10961.815
-	Order -3490.6526 4.3554688 -10865.471
-Unit
-	Type 4
-	Position -3526.782 4.2216997 -10955.832
-	Order -3495.7573 4.3554688 -10868.947
-Unit
-	Type 4
-	Position -3517.9863 5.0661325 -10985.383
-	Order -3493.2427 4.3554688 -10865.529
-Unit
-	Type 4
-	Position -3523.6858 4.1306753 -10954.589
-	Order -3497.1917 4.3554688 -10867.168
-Unit
-	Type 4
-	Position -3516.0215 4.918807 -10996.466
-	Order -3496.4663 4.3554688 -10866.808
-Unit
-	Type 4
-	Position -3531.6038 4.6959367 -10972.718
-	Order -3492.9753 4.3554688 -10864.607
-Unit
-	Type 4
-	Position -3518.6091 3.986761 -10946.692
-	Order -3497.0776 4.3554688 -10867.469
-Unit
-	Type 2
-	Position -3517.1802 4.336381 -10955.9375
-	Order -3495.522 4.3554688 -10865.889
-Unit
-	Type 4
-	Position -3499.9275 4.967394 -10944.201
-	Order -3491.8003 4.3554688 -10866.727
-Unit
-	Type 4
-	Position -3526.7444 4.5879574 -10989.678
-	Order -3490.8914 4.3554688 -10866.673
-Unit
-	Type 4
-	Position -3520.5803 4.2150354 -10941.41
-	Order -3492.2004 4.3554688 -10867.498
-Unit
-	Type 4
-	Position -3516.5486 4.3743544 -10955.625
-	Order -3497.79 4.3554688 -10864.555
-Unit
-	Type 4
-	Position -3508.6377 5.300188 -10976.509
-	Order -3492.054 4.3554688 -10870.413
-Unit
-	Type 4
-	Position -3526.4617 4.4398675 -10960.822
-	Order -3491.3926 4.3554688 -10868.337
-Unit
-	Type 4
-	Position -3509.7278 4.4849844 -10941.836
-	Order -3497.1 4.3554688 -10863.539
-Unit
-	Type 4
-	Position -3513.7117 4.010523 -10930.8125
-	Order -3493.5725 4.3554688 -10867.909
-Unit
-	Type 4
-	Position -3527.656 4.8508215 -10981.115
-	Order -3495.7761 4.3554688 -10864.257
-Unit
-	Type 2
-	Position -3495.9836 4.7905593 -10898.034
-	Order -3497.6687 4.3554688 -10865.358
-Unit
-	Type 4
-	Position -3506.5552 5.1889334 -10968.857
-	Order -3494.4253 4.3554688 -10868.585
-Unit
-	Type 4
-	Position -3521.0244 4.1639338 -10955.295
-	Order -3498.02 4.3554688 -10866.877
-Unit
-	Type 2
-	Position -3501.8105 5.0543985 -10906.31
-	Order -3495.886 4.3554688 -10866.484
-Unit
-	Type 4
-	Position -3532.7412 4.5161023 -10963.416
-	Order -3494.6257 4.3554688 -10865.757
-Unit
-	Type 4
-	Position -3513.74 4.2667646 -10946.991
-	Order -3494.219 4.3554688 -10863.989
-Unit
-	Type 2
-	Position -3521.2153 4.7358365 -10969.554
-	Order -3491.7114 4.3554688 -10870.574
-Unit
-	Type 4
-	Position -3514.3472 4.602157 -10956.601
-	Order -3494.7422 4.3554688 -10869.087
-Unit
-	Type 2
-	Position -3516.0293 4.0228252 -10935.614
-	Order -3492.2188 4.3554688 -10868.44
-Unit
-	Type 2
-	Position -3498.9434 5.1468554 -10937.024
-	Order -3494.589 4.3554688 -10868.996
-Unit
-	Type 2
-	Position -3504.0215 4.9178185 -10938.014
-	Order -3495.3215 4.3554688 -10867.994
-Unit
-	Type 4
-	Position -3508.9834 5.446972 -10994.597
-	Order -3497.6934 4.3554688 -10866.872
-Unit
-	Type 4
-	Position -3508.2664 5.2622485 -10974.883
-	Order -3497.911 4.3554688 -10870.13
-Unit
-	Type 4
-	Position -3512.5725 4.2579517 -10943.066
-	Order -3498.0452 4.3554688 -10865.952
-Unit
-	Type 4
-	Position -3522.9988 4.670466 -10967.602
-	Order -3490.9822 4.3554688 -10865.704
-Unit
-	Type 4
-	Position -3534.3557 4.7763042 -10972.986
-	Order -3498.172 4.3554688 -10869.354
-Unit
-	Type 2
-	Position -3497.0012 4.7897577 -10898.237
-	Order -3490.9163 4.3554688 -10864.32
-Unit
-	Type 4
-	Position -3507.6667 5.4508066 -10986.887
-	Order -3490.4473 4.3554688 -10866.185
-Unit
-	Type 4
-	Position -3524.809 4.179688 -10950.142
-	Order -3495.3962 4.3554688 -10867.112
-Unit
-	Type 4
-	Position -3526.1328 4.565621 -10965.303
-	Order -3492.2542 4.3554688 -10866.93
-Unit
-	Type 4
-	Position -3518.634 5.043398 -10992.09
-	Order -3495.0505 4.3554688 -10865.318
-Unit
-	Type 4
-	Position -3515.3728 4.4689994 -10955.549
-	Order -3497.5234 4.3554688 -10865.594
-Unit
-	Type 4
-	Position -3507.1304 5.4602766 -10978.278
-	Order -3495.6401 4.3554688 -10863.745
-Unit
-	Type 4
-	Position -3511.2126 4.3683224 -10941.905
-	Order -3492.3538 4.3554688 -10869.705
-Unit
-	Type 4
-	Position -3500.995 5.007864 -10955.548
-	Order -3494.249 4.3554688 -10867.607
-Unit
-	Type 4
-	Position -3520.8574 4.092822 -10947.087
-	Order -3493.7622 4.3554688 -10869.827
-Unit
-	Type 2
-	Position -3515.8972 4.0674663 -10939.598
-	Order -3495.719 4.3554688 -10869.975
-Unit
-	Type 4
-	Position -3515.5957 4.961312 -10995.688
-	Order -3496.7556 4.3554688 -10865.938
-Unit
-	Type 2
-	Position -3505.5132 5.040515 -10954.191
-	Order -3492.961 4.3554688 -10868.838
-Unit
-	Type 4
-	Position -3517.6797 4.0517287 -10950.134
-	Order -3496.2224 4.3554688 -10866.484
-Unit
-	Type 2
-	Position -3519.6357 4.1714916 -10954.622
-	Order -3494.5552 4.3554688 -10864.202
-Unit
-	Type 2
-	Position -3507.5684 5.1244216 -10914.667
-	Order -3492.661 4.3554688 -10863.492
-Unit
-	Type 4
-	Position -3531.509 4.676916 -10971.707
-	Order -3496.161 4.3554688 -10867.524
-Unit
-	Type 4
-	Position -3506.2563 5.2028823 -10957.0205
-	Order -3492.9648 4.3554688 -10865.154
-Unit
-	Type 2
-	Position -3516.5278 4.9146914 -10972.229
-	Order -3496.2207 4.3554688 -10870.0205
-Unit
-	Type 4
-	Position -3509.2637 5.352546 -10985.292
-	Order -3497.9817 4.3554688 -10863.927
-Unit
-	Type 2
-	Position -3500.5469 4.9485793 -10944.469
-	Order -3492.2427 4.3554688 -10864.206
-Unit
-	Type 4
-	Position -3506.0156 4.7278004 -10941.468
-	Order -3494.0085 4.3554688 -10869.264
-Unit
-	Type 4
-	Position -3511.7747 5.2189918 -10992.504
-	Order -3494.9463 4.3554688 -10865.834
-Unit
-	Type 4
-	Position -3504.4607 4.8582745 -10950.247
-	Order -3490.2944 4.3554688 -10869.324
-Unit
-	Type 4
-	Position -3515.5671 4.1218605 -10945.486
-	Order -3493.6855 4.3554688 -10870.077
-Unit
-	Type 4
-	Position -3503.1296 5.01307 -10937.572
-	Order -3495.8252 4.3554688 -10864.368
-Unit
-	Type 4
-	Position -3514.463 5.116067 -10983.442
-	Order -3490.3625 4.3554688 -10870.808
-Unit
-	Type 4
-	Position -3523.7 4.6790366 -10992.896
-	Order -3491.2708 4.3554688 -10863.838
-Unit
-	Type 4
-	Position -3523.56 4.158721 -10949.261
-	Order -3490.8845 4.3554688 -10870.17
-Unit
-	Type 4
-	Position -3525.9316 4.37817 -10959.668
-	Order -3495.7537 4.3554688 -10870.295
-Unit
-	Type 4
-	Position -3517.9978 3.9896722 -10943.804
-	Order -3496.425 4.3554688 -10866.019
-Unit
-	Type 4
-	Position -3514.6812 4.026629 -10937.721
-	Order -3495.3481 4.3554688 -10868.579
-Unit
-	Type 4
-	Position -3530.6113 4.5475388 -10966.086
-	Order -3496.054 4.3554688 -10870.35
-Unit
-	Type 4
-	Position -3509.5295 5.1996484 -10974.553
-	Order -3491.6038 4.3554688 -10868.559
-Unit
-	Type 4
-	Position -3518.6304 4.89564 -10994.84
-	Order -3491.5815 4.3554688 -10866.392
-Unit
-	Type 4
-	Position -3517.5295 4.897922 -10979.203
-	Order -3496.9688 4.3554688 -10870.69
-Unit
-	Type 4
-	Position -3517.449 4.6579123 -10961.437
-	Order -3493.2417 4.3554688 -10866.203
-Unit
-	Type 4
-	Position -3505.2156 5.24151 -10965.831
-	Order -3494.8794 4.3554688 -10870.402
-Unit
-	Type 4
-	Position -3495.2886 6.1017604 -10980.165
-	Order -3496.388 4.3554688 -10868.764
-Unit
-	Type 2
-	Position -3515.2468 4.16458 -10926.701
-	Order -3498.0537 4.3554688 -10865.993
-Unit
-	Type 4
-	Position -3508.0955 5.236259 -10974.109
-	Order -3493.916 4.3554688 -10869.647
-Unit
-	Type 4
-	Position -3523.1504 4.6838236 -10973.138
-	Order -3494.5554 4.3554688 -10869.653
-Unit
-	Type 4
-	Position -3531.09 4.642129 -10970.48
-	Order -3491.722 4.3554688 -10869.718
-Unit
-	Type 4
-	Position -3518.2424 4.185459 -10954.299
-	Order -3493.2263 4.3554688 -10870.331
-Unit
-	Type 2
-	Position -3502.442 4.9996986 -10938.812
-	Order -3492.0422 4.3554688 -10867.76
-Unit
-	Type 4
-	Position -3505.4543 5.25077 -10960.198
-	Order -3496.7766 4.3554688 -10867.973
-Unit
-	Type 2
-	Position -3498.5796 5.149794 -10910.527
-	Order -3492.376 4.3554688 -10864.522
-Unit
-	Type 4
-	Position -3504.2622 5.197944 -10956.882
-	Order -3498.1191 4.3554688 -10867.177
-Unit
-	Type 4
-	Position -3519.1116 4.025876 -10945.16
-	Order -3495.3542 4.3554688 -10866.045
-Unit
-	Type 4
-	Position -3493.2493 4.9513626 -10942.634
-	Order -3496.4888 4.3554688 -10870.417
-Unit
-	Type 4
-	Position -3514.2122 4.2601323 -10947.9375
-	Order -3490.9375 4.3554688 -10866.775
-Unit
-	Type 4
-	Position -3517.6382 4.841119 -10975.641
-	Order -3496.8486 4.3554688 -10867.002
-Unit
-	Type 4
-	Position -3515.5857 4.1063232 -10941
-	Order -3497.0945 4.3554688 -10867.989
-Unit
-	Type 2
-	Position -3490.5605 5.431492 -10923.95
-	Order -3496.8354 4.3554688 -10864.97
-Unit
-	Type 4
-	Position -3516.6362 4.0554323 -10945.338
-	Order -3497.0283 4.3554688 -10867.805
-Unit
-	Type 4
-	Position -3520.4456 4.0842643 -10946.134
-	Order -3497.4268 4.3554688 -10867.059
-Unit
-	Type 4
-	Position -3485.7947 4.6907372 -10956.7705
-	Order -3497.6472 4.3554688 -10867.374
-Unit
-	Type 2
-	Position -3519.664 4.614485 -10962.119
-	Order -3493.006 4.3554688 -10865.236
-Unit
-	Type 4
-	Position -3520.2275 4.14128 -10954.052
-	Order -3495.4707 4.3554688 -10865.9795
-Unit
-	Type 4
-	Position -3531.0513 4.7942815 -10975.639
-	Order -3491.1206 4.3554688 -10870.69
-Unit
-	Type 4
-	Position -3509.1267 5.296474 -10977.754
-	Order -3492.683 4.3554688 -10870.13
-Unit
-	Type 4
-	Position -3522.1655 4.5239735 -10998.92
-	Order -3493.1477 4.3554688 -10865.545
-Unit
-	Type 4
-	Position -3514.1692 3.9867818 -10934.565
-	Order -3491.3398 4.3554688 -10864.026
-Unit
-	Type 2
-	Position -3500.4473 5.2472687 -10922.276
-	Order -3494.288 4.3554688 -10867.5
-Unit
-	Type 4
-	Position -3513.3157 4.823185 -10960.53
-	Order -3491.3293 4.3554688 -10867.832
-Unit
-	Type 4
-	Position -3512.385 4.054351 -10930.353
-	Order -3497.0632 4.3554688 -10863.627
-Unit
-	Type 4
-	Position -3521.9692 4.086361 -10950.056
-	Order -3493.4158 4.3554688 -10870.406
-Unit
-	Type 4
-	Position -3518.1562 4.881166 -10979.5
-	Order -3492.5007 4.3554688 -10864.64
-Unit
-	Type 4
-	Position -3516.6636 4.0311565 -10936.629
-	Order -3494.2249 4.3554688 -10868.961
-Unit
-	Type 2
-	Position -3496.496 5.447738 -10918.575
-	Order -3496.484 4.3554688 -10870.5625
-Unit
-	Type 4
-	Position -3508.1963 5.19382 -10963.428
-	Order -3496.1892 4.3554688 -10868.824
-Unit
-	Type 2
-	Position -3507.2524 5.1394534 -10967.081
-	Order -3493.854 4.3554688 -10863.927
-Unit
-	Type 4
-	Position -3518.317 4.6112933 -10961.212
-	Order -3497.5146 4.3554688 -10866.243
-Unit
-	Type 4
-	Position -3512.4058 4.4333262 -10949.461
-	Order -3493.7727 4.3554688 -10866.572
-Unit
-	Type 4
-	Position -3516.7532 5.119229 -10990.708
-	Order -3497.402 4.3554688 -10866.959
-Unit
-	Type 4
-	Position -3520.3225 4.6833034 -10964.304
-	Order -3496.664 4.3554688 -10863.9
-Unit
-	Type 4
-	Position -3522.1372 4.760928 -10977.095
-	Order -3496.5425 4.3554688 -10864.136
-Unit
-	Type 4
-	Position -3518.477 4.2340117 -10955.501
-	Order -3497.0564 4.3554688 -10868.5
-Unit
-	Type 4
-	Position -3483.9197 4.47543 -10966.122
-	Order -3497.7556 4.3554688 -10863.939
-Unit
-	Type 4
-	Position -3512.4004 5.193226 -10983.091
-	Order -3497.0215 4.3554688 -10863.493
-Unit
-	Type 4
-	Position -3501.0706 5.044622 -10938.64
-	Order -3497.2476 4.3554688 -10870.325
-Unit
-	Type 2
-	Position -3496.339 4.799987 -10895.922
-Unit
-	Type 4
-	Position -3509.7012 5.0677385 -10968.265
-	Order -3496.8228 4.3554688 -10863.002
-Unit
-	Type 4
-	Position -3520.2673 4.1580763 -10942.693
-	Order -3494.634 4.3554688 -10865.665
-Unit
-	Type 4
-	Position -3521.1514 4.237058 -10942.198
-	Order -3492.6702 4.3554688 -10866.58
-Unit
-	Type 4
-	Position -3517.136 5.1200156 -10987.04
-	Order -3496.7285 4.3554688 -10864.408
-Unit
-	Type 4
-	Position -3517.3826 4.1521306 -10952.4375
-	Order -3495.5315 4.3554688 -10868.301
-Unit
-	Type 4
-	Position -3508.0874 5.418996 -10982.174
-	Order -3495.0852 4.3554688 -10866.451
-Unit
-	Type 4
-	Position -3507.2297 5.5123873 -10987.804
-	Order -3492.646 4.3554688 -10869.911
-Unit
-	Type 4
-	Position -3509.6733 4.2735753 -10934.516
-	Order -3491.4006 4.3554688 -10865.506
-Unit
-	Type 4
-	Position -3510.346 4.4783354 -10946.125
-	Order -3495.0962 4.3554688 -10864.179
-Unit
-	Type 2
-	Position -3508.9062 4.5941715 -10924.347
-	Order -3494.3567 4.3554688 -10865.735
-Unit
-	Type 4
-	Position -3522.1838 4.166379 -10946.676
-	Order -3492.0508 4.3554688 -10870.264
-Unit
-	Type 4
-	Position -3504.4922 4.89243 -10936.618
-	Order -3496.472 4.3554688 -10868.947
-Unit
-	Type 4
-	Position -3521.5332 4.5231543 -10961.478
-	Order -3497.032 4.3554688 -10864.558
-Unit
-	Type 4
-	Position -3518.7554 4.0742426 -10951.963
-	Order -3490.8906 4.3554688 -10863.035
-Unit
-	Type 4
-	Position -3491.5706 4.981193 -10945.776
-	Order -3497.5906 4.3554688 -10866.27
-Unit
-	Type 4
-	Position -3514.7197 5.057475 -10981.107
-	Order -3495.629 4.3554688 -10868.295
-Unit
-	Type 4
-	Position -3508.2056 5.3642187 -10978.554
-	Order -3490.5366 4.3554688 -10867.355
-Unit
-	Type 4
-	Position -3516.9697 4.9032383 -10978.162
-	Order -3492.2285 4.3554688 -10869.223
-Unit
-	Type 4
-	Position -3511.2214 5.2465096 -10982.439
-	Order -3494.6978 4.3554688 -10866.253
-Unit
-	Type 2
-	Position -3490.724 5.035252 -10944.225
-	Order -3493.1677 4.3554688 -10867.881
-Unit
-	Type 4
-	Position -3512.7961 3.979996 -10932.13
-	Order -3495.5364 4.3554688 -10864.11
-Unit
-	Type 4
-	Position -3508.5554 5.299194 -10975.815
-	Order -3496.7834 4.3554688 -10867.994
-Unit
-	Type 4
-	Position -3507.7908 5.146308 -10965.274
-	Order -3494.897 4.3554688 -10867.043
-Unit
-	Type 4
-	Position -3517.9675 4.0243015 -10940.899
-	Order -3493.6497 4.3554688 -10869.503
-Unit
-	Type 2
-	Position -3517.822 3.9844193 -10944.473
-	Order -3494.5786 4.3554688 -10866.676
-Unit
-	Type 4
-	Position -3517.3198 4.044232 -10940.168
-	Order -3495.6675 4.3554688 -10866.785
-Unit
-	Type 4
-	Position -3525.1453 4.670735 -10989.434
-	Order -3490.9783 4.3554688 -10867.928
-Unit
-	Type 4
-	Position -3516.715 4.8957133 -10969.005
-	Order -3492.541 4.3554688 -10866.46
-Unit
-	Type 4
-	Position -3511.3762 4.3344097 -10941.225
-	Order -3497.2695 4.3554688 -10864.549
-Unit
-	Type 4
-	Position -3518.3755 4.053869 -10951.332
-	Order -3491.7073 4.3554688 -10868.492
-Unit
-	Type 4
-	Position -3519.8064 4.148419 -10941.638
-	Order -3497.3074 4.3554688 -10870.246
-Unit
-	Type 4
-	Position -3509.3281 4.35167 -10936.68
-	Order -3497.8384 4.3554688 -10867.174
-Unit
-	Type 4
-	Position -3508.6482 5.1780157 -10958.611
-	Order -3494.693 4.3554688 -10865.048
-Unit
-	Type 4
-	Position -3522.6401 4.7036614 -10974.249
-	Order -3495.9106 4.3554688 -10863.032
-Unit
-	Type 4
-	Position -3508.2146 5.2371674 -10959.8955
-	Order -3497.457 4.3554688 -10865.282
-Unit
-	Type 4
-	Position -3510.7422 5.064251 -10969.543
-	Order -3493.5125 4.3554688 -10866.722
-Unit
-	Type 4
-	Position -3512.9065 4.9265494 -10964.332
-	Order -3494.651 4.3554688 -10865.045
-Unit
-	Type 2
-	Position -3519.62 4.0366883 -10947.275
-	Order -3493.725 4.3554688 -10870.63
-Unit
-	Type 4
-	Position -3506.1338 4.691665 -10932.914
-	Order -3493.2043 4.3554688 -10869.306
-Unit
-	Type 4
-	Position -3505.127 4.8398747 -10950.429
-	Order -3492.9785 4.3554688 -10863.265
-Unit
-	Type 4
-	Position -3529.0564 4.7786326 -10976.867
-	Order -3491.78 4.3554688 -10868.513
-Unit
-	Type 4
-	Position -3514.0132 5.1803775 -10987.042
-	Order -3491.959 4.3554688 -10865.729
-Unit
-	Type 4
-	Position -3524.8796 4.161233 -10954.472
-	Order -3496.702 4.3554688 -10866.811
-Unit
-	Type 4
-	Position -3521.5374 4.271085 -10957.672
-	Order -3494.785 4.3554688 -10869.405
-Unit
-	Type 4
-	Position -3506.9524 4.6886797 -10945.598
-	Order -3496.7249 4.3554688 -10864.339
-Unit
-	Type 4
-	Position -3500.9714 4.948152 -10943.966
-	Order -3493.0662 4.3554688 -10866.374
-Unit
-	Type 4
-	Position -3502.746 4.900718 -10948.134
-	Order -3496.6729 4.3554688 -10866.981
-Unit
-	Type 4
-	Position -3516.8755 4.8988137 -10970.371
-	Order -3497.9539 4.3554688 -10868.002
-Unit
-	Type 4
-	Position -3495.593 5.64691 -10974.588
-	Order -3496.0532 4.3554688 -10868.237
-Unit
-	Type 4
-	Position -3516.2498 4.9689317 -10994.993
-	Order -3490.8286 4.3554688 -10870.189
-Unit
-	Type 4
-	Position -3521.599 4.7224355 -10971.635
-	Order -3497.8896 4.3554688 -10863.708
-Unit
-	Type 4
-	Position -3517.0986 4.086665 -10949.663
-	Order -3495.711 4.3554688 -10864.98
-Unit
-	Type 4
-	Position -3519.1484 4.1183195 -10940.39
-	Order -3494.9653 4.3554688 -10864.319
-Unit
-	Type 4
-	Position -3526.3018 4.189532 -10951.4375
-	Order -3497.1418 4.3554688 -10864.2
-Unit
-	Type 4
-	Position -3504.832 5.6729193 -10977.667
-	Order -3497.1226 4.3554688 -10863.557
-Unit
-	Type 4
-	Position -3489.0493 4.765506 -10955.939
-	Order -3490.509 4.3554688 -10863.453
-Unit
-	Type 4
-	Position -3509.4917 5.435786 -10990.683
-	Order -3496.9155 4.3554688 -10863.857
-Unit
-	Type 4
-	Position -3513.346 3.9842744 -10931.415
-	Order -3496.731 4.3554688 -10867.778
-Unit
-	Type 4
-	Position -3513.4858 4.426483 -10951.524
-	Order -3497.2688 4.3554688 -10864.1875
-Unit
-	Type 4
-	Position -3519.0132 4.8171144 -10968.054
-	Order -3495.3113 4.3554688 -10868.997
-Unit
-	Type 4
-	Position -3523.7578 4.736543 -10989.362
-	Order -3492.8083 4.3554688 -10865.862
-Unit
-	Type 2
-	Position -3509.574 5.1311374 -10962.519
-	Order -3495.5183 4.3554688 -10868.006
-Unit
-	Type 4
-	Position -3532.1738 4.4974093 -10961.382
-	Order -3495.06 4.3554688 -10865.316
-Unit
-	Type 4
-	Position -3517.0276 4.043926 -10943.07
-	Order -3491.85 4.3554688 -10867.499
-Unit
-	Type 4
-	Position -3508.8467 5.3716087 -10983.974
-	Order -3494.3037 4.3554688 -10870.265
-Unit
-	Type 4
-	Position -3517.0579 5.1195664 -10988.973
-	Order -3492.2698 4.3554688 -10865.696
-Unit
-	Type 4
-	Position -3509.785 5.3091826 -10980.672
-	Order -3493.1133 4.3554688 -10866.703
-Unit
-	Type 4
-	Position -3518.9827 4.6413016 -10962.243
-	Order -3493.8694 4.3554688 -10865.973
-Unit
-	Type 4
-	Position -3510.3042 4.3945637 -10940.358
-	Order -3490.539 4.3554688 -10869.716
-Unit
-	Type 4
-	Position -3506.0396 4.9544435 -10953.049
-	Order -3493.652 4.3554688 -10870.124
-Unit
-	Type 4
-	Position -3508.7078 5.482305 -10993.958
-	Order -3491.564 4.3554688 -10867.825
-Unit
-	Type 4
-	Position -3504.04 5.1217794 -10955.238
-	Order -3493.0273 4.3554688 -10867.285
-Unit
-	Type 4
-	Position -3521.851 4.079679 -10952.094
-	Order -3490.2886 4.3554688 -10868.198
-Unit
-	Type 4
-	Position -3531.7622 4.529813 -10964.528
-	Order -3494.345 4.3554688 -10868.582
-Unit
-	Type 4
-	Position -3529.4373 4.4413743 -10959.935
-	Order -3495.664 4.3554688 -10863.601
-Unit
-	Type 2
-	Position -3520.265 4.553879 -10961.302
-	Order -3491.2727 4.3554688 -10865.427
-Unit
-	Type 2
-	Position -3507.796 4.8484282 -10904.781
-	Order -3497.2334 4.3554688 -10870.854
-Unit
-	Type 4
-	Position -3508.771 5.407098 -10987.551
-	Order -3496.449 4.3554688 -10864.776
-Unit
-	Type 4
-	Position -3521.2441 4.215411 -10943.165
-	Order -3491.1887 4.3554688 -10866.98
-Unit
-	Type 4
-	Position -3503.479 4.872201 -10944.951
-	Order -3494.4883 4.3554688 -10866.863
-Unit
-	Type 4
-	Position -3526.538 4.7102156 -10986.153
-	Order -3490.8733 4.3554688 -10865.15
-Unit
-	Type 4
-	Position -3517.5771 4.748749 -10963.652
-	Order -3494.532 4.3554688 -10862.912
-Unit
-	Type 4
-	Position -3529.4343 4.5578957 -10967.056
-	Order -3497.352 4.3554688 -10870.072
-Unit
-	Type 4
-	Position -3508.8997 5.4249177 -10996.541
-	Order -3498.1663 4.3554688 -10868.285
-Unit
-	Type 4
-	Position -3517.706 5.0779366 -10992.216
-	Order -3498.1208 4.3554688 -10864.912
-Unit
-	Type 4
-	Position -3525.9417 4.5026503 -10962.757
-	Order -3493.2705 4.3554688 -10870.188
-Unit
-	Type 4
-	Position -3531.1174 4.595918 -10968.335
-	Order -3493.832 4.3554688 -10863.112
-Unit
-	Type 4
-	Position -3523.296 4.771571 -10986.186
-	Order -3494.14 4.3554688 -10867.851
-Unit
-	Type 4
-	Position -3527.2935 4.258367 -10956.622
-	Order -3490.476 4.3554688 -10869.741
-Unit
-	Type 4
-	Position -3521.531 4.7336993 -10974.024
-	Order -3492.3057 4.3554688 -10870.229
-Unit
-	Type 4
-	Position -3524.2354 4.117071 -10952.183
-	Order -3496.4614 4.3554688 -10870.291
-Unit
-	Type 4
-	Position -3500.5269 5.153604 -10933.692
-	Order -3495.6392 4.3554688 -10869.669
-Unit
-	Type 4
-	Position -3512.279 4.135486 -10928.599
-	Order -3494.8762 4.3554688 -10863.028
-Unit
-	Type 4
-	Position -3520.709 4.9108377 -10991.964
-	Order -3494.7744 4.3554688 -10867.735
-Unit
-	Type 4
-	Position -3514.7112 4.9884973 -10976.736
-	Order -3492.4954 4.3554688 -10864.235
-Unit
-	Type 4
-	Position -3517.8286 4.779768 -10997.73
-	Order -3497.507 4.3554688 -10863.136
-Unit
-	Type 2
-	Position -3516.166 4.07593 -10940.367
-	Order -3492.788 4.3554688 -10868.843
-Unit
-	Type 2
-	Position -3500.7742 5.035799 -10939.2295
-	Order -3494.09 4.3554688 -10865.989
-Unit
-	Type 2
-	Position -3497.2566 4.8702297 -10959.751
-	Order -3494.9338 4.3554688 -10869.973
-Unit
-	Type 4
-	Position -3510.6135 5.11423 -10972.387
-	Order -3495.7207 4.3554688 -10868.326
-Unit
-	Type 4
-	Position -3507.8245 5.1122985 -10966.728
-	Order -3492.8171 4.3554688 -10865.267
-Unit
-	Type 4
-	Position -3529.8748 4.749608 -10983.434
-	Order -3496.3435 4.3554688 -10867.37
-Unit
-	Type 4
-	Position -3506.66 5.1711144 -10966.719
-	Order -3493.7764 4.3554688 -10870.148
-Unit
-	Type 4
-	Position -3511.476 4.961231 -10960.065
-	Order -3495.5134 4.3554688 -10863.906
-Unit
-	Type 2
-	Position -3503.4058 4.9497933 -10938.761
-	Order -3490.4558 4.3554688 -10870.227
-Unit
-	Type 4
-	Position -3511.4177 5.247502 -10983.645
-	Order -3495.485 4.3554688 -10870.643
-Unit
-	Type 4
-	Position -3521.6 4.882711 -10985.208
-	Order -3494.3906 4.3554688 -10869.378
-Unit
-	Type 4
-	Position -3508.6545 5.4564466 -10989.036
-	Order -3498.0315 4.3554688 -10867.67
-Unit
-	Type 4
-	Position -3516.7466 4.6507387 -10960.657
-	Order -3498.098 4.3554688 -10865.108
-Unit
-	Type 4
-	Position -3507.9456 5.5581937 -10993.431
-	Order -3498.0637 4.3554688 -10865.517
-Unit
-	Type 4
-	Position -3522.3965 4.7064104 -10994.3955
-	Order -3495.2683 4.3554688 -10864.185
-Unit
-	Type 4
-	Position -3515.5679 4.1340556 -10946.754
-	Order -3497.503 4.3554688 -10863.286
-Unit
-	Type 2
-	Position -3504.0852 4.9240403 -10937.334
-	Order -3494.4714 4.3554688 -10866.269
-Unit
-	Type 4
-	Position -3503.8345 4.8672094 -10948.283
-	Order -3493.8386 4.3554688 -10869.052
-Unit
-	Type 4
-	Position -3510.9854 5.2874517 -10986.199
-	Order -3490.6726 4.3554688 -10868.1045
-Unit
-	Type 4
-	Position -3524.8848 4.631985 -10969.215
-	Order -3494.9004 4.3554688 -10862.992
-Unit
-	Type 4
-	Position -3504.8154 4.8005238 -10944.237
-	Order -3496.7153 4.3554688 -10866.974
-Unit
-	Type 4
-	Position -3527.94 4.583126 -10970.376
-	Order -3497.413 4.3554688 -10864.558
-Unit
-	Type 2
-	Position -3507.1343 4.568619 -10929.865
-	Order -3497.55 4.3554688 -10868.201
-Unit
-	Type 4
-	Position -3500.3542 4.982107 -10941.792
-	Order -3491.1816 4.3554688 -10870.062
-Unit
-	Type 4
-	Position -3517.1316 4.0428033 -10938.667
-	Order -3492.0432 4.3554688 -10864.4375
-Unit
-	Type 4
-	Position -3515.3179 5.0225983 -10980.583
-	Order -3494.4797 4.3554688 -10869.147
-Unit
-	Type 4
-	Position -3513.551 4.1351204 -10940.0625
-	Order -3493.9028 4.3554688 -10865.662
-Unit
-	Type 4
-	Position -3515.9043 4.2494626 -10951.976
-	Order -3497.1206 4.3554688 -10865.191
-Unit
-	Type 4
-	Position -3521.1414 4.767417 -10976.786
-	Order -3495.7314 4.3554688 -10863.85
-Unit
-	Type 2
-	Position -3490.9167 5.2211866 -10929.776
-	Order -3492.9653 4.3554688 -10868.3125
-Unit
-	Type 4
-	Position -3530.0117 4.5045824 -10963.381
-	Order -3494.6611 4.3554688 -10869.357
-Unit
-	Type 2
-	Position -3504.0637 4.8383355 -10942.38
-	Order -3494.2356 4.3554688 -10868.383
-Unit
-	Type 4
-	Position -3522.307 4.0746274 -10951.159
-	Order -3490.6545 4.3554688 -10864.414
-Unit
-	Type 4
-	Position -3508.7363 5.4762683 -10989.943
-	Order -3491.593 4.3554688 -10868.399
-Unit
-	Type 4
-	Position -3521.329 4.176962 -10955.973
-	Order -3492.566 4.3554688 -10867.178
-Unit
-	Type 4
-	Position -3513.2107 5.1901283 -10985.205
-	Order -3492.4429 4.3554688 -10865.554
-Unit
-	Type 4
-	Position -3524.009 4.293827 -10946.121
-	Order -3493.81 4.3554688 -10866.801
-Unit
-	Type 4
-	Position -3509.0806 5.4129095 -10988.442
-	Order -3492.5852 4.3554688 -10867.229
-Unit
-	Type 4
-	Position -3512.1465 4.044705 -10931.128
-	Order -3496.5212 4.3554688 -10869.914
-Unit
-	Type 2
-	Position -3507.8176 5.1540375 -10911.688
-	Order -3496.876 4.3554688 -10864.175
-Unit
-	Type 4
-	Position -3516.0437 4.0851665 -10942.207
-	Order -3492.1997 4.3554688 -10864.297
-Unit
-	Type 2
-	Position -3494.3167 4.792418 -10899.312
-	Order -3497.5962 4.3554688 -10869.806
-Unit
-	Type 4
-	Position -3504.8157 4.8982353 -10951.858
-	Order -3497.6624 4.3554688 -10864.256
-Unit
-	Type 4
-	Position -3516.741 4.065931 -10942.231
-	Order -3496.5007 4.3554688 -10863.783
-Unit
-	Type 2
-	Position -3506.0278 5.228188 -10964.214
-	Order -3491.2217 4.3554688 -10867.598
-Unit
-	Type 4
-	Position -3523.1665 4.7964096 -10978.151
-	Order -3490.311 4.3554688 -10866.44
-Unit
-	Type 4
-	Position -3506.0605 5.2454004 -10963.124
-	Order -3491.416 4.3554688 -10864.255
-Unit
-	Type 4
-	Position -3526.3582 4.5378003 -10991.948
-	Order -3495.5112 4.3554688 -10869.435
-Unit
-	Type 4
-	Position -3509.9011 5.2658324 -10978.447
-	Order -3497.2874 4.3554688 -10870.235
-Unit
-	Type 4
-	Position -3519.3364 4.941461 -10993.197
-	Order -3490.2297 4.3554688 -10862.938
-Unit
-	Type 4
-	Position -3512.1912 5.1305513 -10977.794
-	Order -3490.871 4.3554688 -10865.698
-Unit
-	Type 4
-	Position -3518.2449 4.816124 -10976.354
-	Order -3496.4463 4.3554688 -10870.524
-Unit
-	Type 4
-	Position -3522.7734 4.08759 -10950.646
-	Order -3497.5378 4.3554688 -10868.365
-Unit
-	Type 4
-	Position -3527.412 4.4757686 -10991.771
-	Order -3498.0771 4.3554688 -10869.869
-Unit
-	Type 4
-	Position -3519.0125 4.513164 -10960.08
-	Order -3493.288 4.3554688 -10866.499
-Unit
-	Type 4
-	Position -3529.1516 4.7924113 -10978.669
-	Order -3495.8135 4.3554688 -10868.381
-Unit
-	Type 4
-	Position -3508.7349 5.093451 -10968.808
-	Order -3498.1406 4.3554688 -10865.355
-Unit
-	Type 2
-	Position -3508.8489 4.953993 -10914.653
-	Order -3492.4023 4.3554688 -10870.174
-Unit
-	Type 2
-	Position -3501.4111 4.897853 -10949.519
-	Order -3494.3726 4.3554688 -10865.842
-Unit
-	Type 2
-	Position -3510.6086 5.056395 -10960.695
-	Order -3493.0293 4.3554688 -10865.878
-Unit
-	Type 4
-	Position -3519.3062 4.8064775 -10968.718
-	Order -3495.748 4.3554688 -10865.548
-Unit
-	Type 4
-	Position -3497.9983 5.0654254 -10941.206
-	Order -3494.4612 4.3554688 -10870.479
-Unit
-	Type 4
-	Position -3529.3977 4.576745 -10989.289
-	Order -3495.6484 4.3554688 -10863.8545
-Unit
-	Type 4
-	Position -3518.6772 4.199245 -10954.838
-	Order -3490.7876 4.3554688 -10866.256
-Unit
-	Type 4
-	Position -3533.8887 4.741669 -10976.966
-	Order -3492.2786 4.3554688 -10865.237
-Unit
-	Type 4
-	Position -3516.4695 4.9091835 -10969.68
-	Order -3495.1577 4.3554688 -10864.233
-Unit
-	Type 4
-	Position -3519.5378 4.864074 -10979.252
-	Order -3495.9778 4.3554688 -10870.188
-Unit
-	Type 4
-	Position -3520.1658 4.0618434 -10946.741
-	Order -3492.4126 4.3554688 -10864.319
-Unit
-	Type 4
-	Position -3521.5754 4.7229605 -10968.65
-	Order -3498.1707 4.3554688 -10867.28
-Unit
-	Type 4
-	Position -3509.2114 5.466013 -10991.546
-	Order -3496.8425 4.3554688 -10866.105
-Unit
-	Type 4
-	Position -3519.7876 4.5380063 -10960.753
-	Order -3494.5854 4.3554688 -10865.594
-Unit
-	Type 4
-	Position -3524.1934 4.1692886 -10949.733
-	Order -3490.595 4.3554688 -10867.583
-Unit
-	Type 4
-	Position -3516.719 4.035603 -10937.594
-	Order -3495.1626 4.3554688 -10867.113
-Unit
-	Type 4
-	Position -3527.7253 4.540804 -10965.754
-	Order -3491.0537 4.3554688 -10864.466
-Unit
-	Type 4
-	Position -3507.3975 5.4890766 -10981.006
-	Order -3495.0234 4.3554688 -10865.175
-Unit
-	Type 4
-	Position -3508.7454 5.14097 -10972.124
-	Order -3495.2698 4.3554688 -10864.186
-Unit
-	Type 4
-	Position -3526.2192 4.6195283 -10971.185
-	Order -3493.4226 4.3554688 -10864.41
-Unit
-	Type 4
-	Position -3506.473 5.2157254 -10957.814
-	Order -3494.8013 4.3554688 -10862.914
-Unit
-	Type 4
-	Position -3502.2954 4.9111266 -10943.24
-	Order -3492.412 4.3554688 -10870.452
-Unit
-	Type 4
-	Position -3518.1353 4.831193 -10966.0205
-	Order -3494.325 4.3554688 -10866.332
-Unit
-	Type 4
-	Position -3504.7246 5.640401 -10975.85
-	Order -3496.9946 4.3554688 -10867.854
-Unit
-	Type 4
-	Position -3532.0645 4.7334127 -10975.009
-	Order -3493.0388 4.3554688 -10865.991
-Unit
-	Type 4
-	Position -3508.743 5.3769617 -10981.467
-	Order -3491.983 4.3554688 -10866.197
-Unit
-	Type 4
-	Position -3509.901 5.2686825 -10975.749
-	Order -3496.8262 4.3554688 -10864.602
-Unit
-	Type 4
-	Position -3517.899 4.0436254 -10950.829
-	Order -3496.5115 4.3554688 -10864.082
-Unit
-	Type 4
-	Position -3526.9443 4.857011 -10980.655
-	Order -3497.906 4.3554688 -10866.902
-Unit
-	Type 4
-	Position -3506.1917 5.360939 -10973.724
-	Order -3497.9067 4.3554688 -10870.349
-Unit
-	Type 4
-	Position -3506.8298 5.211675 -10964.064
-	Order -3497.306 4.3554688 -10868.572
-Unit
-	Type 4
-	Position -3508.4626 5.171221 -10957.403
-	Order -3494.7424 4.3554688 -10868.948
-Unit
-	Type 2
-	Position -3506.4817 4.829715 -10951.303
-	Order -3497.5645 4.3554688 -10870.393
-Unit
-	Type 2
-	Position -3493.692 5.2999516 -10924.982
-	Order -3493.1204 4.3554688 -10864.399
-Unit
-	Type 4
-	Position -3493.7847 4.9807715 -10941.233
-	Order -3496.5144 4.3554688 -10865.155
-Unit
-	Type 4
-	Position -3520.7627 4.1341667 -10944.848
-	Order -3494.443 4.3554688 -10866.647
-Unit
-	Type 4
-	Position -3509.6306 5.376315 -10995.263
-	Order -3497.1504 4.3554688 -10868.409
-Unit
-	Type 4
-	Position -3525.6853 4.1845555 -10954.597
-	Order -3494.5642 4.3554688 -10867.789
-Unit
-	Type 4
-	Position -3497.9502 5.029141 -10943.077
-	Order -3496.1438 4.3554688 -10864.983
-Unit
-	Type 4
-	Position -3499.465 5.146505 -10936.44
-	Order -3490.908 4.3554688 -10867.251
-Unit
-	Type 4
-	Position -3522.2537 4.6980624 -10968.322
-	Order -3491.173 4.3554688 -10865.179
-Unit
-	Type 4
-	Position -3515.0713 4.92859 -10997.683
-	Order -3495.4644 4.3554688 -10867.348
-Unit
-	Type 4
-	Position -3509.5725 5.4273853 -10992.294
-	Order -3495.6523 4.3554688 -10865.213
-Unit
-	Type 2
-	Position -3505.19 5.2619014 -10962.681
-	Order -3490.3406 4.3554688 -10867.455
-Unit
-	Type 4
-	Position -3504.6401 5.2678356 -10962.296
-	Order -3491.8726 4.3554688 -10868.055
-Unit
-	Type 4
-	Position -3527.831 4.4988275 -10963.483
-	Order -3496.396 4.3554688 -10863.761
-Unit
-	Type 4
-	Position -3522.3096 4.1524286 -10947.543
-	Order -3490.2654 4.3554688 -10864.702
-Unit
-	Type 4
-	Position -3524.683 4.7196784 -10987.485
-	Order -3490.9504 4.3554688 -10866.564
-Unit
-	Type 4
-	Position -3513.194 3.9671671 -10933.181
-	Order -3492.484 4.3554688 -10862.918
-Unit
-	Type 4
-	Position -3507.164 5.501682 -10980.344
-	Order -3491.273 4.3554688 -10869.428
-Unit
-	Type 4
-	Position -3528.6875 4.569698 -10968.423
-	Order -3494.845 4.3554688 -10869.797
-Unit
-	Type 4
-	Position -3515.5688 4.051567 -10938.528
-	Order -3495.1719 4.3554688 -10863.629
-Unit
-	Type 4
-	Position -3504.9854 5.284198 -10969.947
-	Order -3490.5547 4.3554688 -10870.023
-Unit
-	Type 4
-	Position -3505.8464 5.213807 -10967.213
-	Order -3496.5332 4.3554688 -10863.634
-Unit
-	Type 4
-	Position -3528.354 4.5200777 -10964.811
-	Order -3492.7134 4.3554688 -10868.812
-Unit
-	Type 2
-	Position -3507.882 4.8894844 -10905.884
-	Order -3491.6067 4.3554688 -10867.491
-Unit
-	Type 4
-	Position -3525.726 4.162931 -10951.926
-	Order -3492.8323 4.3554688 -10864.363
-Unit
-	Type 4
-	Position -3517.5278 4.726261 -10999.184
-	Order -3493.0745 4.3554688 -10866.795
-Unit
-	Type 4
-	Position -3528.9617 4.777095 -10975.577
-	Order -3496.9934 4.3554688 -10866.135
-Unit
-	Type 4
-	Position -3515.335 4.0430117 -10933.347
-	Order -3491.9614 4.3554688 -10869.653
-Unit
-	Type 2
-	Position -3513.4126 4.151575 -10926.483
-	Order -3495.172 4.3554688 -10869.368
-Unit
-	Type 4
-	Position -3523.283 4.7594514 -10990.784
-	Order -3496.647 4.3554688 -10865.261
-Unit
-	Type 2
-	Position -3500.2827 5.114621 -10928.267
-	Order -3490.2664 4.3554688 -10865.351
-Unit
-	Type 4
-	Position -3518.2336 4.0711064 -10937.534
-	Order -3495.944 4.3554688 -10867.749
-Unit
-	Type 4
-	Position -3513.539 4.2602806 -10946.081
-	Order -3490.5073 4.3554688 -10863.266
-Unit
-	Type 4
-	Position -3525.6467 4.340008 -10958.983
-	Order -3492.8574 4.3554688 -10863.83
-Unit
-	Type 4
-	Position -3515.8682 5.121226 -10990.839
-	Order -3493.6265 4.3554688 -10863.269
-Unit
-	Type 4
-	Position -3513.2065 4.8938537 -10963.241
-	Order -3494.8618 4.3554688 -10863.597
-Unit
-	Type 2
-	Position -3514.4524 4.209883 -10946.711
-	Order -3498.1528 4.3554688 -10865.361
-Unit
-	Type 2
-	Position -3513.705 4.1794086 -10925.446
-	Order -3490.641 4.3554688 -10863.228
-Unit
-	Type 2
-	Position -3517.7896 4.086978 -10934.765
-	Order -3490.5452 4.3554688 -10869.511
-Unit
-	Type 4
-	Position -3522.3494 4.7216887 -10975.741
-	Order -3491.143 4.3554688 -10866.795
-Unit
-	Type 2
-	Position -3496.064 5.3001227 -10922.917
-	Order -3491.5466 4.3554688 -10867.614
-Unit
-	Type 4
-	Position -3506.9993 5.5024323 -10979.579
-	Order -3497.7058 4.3554688 -10863.797
-Unit
-	Type 2
-	Position -3489.7576 5.1190825 -10908.268
-	Order -3490.4775 4.3554688 -10863.444
-Unit
-	Type 4
-	Position -3516.683 4.5835257 -10959.484
-	Order -3492.7903 4.3554688 -10868.489
-Unit
-	Type 2
-	Position -3516.579 4.133547 -10950.137
-	Order -3496.3604 4.3554688 -10867.801
-Unit
-	Type 4
-	Position -3515.7285 4.028602 -10935.019
-	Order -3493.3928 4.3554688 -10867.953
-Unit
-	Type 4
-	Position -3507.518 5.361288 -10975.893
-	Order -3495.5647 4.3554688 -10867.572
-Unit
-	Type 2
-	Position -3514.1323 4.7279377 -10959.271
-	Order -3497.6316 4.3554688 -10864.851
-Unit
-	Type 4
-	Position -3518.0203 3.9675047 -10947.064
-	Order -3496.072 4.3554688 -10864.673
-Unit
-	Type 2
-	Position -3503.6284 5.2031226 -10957.371
-	Order -3497.3796 4.3554688 -10869.711
-Unit
-	Type 4
-	Position -3520.49 4.762878 -10973.019
-	Order -3496.7515 4.3554688 -10867.448
-Unit
-	Type 4
-	Position -3501.2617 4.9446726 -10942.688
-	Order -3490.6807 4.3554688 -10868.612
-Unit
-	Type 4
-	Position -3521.5234 4.9278307 -10981.817
-	Order -3491.69 4.3554688 -10869.056
-Unit
-	Type 2
-	Position -3501.5256 4.808178 -10902.092
-	Order -3496.2668 4.3554688 -10863.347
-Unit
-	Type 4
-	Position -3507.4465 5.4089894 -10977.327
-	Order -3491.163 4.3554688 -10865.013
-Unit
-	Type 4
-	Position -3522.0588 4.197678 -10945.351
-	Order -3496.1287 4.3554688 -10870.677
-Unit
-	Type 4
-	Position -3524.079 4.6445985 -10967.081
-	Order -3493.4116 4.3554688 -10866.478
-Unit
-	Type 4
-	Position -3519.5244 4.783689 -10996.11
-	Order -3492.9973 4.3554688 -10865.726
-Unit
-	Type 2
-	Position -3509.6003 4.9209733 -10910.262
-	Order -3492.2524 4.3554688 -10865.17
-Unit
-	Type 2
-	Position -3504.7761 4.8009534 -10941.127
-	Order -3495.6138 4.3554688 -10868.057
-Unit
-	Type 4
-	Position -3512.7053 4.304979 -10945.472
-	Order -3498.0737 4.3554688 -10867.733
-Unit
-	Type 4
-	Position -3508.6262 5.3170347 -10977.268
-	Order -3497.4978 4.3554688 -10865.315
-Unit
-	Type 2
-	Position -3515.1365 4.1058564 -10929.294
-	Order -3494.2117 4.3554688 -10866.693
-Unit
-	Type 4
-	Position -3483.317 4.3457837 -10976.178
-	Order -3492.858 4.3554688 -10864.008
-Unit
-	Type 2
-	Position -3507.4233 5.251641 -10962.315
-	Order -3491.8518 4.3554688 -10863.437
-Unit
-	Type 4
-	Position -3522.2751 4.8015623 -10992.078
-	Order -3494.0796 4.3554688 -10867.231
-Unit
-	Type 4
-	Position -3505.682 4.915319 -10952.418
-	Order -3490.7578 4.3554688 -10869.801
-Unit
-	Type 2
-	Position -3504.2148 4.8340673 -10944.917
-	Order -3497.666 4.3554688 -10864.25
-Unit
-	Type 4
-	Position -3518.0574 4.0447836 -10938.55
-	Order -3492.4744 4.3554688 -10862.972
-Unit
-	Type 4
-	Position -3528.335 4.438795 -10960.589
-	Order -3491.8894 4.3554688 -10864.937
-Unit
-	Type 4
-	Position -3522.9917 4.112877 -10954.521
-	Order -3498.1116 4.3554688 -10868.238
-Unit
-	Type 4
-	Position -3515.5862 4.148103 -10947.443
-	Order -3493.6067 4.3554688 -10868.198
-Unit
-	Type 2
-	Position -3513.1943 3.9628177 -10933.8
-	Order -3497.648 4.3554688 -10869.151
-Unit
-	Type 4
-	Position -3505.2495 5.2426395 -10966.614
-	Order -3496.4746 4.3554688 -10868.902
-Unit
-	Type 4
-	Position -3526.7158 4.6572914 -10972.886
-	Order -3497.9343 4.3554688 -10863.593
-Unit
-	Type 4
-	Position -3508.3877 5.228116 -10962.058
-	Order -3493.4636 4.3554688 -10864.342
-Unit
-	Type 4
-	Position -3513.8252 4.91863 -10965.436
-	Order -3490.8328 4.3554688 -10864.756
-Unit
-	Type 4
-	Position -3525.2559 4.705767 -10974.706
-	Order -3490.7822 4.3554688 -10866.721
-Unit
-	Type 4
-	Position -3521.9663 4.105591 -10949.114
-	Order -3496.4353 4.3554688 -10867.176
-Unit
-	Type 4
-	Position -3515.096 4.137479 -10942.048
-	Order -3494.0166 4.3554688 -10867.489
-Unit
-	Type 4
-	Position -3525.6719 4.2837825 -10957.92
-	Order -3493.8896 4.3554688 -10867.375
-Unit
-	Type 2
-	Position -3512.967 4.3079095 -10946.462
-	Order -3495.1003 4.3554688 -10864.999
-Unit
-	Type 4
-	Position -3505.35 4.7667775 -10940.771
-	Order -3497.669 4.3554688 -10869.569
-Unit
-	Type 4
-	Position -3519.3794 4.083191 -10952.214
-	Order -3494.323 4.3554688 -10868.03
-Unit
-	Type 4
-	Position -3528.6343 4.4815636 -10962.367
-	Order -3497.6606 4.3554688 -10867.288
-Unit
-	Type 2
-	Position -3515.4868 4.377545 -10953.89
-	Order -3490.265 4.3554688 -10867.005
-Unit
-	Type 4
-	Position -3515.2368 4.9941764 -10978.703
-	Order -3494.542 4.3554688 -10863.61
-Unit
-	Type 4
-	Position -3533.4849 4.7281733 -10971.19
-	Order -3492.8477 4.3554688 -10868.171
-Unit
-	Type 4
-	Position -3507.828 4.5612335 -10938.824
-	Order -3494.99 4.3554688 -10863.785
-Unit
-	Type 4
-	Position -3518.6345 4.820489 -10977.189
-	Order -3492.2183 4.3554688 -10863.883
-Unit
-	Type 4
-	Position -3510.1335 5.101402 -10961.951
-	Order -3494.641 4.3554688 -10870.1045
-Unit
-	Type 4
-	Position -3508.3845 4.602418 -10944.723
-	Order -3496.5515 4.3554688 -10864.11
-Unit
-	Type 4
-	Position -3518.3577 4.0328026 -10950.327
-	Order -3493.3726 4.3554688 -10868.631
-Unit
-	Type 4
-	Position -3524.2126 4.888471 -10980.4795
-	Order -3495.5054 4.3554688 -10867.632
-Unit
-	Type 4
-	Position -3518.2727 4.003263 -10948.583
-	Order -3493.038 4.3554688 -10865.211
-Unit
-	Type 4
-	Position -3522.347 4.9102902 -10980.696
-	Order -3496.1157 4.3554688 -10862.943
-Unit
-	Type 4
-	Position -3508.4124 5.3987803 -11000.315
-	Order -3490.855 4.3554688 -10865.042
-Unit
-	Type 4
-	Position -3528.524 4.81837 -10979.938
-	Order -3492.6926 4.3554688 -10863.504
-Unit
-	Type 4
-	Position -3528.9143 4.601179 -10988.416
-	Order -3491.1628 4.3554688 -10867.308
-Unit
-	Type 4
-	Position -3528.08 4.5697217 -10968.888
-	Order -3496.1206 4.3554688 -10867.905
-Unit
-	Type 4
-	Position -3493.8945 4.9602942 -10968.667
-	Order -3490.7307 4.3554688 -10867.584
-Unit
-	Type 4
-	Position -3517.7996 4.0224204 -10941.814
-	Order -3497.666 4.3554688 -10864.482
-Unit
-	Type 4
-	Position -3510.177 5.263228 -10979.233
-	Order -3492.097 4.3554688 -10868.141
-Unit
-	Type 4
-	Position -3483.461 4.507464 -10963.869
-	Order -3495.369 4.3554688 -10863.169
-Unit
-	Type 4
-	Position -3524.3845 4.2044406 -10949.065
-	Order -3492.3403 4.3554688 -10865.927
-Unit
-	Type 4
-	Position -3506.282 5.189711 -10966.156
-	Order -3495.568 4.3554688 -10864.17
-Unit
-	Type 4
-	Position -3526.9656 4.593019 -10969.342
-	Order -3491.343 4.3554688 -10865.586
-Unit
-	Type 4
-	Position -3482.531 4.2118235 -10979.267
-	Order -3495.408 4.3554688 -10863.902
-Unit
-	Type 4
-	Position -3522.3584 4.1099863 -10953.708
-	Order -3497.918 4.3554688 -10870.604
-Unit
-	Type 4
-	Position -3506.8315 4.6925035 -10944.651
-	Order -3492.2637 4.3554688 -10865.434
-Unit
-	Type 4
-	Position -3516.7668 4.88509 -10967.501
-	Order -3497.8252 4.3554688 -10865.181
-Unit
-	Type 4
-	Position -3516.2698 4.0842967 -10942.885
-	Order -3495.9539 4.3554688 -10868.653
-Unit
-	Type 4
-	Position -3512.4536 4.0104375 -10933.798
-	Order -3495.5637 4.3554688 -10867.813
-Unit
-	Type 4
-	Position -3512.7954 5.0687013 -10996.166
-	Order -3491.7478 4.3554688 -10866.278
-Unit
-	Type 4
-	Position -3530.7322 4.7585206 -10978.664
-	Order -3493.7617 4.3554688 -10864.246
-Unit
-	Type 4
-	Position -3516.463 4.080243 -10933.6875
-	Order -3497.7444 4.3554688 -10870.314
-Unit
-	Type 4
-	Position -3521.1782 4.328302 -10958.353
-	Order -3495.1047 4.3554688 -10869.098
-Unit
-	Type 4
-	Position -3519.0002 4.817501 -10967.356
-	Order -3493.4937 4.3554688 -10865.223
-Unit
-	Type 4
-	Position -3492.4075 4.979633 -10942.098
-	Order -3492.3813 4.3554688 -10867.196
-Unit
-	Type 4
-	Position -3510.9236 4.6525416 -10952.296
-	Order -3496.8975 4.3554688 -10868.9375
-Unit
-	Type 4
-	Position -3493.627 4.924881 -10945.469
-	Order -3492.9622 4.3554688 -10863.5625
-Unit
-	Type 4
-	Position -3498.1365 5.1742578 -10935.451
-	Order -3490.5137 4.3554688 -10870.214
-Unit
-	Type 4
-	Position -3519.1953 4.076664 -10942.863
-	Order -3496.3198 4.3554688 -10870.84
-Unit
-	Type 4
-	Position -3524.642 4.781175 -10985.073
-	Order -3494.9133 4.3554688 -10865.518
-Unit
-	Type 4
-	Position -3529.5215 4.773837 -10982.449
-	Order -3490.4956 4.3554688 -10869.798
-Unit
-	Type 4
-	Position -3527.3335 4.6750607 -10973.543
-	Order -3497.1455 4.3554688 -10866.769
-Unit
-	Type 4
-	Position -3515.5146 4.2418466 -10951
-	Order -3493.8062 4.3554688 -10868.168
-Unit
-	Type 2
-	Position -3508.6765 4.53037 -10940.635
-	Order -3490.6646 4.3554688 -10866.451
-Unit
-	Type 2
-	Position -3518.6416 4.0704036 -10940.9
-	Order -3492.648 4.3554688 -10863.573
-Unit
-	Type 4
-	Position -3531.363 4.722313 -10985.494
-	Order -3494.169 4.3554688 -10866.149
-Unit
-	Type 4
-	Position -3523.9646 4.7616477 -10985.931
-	Order -3490.2622 4.3554688 -10865.682
-Unit
-	Type 2
-	Position -3509.0056 5.3212695 -10974.977
-	Order -3494.8235 4.3554688 -10864.3545
-Unit
-	Type 4
-	Position -3501.377 5.1476297 -10933.864
-	Order -3491.3328 4.3554688 -10865.984
-Unit
-	Type 4
-	Position -3502.8289 5.0051084 -10938.311
-	Order -3498.0774 4.3554688 -10864.167
-Unit
-	Type 4
-	Position -3528.0981 4.810151 -10978.465
-	Order -3493.8562 4.3554688 -10867.142
-Unit
-	Type 2
-	Position -3501.3691 4.9095473 -10947.847
-	Order -3497.7253 4.3554688 -10868.057
-Unit
-	Type 4
-	Position -3523.2878 4.871172 -10979.853
-	Order -3496.8608 4.3554688 -10863.462
-Unit
-	Type 4
-	Position -3517.8997 4.020183 -10949.464
-	Order -3495.2053 4.3554688 -10866.227
-Unit
-	Type 2
-	Position -3516.2332 4.8398404 -10964.939
-	Order -3490.3887 4.3554688 -10870.6
-Unit
-	Type 4
-	Position -3501.7324 4.9194417 -10945.316
-	Order -3497.1094 4.3554688 -10870.873
-Unit
-	Type 4
-	Position -3503.321 5.3188605 -10965.52
-	Order -3490.6428 4.3554688 -10867.694
-Unit
-	Type 2
-	Position -3519.5566 4.0914288 -10943.425
-	Order -3494.299 4.3554688 -10870.622
-Unit
-	Type 4
-	Position -3510.182 5.2745132 -10979.933
-	Order -3497.7893 4.3554688 -10864.932
-Unit
-	Type 4
-	Position -3503.7942 5.076339 -10954.484
-	Order -3490.599 4.3554688 -10867.801
-Unit
-	Type 2
-	Position -3520.2156 4.0669665 -10951.7295
-	Order -3490.4604 4.3554688 -10869.1045
-Unit
-	Type 2
-	Position -3492 5.131459 -10907.503
-	Order -3494.8564 4.3554688 -10865.12
-Unit
-	Type 2
-	Position -3518.1553 4.65253 -10961.882
-	Order -3492.3435 4.3554688 -10866.394
-Unit
-	Type 4
-	Position -3530.794 4.759219 -10977.754
-	Order -3491.7178 4.3554688 -10866.019
-Unit
-	Type 2
-	Position -3510.5544 4.168842 -10932.612
-	Order -3498.0208 4.3554688 -10866.585
-Unit
-	Type 4
-	Position -3512.1643 4.0313764 -10931.846
-	Order -3491.2817 4.3554688 -10866.321
-Unit
-	Type 4
-	Position -3514.4028 4.1477175 -10941.02
-	Order -3491.1357 4.3554688 -10869.482
-Unit
-	Type 4
-	Position -3508.5088 4.908217 -10953.32
-	Order -3493.0305 4.3554688 -10863.246
-Unit
-	Type 4
-	Position -3519.3933 4.8380375 -10995.161
-	Order -3492.4683 4.3554688 -10870.386
-Unit
-	Type 4
-	Position -3509.904 4.221616 -10932.466
-	Order -3496.7415 4.3554688 -10865.377
-Unit
-	Type 4
-	Position -3512.8857 5.204136 -10987.33
-	Order -3496.186 4.3554688 -10868.568
-Unit
-	Type 4
-	Position -3507.9407 5.339949 -10976.451
-	Order -3493.7659 4.3554688 -10868.543
-Unit
-	Type 4
-	Position -3514.6772 5.0817056 -10992.595
-	Order -3492.5117 4.3554688 -10869.976
-Unit
-	Type 2
-	Position -3507.1396 4.827391 -10903.882
-	Order -3495.2898 4.3554688 -10864.806
-Unit
-	Type 4
-	Position -3517.3857 4.926039 -10980.25
-	Order -3498.062 4.3554688 -10865.327
-Unit
-	Type 4
-	Position -3523.4385 4.672841 -10972.457
-	Order -3495.2517 4.3554688 -10868.561
-Unit
-	Type 4
-	Position -3521.3948 4.432716 -10959.97
-	Order -3490.4077 4.3554688 -10869.628
-Unit
-	Type 4
-	Position -3520.7695 4.081291 -10948.2295
-	Order -3490.6257 4.3554688 -10866.464
-Unit
-	Type 4
-	Position -3517.7354 4.179374 -10953.604
-	Order -3494.0605 4.3554688 -10865.505
-Unit
-	Type 4
-	Position -3518.238 4.526161 -10959.9
-	Order -3497.1282 4.3554688 -10866.137
-Unit
-	Type 4
-	Position -3518.9915 4.731471 -10964.363
-	Order -3498.0593 4.3554688 -10866.036
-Unit
-	Type 4
-	Position -3514.0264 5.146679 -10989.205
-	Order -3496.4807 4.3554688 -10868.794
-Unit
-	Type 2
-	Position -3502.6555 5.170572 -10957.124
-	Order -3492.8442 4.3554688 -10868.712
-Unit
-	Type 4
-	Position -3532.085 4.719924 -10979.692
-	Order -3491.2385 4.3554688 -10869.097
-Unit
-	Type 4
-	Position -3507.9756 4.8438244 -10952.084
-	Order -3494.6204 4.3554688 -10865.512
-Unit
-	Type 4
-	Position -3529.496 4.463056 -10960.975
-	Order -3490.7212 4.3554688 -10866.734
-Unit
-	Type 4
-	Position -3529.7212 4.7897835 -10980.86
-	Order -3497.6343 4.3554688 -10867.893
-Unit
-	Type 4
-	Position -3501.7156 5.017495 -10938.9
-	Order -3492.994 4.3554688 -10869.32
-Unit
-	Type 4
-	Position -3521.1924 4.8202386 -10978.316
-	Order -3493.5178 4.3554688 -10867.577
-Unit
-	Type 4
-	Position -3524.954 4.173728 -10955.533
-	Order -3494.1836 4.3554688 -10863.139
-Unit
-	Type 4
-	Position -3511.8542 4.9583745 -10961.376
-	Order -3498.092 4.3554688 -10864.867
-Unit
-	Type 4
-	Position -3504.8237 5.7334857 -10979.631
-	Order -3496.958 4.3554688 -10870.6455
-Unit
-	Type 4
-	Position -3483.5798 4.6169863 -10957.826
-	Order -3494.2542 4.3554688 -10868.277
-Unit
-	Type 4
-	Position -3511.6719 5.2595954 -10987.718
-	Order -3493.1284 4.3554688 -10864.908
-Unit
-	Type 4
-	Position -3525.3303 4.7338552 -10986.082
-	Order -3496.5632 4.3554688 -10869.649
-Unit
-	Type 2
-	Position -3507.272 5.142656 -10967.768
-	Order -3493.5608 4.3554688 -10867.263
-Unit
-	Type 4
-	Position -3517.273 4.029875 -10943.721
-	Order -3492.2424 4.3554688 -10867.892
-Unit
-	Type 4
-	Position -3517.4187 4.879483 -10970.894
-	Order -3494.0813 4.3554688 -10868.357
-Unit
-	Type 2
-	Position -3515.0386 4.077531 -10939.383
-	Order -3494.16 4.3554688 -10864.676
-Unit
-	Type 4
-	Position -3519.4158 4.691105 -10963.75
-	Order -3492.1357 4.3554688 -10869.734
-Unit
-	Type 4
-	Position -3521.889 4.1658654 -10946.036
-	Order -3491.734 4.3554688 -10864.538
-Unit
-	Type 4
-	Position -3516.5024 4.0528007 -10939.164
-	Order -3497.4185 4.3554688 -10866.866
-Unit
-	Type 2
-	Position -3514.1218 4.050797 -10930.036
-	Order -3497.9958 4.3554688 -10865.634
-Unit
-	Type 4
-	Position -3501.152 5.112216 -10936.234
-	Order -3492.3694 4.3554688 -10867.62
-Unit
-	Type 2
-	Position -3511.941 4.401009 -10942.763
-	Order -3494.1702 4.3554688 -10865.674
-Unit
-	Type 4
-	Position -3519.38 4.146575 -10953.867
-	Order -3495.0625 4.3554688 -10867.548
-Unit
-	Type 4
-	Position -3520.605 4.93092 -10982.965
-	Order -3491.5466 4.3554688 -10864.45
-Unit
-	Type 4
-	Position -3517.2173 4.4223084 -10957.45
-	Order -3493.192 4.3554688 -10864.858
-Unit
-	Type 4
-	Position -3514.7688 3.9864419 -10935.893
-	Order -3491.8123 4.3554688 -10870.3955
-Unit
-	Type 4
-	Position -3521.3408 4.487509 -10960.744
-	Order -3494.4326 4.3554688 -10865.814
-Unit
-	Type 4
-	Position -3529.4336 4.728607 -10984.66
-	Order -3491.9934 4.3554688 -10867.292
-Unit
-	Type 4
-	Position -3520.0027 4.7829742 -10975.502
-	Order -3492.466 4.3554688 -10863.409
-Unit
-	Type 4
-	Position -3527.1624 4.8426013 -10982.105
-	Order -3495.7158 4.3554688 -10867.385
-Unit
-	Type 4
-	Position -3522.4263 4.783781 -10977.75
-	Order -3494.9705 4.3554688 -10864.16
-Unit
-	Type 2
-	Position -3518.8428 4.0413084 -10943.466
-	Order -3494.841 4.3554688 -10870.09
-Unit
-	Type 4
-	Position -3516.1436 4.561438 -10958.502
-	Order -3494.0396 4.3554688 -10870.388
-Unit
-	Type 4
-	Position -3523.7131 4.8157845 -10984.599
-	Order -3495.2139 4.3554688 -10870.257
-Unit
-	Type 4
-	Position -3504.6648 5.209543 -10957.571
-	Order -3494.9883 4.3554688 -10868.869
-Unit
-	Type 4
-	Position -3510.4385 5.328829 -10988.211
-	Order -3494.866 4.3554688 -10868.306
-Unit
-	Type 4
-	Position -3511.7898 5.14702 -10997.94
-	Order -3491.2634 4.3554688 -10869.483
-Unit
-	Type 4
-	Position -3525.1384 4.7663198 -10977.129
-	Order -3492.54 4.3554688 -10867.738
-Unit
-	Type 4
-	Position -3513.0728 5.161934 -10983.193
-	Order -3494.8313 4.3554688 -10869.311
-Unit
-	Type 4
-	Position -3529.9011 4.570947 -10967.653
-	Order -3491.6494 4.3554688 -10867.299
-Unit
-	Type 4
-	Position -3506.369 5.558737 -10979.18
-	Order -3497.412 4.3554688 -10867.748
-Unit
-	Type 4
-	Position -3532.5881 4.7114305 -10979.213
-	Order -3491.9443 4.3554688 -10869.204
-Unit
-	Type 2
-	Position -3493.4841 4.7739515 -10895.898
-Unit
-	Type 4
-	Position -3510.2786 5.3703074 -10990.926
-	Order -3498.1082 4.3554688 -10865.352
-Unit
-	Type 4
-	Position -3520.2756 4.770559 -10970.772
-	Order -3492.497 4.3554688 -10868.757
-Unit
-	Type 4
-	Position -3507.3257 5.480415 -10984.217
-	Order -3496.8994 4.3554688 -10867.034
-Unit
-	Type 4
-	Position -3491.9734 4.9830494 -10942.698
-	Order -3490.3489 4.3554688 -10867.629
-Unit
-	Type 4
-	Position -3520.3271 4.2777176 -10957.251
-	Order -3491.3428 4.3554688 -10869.436
-Unit
-	Type 4
-	Position -3506.6145 5.191638 -10969.744
-	Order -3496.8892 4.3554688 -10866.955
-Unit
-	Type 4
-	Position -3507.7522 5.4289904 -10985.707
-	Order -3494.427 4.3554688 -10868.824
-Unit
-	Type 2
-	Position -3506.5967 5.17613 -10967.433
-	Order -3493.6501 4.3554688 -10863.133
-Unit
-	Type 4
-	Position -3517.5947 3.9877973 -10946.125
-	Order -3495.1548 4.3554688 -10863.318
-Unit
-	Type 4
-	Position -3508.6875 5.1789737 -10973.1045
-	Order -3490.5662 4.3554688 -10864.814
-Unit
-	Type 2
-	Position -3496.628 4.7979097 -10896.794
-Unit
-	Type 4
-	Position -3503.7327 5.165092 -10955.938
-	Order -3497.1316 4.3554688 -10864.825
-Unit
-	Type 4
-	Position -3506.0679 5.5171337 -10976.539
-	Order -3494.564 4.3554688 -10868.133
-Unit
-	Type 4
-	Position -3517.8342 4.2723107 -10955.783
-	Order -3496.721 4.3554688 -10863.901
-Unit
-	Type 4
-	Position -3525.9062 4.7626443 -10984.96
-	Order -3497.8118 4.3554688 -10867.967
-Unit
-	Type 4
-	Position -3501.902 5.127517 -10934.767
-	Order -3490.9316 4.3554688 -10868.75
-Unit
-	Type 4
-	Position -3511.438 4.9976153 -10963.628
-	Order -3493.0044 4.3554688 -10867.168
-Unit
-	Type 4
-	Position -3503.5579 4.9919596 -10936.929
-	Order -3494.4546 4.3554688 -10869.71
-Unit
-	Type 4
-	Position -3517.8823 4.2366633 -10955.115
-	Order -3496.484 4.3554688 -10863.807
-Unit
-	Type 4
-	Position -3518.0134 4.030264 -10940.1
-	Order -3495.3474 4.3554688 -10866.802
-Unit
-	Type 2
-	Position -3510.307 5.0749054 -10962.652
-	Order -3490.6082 4.3554688 -10865.258
-Unit
-	Type 4
-	Position -3518.7698 4.44974 -10959.056
-	Order -3495.066 4.3554688 -10866.493
-Unit
-	Type 2
-	Position -3522.8606 4.259493 -10944.99
-	Order -3490.9766 4.3554688 -10867.672
-Unit
-	Type 4
-	Position -3518.2944 4.844247 -10970.393
-	Order -3493.571 4.3554688 -10870.403
-Unit
-	Type 2
-	Position -3509.6453 4.6616 -10950.913
-	Order -3497.5923 4.3554688 -10864.571
-Unit
-	Type 4
-	Position -3519.653 4.715026 -10964.513
-	Order -3497.578 4.3554688 -10865.291
-Unit
-	Type 4
-	Position -3521.5654 4.1271105 -10946.978
-	Order -3496.063 4.3554688 -10866.682
-Unit
-	Type 4
-	Position -3524.215 4.1358857 -10953.893
-	Order -3492.9148 4.3554688 -10863.483
-Unit
-	Type 4
-	Position -3530.5137 4.6814857 -10972.7705
-	Order -3496.9724 4.3554688 -10863.234
-Unit
-	Type 4
-	Position -3519.1392 4.2344427 -10955.973
-	Order -3492.4954 4.3554688 -10866.272
-Unit
-	Type 4
-	Position -3514.9233 4.071357 -10930.545
-	Order -3495.527 4.3554688 -10870.379
-Unit
-	Type 4
-	Position -3516.7668 5.0999346 -10985.468
-	Order -3493.8538 4.3554688 -10866.009
-Unit
-	Type 4
-	Position -3503.2192 4.8881617 -10946.954
-	Order -3497.1077 4.3554688 -10866.516
-Unit
-	Type 2
-	Position -3504.9692 5.261526 -10961.136
-	Order -3493.7434 4.3554688 -10862.992
-Unit
-	Type 4
-	Position -3507.4963 5.471331 -10983.156
-	Order -3496.5718 4.3554688 -10867.792
-Unit
-	Type 2
-	Position -3492.6094 4.962931 -10942.914
-	Order -3490.4924 4.3554688 -10865.507
-Unit
-	Type 4
-	Position -3520.7144 4.1798267 -10943.919
-	Order -3490.5793 4.3554688 -10870.71
-Unit
-	Type 4
-	Position -3530.1868 4.644853 -10988.049
-	Order -3495.1846 4.3554688 -10864.438
-Unit
-	Type 4
-	Position -3514.5532 4.009706 -10933.568
-	Order -3492.5684 4.3554688 -10868.656
-Unit
-	Type 4
-	Position -3509.1304 5.457817 -10992.999
-	Order -3491.3035 4.3554688 -10867.559
-Unit
-	Type 4
-	Position -3527.4639 4.311296 -10957.898
-	Order -3496.2454 4.3554688 -10870.61
-Unit
-	Type 4
-	Position -3510.2983 5.3272734 -10987.361
-	Order -3492.447 4.3554688 -10866.154
-Unit
-	Type 4
-	Position -3496.4702 6.289704 -10981.737
-	Order -3497.508 4.3554688 -10868.535
-Unit
-	Type 4
-	Position -3518.868 4.982207 -10983.737
-	Order -3490.4414 4.3554688 -10863.648
-Unit
-	Type 2
-	Position -3498.5408 5.169896 -10936.159
-	Order -3496.0325 4.3554688 -10863.802
-Unit
-	Type 4
-	Position -3520.3865 4.3422275 -10958.21
-	Order -3494.118 4.3554688 -10864.371
-Unit
-	Type 4
-	Position -3506.964 4.7174816 -10947.53
-	Order -3492.9087 4.3554688 -10863.88
-Unit
-	Type 4
-	Position -3521.263 4.7696424 -10994.425
-	Order -3490.884 4.3554688 -10865.538
-Unit
-	Type 4
-	Position -3520.0017 4.977409 -10986.784
-	Order -3495.352 4.3554688 -10866.004
-Unit
-	Type 2
-	Position -3501.3623 5.0167317 -10943.359
-	Order -3493.6047 4.3554688 -10865.724
-Unit
-	Type 4
-	Position -3517.3928 4.039715 -10937.903
-	Order -3495.661 4.3554688 -10864.708
-Unit
-	Type 4
-	Position -3518.993 4.1178155 -10953.096
-	Order -3494.9475 4.3554688 -10863.143
-Unit
-	Type 4
-	Position -3530.0828 4.6533275 -10971.938
-	Order -3492.4983 4.3554688 -10865.754
-Unit
-	Type 4
-	Position -3507.014 5.4233403 -10976.377
-	Order -3491.87 4.3554688 -10866.824
-Unit
-	Type 4
-	Position -3508.0745 5.5362406 -10990.212
-	Order -3491.5967 4.3554688 -10869.34
-Unit
-	Type 4
-	Position -3516.3276 4.83101 -10998.593
-	Order -3490.8025 4.3554688 -10867.838
-Unit
-	Type 4
-	Position -3519.1804 4.019232 -10947.877
-	Order -3496.0137 4.3554688 -10868.768
-Unit
-	Type 2
-	Position -3521.521 4.273871 -10941.435
-	Order -3491.0112 4.3554688 -10868.922
-Unit
-	Type 4
-	Position -3517.6074 4.041703 -10936.982
-	Order -3495.1433 4.3554688 -10870.643
-Unit
-	Type 4
-	Position -3508.0898 5.10095 -10967.546
-	Order -3492.1025 4.3554688 -10863.712
-Unit
-	Type 4
-	Position -3518.5984 4.9559207 -10982.48
-	Order -3497.842 4.3554688 -10863.256
-Unit
-	Type 4
-	Position -3524.221 4.74066 -10986.718
-	Order -3496.5989 4.3554688 -10865.778
-Unit
-	Type 4
-	Position -3512.0762 4.0406537 -10932.573
-	Order -3490.8098 4.3554688 -10868.011
-Unit
-	Type 4
-	Position -3526.3416 4.205924 -10954.948
-	Order -3495.448 4.3554688 -10864.722
-Unit
-	Type 4
-	Position -3520.8655 4.753057 -10974.266
-	Order -3491.3743 4.3554688 -10870.411
-Unit
-	Type 4
-	Position -3521.4175 4.1680846 -10945.098
-	Order -3493.317 4.3554688 -10863.64
-Unit
-	Type 4
-	Position -3514.3577 4.50138 -10954.491
-	Order -3490.758 4.3554688 -10863.512
-Unit
-	Type 4
-	Position -3505.901 5.264106 -10961.329
-	Order -3491.1973 4.3554688 -10864.189
-Unit
-	Type 4
-	Position -3490.454 4.9692945 -10949.696
-	Order -3495.6282 4.3554688 -10865.485
-Unit
-	Type 4
-	Position -3528.2336 4.7354856 -10975.137
-	Order -3496.4185 4.3554688 -10865.386
-Unit
-	Type 4
-	Position -3515.2556 4.9690757 -10971.234
-	Order -3495.4275 4.3554688 -10868.221
-Unit
-	Type 4
-	Position -3518.18 4.8437433 -10977.816
-	Order -3495.7446 4.3554688 -10870.348
-Unit
-	Type 4
-	Position -3482.717 4.410595 -10969.097
-	Order -3493.5657 4.3554688 -10869.67
-Unit
-	Type 4
-	Position -3506.9758 5.6227245 -10991.146
-	Order -3491.401 4.3554688 -10870.126
-Unit
-	Type 2
-	Position -3517.6343 4.335055 -10956.624
-	Order -3491.709 4.3554688 -10863.23
-Unit
-	Type 4
-	Position -3496.4841 5.863898 -10975.262
-	Order -3491.7607 4.3554688 -10868.332
-Unit
-	Type 4
-	Position -3514.9143 3.998341 -10936.656
-	Order -3492.2034 4.3554688 -10869.055
-Unit
-	Type 2
-	Position -3504.5923 4.8178425 -10946.595
-	Order -3496.2644 4.3554688 -10866.512
-Unit
-	Type 4
-	Position -3528.8362 4.4584627 -10961.116
-	Order -3492.42 4.3554688 -10867.761
-Unit
-	Type 4
-	Position -3518.314 4.792144 -10997.048
-	Order -3494.6377 4.3554688 -10866.743
+	Type 11
+	Position -3408 6.5429688 -10866
+	Charge 0.5
+Structure
+	Id 513
+	Type 26
+	Position -3409 6 -10869
+	Charge 40
+Structure
+	Id 514
+	Type 17
+	Position -3507 4.82666 -10867
+Structure
+	Id 515
+	Type 28
+	Position -3509 6.737695 -10867
+Structure
+	Id 516
+	Type 29
+	Position -3508 6.551758 -10870
+Structure
+	Id 517
+	Type 13
+	Position -3507 5.5898438 -10873
+Structure
+	Id 518
+	Type 5
+	Position -3432 5.572754 -10850
+Structure
+	Id 519
+	Type 5
+	Position -3428 5.4975586 -10850
+Structure
+	Id 520
+	Type 5
+	Position -3432 5.6831055 -10846
+Structure
+	Id 521
+	Type 5
+	Position -3432 5.658203 -10842
+Structure
+	Id 522
+	Type 5
+	Position -3436 5.520508 -10842
+Structure
+	Id 523
+	Type 5
+	Position -3436 5.637207 -10846
+Structure
+	Id 525
+	Type 5
+	Position -3440 5.6376953 -10846
+Structure
+	Id 526
+	Type 5
+	Position -3440 5.739746 -10850
+Structure
+	Id 527
+	Type 5
+	Position -3440 5.6831055 -10854
+Structure
+	Id 528
+	Type 5
+	Position -3444 5.479492 -10854
+Structure
+	Id 529
+	Type 5
+	Position -3444 5.544922 -10850
+Structure
+	Id 530
+	Type 5
+	Position -3444 5.604492 -10846
+Structure
+	Id 531
+	Type 5
+	Position -3444 5.5546875 -10842
+Structure
+	Id 532
+	Type 5
+	Position -3412 5.0625 -10864
+	Charge 29.757526
+Structure
+	Id 533
+	Type 5
+	Position -3416 5.0688477 -10864
+	Charge 30
+Structure
+	Id 534
+	Type 5
+	Position -3420 5.1435547 -10864
+	Charge 30
+Structure
+	Id 535
+	Type 5
+	Position -3420 5.2192383 -10860
+	Charge 30
+Structure
+	Id 536
+	Type 5
+	Position -3412 4.9746094 -10868
+	Charge 30
+Structure
+	Id 537
+	Type 5
+	Position -3416 4.976074 -10868
+	Charge 30
+Structure
+	Id 538
+	Type 5
+	Position -3420 5.0356445 -10868
+	Charge 30
+Structure
+	Id 539
+	Type 5
+	Position -3448 5.501465 -10842
+Structure
+	Id 540
+	Type 5
+	Position -3448 5.470215 -10846
+Structure
+	Id 541
+	Type 5
+	Position -3448 5.3876953 -10850
+Structure
+	Id 542
+	Type 13
+	Position -3447 5.84375 -10855
+Structure
+	Id 543
+	Type 11
+	Position -3452 6.991699 -10840
+	Charge 0.5
+Structure
+	Id 544
+	Type 5
+	Position -3428 5.270508 -10864
+Structure
+	Id 545
+	Type 5
+	Position -3428 5.2578125 -10868
+Structure
+	Id 546
+	Type 5
+	Position -3432 5.3134766 -10864
+Structure
+	Id 547
+	Type 5
+	Position -3432 5.314453 -10868
+Structure
+	Id 548
+	Type 5
+	Position -3436 5.362793 -10864
+Structure
+	Id 549
+	Type 5
+	Position -3436 5.364746 -10868
+Structure
+	Id 550
+	Type 5
+	Position -3440 5.375 -10864
+Structure
+	Id 551
+	Type 5
+	Position -3440 5.373535 -10868
+Structure
+	Id 552
+	Type 5
+	Position -3444 5.426758 -10864
+Structure
+	Id 553
+	Type 5
+	Position -3444 5.371582 -10868
+Structure
+	Id 554
+	Type 5
+	Position -3448 5.330078 -10864
+Structure
+	Id 555
+	Type 21
+	Position -3440 6.4780273 -10860
+Structure
+	Id 556
+	Type 21
+	Position -3444 6.48291 -10860
+Structure
+	Id 557
+	Type 21
+	Position -3448 6.3598633 -10860
+Structure
+	Id 558
+	Type 13
+	Position -3455 5.4526367 -10877
+Structure
+	Id 559
+	Type 17
+	Position -3463 4.8862305 -10847
+Structure
+	Id 560
+	Type 24
+	Position -3465 4.52317 -10847
+Structure
+	Id 561
+	Type 24
+	Position -3471 4.267924 -10871
+Structure
+	Id 562
+	Type 24
+	Position -3469 4.266401 -10871
+Structure
+	Id 563
+	Type 2
+	Position -3396 7.4418945 -10824
+	Fuel 30
+Structure
+	Id 564
+	Type 17
+	Position -3407 5.36084 -10845
+Structure
+	Id 565
+	Type 17
+	Position -3409 5.3549805 -10845
+Structure
+	Id 566
+	Type 17
+	Position -3409 5.3969727 -10843
+Structure
+	Id 567
+	Type 17
+	Position -3409 5.4370117 -10841
+Structure
+	Id 568
+	Type 17
+	Position -3409 5.465332 -10839
+Structure
+	Id 569
+	Type 13
+	Position -3411 6.1206055 -10843
+	Minerals 30
+Structure
+	Id 570
+	Type 17
+	Position -3409 5.4941406 -10837
+Structure
+	Id 571
+	Type 17
+	Position -3407 5.48291 -10837
+Structure
+	Id 572
+	Type 17
+	Position -3405 5.465332 -10837
+Structure
+	Id 573
+	Type 17
+	Position -3403 5.445801 -10837
+Structure
+	Id 574
+	Type 17
+	Position -3403 5.486328 -10835
+Structure
+	Id 575
+	Type 17
+	Position -3403 5.5341797 -10833
+Structure
+	Id 576
+	Type 17
+	Position -3403 5.583008 -10831
+Structure
+	Id 577
+	Type 17
+	Position -3403 5.6347656 -10829
+Structure
+	Id 578
+	Type 17
+	Position -3403 5.686035 -10827
+Structure
+	Id 579
+	Type 17
+	Position -3401 5.6835938 -10827
+Structure
+	Id 581
+	Type 17
+	Position -3399 5.6816406 -10827
+Structure
+	Id 582
+	Type 17
+	Position -3397 5.675293 -10827
+Structure
+	Id 583
+	Type 10
+	Position -3407 6.741699 -10835
+Structure
+	Id 584
+	Type 10
+	Position -3409 6.7592773 -10835
+Structure
+	Id 585
+	Type 10
+	Position -3411 6.7680664 -10835
+Structure
+	Id 586
+	Type 10
+	Position -3413 6.7753906 -10835
+Structure
+	Id 587
+	Type 28
+	Position -3415 7.3651366 -10837
+Structure
+	Id 588
+	Type 28
+	Position -3413 7.351953 -10837
+Structure
+	Id 589
+	Type 28
+	Position -3411 7.348047 -10837
+Structure
+	Id 590
+	Type 3
+	Position -3486 6.480957 -10860
+	Charge 1495.2952
+Structure
+	Id 591
+	Type 11
+	Position -3508 6.677246 -10860
+	Charge 0.5
+Structure
+	Id 592
+	Type 27
+	Position -3508 6.5512695 -10864
+	Charge 30
+Structure
+	Id 593
+	Type 29
+	Position -3476 6.729004 -10850
+Structure
+	Id 594
+	Type 11
+	Position -3480 6.6401367 -10850
+	Charge 0.5
+Structure
+	Id 595
+	Type 21
+	Position -3456 6.378418 -10860
+Structure
+	Id 596
+	Type 21
+	Position -3456 6.305176 -10864
+Structure
+	Id 597
+	Type 21
+	Position -3456 6.1572266 -10868
+Structure
+	Id 598
+	Type 21
+	Position -3456 6.0234375 -10872
+Structure
+	Id 599
+	Type 21
+	Position -3460 6.373535 -10860
+Structure
+	Id 600
+	Type 21
+	Position -3460 6.3222656 -10864
+Structure
+	Id 601
+	Type 21
+	Position -3460 6.2246094 -10868
+Structure
+	Id 602
+	Type 17
+	Position -3463 5.194336 -10859
+Structure
+	Id 603
+	Type 17
+	Position -3463 5.129883 -10861
+Structure
+	Id 604
+	Type 17
+	Position -3463 5.095215 -10863
+Structure
+	Id 605
+	Type 17
+	Position -3463 5.0683594 -10865
+Structure
+	Id 606
+	Type 17
+	Position -3463 5.036133 -10867
+Structure
+	Id 607
+	Type 17
+	Position -3463 4.992676 -10869
+Structure
+	Id 608
+	Type 21
+	Position -3466 5.5932617 -10860
+Structure
+	Id 609
+	Type 21
+	Position -3466 5.6875 -10864
+Structure
+	Id 610
+	Type 21
+	Position -3466 5.4711914 -10868
+Structure
+	Id 611
+	Type 5
+	Position -3428 5.248047 -10872
+Structure
+	Id 612
+	Type 5
+	Position -3432 5.388672 -10872
+Structure
+	Id 613
+	Type 5
+	Position -3436 5.429199 -10872
+Structure
+	Id 614
+	Type 5
+	Position -3440 5.270996 -10872
+Structure
+	Id 615
+	Type 5
+	Position -3444 5.2055664 -10872
+Structure
+	Id 616
+	Type 27
+	Position -3432 6.888672 -10880
+	Charge 30
+Structure
+	Id 617
+	Type 11
+	Position -3414 6.434082 -10872
+	Charge 0.5
+Structure
+	Id 618
+	Type 11
+	Position -3436 6.989746 -10880
+	Charge 0.5
+Structure
+	Id 619
+	Type 17
+	Position -3413 5.2578125 -10849
+Structure
+	Id 620
+	Type 17
+	Position -3413 5.3066406 -10847
+Structure
+	Id 621
+	Type 17
+	Position -3413 5.3481445 -10845
+Structure
+	Id 622
+	Type 17
+	Position -3411 5.3515625 -10845
+Structure
+	Id 623
+	Type 17
+	Position -3407 5.251953 -10849
+Structure
+	Id 624
+	Type 17
+	Position -3407 5.315918 -10847
+Structure
+	Id 625
+	Type 13
+	Position -3405 5.9750977 -10849
+	Minerals 29.138819
+Structure
+	Id 626
+	Type 1
+	Position -3416 6.9414062 -10850
+	Charge 30
+	Fuel 16.100056
+Structure
+	Id 627
+	Type 1
+	Position -3416 7.041992 -10846
+	Fuel 9.090358
+Structure
+	Id 628
+	Type 27
+	Position -3412 7.1601562 -10840
+	Charge 30
+Structure
+	Id 629
+	Type 11
+	Position -3416 7.1640625 -10840
+	Charge 0.5
+Structure
+	Id 630
+	Type 11
+	Position -3428 7.2143555 -10840
+	Charge 0.5
+Structure
+	Id 631
+	Type 27
+	Position -3440 7.0185547 -10840
+	Blueprint true
+	Health 169.57402
+Structure
+	Id 632
+	Type 5
+	Position -3452 5.4921875 -10844
+	Blueprint true
+	Health 32.99362
+Structure
+	Id 633
+	Type 5
+	Position -3452 5.4174805 -10848
+Structure
+	Id 634
+	Type 5
+	Position -3452 5.3588867 -10852
+Structure
+	Id 635
+	Type 5
+	Position -3432 5.3935547 -10876
+Structure
+	Id 636
+	Type 5
+	Position -3436 5.4799805 -10876
+Structure
+	Id 637
+	Type 5
+	Position -3440 5.1401367 -10876
+Structure
+	Id 638
+	Type 5
+	Position -3444 5.024414 -10876
+Structure
+	Id 639
+	Type 5
+	Position -3440 5.081543 -10880
+Structure
+	Id 640
+	Type 5
+	Position -3444 4.932129 -10880
+Structure
+	Id 641
+	Type 5
+	Position -3420 5.415039 -10854
+Structure
+	Id 643
+	Type 5
+	Position -3420 5.486328 -10850
+	Charge 21.471436
+Structure
+	Id 644
+	Type 5
+	Position -3420 5.5791016 -10846
+	Charge 27.420128
+Structure
+	Id 645
+	Type 27
+	Position -3450 6.543457 -10872
+	Charge 30
+Structure
+	Id 646
+	Type 12
+	Position -3450 7.686035 -10868
+	Fuel 190
+Structure
+	Id 647
+	Type 13
+	Position -3451 5.801758 -10865
+Structure
+	Id 648
+	Type 13
+	Position -3451 5.841797 -10863
+Structure
+	Id 649
+	Type 13
+	Position -3505 5.8222656 -10855
+	Minerals 19.849998
+Structure
+	Id 650
+	Type 13
+	Position -3507 5.7836914 -10857
+Structure
+	Id 651
+	Type 13
+	Position -3495 5.291504 -10865
+Structure
+	Id 652
+	Type 21
+	Position -3484 5.630371 -10870
+Structure
+	Id 653
+	Type 21
+	Position -3484 5.504883 -10874
+Structure
+	Id 654
+	Type 11
+	Position -3480 6.354492 -10870
+	Charge 0.5
+Structure
+	Id 655
+	Type 27
+	Position -3476 6.7490234 -10864
+	Charge 30
+Structure
+	Id 656
+	Type 6
+	Position -3486 6.3276367 -10864
+	Fuel 0.0022688913
+	Minerals 30
+Structure
+	Id 657
+	Type 6
+	Position -3482 6.555176 -10860
+	Fuel 0.0035528094
+	Minerals 30
+Structure
+	Id 658
+	Type 12
+	Position -3482 7.4536133 -10864
+	Fuel 100
+Structure
+	Id 659
+	Type 17
+	Position -3485 4.6328125 -10867
+Structure
+	Id 660
+	Type 17
+	Position -3483 4.706543 -10867
+Structure
+	Id 661
+	Type 17
+	Position -3481 4.822754 -10867
+Structure
+	Id 662
+	Type 17
+	Position -3479 4.9379883 -10867
+Structure
+	Id 663
+	Type 17
+	Position -3479 4.96875 -10865
+Structure
+	Id 664
+	Type 17
+	Position -3479 4.9882812 -10863
+Structure
+	Id 665
+	Type 17
+	Position -3479 4.998535 -10861
+Structure
+	Id 666
+	Type 17
+	Position -3479 4.9697266 -10859
+Structure
+	Id 667
+	Type 6
+	Position -3476 6.7387695 -10860
+Unit
+	Type 0
+	Position -3561.844 7.9662657 -10731.616
+	Order -3492.3582 4.3554688 -10858.024
+Unit
+	Type 10
+	Position -3561.4026 7.893909 -10737.18
+	Order -3494.2644 4.3554688 -10859.293
+Unit
+	Type 0
+	Position -3557.3638 7.7249193 -10741.838
+	Order -3495.159 4.3554688 -10859.687
+Unit
+	Type 4
+	Position -3567.763 7.7849784 -10730.658
+	Order -3493.6619 4.3554688 -10857.91
+Unit
+	Type 10
+	Position -3568.23 7.8977304 -10735.536
+	Order -3495.575 4.3554688 -10854.1045
+Unit
+	Type 4
+	Position -3559.4587 7.5036464 -10743.034
+	Order -3494.3313 4.3554688 -10853.918
+Unit
+	Type 0
+	Position -3560.4856 7.953405 -10732.408
+	Order -3495.538 4.3554688 -10857.06
+Unit
+	Type 4
+	Position -3567.2542 7.7558284 -10732.915
+	Order -3496.1777 4.3554688 -10859.744
+Unit
+	Type 0
+	Position -3564.6328 7.875576 -10728.523
+	Order -3496.2053 4.3554688 -10854.867
+Unit
+	Type 4
+	Position -3565.1897 7.603324 -10739.675
+	Order -3492.8079 4.3554688 -10854.292
+Unit
+	Type 0
+	Position -3570.3489 7.7522445 -10738.129
+	Order -3495.8032 4.3554688 -10858.689
+Unit
+	Type 10
+	Position -3566.806 7.882005 -10736.54
+	Order -3495.7427 4.3554688 -10856.519
+Unit
+	Type 4
+	Position -3560.4036 7.4374638 -10744.887
+	Order -3494.811 4.3554688 -10855.876
+Unit
+	Type 4
+	Position -3554.1792 7.6847615 -10739.292
+	Order -3498.9683 4.3554688 -10852.968
+Unit
+	Type 10
+	Position -3557.3433 8.056575 -10732.478
+	Order -3496.8945 4.3554688 -10856.7705
+Unit
+	Type 4
+	Position -3568.444 7.6106224 -10742.174
+	Order -3492.518 4.3554688 -10855.582
+Unit
+	Type 10
+	Position -3565.229 7.830516 -10741.596
+	Order -3498.0918 4.3554688 -10852.563
+Unit
+	Type 0
+	Position -3555.0938 7.909521 -10733.568
+	Order -3492.747 4.3554688 -10854.984
+Unit
+	Type 4
+	Position -3568.7546 7.7550645 -10732.756
+	Order -3493.2502 4.3554688 -10855.183
+Unit
+	Type 1
+	Position -3560.0398 8.090099 -10736.978
+	Order -3492.6487 4.3554688 -10858.962
+Unit
+	Type 4
+	Position -3565.604 7.796864 -10730.78
+	Order -3493.0117 4.3554688 -10859.655
+Unit
+	Type 4
+	Position -3566.8057 7.607875 -10739.291
+	Order -3495.672 4.3554688 -10855.706
+Unit
+	Type 0
+	Position -3554.3528 7.834185 -10736.454
+	Order -3497.6118 4.3554688 -10859.591
+Unit
+	Type 4
+	Position -3560.8914 7.59281 -10740.121
+	Order -3495.4841 4.3554688 -10858.904
+Unit
+	Type 4
+	Position -3565.8086 7.7078342 -10734.474
+	Order -3497.3083 4.3554688 -10855.811
+Unit
+	Type 10
+	Position -3565.3992 7.816339 -10743.916
+	Order -3494.4097 4.3554688 -10858.341
+Unit
+	Type 0
+	Position -3558.4717 7.648478 -10743.036
+	Order -3497.5623 4.3554688 -10853.282
+Unit
+	Type 0
+	Position -3559.342 7.841524 -10735.234
+	Order -3496.0073 4.3554688 -10855.131
+Unit
+	Type 10
+	Position -3560.572 8.022801 -10728.535
+	Order -3499.8813 4.3554688 -10852.5
+Unit
+	Type 1
+	Position -3559.3362 8.2817955 -10731.537
+	Order -3496.861 4.3554688 -10858.192
+Unit
+	Type 4
+	Position -3562.329 7.537001 -10742.508
+	Order -3498.071 4.3554688 -10857.633
+Unit
+	Type 10
+	Position -3562.5952 8.017733 -10729.435
+	Order -3492.693 4.3554688 -10851.999
+Unit
+	Type 0
+	Position -3563.4087 7.8495765 -10735.316
+	Order -3498.4004 4.3554688 -10853.7
+Unit
+	Type 10
+	Position -3564.8525 8.050367 -10731.908
+	Order -3493.9858 4.3554688 -10857.73
+Unit
+	Type 4
+	Position -3556.454 7.639394 -10738.874
+	Order -3494.8813 4.3554688 -10858.666
+Unit
+	Type 4
+	Position -3569.6528 7.604641 -10737.192
+	Order -3496.4795 4.3554688 -10855.068
+Unit
+	Type 4
+	Position -3556.684 7.825098 -10731.811
+	Order -3498.9382 4.3554688 -10853.28
+Unit
+	Type 4
+	Position -3555.278 7.668295 -10736.808
+	Order -3492.4688 4.3554688 -10855.306
+Unit
+	Type 4
+	Position -3562.075 7.7597 -10733.529
+	Order -3497.4614 4.3554688 -10854.891
+Unit
+	Type 10
+	Position -3558.5215 8.072853 -10729.555
+	Order -3493.5544 4.3554688 -10853.734
+Unit
+	Type 0
+	Position -3570.0266 7.83751 -10734.341
+	Order -3494.8413 4.3554688 -10856.662
+Unit
+	Type 0
+	Position -3553.7048 7.8700447 -10735.019
+	Order -3495.9666 4.3554688 -10858.442
+Unit
+	Type 4
+	Position -3564.9202 7.742415 -10733.667
+	Order -3499.5186 4.3554688 -10852.695
+Unit
+	Type 4
+	Position -3561.521 7.443389 -10745.343
+	Order -3493.69 4.3554688 -10856.909
+Unit
+	Type 4
+	Position -3564.928 7.7925916 -10730.581
+	Order -3497.0408 4.3554688 -10859.452
+Unit
+	Type 4
+	Position -3556.9744 7.6120257 -10741.149
+	Order -3493.7146 4.3554688 -10857.053
+Unit
+	Type 4
+	Position -3561.8252 7.6280155 -10738.167
+	Order -3493.9346 4.3554688 -10858.384
+Unit
+	Type 10
+	Position -3565.4973 7.9313793 -10735.305
+	Order -3499.7234 4.3554688 -10856.344
+Unit
+	Type 4
+	Position -3560.379 7.8301253 -10731.238
+	Order -3497.1204 4.3554688 -10857.085
+Unit
+	Type 4
+	Position -3559.598 7.829044 -10730.52
+	Order -3496.359 4.3554688 -10853.713
+Unit
+	Type 0
+	Position -3565.1702 7.7426496 -10740.51
+	Order -3497.1526 4.3554688 -10852.291
+Unit
+	Type 4
+	Position -3563.5527 7.54665 -10742.527
+	Order -3496.9272 4.3554688 -10854.361
+Unit
+	Type 0
+	Position -3569.489 7.940751 -10731.375
+	Order -3497.6592 4.3554688 -10854.494
+Unit
+	Type 4
+	Position -3566.513 7.7946115 -10731.815
+	Order -3497.8596 4.3554688 -10856.306
+Unit
+	Type 0
+	Position -3555.3313 7.809196 -10740.266
+	Order -3496.4768 4.3554688 -10855.724
+Unit
+	Type 4
+	Position -3566.2139 7.5874233 -10742.903
+	Order -3499.4482 4.3554688 -10851.862
+Unit
+	Type 1
+	Position -3565.4497 8.092022 -10736.699
+	Order -3499.2795 4.3554688 -10859.356
+Unit
+	Type 4
+	Position -3562.112 7.6612716 -10736.593
+	Order -3494.4119 4.3554688 -10858.324

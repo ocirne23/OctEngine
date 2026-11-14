@@ -66,6 +66,7 @@ static constexpr EStructureType c_combatItems[] = {
     EStructureType::Turret,
     EStructureType::Searchlight,
     EStructureType::Barracks,
+    EStructureType::Armory,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;

@@ -86,7 +86,7 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
 
 ### Q — Combat
 
-**Emitter · Bastion · Lance · Wall · Gate · Turret · Searchlight · Barracks** (the Bridge is with the Road, on the Logistics page)
+**Emitter · Bastion · Lance · Wall · Gate · Turret · Searchlight · Barracks · Armory** (the Armory: see The Armory in [Economy.md](Economy.md); the Bridge is with the Road, on the Logistics page)
 
 * **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (26 m), a
   shadow too. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed

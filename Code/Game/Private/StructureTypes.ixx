@@ -10,7 +10,7 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, Count };
 
 // LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
 // walk through: its collider is Layer Gate, which leaves the Player layer out).
@@ -22,7 +22,7 @@ export constexpr bool isLineType(EStructureType t)
 // (StructureSystem::groundFit), and its prefab reaches down to the bed. Every other type refuses water.
 export constexpr bool standsOnWater(EStructureType t)
 {
-    return t == EStructureType::Bridge || t == EStructureType::Gate;
+    return t == EStructureType::Bridge || t == EStructureType::Gate || t == EStructureType::Walkway;
 }
 // BREACHABLE by the units' flow field (Nav "Wall breach cost"): they walk into it and chew it down. The Walkway too:
 // a line of it behind a wall must not close a base off.

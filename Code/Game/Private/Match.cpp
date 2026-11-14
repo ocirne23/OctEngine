@@ -722,6 +722,9 @@ void GameMatch::update(float deltaSec)
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
+    for (const StructureSystem::GuardShot& shot : m_structures.guardShots()) // the Armory guards' arrows: a hit line each
+        m_npcs.addBeam(shot.from, shot.to, NpcSystem::EBeamKind::MeleeHit);
+    m_structures.guardShots().clear();
     if (m_isServer) // strikes (turret lightning, melee hits) are pure visuals on clients: broadcast this frame's
     {
         ProfileScope beamScope("Strike broadcast", EProfileCategory::Game);

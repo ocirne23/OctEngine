@@ -181,7 +181,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
     // Solar 5, Fabricator 6, Bastion 7, Lance 8, Barracks 9, Wall 10, Turret 11, MineralSilo 12, Constructor 13, Base 14,
     // CablePower 15, CablePipe 16, CableConveyor 17, CrossingPower 18, CrossingPipe 19, CrossingConveyor 20, House 21,
-    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26, Searchlight 27, Walkway 28.
+    // MedicStation 22, Quarry 23, Bridge 24, Gate 25, Lens 26, Searchlight 27, Walkway 28, Armory 29.
+    Tweak::floatVar("Game/Economy", "Armory cost", &s.costs[29], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[27], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Walkway cost (per segment)", &s.costs[28], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Lens cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
@@ -213,7 +214,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
             "Barracks health", "Wall health", "Light tower health", "Storehouse health", "Builder's hut health", "Beacon health",
             "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
-            "Lens health", "Searchlight health", "Walkway health" };
+            "Lens health", "Searchlight health", "Walkway health", "Armory health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -236,6 +237,12 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Carriers", "Cart load", &s.carrierCartLoad, 1.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Carriers", "Walk speed (m/s)", &s.carrierSpeed, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Carriers", "Build rate (stone/s)", &s.carrierBuildRate, 0.1f, 50.0f, 0.1f);
+    Tweak::floatVar("Game/Armory", "Range (m)", &s.armoryRange, 5.0f, 300.0f, 1.0f);
+    Tweak::intVar("Game/Armory", "Guards", &s.armoryGuards, 0, 64, 1);
+    Tweak::floatVar("Game/Armory", "Stand down after (s)", &s.armoryStandDown, 0.0f, 120.0f, 1.0f);
+    Tweak::floatVar("Game/Armory", "Guard range (m)", &s.guardRange, 2.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Armory", "Guard damage", &s.guardDamage, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Armory", "Guard shot interval (s)", &s.guardInterval, 0.1f, 10.0f, 0.05f);
     Tweak::intVar("Game/Carriers", "Max walkers per building", &s.carriersPerBuilding, 1, 32, 1);
     Tweak::floatVar("Game/Structures", "Constructor range", &s.constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &s.constructorBuildRate, 0.5f, 50.0f, 0.25f);
@@ -253,7 +260,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Economy", "Fabricator energy/s", &s.fabricatorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Fabricator fuel/s", &s.fabricatorFuelPerSec, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Fabricator minerals/s", &s.fabricatorMineralsPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fuel tank capacity", &s.fuelTankCapacity, 10.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Fuel tank capacity", &s.fuelTankCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Fuel burn/s per generator", &s.fuelBurnRate, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &s.genEnergyPerSec, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s", &s.emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);

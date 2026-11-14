@@ -24,12 +24,13 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Lance", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 1.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
     0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f, // (the Wall and the Gate: 3 m tall)
-    StructureSystem::WalkwayDeckHeight + 0.1f };        // the Walkway: its origin is 0.1 over the deck, like the Bridge's
+    StructureSystem::WalkwayDeckHeight + 0.1f,          // the Walkway: its origin is 0.1 over the deck, like the Bridge's
+    2.0f };                                             // the Armory
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -178,8 +179,14 @@ oc::string StructureSystem::describeType(EStructureType type) const
         line("Paint it: hold and drag.");
         break;
     case EStructureType::Walkway:
-        desc = oc::format("A road on a scaffold, {:g} m over the ground: stand on it behind a wall and see over the wall. Next to a road it is a flight of stairs down to the ground. It joins the road, and the workers walk it. Nothing passes under it.", WalkwayDeckHeight);
+        desc = oc::format("A road on a scaffold, {:g} m over the ground: stand on it behind a wall and see over the wall. Next to a road it is a flight of stairs down to the ground. It joins the road, and the workers walk it. Nothing passes under it. It stands in water too, on piers down to the bed.", WalkwayDeckHeight);
         line("Paint it: hold and drag.");
+        break;
+    case EStructureType::Armory:
+        desc = "Bows for the workers. While a demon is in its range, free workers come by road, take a bow and stand guard on the walkways (or on the road) nearest to the demons. They go back to work when the demons are gone. It must touch a road.";
+        line(oc::format("Up to {} guards", m_settings.armoryGuards));
+        line(oc::format("A guard: {:g} damage every {:g} s, {:g} m", m_settings.guardDamage, m_settings.guardInterval, m_settings.guardRange));
+        range(m_settings.armoryRange);
         break;
     case EStructureType::CablePower:
     case EStructureType::CablePipe:

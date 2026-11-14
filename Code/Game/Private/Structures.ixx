@@ -71,6 +71,9 @@ public:
         // tickCarriers, except sendReady (the ~1 s pass).
         uint8 walkers = 0;      // walkers whose transport job is this building
         uint8 walkersIdle = 0;  // ... of them: waiting at the pickup, or on their way to it
+        uint8 guards = 0;       // an Armory: the walkers that are its guards, or on their way to it for a bow (counted fresh every tickCarriers)
+        float alarm = 0.0f;     // an Armory: seconds its guards still stay out (set while an enemy unit is in its range)
+        glm::vec3 threat{ 0.0f }; // an Armory: the enemy unit nearest to it at the last pass (the posts are picked by it)
         uint8 waitRank = 0;     // scratch of the walker loop: the waiting walkers seen so far (the first one loads)
         uint8 homeWalkers = 0;  // House / Beacon: its workers that are out on the road
         bool sendReady = false; // it has a load to send now (a storage: and a consumer on its road wants it)
@@ -455,6 +458,7 @@ public:
         case EStructureType::Lumberyard:
         case EStructureType::Quarry:
         case EStructureType::Fabricator:
+        case EStructureType::Armory:
         case EStructureType::House:
         case EStructureType::MedicStation:
         case EStructureType::MineralSilo: return 2;
@@ -537,7 +541,12 @@ public:
     float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX, bool byPlayer = false);
     float constructorRange() const { return m_settings.constructorRange; }
 
+    // The guards' shots of this tick (tickCarriers): the match draws one line each and clears the list.
+    struct GuardShot { glm::vec3 from, to; };
+    oc::vector<GuardShot>& guardShots() { return m_guardShots; }
+
 private:
+    oc::vector<GuardShot> m_guardShots;
     struct Node
     {
         EntityPtr entity;
@@ -628,8 +637,19 @@ private:
         uint8 state = 0;             // EWalkerState (Carriers.cpp)
         uint8 work = 0;              // ECarrierWork: what its load is for
         bool dismissed = false;      // its worker is needed elsewhere: it walks home when it is next idle
+        bool guard = false;          // its entity is guard.pre (it has a bow): setGuardLook
     };
     oc::vector<Walker> m_walkers;
+    // THE ARMORY'S GUARDS: walkers too. While an enemy unit is in an Armory's range (Ref::alarm), free workers walk to
+    // it for a bow (the houses send them, and waiting walkers go), then to a POST - a free Walkway deck cell in the
+    // Armory's range, else a road cell, nearest to the threat - and shoot from there. Nothing hurts them. See
+    // "The Armory" in Docs/Context/Game/Economy.md.
+    GameUnitComponent* nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
+        const glm::vec3* sightFrom = nullptr) const;
+    bool walkwayDeckAt(int cx, int cz) const;
+    bool guardWanted(int index, uint8 team) const;
+    bool guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const;
+    void setGuardLook(Walker& w, bool guard);
     int m_carrierCount[GameMaxTeams] = {}; // walkers on the road per team (the HUD)
     float m_carrierPassTimer = 0.0f;       // the ~1 s pass: sendReady, and the houses send out / call back workers
     void tickCarriers(float deltaSec);

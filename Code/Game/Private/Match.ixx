@@ -720,7 +720,7 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "LNC", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

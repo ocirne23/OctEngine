@@ -29,7 +29,7 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/crossing.pre", "Entities/Game/house.pre",   // the three crossings share one
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
-    "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre" };
+    "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -161,7 +161,7 @@ StructureSystem::EGroundFit StructureSystem::groundFit(EStructureType type, cons
         }
     const bool flatPiece = isCableOrCrossing(type); // a slab on the ground, no box to sink
     outY = flatPiece ? center : low; // set before the refusals too: a red ghost still stands on the ground
-    // WATER over the ground: a refusal - except for the types that stand on water (the Bridge, the Gate). For those the
+    // WATER over the ground: a refusal - except for the types that stand on water (the Bridge, the Gate, the Walkway). For those the
     // water SURFACE is the ground from here on: the stand height, the step test (the bed under it does not count) and
     // the tree / rock box.
     if (Globals::physics.isWaterActive())

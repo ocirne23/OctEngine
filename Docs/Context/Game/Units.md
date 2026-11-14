@@ -245,7 +245,8 @@ mutexed; `~GameMatch` joins it too. The label list and the popup are the job's K
 (`m_labelsScratch`, `m_labelsPopup`), swapped into GameHud at the end so last frame's list comes
 back with its capacity — no per-frame list allocation, only the selected info string outgrows SSO.
 
-**HUD** through `Globals::gameHud`: bars Health / Energy / Materials / Grid energy, counters "Energy
+**HUD** through `Globals::gameHud`: bars Health / Energy / Materials / Grid energy (the light in the dedicated stores:
+the Crystal stores and the Beacon's own store, `m_gridEnergyTotal` over their capacity), counters "Energy
 gen/s" / "Energy use/s" (minerals, fuel and pressure are deliberately NOT counters — they read on the
 structure labels); co-op authority adds "Time" (the match clock as h:mm:ss of authority sim time,
 `m_matchTime`, saved as `MatchTime`), "Next wave (s)", "Next wave power" (the coming wave's budget
