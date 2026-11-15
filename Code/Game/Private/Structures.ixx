@@ -74,7 +74,10 @@ public:
         uint8 walkers = 0;      // walkers whose transport job is this building
         uint8 walkersIdle = 0;  // ... of them: waiting at the pickup, or on their way to it
         uint8 guards = 0;       // an Armory: the walkers that are its guards, or on their way to it for a bow (counted fresh every tickCarriers)
-        float alarm = 0.0f;     // an Armory: seconds its guards still stay out (set while an enemy unit is in its range)
+        uint8 crew = 0;         // a Cannon: the walkers of its crew (on the way, at the gun or fetching munitions; counted fresh every tickCarriers)
+        uint8 crewAtGun = 0;    // ... of them: at the gun now (it fires only with one)
+        uint8 crewFetching = 0; // ... of them: on a munitions trip
+        float alarm = 0.0f;     // an Armory / a Cannon: seconds its guards / crew still stay out (set while an enemy unit is in its range)
         glm::vec3 threat{ 0.0f }; // an Armory: the enemy unit nearest to it at the last pass (the posts are picked by it)
         uint8 waitRank = 0;     // scratch of the walker loop: the waiting walkers seen so far (the first one loads)
         uint8 homeWalkers = 0;  // House / Beacon: its workers that are out on the road
@@ -82,7 +85,16 @@ public:
         bool buildReady = false; // it holds stone, and a blueprint on its road wants it (the ~1 s pass): work for a walker with no other
         bool repairReady = false; // the same for a damaged structure on its road, and only while the team has no build work
         bool transportReady = false; // a storage: another storage on its road is much emptier (a cart trip), and it has no other work
-        float goodsIncoming[3] = {}; // per store index: the goods the walkers carry toward it now (counted fresh every tickCarriers)
+        float goodsIncoming[GameStructureComponent::NumStores] = {}; // per store index: the goods the walkers carry toward it now (counted fresh every tickCarriers)
+        float cannonReload = 0.0f; // a Cannon: seconds to its next shot (tickCannons, authority)
+        // A Cannon's GUN TURN: its aim from the placed facing (radians about +Y, within the arc). The entity's rotation is
+        // the facing turned by it (cannonFacingRot undoes it). The authority turns it toward its target (tickCannons); a
+        // client gets it in GSt's output byte.
+        float cannonAim = 0.0f;
+        float cannonAimGoal = 0.0f;           // where the gun turns to ("Turn rate (deg/s)"): the target's bearing (a client: GSt's)
+        float cannonSeek = 0.0f;              // seconds to the next target search
+        bool cannonHasTarget = false;
+        glm::vec3 cannonTargetPos{ 0.0f };    // the target's place at the last search
         float buildIncoming = 0.0f; // a blueprint: the stone the walkers carry toward it now (counted fresh every tickCarriers)
         // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store or the
         // Beacon) this structure sends its light to (a producer), takes it from (a consumer) or shares with (another
@@ -95,6 +107,7 @@ public:
         // prefab's flag, restored when the ship lands (aloft every ship structure is invulnerable).
         bool onShip = false;
         glm::vec3 shipLocal{ 0.0f };
+        int8 shipTurn = 0; // a rotated placement on the deck (the Cannon): eighths of a turn relative to the ship
         bool authoredInvulnerable = false;
         // A SHIP RAIL's collider (buildRailBody): the rail pieces on its open sides only, so the tile is walked on. Landed
         // and not rubble only (aloft the ship's body carries them). Shared: the roster hands out copies of a Ref.
@@ -119,7 +132,7 @@ public:
         float yield, uint8 team, bool built);
     void mirrorRemove(uint32 id);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
-        float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble);
+        float mineralFrac, float ammoFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble);
     // Cable/crossing BLUEPRINTS only (GCb): health = build progress, over the segment's own
     // healthMax. The built flip still arrives through the GPl re-send.
     void mirrorCableProgress(uint32 id, float healthFrac, bool rubble);
@@ -142,6 +155,7 @@ public:
 
     glm::vec2 structureFacing(int index) const; // from the entity's rotation (Crossing replay)
     float structureYield(int index) const { return m_frame[index].yield; } // Lumberyard / Quarry (1 elsewhere)
+    float structureCannonAim(int index) const { return m_frame[index].cannonAim; } // a Cannon's gun turn (radians from its facing)
     float structureOutputFrac(int index) const // union: the emitter variant (Base included)
     {
         return hasShieldEmitter(m_frame[index].type) ? m_frame[index].state->emitter.outputFrac : 0.0f;
@@ -371,6 +385,7 @@ public:
         case EStructureType::Solar:
         case EStructureType::MedicStation:
         case EStructureType::Searchlight:
+        case EStructureType::AmmoWorks:   // (its munitions are light charges: it takes light like a consumer)
         case EStructureType::Turret:      return m_settings.internalBuffer;
         case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
                                                        // stamped per instance (= its unit's cost, the build bar)
@@ -394,6 +409,7 @@ public:
         case EStructureType::Fabricator:  return m_settings.workersFabricator;
         case EStructureType::Constructor: return m_settings.workersConstructor;
         case EStructureType::Generator:   return m_settings.workersGenerator;
+        case EStructureType::AmmoWorks:   return m_settings.workersAmmo;
         default:                          return 0;
         }
     }
@@ -414,6 +430,18 @@ public:
     float structureFlowUtil(int index) const { return m_frame[index].state->flowUtil; }
     float structureMinerals(int index) const { return m_frame[index].state->store[2]; }
     float structureMineralCapacity(int index) const { return mineralCapacityOf(m_frame[index].type); }
+    float structureMunitions(int index) const { return m_frame[index].state->store[GoodMunitions]; }
+    float structureMunitionCapacity(int index) const { return munitionCapacityOf(m_frame[index].type); }
+    float munitionCapacityOf(EStructureType t) const
+    {
+        switch (t)
+        {
+        case EStructureType::Cannon:    return m_settings.cannonAmmoCapacity;
+        case EStructureType::AmmoWorks: return m_settings.ammoWorksBuffer;
+        case EStructureType::AmmoStore: return m_settings.ammoStoreCapacity;
+        default:                        return 0.0f;
+        }
+    }
     float fuelCapacityOf(EStructureType t) const
     {
         switch (t)
@@ -434,6 +462,7 @@ public:
         case EStructureType::Quarry:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:  return m_settings.internalBuffer;
+        case EStructureType::AmmoWorks:    return m_settings.ammoWorksBuffer; // the stone it packs
         // Barracks hold NO minerals: units are paid from their energy store (no conveyor attaches).
         case EStructureType::MineralSilo:  return m_settings.mineralSiloCapacity;
         case EStructureType::Base:         return m_settings.mineralBaseCapacity;
@@ -475,6 +504,7 @@ public:
         case EStructureType::Fabricator:
         case EStructureType::Armory:
         case EStructureType::MageTower:
+        case EStructureType::AmmoWorks:
         case EStructureType::House:
         case EStructureType::MedicStation:
         case EStructureType::MineralSilo: return 2;
@@ -562,6 +592,35 @@ public:
     // The guards' shots of this tick (tickCarriers): the match draws one line each and clears the list.
     struct GuardShot { glm::vec3 from, to; };
     oc::vector<GuardShot>& guardShots() { return m_guardShots; }
+    // THE CANNONS (tickCannons, authority, after production): a built Cannon with a munition and its reload done fires
+    // at the nearest solid enemy unit in its arc ("Arc (deg)" around its facing) between "Min range" and "Range". A
+    // shot is a launch (the muzzle, the ballistic velocity): the match spawns the shell (NpcSystem::fireCannonShell)
+    // and clears the list. The shell does the damage (cannonShell.pre: its splash).
+    struct CannonShot { glm::vec3 from, velocity; uint8 team; };
+    oc::vector<CannonShot>& cannonShots() { return m_cannonShots; }
+    void tickCannons(float deltaSec);
+    // A Cannon's placed facing: its entity's rotation without the gun's turn (Ref::cannonAim; identity turn elsewhere).
+    static glm::quat cannonFacingRot(const Ref& r)
+    {
+        return r.type == EStructureType::Cannon ? r.entity->rot * glm::angleAxis(-r.cannonAim, glm::vec3(0.0f, 1.0f, 0.0f)) : r.entity->rot;
+    }
+    // Turns the gun toward Ref::cannonAimGoal at "Turn rate (deg/s)": the entity's rotation follows. Authority and mirror.
+    void turnCannon(Ref& r, float deltaSec) const
+    {
+        const float step = glm::radians(glm::max(m_settings.cannonTurnRate, 1.0f)) * deltaSec;
+        const float aim = r.cannonAim + glm::clamp(r.cannonAimGoal - r.cannonAim, -step, step);
+        if (aim == r.cannonAim)
+            return;
+        const glm::quat facing = cannonFacingRot(r);
+        r.cannonAim = aim;
+        r.entity->rot = facing * glm::angleAxis(aim, glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+    // THE AMMO STORE'S BLAST (tickDamage): where one blew up this tick and how big - the match shows the flash and clears
+    // the list. The damage is done already.
+    struct Blast { glm::vec3 pos; float radius; };
+    oc::vector<Blast>& blasts() { return m_blasts; }
+    // A Cannon's stand: the top of the road piece or the walkway deck in its cell, else nothing (false: the ground).
+    bool cannonStandY(const glm::vec3& snappedGround, float& outY) const;
 
     // ---- THE SHIP'S STRUCTURES (Docs/Context/Game/Ship.md "Building on the ship") ----
     // A structure ON THE SHIP keeps its place on the deck in SHIP space (Ref::shipLocal). GameMatch hands in the
@@ -586,7 +645,8 @@ public:
     // Can `type` stand at the snapped ship-local point: every footprint tile on the deck, off the helm, free of the
     // other ship structures.
     bool deckCellsFree(EStructureType type, const glm::vec3& snappedLocal) const;
-    void queueShipPlaceRequest(EStructureType type, const glm::vec3& snappedLocal, float yield, uint8 team);
+    // turn: a rotated placement's facing on the deck, in eighths of a turn relative to the ship (the Cannon).
+    void queueShipPlaceRequest(EStructureType type, const glm::vec3& snappedLocal, float yield, uint8 team, int turn = 0);
     // The ship's world pose of a ship-local point (setShipPose's pose).
     glm::vec3 shipToWorld(const glm::vec3& local) const { return m_shipPos + m_shipRot * local; }
     // The Beacon on the deck (the start) and the rails on the edge tiles that have none yet (the start, after a load).
@@ -599,8 +659,13 @@ public:
 private:
     // The ship-local tile of a world cell (landed: the inverse of the quarter-turn pose); false = no deck tile there.
     bool worldCellOnDeck(int cx, int cz) const;
-    void placeShipStructure(EStructureType type, const glm::vec3& local, float yield, uint8 team); // the ship request's validation + spawn
-    int spawnShipStructure(uint32 id, EStructureType type, const glm::vec3& local, uint8 team, bool built, float yield = 1.0f);
+    void placeShipStructure(EStructureType type, const glm::vec3& local, float yield, uint8 team, int turn); // the ship request's validation + spawn
+    int spawnShipStructure(uint32 id, EStructureType type, const glm::vec3& local, uint8 team, bool built, float yield = 1.0f, int turn = 0);
+    // A ship structure's world rotation: the ship's, turned by its own shipTurn (a Cannon).
+    glm::quat shipStructureRot(const Ref& r) const
+    {
+        return m_shipRot * glm::angleAxis((float)r.shipTurn * glm::quarter_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
     void shipJoin(const Ref& s);  // into the world (landed)
     void shipLeave(const Ref& s); // out of it (aloft)
     void applyRailSides(const Ref& s); // a ShipRail's rail pieces: the sides of its tile that face off the deck
@@ -637,6 +702,9 @@ private:
     uint32 m_shipRevision = 0;
 
     oc::vector<GuardShot> m_guardShots;
+    oc::vector<CannonShot> m_cannonShots;
+    oc::vector<Blast> m_blasts;
+    void ammoBlast(const Ref& s); // tickDamage: an Ammo store dies with munitions in it
     struct Node
     {
         EntityPtr entity;
@@ -651,6 +719,7 @@ private:
         float yield = 1.0f;
         uint8 team = 0;
         bool ship = false; // pos is a ship-local ground point on the deck
+        int turn = 0;      // ship: a rotated placement's turn on the deck (eighths, relative to the ship)
     };
     struct RouteRequest
     {
@@ -745,13 +814,21 @@ private:
     bool guardDeckAt(int cx, int cz) const; // a Walkway deck, or a built rail tile of the landed ship: no clear line needed
     bool railEdgeBetween(int ax, int az, int bx, int bz) const; // a landed ship's rail piece between two neighbour cells
     bool guardWanted(int index, uint8 team) const;
+    // THE CANNON'S CREW: walkers too. While an enemy unit is within "Crew call range" of a Cannon (Ref::alarm), free
+    // workers walk to it and MAN it (it fires only then). One of them keeps it armed: a trip to the nearest Ammo store /
+    // Ammo works for munitions while another one stays at the gun (a lone one goes when the gun is empty). See "The
+    // Cannon and munitions" in Docs/Context/Game/Economy.md.
+    bool crewWanted(int index, uint8 team) const;
+    int crewAmmoSource(glm::ivec2 fromCell, uint8 team, oc::vector<glm::vec3>& outPath) const;
     bool guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const;
     void setGuardLook(Walker& w, bool guard);
     int m_carrierCount[GameMaxTeams] = {}; // walkers on the road per team (the HUD)
     float m_carrierPassTimer = 0.0f;       // the ~1 s pass: sendReady, and the houses send out / call back workers
     void tickCarriers(float deltaSec);
     void carrierHousePass();
-    bool roadAt(int cx, int cz, float& outY) const;
+    // throughGates: a built GATE with road on two opposite sides is road too (the walkers pass it); off for the test of
+    // those sides, so two gates side by side do not ask each other.
+    bool roadAt(int cx, int cz, float& outY, bool throughGates = true) const;
     bool touchesRoad(int index) const;
     // WHAT A LOAD IS FOR, in the order a walker takes work: Goods = the buildings that take goods (never a blueprint);
     // Build = ONLY the blueprints that still need stone (blueprintNeed; rubble too) - the walkers BUILD along the road,

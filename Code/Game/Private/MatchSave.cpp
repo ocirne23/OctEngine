@@ -25,32 +25,20 @@ void GameMatch::saveGame()
         return;
     }
     AssetNode root; // unnamed - writeAssetText writes only the children
-    if (m_coop && (m_coopMap.built || m_sandboxWorld))
+    if (m_coop)
     {
-        // The map's generation inputs: structure/unit positions and node indices only make sense
-        // on the exact map the save was played on - loadGame regenerates it from these. (The
-        // sandbox world has none: its terrain is the session's, its nodes the session's Base site.)
-        if (m_coopMap.built)
-        {
-            root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
-            root.set("MapFill", m_coopMap.fill);
-            root.set("MapLanes", oc::to_string(m_coopMap.lanes));
-        }
-        // The wave clock: how many waves launched (sizes the next one) and the seconds to it, so a
-        // load resumes the escalation instead of restarting at wave 1.
+        // The wave clock: how many waves launched and the seconds to the next, so a load resumes the night. The light
+        // rules: the sun is the wave clock, so the time of day rides along. (The terrain is the session's, so no map.)
         root.set("WaveIndex", oc::to_string(m_waveIndex));
         root.set("WaveTimer", glm::max(m_waveTimer, 0.0f));
-        if (m_sandboxWorld) // the light rules: the sun is the wave clock, so the time of day rides along
-        {
-            root.set("NightIndex", oc::to_string(m_nightIndex));
-            root.set("Night", m_night);
-            root.set("TimeOfDay", Globals::settings.sky.timeOfDay);
-            // The night's build-up: the waves launched this night and the size rolled for the next one ("Next wave power").
-            root.set("NightWave", oc::to_string(m_nightWave));
-            root.set("WaveScale", m_waveScale);
-        }
+        root.set("NightIndex", oc::to_string(m_nightIndex));
+        root.set("Night", m_night);
+        root.set("TimeOfDay", Globals::settings.sky.timeOfDay);
+        // The night's build-up: the waves launched this night and the size rolled for the next one ("Next wave power").
+        root.set("NightWave", oc::to_string(m_nightWave));
+        root.set("WaveScale", m_waveScale);
         root.set("MatchTime", m_matchTime); // the HUD clock (sim seconds since the world spawned)
-        saveTrickle(root); // the wave/ambient spawns still queued (a save mid-wave loses nothing)
+        saveTrickle(root); // the wave spawns still queued (a save mid-wave loses nothing)
     }
     else if (m_coopMap.built && m_coopMap.pvp)
         root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
@@ -100,22 +88,9 @@ void GameMatch::loadGame(oc::string_view path)
         Log::warning("Load game: " + error);
         return;
     }
-    // A co-op save carries its map's generation inputs: regenerate the exact map first (clearing
-    // the current structures BEFORE the node set swaps).
-    // Connected clients rebuild from the GMp broadcast the same way.
-    if (m_coop)
-    {
-        if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0 && !m_sandboxWorld)
-        {
-            m_structures.clearAllStructures(); // fires GRm hooks - clients prune ahead of the swap
-            rebuildCoopMap((uint32)seedNode->asInt(),
-                root.find("MapFill") ? root.find("MapFill")->asFloat() : m_coopMap.fill,
-                root.find("MapLanes") ? root.find("MapLanes")->asInt() : m_coopMap.lanes);
-            if (m_isServer)
-                sendMapSeed();
-        }
-    }
-    else if (const AssetNode* mapNode = root.find("PvpMap")) // a PvP save names its arena
+    // A PvP save names its arena: build it first (clearing the current structures BEFORE the node set swaps). Connected
+    // clients rebuild from the GMp broadcast the same way.
+    if (const AssetNode* mapNode = root.find("PvpMap"); mapNode && !m_coop)
     {
         const EPvpMap map = (EPvpMap)glm::clamp(mapNode->asInt(), 0, (int)EPvpMap::Count - 1);
         if (!m_coopMap.built || !m_coopMap.pvp || m_coopMap.pvpMap != map)
@@ -163,7 +138,7 @@ void GameMatch::loadGame(oc::string_view path)
         m_waveIndex = glm::max(n->asInt(), 0);
     if (const AssetNode* n = root.find("WaveTimer"))
         m_waveTimer = glm::max(n->asFloat(), 0.0f);
-    if (m_sandboxWorld)
+    if (m_coop)
     {
         if (const AssetNode* n = root.find("NightIndex"))
             m_nightIndex = glm::max(n->asInt(), 0);
@@ -187,7 +162,7 @@ void GameMatch::loadGame(oc::string_view path)
         setRally(false, glm::vec3(0.0f));
     if (const AssetNode* n = root.find("PlayerPos"))
         m_player.teleport(n->asVec3(m_player.bodyPos()));
-    loadTrickle(root); // resume the queued wave/ambient spawns (after rebuildCoopMap - see there)
+    loadTrickle(root); // resume the queued wave spawns
     if (m_isServer)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -231,7 +206,7 @@ bool GameMatch::runScenario(oc::string_view savePath)
     // PvP: the loaded units' spatial entries link at the next commitFrame - the select-all query
     // runs from the next update() (issueScenarioOrder), marching everything on the other Base.
     // CO-OP: no order - there is no enemy Base to march on, and the session is measured as saved
-    // (the player holds position, the AI waves and ambient groups carry on).
+    // (the player holds position, the AI waves carry on).
     m_scenarioOrderPending = !m_coop;
     m_scenarioOrderTries = 0;
     return true;

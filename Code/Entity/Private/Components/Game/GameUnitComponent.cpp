@@ -351,7 +351,10 @@ void GameUnitComponent::applyHeightLimit(Tick& t)
 bool GameUnitComponent::applyDamageAndHeal(Tick& t)
 {
     // The battery eats direct damage first (the player's applyDamage rule); shield-less bodies take it all.
-    if (const float dmg = takePendingDamage(); dmg > 0.0f && solid) // the shadow form drops what hit it
+    // The shadow form drops what hit it, but for the part that hurts a shadow too.
+    const float plain = oc::atomic_ref<float>(pendingDamage).exchange(0.0f);
+    const float throughShadow = oc::atomic_ref<float>(pendingShadowDamage).exchange(0.0f);
+    if (const float dmg = (solid ? plain : 0.0f) + throughShadow; dmg > 0.0f)
     {
         float remaining = dmg;
         if (!collapsed && shieldOutput > 0.0f && params.damageAbsorb > 0.0f && energy > 0.0f)
@@ -1028,12 +1031,12 @@ uint32 GameUnitComponent::opposingTeamGuess() const
     return (team + 1u) % n;
 }
 
-void GameUnitComponent::damage(float amount, uint32 sourceTeam)
+void GameUnitComponent::damage(float amount, uint32 sourceTeam, bool throughShadow)
 {
     if (amount <= 0.0f)
         return;
     noteHurtTeam(sourceTeam);
-    atomicAdd(pendingDamage, amount); // every victim banks into the inbox: the owner tick absorbs shield-first
+    atomicAdd(throughShadow ? pendingShadowDamage : pendingDamage, amount); // every victim banks into the inbox: the owner tick absorbs shield-first
 }
 
 void GameUnitComponent::heal(float amount)
@@ -1044,8 +1047,8 @@ void GameUnitComponent::heal(float amount)
 
 float GameUnitComponent::takePendingDamage()
 {
-    oc::atomic_ref<float> ref(pendingDamage);
-    return ref.exchange(0.0f);
+    oc::atomic_ref<float> ref(pendingDamage), shadow(pendingShadowDamage);
+    return ref.exchange(0.0f) + shadow.exchange(0.0f);
 }
 
 void GameUnitComponent::applyTeamTint(Entity& entity)

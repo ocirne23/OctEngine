@@ -19,7 +19,7 @@ import Network;
 import Nav;
 import Particle; // the reveal smoke's puff stream
 import Spatial;
-import Threading; // the ambient wander + nav feed ride the post-update batch
+import Threading; // the nav feed rides the post-update batch
 import :Match;
 import :GameCamera;
 import :Player;
@@ -35,7 +35,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 {
     if (!m_enabled)
         return;
-    m_sandboxWorld = coop && m_settings.coopSandboxWorld;
+    m_sandboxWorld = coop; // co-op is the sandbox world (the procedural terrain); the flat maps are PvP's
     GameSound::discardPosted(); // what a previous match's teardown posted
     // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
     // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
@@ -58,6 +58,12 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     Globals::settings.game.unitParams.revealPuff = m_sandboxWorld ? Globals::particleSystem.createPuffStream("Effects/reveal_smoke.pfx") : UINT32_MAX;
     // The burst of an enemy unit that dies (GameUnitComponent::kill): the same capped puffs, in every mode.
     Globals::settings.game.unitParams.deathPuff = Globals::particleSystem.createPuffStream("Effects/demon_death.pfx");
+    // The burst of a cannon shell's impact (GameProjectileComponent::destroy, ImpactPuff shells).
+    GameProjectileComponent::params.impactPuff = Globals::particleSystem.createPuffStream("Effects/shell_blast.pfx");
+    GameProjectileComponent::params.impactFlash = Globals::particleSystem.createPuffStream("Effects/shell_flash.pfx");
+    // ... and of its launch (MuzzleFlash shells: GameProjectileComponent::spawn).
+    GameProjectileComponent::params.muzzlePuff = Globals::particleSystem.createPuffStream("Effects/muzzle_flash.pfx");
+    GameProjectileComponent::params.muzzleSmoke = Globals::particleSystem.createPuffStream("Effects/muzzle_smoke.pfx");
 
     // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
     // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
@@ -193,6 +199,7 @@ GameMatch::~GameMatch()
     m_rallyMarker = EntityPtr();
     Globals::gameHud.removeCounter("Ship");
     Globals::gameHud.removeCounter("Flag");
+    Globals::gameHud.setTabs({}, -1); // the build bar's tab strip
     Globals::rendererVK.clearSceneFocus(); // back to camera-based cascades and RTAO falloff for the sandbox/menu
     // The ctor's top-down preset off again. The debug mode stays as it is NOW: it is a baked shader
     // define, and only its tweak callback reloads the pipeline - a silent write would desync the two.
@@ -259,14 +266,13 @@ void GameMatch::spawnWorld()
     m_isClient = Globals::networkManager.role() == ENetRole::Client;
     if (m_coop)
     {
-        // CO-OP: its own OPEN world - one shared Base at the center of a big wall-less map (the
-        // corridor and its border ring are PvP-only). Waves come from any compass direction.
-        // The SANDBOX WORLD's Base goes wherever tickBaseSite finds ground near the anchor.
-        m_basePos = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f);
-        m_playerStart = m_sandboxWorld ? m_worldAnchor : glm::vec3(0.0f, 1.0f, -6.0f);
-        m_waveTimer = m_settings.waveFirstDelay;
+        // CO-OP: the sandbox world - one shared Base wherever tickBaseSite finds ground near the anchor. Waves come at
+        // night (tickWaves: the first at dusk).
+        m_basePos = m_worldAnchor;
+        m_playerStart = m_worldAnchor;
+        m_waveTimer = 0.0f;
         // The light rules: the match starts in the morning, with the sun cycle running (the night is the wave clock).
-        if (m_sandboxWorld && !m_isClient && m_settings.startTimeOfDay >= 0.0f)
+        if (!m_isClient && m_settings.startTimeOfDay >= 0.0f)
         {
             Globals::settings.sky.sunCycle = true;
             Globals::settings.sky.timeOfDay = glm::min(m_settings.startTimeOfDay, 23.99f);
@@ -323,27 +329,9 @@ void GameMatch::spawnWorld()
 
     if (!m_isServer && !m_isClient) // single player: the server binding above did not run
         m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
-    if (m_sandboxWorld)
-    {
-        // The procedural terrain IS the map: no rock grid, no barrier, no bounds, no resource nodes (the lumberyards
-        // and the quarries work the world's own trees and rocks).
-    }
-    else if (m_coop)
-    {
-        // The generated co-op map (terrain + barrier + nodes): the AUTHORITY rolls the seed and
-        // builds now; a CLIENT builds the identical set locally when the server's GMp event
-        // delivers the seed (first thing in its join replay). Placement bounds = inside the
-        // barrier either way - cellsFree needs them before the map lands.
-        m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
-        if (!m_isClient)
-        {
-            uint32 seed = (uint32)m_settings.mapSeed;
-            if (seed == 0) // tweak 0 = roll a fresh map every run
-                seed = (std::random_device{}() & 0x7fffffffu) | 1u;
-            rebuildCoopMap(seed, m_settings.terrainFill, m_settings.terrainLanes);
-        }
-    }
-    else
+    // CO-OP: the procedural terrain IS the map: no rock grid, no bounds, no resource nodes (the lumberyards and the
+    // quarries work the world's own trees and rocks).
+    if (!m_coop)
     {
         // PvP ARENA: rock terrain + nodes from the lobby's map pick (setPvpMap). The AUTHORITY
         // builds now; a CLIENT builds the identical layout when the server's GMp event names the
@@ -369,12 +357,7 @@ void GameMatch::spawnWorld()
             m_player.setTeam(m_team);
             m_playerStart = teamStartPos((uint8)m_team);
         }
-        else if (!m_sandboxWorld) // the sandbox world's Base waits for the terrain (tickBaseSite)
-        {
-            m_structures.spawnBase(m_basePos);
-            if (m_settings.coopEnemies) // the scatter's points, trickled in (tickCoopSpawns)
-                m_ambientPendingBudget = (float)m_settings.ambientBudget;
-        }
+        // (Co-op: the Base waits for the terrain - tickBaseSite.)
         // Respawns land on a FREE cell near the anchor: buildings placed on the spawn spot after
         // the fact (a wall ring around the Base, a house) must not swallow the capsule. Rings of
         // 1x1 probes outward from the anchor, cables walk-through; a fully built-over area falls
@@ -427,17 +410,15 @@ void GameMatch::spawnWorld()
 
     if (m_sandboxWorld)
         Log::info("Game mode (sandbox world): WASD walk, Space jumps, LShift sprints, the mouse looks, LMB at the "
-                  "crosshair places / inspects. BUILD: Tab steps through the pages (Defence, Works, Roads, off), "
-                  "Q / E pick the item, LMB places, RMB or Esc cancels, X deletes. The number row arms a slot "
-                  "directly. Buildings need flat, dry ground without trees or rocks");
+                  "crosshair places / inspects. BUILD: Tab steps through the pages (Emplacement, Unit, Structure, "
+                  "Production, Resource), Q / E pick the item, LMB places, RMB or Esc cancels, X deletes. The number "
+                  "row arms a slot directly. Buildings need flat, dry ground without trees or rocks");
     else
         Log::info("Game mode: SELECT by default (click inspects, RMB moves the "
-                  "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
-                  "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
-                  "(press + drag) a run between buildings to connect them");
+                  "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E/R/A = the build pages, "
+                  "X = delete, C = cancel. Roads are physical: paint (press + drag) a run between buildings");
     if (m_coop && m_settings.coopEnemies)
-        Log::info("CO-OP: defend the central Base - swarm waves attack periodically, and the map "
-                  "is crawling with scattered enemies to clear as you expand");
+        Log::info("CO-OP: defend the Beacon - the demons come at night");
     else if (m_coop)
         Log::info("CO-OP: no enemies (\"Game/Coop/Spawn enemies\" is off) - build in peace");
 }
@@ -735,6 +716,7 @@ void GameMatch::update(float deltaSec)
         tickMedicHealing(deltaSec); // own player only on a client (units heal on the server)
         m_structures.tickMirror(deltaSec);
         m_npcs.drawBeamLights(); // HERE, not in the windowed pass: a light record added before the begin-frame job is reset by it
+        GameProjectileComponent::drawImpactLights(); // (the same rule)
         submitNavFeed(deltaSec); // obstacles only: the local player's move-order goal field
         submitWorldLabels(deltaSec);
         return;
@@ -748,17 +730,9 @@ void GameMatch::update(float deltaSec)
     m_structures.tickAuthority(playerPos, deltaSec);
     tickStaffBeam(deltaSec); // after the structures' cones (publishSearchlights resets the list)
     m_npcs.drawBeamLights(); // HERE, not in the windowed pass: a light record added before the begin-frame job is reset by it
+    GameProjectileComponent::drawImpactLights(); // (the same rule)
     tickBaseHealing(deltaSec);
     tickMedicHealing(deltaSec);
-    // The ambient wander is a POST-UPDATE job: it only writes idle units' order fields and reads
-    // the roster + the immutable co-op map, all stable once the entity pass is done, so it runs
-    // during present instead of in front of the batch submit. Its orders land in the next pass.
-    if (m_coop)
-    {
-        ProfileScope queueScope("Ambient wander queue", EProfileCategory::Game);
-        Globals::jobSystem.submitPostUpdate([this, deltaSec] { tickAmbientWander(deltaSec); },
-            { "Ambient wander", EProfileCategory::Game }, EJobPriority::Normal, 0, JobSystem::EPostUpdateBatch::Sim);
-    }
     tickPlayerMelee(deltaSec);
     tickFollowers(deltaSec);
 
@@ -802,6 +776,20 @@ void GameMatch::update(float deltaSec)
     for (const StructureSystem::GuardShot& shot : m_structures.guardShots()) // the Armory guards' arrows: a hit line each
         m_npcs.addBeam(shot.from, shot.to, NpcSystem::EBeamKind::MeleeHit);
     m_structures.guardShots().clear();
+    for (const StructureSystem::CannonShot& shot : m_structures.cannonShots()) // the cannons' shells (replicated entities)
+        m_npcs.fireCannonShell(shot.from, shot.velocity, shot.team);
+    m_structures.cannonShots().clear();
+    // An Ammo store that blew up (the damage is done): a burst of light charges, a flash and the crash. Authority only.
+    for (const StructureSystem::Blast& blast : m_structures.blasts())
+    {
+        if (m_blastPuff == UINT32_MAX)
+            m_blastPuff = Globals::particleSystem.createPuffStream("Effects/ammo_blast.pfx");
+        for (int k = 0; k < 4; ++k)
+            Globals::particleSystem.emitPuff(m_blastPuff, blast.pos + glm::vec3(glm::linearRand(-1.0f, 1.0f), 0.5f * (float)k, glm::linearRand(-1.0f, 1.0f)) * 0.5f);
+        GameSound::post(EGameSound::StructureCollapse, blast.pos, 1.6f, 3.0f);
+        GameSound::post(EGameSound::SplashImpact, blast.pos, 2.0f, glm::max(blast.radius * 0.5f, 1.0f));
+    }
+    m_structures.blasts().clear();
     if (m_isServer) // strikes (turret lightning, melee hits) are pure visuals on clients: broadcast this frame's
     {
         ProfileScope beamScope("Strike broadcast", EProfileCategory::Game);
@@ -815,7 +803,7 @@ void GameMatch::update(float deltaSec)
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
         }
     }
-    if (m_coop && m_settings.coopEnemies && (!m_sandboxWorld || m_siteFound))
+    if (m_coop && m_settings.coopEnemies && m_siteFound)
     {
         ProfileScope coopScope("Coop waves", EProfileCategory::Game);
         tickWaves(deltaSec);
@@ -1326,11 +1314,11 @@ void GameMatch::drawShipFootprint(const glm::vec3& centre, int turns, uint32 col
     Globals::rendererVK.addDebugLine(world(GameShip::DeckCentreX, 0.0f), world(GameShip::DeckCentreX, -GameShip::DeckHalfLength - 6.0f), color);
 }
 
-void GameMatch::requestShipPlace(EStructureType type, const glm::vec3& local, float yield)
+void GameMatch::requestShipPlace(EStructureType type, const glm::vec3& local, float yield, int turn)
 {
     if (m_isClient)
         return; // the ship is the authority's (a client sees none)
-    m_structures.queueShipPlaceRequest(type, local, yield, (uint8)m_team);
+    m_structures.queueShipPlaceRequest(type, local, yield, (uint8)m_team, turn);
 }
 
 void GameMatch::drawShipGhost(EStructureType type, const glm::vec3& local, uint32 color) const
@@ -1531,15 +1519,13 @@ void GameMatch::updateHud()
         char clock[16];
         snprintf(clock, sizeof(clock), "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60);
         hud.setCounterText("Time", clock, glm::vec3(0.9f, 0.9f, 0.9f));
-        if (m_sandboxWorld) // the light rules: the sun is the wave clock
-        {
-            const float hours = Globals::settings.sky.timeOfDay;
-            char sun[32];
-            snprintf(sun, sizeof(sun), "%s %d  %02d:%02d", m_night ? "Night" : "Day", m_night ? m_nightIndex : m_nightIndex + 1,
-                (int)hours % 24, (int)(hours * 60.0f) % 60);
-            hud.setCounterText("Sun", sun, m_night ? glm::vec3(0.6f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.85f, 0.4f));
-        }
-        if (!m_sandboxWorld || m_night)
+        // The light rules: the sun is the wave clock.
+        const float hours = Globals::settings.sky.timeOfDay;
+        char sun[32];
+        snprintf(sun, sizeof(sun), "%s %d  %02d:%02d", m_night ? "Night" : "Day", m_night ? m_nightIndex : m_nightIndex + 1,
+            (int)hours % 24, (int)(hours * 60.0f) % 60);
+        hud.setCounterText("Sun", sun, m_night ? glm::vec3(0.6f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.85f, 0.4f));
+        if (m_night)
             hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
         else
             hud.removeCounter("Next wave (s)");
@@ -1599,6 +1585,14 @@ void GameMatch::updateGameInput(const Camera& camera)
         lmbEdge = false;
         rmbEdge = false;
         m_rmbMoveDrag = false; // dragging a move order onto the hotbar ends it
+    }
+    else if (const int tab = Globals::gameHud.tabAtScreenPos(m_mousePos); tab >= 0) // the build bar's page tabs
+    {
+        if (lmbEdge)
+            activateTab(tab);
+        lmbEdge = false;
+        rmbEdge = false;
+        m_rmbMoveDrag = false;
     }
     // The build UI: a right click CLOSES it at once, whatever is armed or half done (setMode drops both). The
     // item stays the page's last one, so Tab arms it again.
@@ -1774,8 +1768,6 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         sound.playerHealth = m_player.entity() ? m_player.health() : -1.0f;
         m_sound.update(sound, m_structures);
     }
-    if (m_coop && !m_sandboxWorld)
-        drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)
     {
         ProfileScope navDrawScope("Nav debug draw", EProfileCategory::Game);

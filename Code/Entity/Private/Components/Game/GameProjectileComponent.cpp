@@ -2,13 +2,42 @@ module Entity;
 
 import Core;
 import Core.glm;
+import Core.Time; // the impact lights' age (real seconds)
 import Core.Transform;
 import :Entity;
 import Force;
+import Particle; // the impact burst (ParticleSystem::emitPuff)
 import Physics;
+import RendererVK; // the muzzle flash's and the impact's lights
 import Spatial;
 
 GameProjectileParams GameProjectileComponent::params;
+
+namespace
+{
+    // The impact lights (GameProjectileComponent::drawImpactLights): the last c_maxImpacts impacts, by their real time.
+    constexpr int c_maxImpacts = 32;
+    constexpr float c_impactSeconds = 0.3f, c_impactRange = 10.8f, c_impactIntensity = 500.0f;
+    struct ImpactLight { glm::vec3 pos{ 0.0f }; double born = -1.0; };
+    ImpactLight g_impacts[c_maxImpacts];
+    int g_impactNext = 0;
+    std::mutex g_impactMutex; // (constant-initialized: safe at namespace scope)
+}
+
+void GameProjectileComponent::drawImpactLights()
+{
+    const double now = Globals::time.getElapsedSec();
+    const std::lock_guard lock(g_impactMutex);
+    for (const ImpactLight& impact : g_impacts)
+    {
+        const float age = (float)(now - impact.born);
+        if (impact.born < 0.0 || age < 0.0f || age >= c_impactSeconds)
+            continue;
+        const float fade = 1.0f - age / c_impactSeconds;
+        Globals::rendererVK.addLightInfo(PointLight(impact.pos + glm::vec3(0.0f, 1.0f, 0.0f), c_impactRange, glm::vec3(0.6f, 0.9f, 1.0f),
+            c_impactIntensity * fade * fade));
+    }
+}
 
 void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
@@ -19,6 +48,18 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     emitterDrain = info.emitterDrain;
     emitterDrainRadius = info.emitterDrainRadius;
     splashRadius = info.splashRadius;
+    splashEdge = glm::clamp(info.splashEdge, 0.0f, 1.0f);
+    hitsShadows = info.hitsShadows;
+    impactPuff = info.impactPuff;
+    muzzleFlash = info.muzzleFlash;
+    origin = entity.pos;
+    if (muzzleFlash) // the launch, as big as an impact: a few puffs of shards, the impact's flash and smoke where it starts (the light: update)
+    {
+        for (int k = 0; k < 3; ++k)
+            Globals::particleSystem.emitPuff(params.muzzlePuff, entity.pos + glm::vec3(0.0f, 0.3f * (float)k, 0.0f));
+        Globals::particleSystem.emitPuff(params.impactFlash, entity.pos);
+        Globals::particleSystem.emitPuff(params.muzzleSmoke, entity.pos);
+    }
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity))
         fc->emitter.setTeam(team);
     // The shot's sound, on every role (a replicated shell spawns here too).
@@ -31,13 +72,30 @@ void GameProjectileComponent::destroy(Entity& entity, const SpawnInfo&)
         return; // it ran out in the air: no impact
     GameUnitComponent::reportSound(splashRadius > 0.0f ? GameUnitComponent::ESoundCue::SplashImpact : GameUnitComponent::ESoundCue::ShotImpact,
         entity.pos, glm::max(splashRadius, 1.0f));
+    if (impactPuff) // the burst: a few puffs of shards over the impact and one flash (capped by the particle system)
+    {
+        for (int k = 0; k < 3; ++k)
+            Globals::particleSystem.emitPuff(params.impactPuff, entity.pos + glm::vec3(0.0f, 0.4f * (float)k, 0.0f));
+        Globals::particleSystem.emitPuff(params.impactFlash, entity.pos);
+        const std::lock_guard lock(g_impactMutex); // ... and its light (drawImpactLights)
+        g_impacts[g_impactNext] = { entity.pos, Globals::time.getElapsedSec() };
+        g_impactNext = (g_impactNext + 1) % c_maxImpacts;
+    }
 }
 
 void GameProjectileComponent::update(Entity& entity, float deltaSec)
 {
+    age += deltaSec; // (every role: the muzzle light's time, and destroy's impact test)
+    // THE MUZZLE FLASH's light: a point light where it started, bright at once and gone in c_flashSeconds. addLightInfo
+    // is lock-free (the entity pass runs this on workers).
+    constexpr float c_flashSeconds = 0.15f, c_flashRange = 12.0f, c_flashIntensity = 700.0f;
+    if (muzzleFlash && age < c_flashSeconds)
+    {
+        const float fade = 1.0f - age / c_flashSeconds;
+        Globals::rendererVK.addLightInfo(PointLight(origin, c_flashRange, glm::vec3(0.6f, 0.9f, 1.0f), c_flashIntensity * fade * fade));
+    }
     if (Globals::networkManager.role() == ENetRole::Client)
         return; // replicated shots fly on the owner's spawn velocities; the server despawns them
-    age += deltaSec;
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     const glm::vec3 pos = pc && pc->body.isValid() ? pc->body.getPosition() : entity.pos;
     if (spent || age > lifetime || pos.y < params.voidY)
@@ -91,17 +149,19 @@ void GameProjectileComponent::onContact(Entity& self, Entity* other, bool begin)
             const glm::vec3 d = victim->pos - self.pos;
             if (glm::dot(d, d) > r2)
                 return;
+            // THE FALLOFF: the full damage at the centre, splashEdge of it at the edge, linear between.
+            const float share = glm::mix(1.0f, splashEdge, std::sqrt(glm::dot(d, d)) / splashRadius);
             if (GameUnitComponent* unit = getComponent<GameUnitComponent>(victim); unit && unit->team != team)
-                unit->damage(unitDamage, team);
+                unit->damage(unitDamage * share, team, hitsShadows);
             else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(victim); sc && sc->team != team)
-                sc->damage(structureDamage);
+                sc->damage(structureDamage * share);
         });
     }
     else if (!other)
     {
     }
     else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(other); unit && unit->team != team)
-        unit->damage(unitDamage, team);
+        unit->damage(unitDamage, team, hitsShadows);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(other); sc && sc->team != team)
         sc->damage(structureDamage);
     spent = true; // any contact spends the shot, own team and ground included
@@ -123,4 +183,8 @@ void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info
     if (info.emitterDrain != d.emitterDrain)         out.set("EmitterDrain", info.emitterDrain);
     if (info.emitterDrainRadius != d.emitterDrainRadius) out.set("EmitterDrainRadius", info.emitterDrainRadius);
     if (info.splashRadius != d.splashRadius)         out.set("SplashRadius", info.splashRadius);
+    if (info.splashEdge != d.splashEdge)             out.set("SplashEdge", info.splashEdge);
+    if (info.hitsShadows)                            out.set("HitsShadows", true);
+    if (info.impactPuff)                             out.set("ImpactPuff", true);
+    if (info.muzzleFlash)                            out.set("MuzzleFlash", true);
 }

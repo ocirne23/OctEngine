@@ -52,12 +52,12 @@ void StructureSystem::mirrorRemove(uint32 id)
 }
 
 void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float chargeFrac,
-    float fuelFrac, float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble)
+    float fuelFrac, float mineralFrac, float ammoFrac, float outputFrac, float utilFrac, bool powered, bool blueprint, bool rubble)
 {
     const int index = structureIndexById(id);
     if (index < 0)
         return;
-    const Ref& ref = m_frame[index];
+    Ref& ref = m_frame[index];
     GameStructureComponent& s = *ref.state;
     if ((s.rubble != 0) != rubble) // destroyed to rubble, or built up again: the tint and the collider follow
         setRubble(ref, rubble);
@@ -71,11 +71,14 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     s.store[0] = chargeFrac * s.capacity[0]; // per-instance (a barracks' capacity = its unit's cost)
     s.store[1] = fuelFrac * fuelCapacityOf(ref.type);
     s.store[2] = mineralFrac * mineralCapacityOf(ref.type);
+    s.store[GoodMunitions] = ammoFrac * munitionCapacityOf(ref.type);
     s.flowUtil = utilFrac; // already server-smoothed
     if (hasShieldEmitter(ref.type)) // union: emitter variant (Base included)
         s.emitter.outputFracTarget = outputFrac; // tickMirror eases the live field toward this
     else if (isBarracksType(ref.type)) // the output byte carries the barracks' POPULATION instead
         s.barracks.population = (int)glm::round(outputFrac * 255.0f);
+    else if (ref.type == EStructureType::Cannon) // ... and the CANNON's gun turn (tickMirror turns it there)
+        ref.cannonAimGoal = (outputFrac - 0.5f) * glm::two_pi<float>();
     s.powered = powered;
 }
 
@@ -141,9 +144,11 @@ void StructureSystem::saveTo(AssetNode& root) const
         {
             n.set("Ship", true);
             n.set("Local", s.shipLocal);
+            if (s.shipTurn != 0) // a Cannon's turn on the deck (eighths, relative to the ship)
+                n.set("ShipTurn", oc::to_string((int)s.shipTurn));
         }
-        const glm::vec3 forward = isCrossingType(s.type)
-            ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
+        const glm::vec3 forward = isCrossingType(s.type) || isRotatedPlacement(s.type)
+            ? cannonFacingRot(s) * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         if (glm::dot(glm::vec2(forward.x, forward.z), glm::vec2(forward.x, forward.z)) > 1e-4f)
             n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
         if (s.yield < 1.0f)
@@ -162,6 +167,8 @@ void StructureSystem::saveTo(AssetNode& root) const
             n.set("Fuel", s.state->store[1]);
         if (s.state->store[2] > 1e-3f)
             n.set("Minerals", s.state->store[2]);
+        if (s.state->store[GoodMunitions] > 1e-3f)
+            n.set("Munitions", s.state->store[GoodMunitions]);
         if (isCableOrCrossing(s.type)) // the cells it holds (transport node fill)
             if (const auto it = m_net.nodeById.find(s.state->structureId);
                 it != m_net.nodeById.end() && m_net.nodes[it->second].fill != 0)
@@ -231,13 +238,16 @@ void StructureSystem::loadFrom(const AssetNode& root)
         const bool onShip = n->find("Ship") && n->find("Ship")->asBool();
         if (onShip && !m_shipExists)
             continue; // no ship to stand on (the ship is off)
-        if (float groundY = 0.0f; !onShip && groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
+        if (float groundY = 0.0f; !onShip && typeInt == (int)EStructureType::Cannon && cannonStandY(pos, groundY))
+            pos.y = groundY + spawnHeightOf((EStructureType)typeInt); // on its road piece / walkway deck (loaded before it)
+        else if (!onShip && groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
             pos.y = groundY + spawnHeightOf((EStructureType)typeInt);
         const float yield = n->find("Yield") ? n->find("Yield")->asFloat() : 1.0f;
         const uint8 team = (uint8)glm::clamp(n->find("Team") ? n->find("Team")->asInt() : 0, 0, GameMaxTeams - 1);
         const bool blueprint = n->find("Blueprint") ? n->find("Blueprint")->asBool() : false;
         const int index = onShip
-            ? spawnShipStructure(id, (EStructureType)typeInt, n->find("Local") ? n->find("Local")->asVec3() : glm::vec3(0.0f), team, !blueprint, yield)
+            ? spawnShipStructure(id, (EStructureType)typeInt, n->find("Local") ? n->find("Local")->asVec3() : glm::vec3(0.0f), team, !blueprint, yield,
+                n->find("ShipTurn") ? n->find("ShipTurn")->asInt() : 0)
             : spawnStructure(id, (EStructureType)typeInt, pos, rot, team, !blueprint, yield);
         if (index < 0)
             continue;
@@ -249,6 +259,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
         s.store[0] = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, s.capacity[0]);
         s.store[1] = glm::clamp(n->find("Fuel") ? n->find("Fuel")->asFloat() : 0.0f, 0.0f, s.capacity[1]);
         s.store[2] = glm::clamp(n->find("Minerals") ? n->find("Minerals")->asFloat() : 0.0f, 0.0f, s.capacity[2]);
+        s.store[GoodMunitions] = glm::clamp(n->find("Munitions") ? n->find("Munitions")->asFloat() : 0.0f, 0.0f, s.capacity[GoodMunitions]);
         if (const AssetNode* f = n->find("Fill"); f && isCableOrCrossing((EStructureType)typeInt))
             m_savedFills[id] = (uint16)glm::clamp(f->asInt(), 0, 65535); // the rebuild below picks it up
         if (hasShieldEmitter((EStructureType)typeInt)) // union variants: write only the active one

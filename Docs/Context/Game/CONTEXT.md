@@ -9,8 +9,8 @@
 > fields is in [`Docs/Context/Nav/CONTEXT.md`](../Nav/CONTEXT.md).
 
 A static lib linked by App; links Entity, Force, Physics and Input. Two modes on one codebase: a
-top-down tactical **PvP** whitebox, and a **co-op** mode — by default a third-person building game in the SANDBOX
-WORLD (terrain, trees, ocean) with no enemies, or (tweaks) the generated rock map with waves; see [Modes.md](Modes.md).
+top-down tactical **PvP** whitebox, and a **co-op** mode — a third-person building game in the SANDBOX
+WORLD (terrain, trees, ocean) with night waves; see [Modes.md](Modes.md).
 
 ```
 App.exe --game                     single player sandbox
@@ -28,7 +28,7 @@ documentation lives in topic files in this folder — read the ones for the area
 
 | File | Covers |
 |---|---|
-| [Modes.md](Modes.md) | Game modes: co-op (the sandbox world: Base site, nodes, the third-person player, crosshair aim; the generated map, teams, shield-less bodies, ambient scatter, waves, the spawn blob, unit types and archetypes, targeting range gates) and PvP (the arenas, teams, structure damage) |
+| [Modes.md](Modes.md) | Game modes: co-op (the sandbox world: Base site, nodes, the third-person player, crosshair aim; the light rules, teams, shield-less bodies, waves, the spawn blob, unit types and archetypes, targeting range gates) and PvP (the arenas, teams, structure damage) |
 | [Sync.md](Sync.md) | Multiplayer sync: the three layers (structure mirror, network entities, capsule adoption), the game blob, puppets, client intents, settings, shadow preset, scene focus, detach camera |
 | [Economy.md](Economy.md) | Economy: the cable transport, physical cables and crossings, derived networks, the cell hash, construction, grid placement |
 | [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, followers), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
@@ -60,7 +60,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | MageTower | Mage tower (MAGE): free workers take a staff and turn small light cones on the enemies (Economy.md, The Armory) |
 | ShipRail | Ship rail (RAIL): the ship's wall, one per edge tile of its deck (Ship.md, Building on the ship) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
-| the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
+| the hotbar pages (`buildCategoryItems` 0..4) | Emplacement (EMPL) / Unit (UNIT) / Structure (STRC) / Production (PROD) / Resource (RSRC) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
 | badges: No power cable / No pipeline, No conveyor | No light store in reach, Light blocked / No road |
 
@@ -180,7 +180,7 @@ bubble; blueprints and unpowered emitters have no bubble and add none — up to 
 (`World::MaxSimLodZones`) in roster order. A zone stamps **tier 1 + a tier 2 band, never tier 0**.
 The structures themselves are `Global` (always ticking, fields always projected); the zone exists for
 the ENEMY in their field: beyond every focus point it is unselected, and the far tick would teleport
-it straight through the barrier. Inside a zone it ticks at tier 1 with its body live, so the field
+it straight through the field. Inside a zone it ticks at tier 1 with its body live, so the field
 pushes it.
 
 With the LOD active the World visits ONLY entities within the outer tier radius of a focus point
@@ -193,41 +193,37 @@ no production, no flows, no turret fire.
 > stay LOD-selected** — they carry no stores, and hundreds of them would sit in the always-visited
 > list.
 
-`terrainroot.pre` is Global too (with `CullMode None`), so the rocks, markers and barrier children
-are selected individually by their own position.
+`terrainroot.pre` is Global too (with `CullMode None`), so the arena's rocks and markers are selected individually by
+their own position.
 
 ---
 
 # The world
 
 (The co-op SANDBOX WORLD stands on the procedural terrain instead — see [Modes.md](Modes.md). This section is the
-flat maps: PvP and the generated co-op map.)
+flat maps: PvP.)
 
 A flat 600 m plane (`Assets/Entities/Game/*.pre`, baseshapes solid meshes with per-prefab `Color`
-tints), plus generated rock terrain and per-mode resource nodes. **Every enemy unit's body is the
+tints), plus the arena's rock terrain and resource nodes. **Every enemy unit's body is the
 shared box-limb model `Debug/CubeGuy.pre`** as a Scene child — size by the reference-site `Scale`,
 colour by `Component GameUnit` `Color`; the GameUnit turns it to the heading and feeds its walk (The
 MODEL, in [`Docs/Context/Entity/CONTEXT.md`](../Entity/CONTEXT.md)). `player.pre` keeps its own shape.
 
 **NO win condition yet.**
 
-## The shared terrain grid
+## The arena's terrain grid
 
-`CoopMap` serves BOTH modes — it carries its own `cellsX` / `cellsZ` / `cellSize` / `origin`, and
+`CoopMap` (PvP only; co-op has no grid) carries its own `cellsX` / `cellsZ` / `cellSize` / `origin`, and
 everything downstream (cell math, flood fill, rect merging, rock spawn, `clampToOpenGround`) reads
-those.
+those: a per-arena rectangle at `c_pvpCellSize` 5 m (so `rock.pre`, a 10 m cube, spawns at HALF scale) plus a
+`c_pvpBorderCells` (2) rock border ring = 10 m.
 
-| Mode | Grid |
-|---|---|
-| Co-op | `c_coopCells` 54² at 10 m — **exactly `2 × c_coopHalfSize` (270 m)**, static_asserted |
-| PvP | a per-arena rectangle at `c_pvpCellSize` 5 m (so `rock.pre`, a 10 m cube, spawns at HALF scale) plus a `c_pvpBorderCells` (2) rock border ring = 10 m |
-
-Shared machinery: `finishGrid(seedCells)` does the BFS from the seeds, **seals cut-off pockets by
+`finishGrid(seedCells)` does the BFS from the seeds, **seals cut-off pockets by
 turning unreachable open cells into rock**, and merges the blocked runs into `m_terrainRects`. Those
 rects are simultaneously the Nav obstacles, the `StructureSystem::setTerrainBlocked` rects and the
 placement bounds.
 
-Blocked cells spawn `rock.pre` (sunk to a 3.5–6 m exposed height in co-op, 3–4.5 m in PvP) plus
+Blocked cells spawn `rock.pre` (sunk to a 3–4.5 m exposed height) plus
 `terrainmark.pre` — a dark-red ground plane, render-only — under ONE `m_terrainRoot` through
 `spawnBatch`.
 
@@ -236,20 +232,16 @@ fail), so `clampToOpenGround` snaps it to the nearest open cell centre.
 
 ## Determinism and the GMp event
 
-Generation is **pure seeded math** (`MapRng` / `mapHash` — **NEVER `glm::linearRand`**), so every
-instance derives the identical map.
+Generation is **pure math** (`MapRng` / `mapHash` — **NEVER `glm::linearRand`**), so every
+instance derives the identical arena.
 
-The AUTHORITY broadcasts the inputs as the **"GMp"** event, **FIRST in `onClientJoined`, before the
-GPl replay** (reliable ch1 order). GMp carries a MODE BYTE: **0 = the co-op inputs (seed u32, fill
-f32, lanes u8), 1 = the PvP arena index (u8).**
+The AUTHORITY broadcasts the arena as the **"GMp"** event (`[u8 EPvpMap]`), **FIRST in `onClientJoined`, before the
+GPl replay** (reliable ch1 order).
 
 **Clients defer terrain and nodes until it arrives**, so a client has no terrain until its join
-replay lands. `rebuildCoopMap`
-/ `rebuildPvpMap` no-op on repeats.
+replay lands. `rebuildPvpMap` no-ops on repeats.
 
-The same inputs ride the F9 save (`MapSeed` / `MapFill` / `MapLanes`, or `PvpMap`), **because a
-joiner's tweak sync lands after the replay — too late.** `loadGame` regenerates the exact map after
-clearing structures, and re-broadcasts GMp.
+The arena rides the F9 save (`PvpMap`). `loadGame` rebuilds it after clearing structures, and re-broadcasts GMp.
 
 ---
 
@@ -261,17 +253,17 @@ A full sim snapshot to `Assets/Local/gamesave.txt` through AssetParser
 (`StructureSystem::saveTo` / `loadFrom` / `clearAllStructures`, `NpcSystem::saveUnits` / `loadUnits`,
 `GameMatch::saveGame` / `loadGame`): structures with id / type / pos / facing / yield / team /
 blueprint / stores / route — **cable segments are ordinary Structure entries, with NO Cable nodes** —
-plus the map inputs and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
-clock (`WaveIndex` waves launched, which sizes the next one; `WaveTimer` seconds to it) and
-`MatchTime` (the HUD clock), so a load resumes the escalation; the sandbox world adds `NightIndex` / `Night` /
-`TimeOfDay` / `NightWave` / `WaveScale` (the light rules and the night's build-up, [Modes.md](Modes.md)). **A structure's HEIGHT comes from the world at load, not from the save**:
+plus the PvP arena and `PlayerPos`, the LOCAL player's body position. Co-op saves also carry the wave
+clock (`WaveIndex` waves launched; `WaveTimer` seconds to the next), `MatchTime` (the HUD clock), `NightIndex` /
+`Night` / `TimeOfDay` / `NightWave` / `WaveScale` (the light rules and the night's build-up, [Modes.md](Modes.md)), so
+a load resumes the night. **A structure's HEIGHT comes from the world at load, not from the save**:
 `loadFrom` puts it on the ground under it at its type's stand height NOW (`groundFit`, the placement's own test; the
 water surface for a bridge or a gate), so a type whose model got taller or lower does not float or sink; the saved
 height stays only where this instance has no ground collider under the place. **Shots are NOT saved**; projectiles
 are transient and a load clears them.
 
 **A structure entry writes only NON-DEFAULT keys**: Id, Type and Position always; Facing, Yield (a Lumberyard's / Quarry's),
-Team, Blueprint, Health, the three stores (Charge / Fuel / Minerals), Fill, OutputFrac, UnitType and
+Team, Blueprint, Health, the four stores (Charge / Fuel / Minerals / Munitions), Fill, OutputFrac, UnitType and
 Route only when the `loadFrom` fallback (no facing, a full yield, team 0, built, full health, empty stores,
 no fill, dark, Grunt, no route) would not restore them. A blueprint's health is its build progress and
 is always below max, so it is always written.
@@ -280,15 +272,9 @@ is always below max, so it is always written.
 in points at `queueWave` and its bodies materialize over the following frames, so without it a save
 mid-wave would drop everything not yet spawned. `WaveTrickle` carries the remaining points
 (`Pending`), WHERE they enter (`Origin`) and march (`Dest`), the blob `Radius`, `LastArchetype`, and
-the wave's rolled, JITTERED `Mix` — which cannot be re-derived from the archetype table.
-`AmbientTrickle` carries the world-start scatter's remaining points plus the group it is mid-way
-through placing. A resumed wave with points left **re-seeds its Nav lane**.
-
-> `loadTrickle` MUST run after `rebuildCoopMap` — that voids the in-progress ambient group, whose
-> anchor belongs to the old map. A save with NO trickle nodes CLEARS both budgets: that file is the
-> complete state, and letting the running session's own scatter continue on top of it would
-> double-spawn. The spacing ring (`m_waveRecent`) is deliberately not saved — it only rejects spots
-> for a handful of spawns.
+the wave's rolled, JITTERED `Mix` — which cannot be re-derived from the archetype table. A resumed wave with points
+left **re-seeds its Nav lane**. A save with NO trickle node CLEARS the budget: that file is the complete state. The
+spacing ring (`m_waveRecent`) is deliberately not saved — it only rejects spots for a handful of spawns.
 
 Units save type / team / pos / health / energy / source / route index **plus `Order`, the standing
 MOVE ORDER destination** — written only for a real move order, never for a transient `wanderOrder`

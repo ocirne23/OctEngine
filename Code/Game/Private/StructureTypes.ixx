@@ -10,7 +10,7 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, Count };
 
 // LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
 // walk through: its collider is Layer Gate, which leaves the Player layer out).
@@ -43,6 +43,12 @@ export constexpr bool isHarvestType(EStructureType t)
 export constexpr bool isPlaceableType(EStructureType t)
 {
     return (int)t < (int)EStructureType::Count && t != EStructureType::Base && t != EStructureType::ShipRail;
+}
+// Stone builds and repairs it (investMaterials, the walkers' build and repair work, the Builder's hut): everything placeable,
+// plus the two the game places itself - the Base and the ship's rail (rubble of a rail is built again like any blueprint).
+export constexpr bool isRepairableType(EStructureType t)
+{
+    return isPlaceableType(t) || t == EStructureType::Base || t == EStructureType::ShipRail;
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
 // BUILT segments is one transport RUN; the buildings it touches are its ports (see
@@ -79,8 +85,17 @@ export constexpr bool isShipPlaceableType(EStructureType t)
 // and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab - never the Walkway.
 export constexpr bool isWalkThrough(EStructureType t)
 {
-    return (isCableOrCrossing(t) && t != EStructureType::Walkway) || t == EStructureType::Solar;
+    return (isCableOrCrossing(t) && t != EStructureType::Walkway) || t == EStructureType::Solar || t == EStructureType::Cannon;
 }
+// THE CANNON stands on ONE cell that may also hold a road piece or a walkway deck (the piece stays the cell's primary
+// occupant, the cannon rides `underId`), turned to a facing (eighths of a turn), and fires in an arc around it.
+export constexpr bool isRotatedPlacement(EStructureType t)
+{
+    return t == EStructureType::Cannon;
+}
+// MUNITIONS: the fourth good (store index 3) - made by the Ammo works, banked by the Ammo store, used by the Cannon.
+// They move ONLY by carrier (never on a cable).
+export constexpr int GoodMunitions = 3;
 export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 minerals; -1 = not a cable
 {
     return t == EStructureType::CablePower ? 0
@@ -115,7 +130,7 @@ export inline constexpr const char* c_storePriorityNames[] = { "Balance", "Fill"
 export constexpr bool hasStorePriority(EStructureType t)
 {
     return t == EStructureType::MineralSilo || t == EStructureType::Battery || t == EStructureType::Base
-        || t == EStructureType::FuelTank;
+        || t == EStructureType::FuelTank || t == EStructureType::AmmoStore;
 }
 // A building with a player ORDER byte (the popup, GqU / GBu, the save): a barracks' unit type, a store's priority.
 export constexpr bool hasOrderByte(EStructureType t)

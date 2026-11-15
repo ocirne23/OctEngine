@@ -165,21 +165,24 @@ uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color, floa
     texture.pixel = { uint8(key & 0xFF), uint8((key >> 8) & 0xFF), uint8((key >> 16) & 0xFF), 0xFF };
     const uint16 texIdx = Globals::textureManager.upload(texture, false, true);
 
-    RendererVKLayout::MaterialInfo material{};
-    // No MATERIAL_FLAG_NO_RAYTRACING: the flag also drops the instance from the sun shadow caster cull,
-    // and every tinted game entity (units, structures, the player) went shadowless. Tints cast shadows
-    // and sit in the TLAS like any lit material.
-    material.flags = 0;
-    material.opacity = 1.0f;
-    material.diffuseTexIdx = texIdx;
-    material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
-    material.metalRoughnessTexIdx = 0xFFFF; // lit shading's "no texture": metal 0, roughness 0.65
-    material.alphaMode = 0;
-    if (strength > 0) // EMISSIVE: the unlit shader reads the strength from `opacity` (EAlphaMode::Emissive)
-    {
-        material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Emissive;
-        material.opacity = (float)strength / 16.0f;
-    }
+    // A PLAIN tint has no MATERIAL_FLAG_NO_RAYTRACING: the flag also drops the instance from the sun shadow caster
+    // cull, and every tinted game entity (units, structures, the player) went shadowless. Tints cast shadows and sit
+    // in the TLAS like any lit material.
+    // An EMISSIVE one (the unlit shader reads the strength from `opacity`, EAlphaMode::Emissive) is OUT OF RAY TRACING, as
+    // its container is (gemsGlow / eyes: ExcludeFromRayTracing, which this tint replaces): a glowing piece is a look, not
+    // geometry. A light at its centre (the cannon shell's) otherwise had every shadow ray toward it hit the piece itself.
+    // ONE initializer, every field decided in it: written as `material.flags |= NO_RAYTRACING` inside an `if` after the
+    // plain fields, the flag never reached the table in the RelWithDebInfo build (the alpha mode and the strength set in
+    // the same `if` did) - unless something read `material.flags` before the add.
+    const bool glows = strength > 0;
+    const RendererVKLayout::MaterialInfo material{
+        .flags = glows ? RendererVKLayout::MATERIAL_FLAG_NO_RAYTRACING : 0u,
+        .opacity = glows ? (float)strength / 16.0f : 1.0f,
+        .diffuseTexIdx = texIdx,
+        .normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX,
+        .metalRoughnessTexIdx = 0xFFFF, // lit shading's "no texture": metal 0, roughness 0.65
+        .alphaMode = glows ? (uint16)RendererVKLayout::EAlphaMode::Emissive : (uint16)0,
+    };
     const uint16 materialIdx = (uint16)addMaterialInfos({ material });
     m_solidColorMaterials.emplace(key, materialIdx);
     // Publish to the lock-free mirror (inserts only happen here, under the lock). A full mirror just leaves

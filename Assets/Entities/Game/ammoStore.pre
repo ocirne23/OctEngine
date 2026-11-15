@@ -1,0 +1,62 @@
+# Ammo store: banks MUNITIONS ("Ammo store capacity"); workers fill it from the Ammo works and take from it to the
+# Cannons (a storage of the munitions good). DESTROYED WITH MUNITIONS INSIDE IT EXPLODES (StructureSystem::ammoBlast):
+# keep it away from the wall. A 2x1.5x2 m box (1 cell). Spawned origin 0.75 above the ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a low iron-banded crate (the root) with a stack of
+# pale charging crystals on it. The child pieces are render-only.
+Prefab gameAmmoStore
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeHalf
+		Type StaticMesh
+		Color 0.4 0.3 0.2
+		Position 0 -0.3 0
+		Scale 0.9
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 1 0.75 1
+	Component GameStructure
+		MeleeRadius 1
+		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Band
+			Position 0 -0.3 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.22 0.22 0.24
+				Scale 0.93
+		Entity
+			Name Crystal
+			Position 0 0.55 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3
+				Scale 0.28
+		Entity
+			Name CrystalL
+			Position -0.45 0.38 0.3
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 2.5
+				Scale 0.18
+		Entity
+			Name CrystalR
+			Position 0.45 0.38 -0.3
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 2.5
+				Scale 0.18

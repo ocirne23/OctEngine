@@ -245,12 +245,21 @@ public:
 			const float slot = hudSettings.hotbarSlotSize * s;
 			const float pad = 5.0f * s;
 			const float margin = 14.0f * s;
-			const int columns = hud.columns > 0 ? hud.columns : GameHud::NumSlots;
-			const int rows = (GameHud::NumSlots + columns - 1) / columns;
-			const float totalH = rows * slot + (rows - 1) * pad;
 			// ONE ROW (columns <= 0) is a BAR: wide slots (a caption fits at full size), centred at the bottom of the
-			// viewport on a dark plate, the armed slot in gold. A grid stays square, bottom left.
+			// viewport on a dark plate, the armed slot in gold, ONLY as many slots as are assigned (up to the last
+			// one), and the TAB STRIP (setTabs) over it. A grid stays square, all its slots, bottom left.
 			const bool bar = hud.columns <= 0;
+			int shown = GameHud::NumSlots;
+			if (bar)
+			{
+				shown = 1;
+				for (int i = 0; i < GameHud::NumSlots; ++i)
+					if (hud.slots[i].used)
+						shown = i + 1;
+			}
+			const int columns = hud.columns > 0 ? hud.columns : shown;
+			const int rows = (shown + columns - 1) / columns;
+			const float totalH = rows * slot + (rows - 1) * pad;
 			const float slotW = bar ? slot * 1.45f : slot;
 			const float totalW = columns * slotW + (columns - 1) * pad;
 			const float x0 = bar ? (vpMin.x + vpMax.x - totalW) * 0.5f : vpMin.x + margin;
@@ -260,10 +269,46 @@ public:
 					col(0.03f, 0.03f, 0.04f, 0.55f), 8.0f * s);
 			const float keyFontSize = fontSize * 0.95f;
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
-			glm::vec4 rects[GameHud::NumSlots];
+			glm::vec4 rects[GameHud::NumSlots] = {}; // a slot not drawn keeps an empty rect: no hit
 			const HudSlot* cardSlot = nullptr; // the hovered slot's hover card, drawn after the grid
 			ImVec2 cardAnchor(0.0f, 0.0f);
-			for (int i = 0; i < GameHud::NumSlots; ++i)
+			// THE TAB STRIP (a bar only): the page names in a row over the bar's plate, centred, the open one in gold.
+			// Each tab's rect goes back for the clicks (GameHud::tabAtScreenPos).
+			if (bar && hud.tabCount > 0)
+			{
+				const float tabFont = fontSize * 0.95f;
+				const float tabH = tabFont + 8.0f * s;
+				const float tabPadX = 10.0f * s;
+				float tabW[GameHud::MaxTabs] = {};
+				float stripW = 0.0f;
+				for (int t = 0; t < hud.tabCount; ++t)
+				{
+					tabW[t] = font->CalcTextSizeA(tabFont, noWrap, 0.0f, hud.tabLabels[t].c_str()).x + tabPadX * 2.0f;
+					stripW += tabW[t] + (t > 0 ? pad : 0.0f);
+				}
+				float tx = (vpMin.x + vpMax.x - stripW) * 0.5f;
+				const float ty = y0 - pad * 1.5f - pad - tabH;
+				glm::vec4 tabRects[GameHud::MaxTabs];
+				for (int t = 0; t < hud.tabCount; ++t)
+				{
+					const ImVec2 tMin(tx, ty), tMax(tx + tabW[t], ty + tabH);
+					tabRects[t] = glm::vec4(tMin.x, tMin.y, tMax.x, tMax.y);
+					const bool open = t == hud.selectedTab;
+					const bool hovered = mouse.x >= tMin.x && mouse.x <= tMax.x && mouse.y >= tMin.y && mouse.y <= tMax.y;
+					dl->AddRectFilled(tMin, tMax, open ? col(0.16f, 0.13f, 0.06f, 0.9f)
+						: hovered ? col(0.16f, 0.18f, 0.22f, 0.85f) : col(0.04f, 0.04f, 0.05f, 0.6f), 5.0f * s);
+					dl->AddRect(tMin, tMax, open ? col(1.0f, 0.82f, 0.35f, 1.0f)
+						: hovered ? col(1.0f, 1.0f, 1.0f, 0.8f) : col(0.5f, 0.5f, 0.55f, 0.5f), 5.0f * s, 0, open ? 2.0f * s : 1.0f * s);
+					const ImVec2 ts = font->CalcTextSizeA(tabFont, noWrap, 0.0f, hud.tabLabels[t].c_str());
+					text(ImVec2(tMin.x + (tabW[t] - ts.x) * 0.5f, tMin.y + (tabH - ts.y) * 0.5f), tabFont,
+						open ? col(1.0f, 0.88f, 0.5f, 1.0f) : col(0.85f, 0.85f, 0.85f, 1.0f), hud.tabLabels[t].c_str());
+					tx += tabW[t] + pad;
+				}
+				Globals::gameHud.setTabScreenRects(oc::span<const glm::vec4>(tabRects, (size_t)hud.tabCount));
+			}
+			else
+				Globals::gameHud.setTabScreenRects({});
+			for (int i = 0; i < shown; ++i)
 			{
 				const float x = x0 + (i % columns) * (slotW + pad);
 				const float y = y0 + (i / columns) * (slot + pad);

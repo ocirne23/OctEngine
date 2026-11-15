@@ -5,33 +5,25 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 31;
+export constexpr int GameStructureTypeCount = 34;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
 export struct GameMatchSettings
 {
-    float waveFirstDelay = 40.0f;
-    float waveInterval = 120.0f;
-    // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost, so a brute-heavy archetype fields far
-    // fewer bodies than a swarm flood of the same budget.
-    int waveBudget = 100;             // points in wave 1 (the sandbox world: with the night ramp below, the first night is ~80% of what 200
-                                      // with a 0.25 ramp gave, the second ~1.3x, the later ones grow faster)
-    float waveBudgetGrowth = 60.0f;   // extra points per subsequent wave
-    float waveGrowthGrowth = 30.0f;   // how much that per-wave growth itself climbs every wave
+    // THE WAVES (co-op, at night). Sized in BUDGET POINTS, not unit counts: each type has a cost, so a brute-heavy
+    // archetype fields far fewer bodies than a swarm flood of the same budget. Wave k (0-based) of night n (0-based):
+    //   waveBudget x nightGrowth^n x (1 + waveGrowthPerWave x k) x random(1 +- waveVariation)
+    int waveBudget = 200;          // points of the first night's first wave
+    float nightGrowth = 2.5f;         // x every wave's points per night
+    int   nightWaves = 14;            // waves in one night (the first at dusk): the time between them is the night's length / this
+    float waveGrowthPerWave = 0.25f;  // each later wave of a night is this much bigger (x the night's first wave, added per wave)
+    float waveVariation = 0.4f;       // random +- on a wave's size and on the time to the next one
     float waveCost[GameUnitTypeCount] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                           15.0f, 100.0f, 500.0f, 30.0f, 40.0f, // Elite, Giant, Titan, Lobber, Spawner
                                           5.0f };                              // Warrior
-    int waveMaxAlive = 100000;        // total AI units cap (ambient + waves)
+    int waveMaxAlive = 100000;        // total AI units cap
     float waveSpawnAreaPerUnit = 6.0f; // m² of blob per body (~2.8 m mean spacing at 6)
-    int ambientBudget = 500000;       // POINTS of world-start scatter (same per-type costs as waves)
-    float ambientSafeRadius = 45.0f;  // the scatter keeps clear of the Base (planar)
-    int ambientRecipeWindow = 3;      // a group rolls recipes gated within this many bands below its depth band
-    float ambientDepthScale = 0.9f;   // the depth fraction that already counts as the deepest band
-    float ambientWanderInterval = 90.0f; // mean seconds between an idle AI unit's strolls (0 = off)
-    float ambientWanderDistance = 12.0f; // stroll length (0.4-1x of it)
-    float ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
-    float ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
     float labelMaxDistance = 120.0f;  // world labels beyond this are not built
     float labelBarDistance = 45.0f;   // m from the CAMERA: a building farther than this shows no bars (health / build, stores); its badge stays
     float labelUnitStrength = 1.5f;   // a unit shows a bar only when its health + shield is at least this x the common enemy's in view
@@ -39,22 +31,13 @@ export struct GameMatchSettings
     float navUnitSourceReach = 64.0f;
     // A non-AI unit farther than this from every SIM LOD focus seeds a new cluster focus.
     float focusClusterRadius = 40.0f;
-    int spawnsPerFrame = 100;         // trickle budget - a huge wave enters over seconds, not one hitch
-    // Co-op in the SANDBOX WORLD (terrain, trees, ocean) with the third-person player; off = the generated rock map
-    // with the top-down camera. Read when the match is constructed.
-    bool coopSandboxWorld = true;
-    bool coopEnemies = true;          // waves + the ambient scatter (off: a peaceful building game)
-    float sandboxWaveDistance = 70.0f; // sandbox world: the NEAREST a wave spawns to the Base (m); it spawns on the first enemy land from there out
+    int spawnsPerFrame = 150;       // trickle budget - a huge wave enters over seconds, not one hitch
+    bool coopEnemies = true;          // the waves (off: a peaceful building game)
+    float sandboxWaveDistance = 70.0f; // the NEAREST a wave spawns to the Base (m); it spawns on the first enemy land from there out
     float sandboxWaveMaxDistance = 400.0f; // ... and the farthest, where the players' land reaches past it
-    // THE LIGHT RULES (the sandbox world): the waves come at NIGHT only, daylight burns the demons, and a field does
-    // not push them - they walk in and burn.
+    // THE LIGHT RULES (co-op): the waves come at NIGHT only, daylight burns the demons, and a field does not push them -
+    // they walk in and burn.
     float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
-    int   nightWaves = 14;            // waves in one night (the first at dusk): the time between them is the night's length / this
-    float waveSizeMult = 1.0f;        // x every wave's budget: the one knob for "how many enemies"
-    float nightWaveRamp = 0.5f;   // each later wave of a night is this much bigger (x the night's base size, added per wave)
-    float nightWaveVariation = 0.4f;  // random +- on a night wave's size and on the time to the next one
-    int   nightSurgeEvery = 4;        // every Nth wave of a night is a surge (0 = none)
-    float nightSurgeSize = 2.0f;      // x the size of a surge wave
     float sunlightDps = 20.0f;        // health/s a demon loses in full daylight
     bool fieldsBlockDemons = false;   // on = the fields push every demon, as on the flat maps
     bool demonShadowForm = true;      // a demon outside a player field (and outside daylight) takes no direct damage
@@ -106,10 +89,6 @@ export struct GameMatchSettings
     float spawnBeamGlow = 6.0f;       // the red signal beam at a spawn site, from the ground to the clouds (0 = none)
     float spawnBeamRadius = 1.5f;     // m: its core
     float fieldFogClear = 1.0f;       // 0..1: the share of the fog a field removes inside its bubble (0 = off)
-    // Map generation inputs, read once at generation on the AUTHORITY (the lobby writes them too).
-    int mapSeed = 0;                  // 0 = random each run
-    float terrainFill = 0.3f;         // fraction of interior cells turned to rock (before carving)
-    int terrainLanes = 6;             // carved attack lanes from the base ring to the map edge
     // The player-inventory material loop.
     float refillRadius = 6.0f;        // metres from a Silo/Base within which the inventory refills
     float refillRate = 15.0f;         // materials/s pulled from the stores
@@ -213,6 +192,9 @@ export struct GameStructureSettings
         40.0f,  // Armory
         50.0f,  // MageTower
         5.0f,   // ShipRail (spawned with the ship, never placed - this entry only prices its repairs)
+        40.0f,  // Cannon
+        60.0f,  // AmmoWorks
+        15.0f,  // AmmoStore
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -251,7 +233,35 @@ export struct GameStructureSettings
         250.0f,  // Armory
         250.0f,  // MageTower
         600.0f,  // ShipRail: the ship's wall, one per edge tile
+        300.0f,  // Cannon
+        300.0f,  // AmmoWorks
+        120.0f,  // AmmoStore: it blows up with its munitions
     };
+    // THE CANNON and MUNITIONS (the fourth good: made by the Ammo works from stone and light, banked by the Ammo store,
+    // carried by workers). The cannon fires an arcing splash shell (cannonShell.pre: its damage and splash) in an arc
+    // around its facing.
+    float cannonRange = 45.0f;        // m
+    float cannonMinRange = 10.0f;      // m: nothing closer (the shell would land on its own wall)
+    float cannonArcDeg = 150.0f;      // the arc it fires in, centred on its facing
+    float cannonFireInterval = 3.0f;  // s between two shots
+    float cannonShotSpeed = 20.0f;    // m/s: the shell's horizontal speed (the flight time follows the distance)
+    float cannonAmmoCapacity = 5.0f;  // munitions it holds (one per shot)
+    float cannonTurnRate = 60.0f;     // deg/s the gun turns to aim (it fires only when it points at the target)
+    // THE CREW: workers MAN a cannon (it fires only with one at the gun; with fewer than "Crew" the reload is slower).
+    // An enemy unit within "Crew call range" calls them out; they stay "Crew stand down" after the last one left it.
+    int   cannonCrew = 2;
+    float cannonCallRange = 60.0f;    // m
+    float cannonStandDown = 15.0f;    // s
+    float ammoRate = 0.5f;            // munitions/s an Ammo works makes with full staff
+    float ammoStonePer = 1.0f;        // stone per munition
+    float ammoLightPer = 2.0f;        // light per munition
+    int   workersAmmo = 2;            // workers an Ammo works needs
+    float ammoWorksBuffer = 50.0f;    // munitions (and stone) it holds
+    float ammoStoreCapacity = 30.0f;  // munitions an Ammo store banks
+    // THE BLAST: an Ammo store destroyed with munitions in it explodes - units of EVERY team and buildings in the radius
+    // take the damage, less toward the edge. Both scale with the munitions inside (a full store: the full values).
+    float ammoBlastRadius = 8.0f;     // m
+    float ammoBlastDamage = 400.0f;
     // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
     // rubble: a destroyed building is gone).
     float rubbleCost = 0.5f;
@@ -262,7 +272,7 @@ export struct GameStructureSettings
     // under harvestMinYield. BY SIZE: each tree counts (its size / the world's average tree) ^ harvestSizeExponent, each
     // rock (its longest axis / harvestRockRef) ^ harvestSizeExponent - so a big boulder or a big tree counts for many.
     float harvestRadius = 32.0f;
-    float harvestTreesFull = 6.7f;    // average trees
+    float harvestTreesFull = 5.0f;    // average trees
     float harvestStoneFull = 4.0f;    // reference rocks (a 6 m boulder alone is 4 with the defaults, a 20 m monolith 44)
     float harvestSizeExponent = 2.0f; // 1 = by length, 2 = by area, 3 = by volume
     float harvestRockRef = 3.0f;      // m: the rock that counts 1
@@ -522,12 +532,14 @@ export struct GameStructureParams
     float turretDamage = 12.5f;
     // THE SEARCHLIGHT: a cone of light that turns to the nearest demon in range. Every demon in the cone is solid and
     // burns (GameUnitParams::lightCones); it draws light only while it shines.
-    float searchlightRange = 26.0f;
-    float searchlightHalfAngleDeg = 16.0f;
+    float searchlightRange = 40.0f;
+    float searchlightHalfAngleDeg = 11.0f; // (about as wide at the far end of 40 m as 16 degrees were at 26 m)
     float searchlightDps = 3.2f;           // health/s to EACH unit in the cone
     float searchlightEnergyPerSec = 1.0f;   // while it shines
     float searchlightTurnDegPerSec = 30.0f;
-    float searchlightIntensity = 2500.0f;   // the spot light on the ground and the demons
+    // The spot light on the ground and the demons, for a 26 m range: the Searchlight's own spot scales by (range / 26)^2
+    // (the lights fall off with the square of the distance), so its far end is as bright at any range.
+    float searchlightIntensity = 2500.0f;
     float medicRange = 12.0f;
     float medicHealRate = 40.0f;   // health/s AND battery energy/s per body (stations stack)
     float medicHealCost = 0.5f;    // light to heal a unit from 0 to full health, x its spawn energy (paid per health healed)

@@ -10,15 +10,15 @@ import Settings;
 namespace
 {
     // Mirrors of light_grid.inc.glsl / hash_grid.inc.glsl: keep in sync.
-    constexpr uint32 GRID_SIZE = 32;
-    constexpr uint32 MAX_LARGE_LIGHTS_PER_GRID = 14;
-    constexpr uint32 MAX_LIGHTCELL_LIGHTS = 16;
+    constexpr uint32 GRID_SIZE = 64;
+    constexpr uint32 MAX_LARGE_LIGHTS_PER_GRID = 30;
+    constexpr uint32 MAX_LIGHTCELL_LIGHTS = 24;
     constexpr uint32 GRID_HEADER_SIZE = 4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1);
     constexpr uint32 CELL_STRIDE = MAX_LIGHTCELL_LIGHTS / 2 + 1;
     constexpr uint32 GATHER_GROUP = 64;        // LIGHT_GRID_GATHER_GROUP
     constexpr uint32 LARGE_BIT = 0x80000000u;
     constexpr uint32 CULL_VEC4S_PER_LIGHT = 3;
-    constexpr int MAX_GRIDS_PER_AXIS = 32;     // a kilometre-scale light walks 32^3 grids at most
+    constexpr int MAX_GRIDS_PER_AXIS = 32;     // a light of two kilometres walks 32^3 grids at most
     constexpr uint32 INITIAL_TOUCHES = 65536;
 
     glm::ivec3 gridPosOf(const glm::vec3& pos)
@@ -33,8 +33,8 @@ namespace
         const float t = glm::max(viewDist - glm::max(params.lodStart, 0.0f), 0.0f) / glm::max(params.lodStep, 0.01f);
         const float power = glm::max(params.lodPower, 0.01f);
         const float level = glm::abs(power - 0.5f) < 1e-3f ? std::sqrt(t) : glm::abs(power - 1.0f) < 1e-3f ? t : std::pow(t, power);
-        const int minLog2 = oc::clamp(params.minCellLog2, 0, 5);
-        const int maxLog2 = oc::clamp(params.maxCellLog2, minLog2, 5);
+        const int minLog2 = oc::clamp(params.minCellLog2, 0, 6); // (6: 64 m, one cell per grid)
+        const int maxLog2 = oc::clamp(params.maxCellLog2, minLog2, 6);
         const uint32 cellSize = (1u << minLog2) << uint32(glm::min(level, 8.0f));
         return oc::clamp(cellSize, 1u << minLog2, 1u << maxLog2);
     }

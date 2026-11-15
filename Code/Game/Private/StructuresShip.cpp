@@ -44,7 +44,8 @@ bool StructureSystem::deckCellsFree(EStructureType type, const glm::vec3& p) con
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f;
     for (const Ref& r : m_frame)
     {
-        if (!r.onShip)
+        // A CANNON may stand on a RAIL tile (the rail stays; landed, the rail is the cell's occupant, the cannon rides underId).
+        if (!r.onShip || (type == EStructureType::Cannon && r.type == EStructureType::ShipRail))
             continue;
         const float other = footprintCellsOf(r.type) * GridCellSize * 0.5f;
         if (glm::abs(r.shipLocal.x - p.x) < half + other - 1e-3f && glm::abs(r.shipLocal.z - p.z) < half + other - 1e-3f)
@@ -53,14 +54,15 @@ bool StructureSystem::deckCellsFree(EStructureType type, const glm::vec3& p) con
     return true;
 }
 
-void StructureSystem::queueShipPlaceRequest(EStructureType type, const glm::vec3& snappedLocal, float yield, uint8 team)
+void StructureSystem::queueShipPlaceRequest(EStructureType type, const glm::vec3& snappedLocal, float yield, uint8 team, int turn)
 {
     PlaceRequest request{ type, snappedLocal, glm::vec3(0.0f), yield, team };
     request.ship = true;
+    request.turn = turn;
     m_requests.push_back(request);
 }
 
-void StructureSystem::placeShipStructure(EStructureType type, const glm::vec3& local, float yield, uint8 team)
+void StructureSystem::placeShipStructure(EStructureType type, const glm::vec3& local, float yield, uint8 team, int turn)
 {
     if (!m_shipExists || !isShipPlaceableType(type) || (int)team >= GameMaxTeams)
         return;
@@ -68,18 +70,21 @@ void StructureSystem::placeShipStructure(EStructureType type, const glm::vec3& l
     if (!deckCellsFree(type, p) || actorInFootprint(type, shipToWorld(p)))
         return; // raced the ghost: refused like a land placement
     // (No GPl: clients see no ship. CHEAT "Free instant build" skips the blueprint like on land.)
-    spawnShipStructure(m_nextStructureId++, type, p, team, /*built*/ m_settings.cheatInstantBuild, yield);
+    spawnShipStructure(m_nextStructureId++, type, p, team, /*built*/ m_settings.cheatInstantBuild, yield,
+        isRotatedPlacement(type) ? turn : 0);
 }
 
-int StructureSystem::spawnShipStructure(uint32 id, EStructureType type, const glm::vec3& local, uint8 team, bool built, float yield)
+int StructureSystem::spawnShipStructure(uint32 id, EStructureType type, const glm::vec3& local, uint8 team, bool built, float yield, int turn)
 {
     const glm::vec3 pos = shipToWorld(local + glm::vec3(0.0f, spawnHeightOf(type), 0.0f));
-    const int index = spawnStructure(id, type, pos, m_shipRot, team, built, yield, /*insert*/ m_shipJoined);
+    const glm::quat rot = m_shipRot * glm::angleAxis((float)(turn & 7) * glm::quarter_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
+    const int index = spawnStructure(id, type, pos, rot, team, built, yield, /*insert*/ m_shipJoined);
     if (index < 0)
         return -1;
     Ref& ref = m_frame[index];
     ref.onShip = true;
     ref.shipLocal = local;
+    ref.shipTurn = (int8)(turn & 7);
     ref.authoredInvulnerable = ref.state->invulnerable != 0;
     if (type == EStructureType::ShipRail)
         applyRailSides(ref);
@@ -179,7 +184,7 @@ void StructureSystem::tickShipStructures()
         if (!r.onShip)
             continue;
         r.entity->pos = shipToWorld(r.shipLocal + glm::vec3(0.0f, spawnHeightOf(r.type), 0.0f));
-        r.entity->rot = m_shipRot;
+        r.entity->rot = shipStructureRot(r) * glm::angleAxis(r.cannonAim, glm::vec3(0.0f, 1.0f, 0.0f)); // (a Cannon: its gun's turn)
         if (r.rubbleVisual)
         {
             r.rubbleVisual->pos = shipToWorld(r.shipLocal);
@@ -358,7 +363,7 @@ void StructureSystem::shipColliderBoxes(oc::vector<GameShip::Box>& out) const
         return; // landed: every structure has its own collider again
     for (const Ref& r : m_frame)
     {
-        if (!r.onShip || r.state->rubble)
+        if (!r.onShip || r.state->rubble || isWalkThrough(r.type)) // (the Cannon: walked through)
             continue;
         if (r.type == EStructureType::ShipRail) // the rail pieces only: the tile is walked on
         {

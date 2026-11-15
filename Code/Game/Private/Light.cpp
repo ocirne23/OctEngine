@@ -264,7 +264,11 @@ void StructureSystem::publishSearchlights() const
         // The light starts IN FRONT of the lamp gem, not at its centre: from inside the mesh every shadow ray hits the
         // gem itself and the cone is dark.
         const glm::vec3 source = lamp + axis * c_searchlightLampClear;
-        Globals::rendererVK.addLightInfo(SpotLight(source, params.searchlightRange * 1.15f, color, params.searchlightIntensity, axis, halfAngle, 0.15f));
+        // "Searchlight brightness" is for a 26 m range; the light falls off with the square of the distance, so a longer
+        // reach gets that much more (its far end stays as bright).
+        const float reach = glm::max(params.searchlightRange, 1.0f) / 26.0f;
+        Globals::rendererVK.addLightInfo(SpotLight(source, params.searchlightRange * 1.15f, color, params.searchlightIntensity * reach * reach,
+            axis, halfAngle, 0.15f));
         // (No beam column for a shaft in the air: a column is a cylinder, and it did not read as this cone.)
     }
     // THE MAGES (walkers of a Mage tower, the authority only): a small Searchlight cone each, from the staff, while it has

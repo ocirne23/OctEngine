@@ -22,8 +22,8 @@ idempotent; the server side is fed by StructureSystem's `onStructure*` hooks.
   (`[u16 count]{u32 id, u8 fill, u8 util}`, up to 160, rotating through `m_cableFillCursor`).
 
 Plus **GSt at 5 Hz**: per-team mineral / fuel totals and the grid energy figures, then u8-quantized
-health / charge / fuel / minerals / outputFrac (a barracks' population instead) / flow-utilization
-plus a status byte (bit0 powered, bit1 blueprint) for the first 79 NON-CABLE structures. **Mirrored
+health / charge / fuel / minerals / munitions / outputFrac (a barracks' population instead; a Cannon's gun turn, -pi..pi) / flow-utilization
+plus a status byte (bit0 powered, bit1 blueprint, bit2 rubble) for the first 72 NON-CABLE structures (12 B each). **Mirrored
 emitters drive their LOCAL ForceComponent from the synced outputFrac**, so client-side fields are
 real and the client player's shield readbacks work.
 

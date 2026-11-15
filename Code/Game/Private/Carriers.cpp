@@ -35,7 +35,14 @@ namespace
         Walker_GuardToArmory, // walking to the Armory for its bow
         Walker_GuardToPost,   // armed, walking to its post
         Walker_Guarding,      // at its post: it shoots the nearest enemy unit in "Guard range (m)"
+        // THE CREW states (its job is an alarmed Cannon), all from here on:
+        Walker_CrewToCannon,  // walking to the gun (empty)
+        Walker_Crewing,       // at the gun: the cannon is manned (Ref::crewAtGun)
+        Walker_CrewFetch,     // walking to an Ammo store / Ammo works for munitions (targetId)
+        Walker_CrewBring,     // walking back to the gun with them
     };
+    constexpr bool isGuardState(uint8 s) { return s >= Walker_GuardToArmory && s <= Walker_Guarding; }
+    constexpr bool isCrewState(uint8 s) { return s >= Walker_CrewToCannon; }
     constexpr const char* c_guardPrefab = "Entities/Game/guard.pre";
     constexpr const char* c_magePrefab = "Entities/Game/mage.pre";
     constexpr float c_guardRepost = 4.0f; // s with nothing to shoot before a guard looks for a better post
@@ -54,7 +61,7 @@ namespace
 }
 
 // A BUILT road piece in the cell: the primary occupant or the cable under a crossing. outY = its entity height.
-bool StructureSystem::roadAt(int cx, int cz, float& outY) const
+bool StructureSystem::roadAt(int cx, int cz, float& outY, bool throughGates) const
 {
     const auto it = m_cells.find(cellKey(cx, cz));
     if (it == m_cells.end())
@@ -95,6 +102,17 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY) const
                 outY -= WalkwayDeckHeight * 0.5f;
             return true;
         }
+        // A GATE with ROAD ON TWO OPPOSITE SIDES (+X and -X, or +Z and -Z): the walkers go through it, at the middle
+        // height of the two roads. (Its sides are tested without this rule: no gate leans on another gate.)
+        if (type == EStructureType::Gate && throughGates)
+        {
+            float a = 0.0f, b = 0.0f;
+            if ((roadAt(cx + 1, cz, a, false) && roadAt(cx - 1, cz, b, false)) || (roadAt(cx, cz + 1, a, false) && roadAt(cx, cz - 1, b, false)))
+            {
+                outY = 0.5f * (a + b);
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -106,6 +124,8 @@ bool StructureSystem::touchesRoad(int index) const
     forEachFootprintCell(ref.type, ref.entity->pos, ref.entity->rot, [&](int cx, int cz)
     {
         float y;
+        if (ref.type == EStructureType::Cannon) // it may stand ON the road (a road piece or a walkway deck in its cell)
+            road = road || roadAt(cx, cz, y);
         for (const glm::ivec2& n : c_neighbours)
             road = road || (!railEdgeBetween(cx, cz, cx + n.x, cz + n.y) && roadAt(cx + n.x, cz + n.y, y));
     });
@@ -118,7 +138,7 @@ bool StructureSystem::touchesRoad(int index) const
 float StructureSystem::blueprintNeed(const Ref& ref) const
 {
     const GameStructureComponent& s = *ref.state;
-    if (!s.blueprint || !isPlaceableType(ref.type) || rubbleBlocked(ref)) // (rubble with an enemy near: no trip to it)
+    if (!s.blueprint || !isRepairableType(ref.type) || rubbleBlocked(ref)) // (rubble with an enemy near: no trip to it)
         return 0.0f;
     const float healthMax = glm::max(s.healthMax, 1e-3f); // investMaterials' price: the type's cost over its health
     return glm::max((healthMax - s.health) * glm::max(m_settings.costs[(int)ref.type], 0.01f) / healthMax - ref.buildIncoming, 0.0f);
@@ -129,7 +149,7 @@ float StructureSystem::blueprintNeed(const Ref& ref) const
 float StructureSystem::repairNeed(const Ref& ref) const
 {
     const GameStructureComponent& s = *ref.state;
-    if (s.blueprint || (!isPlaceableType(ref.type) && ref.type != EStructureType::Base))
+    if (s.blueprint || !isRepairableType(ref.type))
         return 0.0f;
     const float healthMax = glm::max(s.healthMax, 1e-3f);
     return glm::max((healthMax - s.health) * glm::max(m_settings.costs[(int)ref.type], 0.01f) / healthMax - ref.buildIncoming, 0.0f);
@@ -200,9 +220,11 @@ bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, boo
     // ONLY WHERE THE LOAD FITS IN FULL: the load the source would send (a full one, or all of a smaller store) against
     // the target's room, less what other walkers already carry to it. A hearth that misses one wood is no target for
     // five: the walker would bring four back. (A target smaller than a load takes what its whole store holds.)
+    // MUNITIONS go in whole ones: a load as big as the room (at least one) - a cannon is topped up, not only refilled when empty.
     const float load = glm::min(glm::max(m_settings.carrierLoad, 1.0f), m_frame[sourceIdx].state->store[good]);
-    const float fit = glm::min(load, t.capacity[good]);
-    const bool fits = fit > 0.0f && t.capacity[good] - t.store[good] - target.goodsIncoming[good] >= fit - 1e-3f;
+    const float room = t.capacity[good] - t.store[good] - target.goodsIncoming[good];
+    const float fit = good == GoodMunitions ? glm::min(load, glm::floor(room + 1e-3f)) : glm::min(load, t.capacity[good]);
+    const bool fits = (good == GoodMunitions ? fit >= 1.0f : fit > 0.0f) && room >= fit - 1e-3f;
     // A storage tops up a consumer only under half full; a DRAINING one (EStorePriority::Drain) fills it whenever the load fits.
     if (consumersOnly)
         return isConsumer && fits && (t.store[good] < t.capacity[good] * 0.5f || storeRank(m_frame[sourceIdx]) == 0);
@@ -310,6 +332,26 @@ bool StructureSystem::guardWanted(int index, uint8 team) const
         && (int)ref.guards < (ref.type == EStructureType::MageTower ? m_settings.mageCount : m_settings.armoryGuards);
 }
 
+// An alarmed, built Cannon of the team that has fewer crew than "Crew" (not on the flying ship: no road leads there).
+bool StructureSystem::crewWanted(int index, uint8 team) const
+{
+    const Ref& ref = m_frame[index];
+    return ref.type == EStructureType::Cannon && !ref.state->blueprint && ref.state->team == team && ref.alarm > 0.0f
+        && (!ref.onShip || m_shipJoined) && (int)ref.crew < glm::max(m_settings.cannonCrew, 1);
+}
+
+// The nearest munitions a cannon's crew can fetch, by road from fromCell: a built Ammo store or Ammo works (any
+// building of the team that banks or makes them) that holds at least one. -1 = none.
+int StructureSystem::crewAmmoSource(glm::ivec2 fromCell, uint8 team, oc::vector<glm::vec3>& outPath) const
+{
+    return roadSearch(-1, fromCell, [&](int index)
+    {
+        const Ref& r = m_frame[index];
+        return !r.state->blueprint && r.state->team == team && r.state->capacity[GoodMunitions] > 0.0f && r.state->store[GoodMunitions] >= 1.0f
+            && transportRoleOf(r.type, GoodMunitions) != ETransportRole::Consumer ? 2 : 0;
+    }, outPath);
+}
+
 // A guard's POST, by road from fromCell: a road cell within the Armory's range that no other guard has. A Walkway DECK
 // cell first (the place behind a wall), then any road cell; among those, the one nearest to the Armory's threat. One
 // breadth-first search over the road (like roadSearch); outPath = the walk there (one point: it stands on the post).
@@ -410,9 +452,13 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
             const int cx = cell.cx + n.x, cz = cell.cz + n.y;
             if (railEdgeBetween(cell.cx, cell.cz, cx, cz))
                 continue; // the ship's rail between them: not off the ship that way
-            if (const auto it = m_cells.find(cellKey(cx, cz)); it != m_cells.end() && it->second.id != 0)
-                if (const int index = structureIndexById(it->second.id); index >= 0)
+            // Both occupants of the cell: a CANNON rides under a road piece or a walkway deck (underId).
+            if (const auto it = m_cells.find(cellKey(cx, cz)); it != m_cells.end())
+                for (const uint32 id : { it->second.id, it->second.underId })
                 {
+                    const int index = id != 0 ? structureIndexById(id) : -1;
+                    if (index < 0)
+                        continue;
                     const int priority = goal(index);
                     if (priority >= 2)
                     {
@@ -426,6 +472,8 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
                         fallbackCell = i;
                     }
                 }
+            if (found >= 0)
+                break;
             visit(cx, cz, i);
         }
     }
@@ -490,7 +538,7 @@ int StructureSystem::carrierJobTier(int index, uint8 team) const
     if ((ref.buildReady || ref.repairReady || ref.transportReady) && ref.walkersIdle == 0) // stone for a blueprint or a repair, a cart trip: only when no load waits anywhere
         return 1;
     if (ref.walkers == 0)
-        for (int good = 1; good <= 2; ++good)
+        for (int good = 1; good <= GoodMunitions; ++good)
             if (s.capacity[good] > 0.0f && transportRoleOf(ref.type, good) == ETransportRole::Producer)
                 return 1;
     return 0;
@@ -502,10 +550,20 @@ void StructureSystem::carrierHousePass()
 {
     // THE ALARM: an enemy unit within "Range (m)" of a built Armory calls its guards out, and holds them for "Stand down
     // after (s)" (tickCarriers counts it down). The nearest one is the THREAT the posts are picked by.
+    // A CANNON's alarm is the same with "Crew call range (m)" and "Crew stand down (s)": it calls out its crew.
     bool guardsWanted[GameMaxTeams] = {};
+    bool crewsWanted[GameMaxTeams] = {};
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         Ref& ref = m_frame[i];
+        if (ref.type == EStructureType::Cannon && !ref.state->blueprint && ref.state->team < GameMaxTeams && (!ref.onShip || m_shipJoined))
+        {
+            glm::vec3 threat;
+            if (nearestEnemyUnit(ref.entity->pos, m_settings.cannonCallRange, ref.state->team, threat))
+                ref.alarm = glm::max(m_settings.cannonStandDown, c_passSeconds * 1.5f);
+            crewsWanted[ref.state->team] |= crewWanted(i, (uint8)ref.state->team);
+            continue;
+        }
         if (!armsGuards(ref.type) || ref.state->blueprint || ref.state->team >= GameMaxTeams)
             continue;
         glm::vec3 threat;
@@ -536,7 +594,7 @@ void StructureSystem::carrierHousePass()
         ref.transportReady = false;
         if (isCableOrCrossing(ref.type) || ref.state->blueprint)
             continue;
-        for (int good = 1; good <= 2 && !ref.sendReady; ++good)
+        for (int good = 1; good <= GoodMunitions && !ref.sendReady; ++good)
         {
             bool consumersOnly = false;
             if (carrierSendGood(i, good, consumersOnly))
@@ -561,17 +619,17 @@ void StructureSystem::carrierHousePass()
     }
     // TRANSPORT (the cart), behind every other work of the building: a storage with a much emptier storage of the same
     // good on its road. Only a team with two storages of a good has any (no search for the others).
-    int storages[GameMaxTeams][3] = {};
+    int storages[GameMaxTeams][GameStructureComponent::NumStores] = {};
     for (const Ref& ref : m_frame)
         if (!ref.state->blueprint && ref.state->team < GameMaxTeams)
-            for (int good = 1; good <= 2; ++good)
+            for (int good = 1; good <= GoodMunitions; ++good)
                 storages[ref.state->team][good] += ref.state->capacity[good] > 0.0f && transportRoleOf(ref.type, good) == ETransportRole::Storage ? 1 : 0;
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         Ref& ref = m_frame[i];
         if (ref.state->blueprint || ref.sendReady || ref.buildReady || ref.repairReady || ref.state->team >= GameMaxTeams)
             continue;
-        for (int good = 1; good <= 2 && !ref.transportReady; ++good)
+        for (int good = 1; good <= GoodMunitions && !ref.transportReady; ++good)
             if (storages[ref.state->team][good] >= 2 && ref.state->capacity[good] > 0.0f
                 && transportRoleOf(ref.type, good) == ETransportRole::Storage
                 && ref.state->store[good] >= glm::max(m_settings.carrierCartLoad, 1.0f) * 0.2f)
@@ -604,10 +662,14 @@ void StructureSystem::carrierHousePass()
         if (active >= allowed || freeLeft[team] <= 0)
             continue;
         Walker w;
-        // A GUARD first: an alarmed Armory on this road that is short of guards. Then the carrier jobs.
+        // A GUARD first: an alarmed Armory on this road that is short of guards. Then a CREW for an alarmed Cannon. Then
+        // the carrier jobs.
         int job = guardsWanted[team] ? roadSearch(i, glm::ivec2(0), [&](int index) { return guardWanted(index, team) ? 2 : 0; }, w.path) : -1;
         const bool guard = job >= 0 && !w.path.empty();
         if (!guard)
+            job = crewsWanted[team] ? roadSearch(i, glm::ivec2(0), [&](int index) { return crewWanted(index, team) ? 2 : 0; }, w.path) : -1;
+        const bool crew = !guard && job >= 0 && !w.path.empty();
+        if (!guard && !crew)
             job = roadSearch(i, glm::ivec2(0), [&](int index) { return carrierJobTier(index, team); }, w.path);
         if (job < 0 || w.path.empty())
             continue;
@@ -619,9 +681,11 @@ void StructureSystem::carrierHousePass()
         w.team = team;
         w.mage = guard && m_frame[job].type == EStructureType::MageTower;
         w.jobId = m_frame[job].state->structureId;
-        w.state = guard ? Walker_GuardToArmory : Walker_ToJob;
+        w.state = guard ? Walker_GuardToArmory : crew ? Walker_CrewToCannon : Walker_ToJob;
         if (guard)
             ++m_frame[job].guards;
+        else if (crew)
+            ++m_frame[job].crew;
         else
         {
             ++m_frame[job].walkers;
@@ -652,9 +716,11 @@ void StructureSystem::tickCarriers(float deltaSec)
     for (Ref& ref : m_frame)
     {
         ref.walkers = ref.walkersIdle = ref.waitRank = ref.homeWalkers = ref.guards = 0;
+        ref.crew = ref.crewAtGun = ref.crewFetching = 0;
         ref.alarm = glm::max(ref.alarm - deltaSec, 0.0f);
         ref.buildIncoming = 0.0f;
-        ref.goodsIncoming[1] = ref.goodsIncoming[2] = 0.0f;
+        for (float& incoming : ref.goodsIncoming)
+            incoming = 0.0f;
     }
     for (int& count : m_carrierCount)
         count = 0;
@@ -672,8 +738,16 @@ void StructureSystem::tickCarriers(float deltaSec)
             ++m_carrierCount[m_frame[home].state->team];
         if (const int job = w.state != Walker_Home ? structureIndexById(w.jobId) : -1; job >= 0)
         {
-            if (w.state >= Walker_GuardToArmory)
+            if (isGuardState(w.state))
                 ++m_frame[job].guards;
+            else if (isCrewState(w.state))
+            {
+                ++m_frame[job].crew;
+                m_frame[job].crewAtGun += w.state == Walker_Crewing ? 1 : 0;
+                m_frame[job].crewFetching += w.state == Walker_CrewFetch || w.state == Walker_CrewBring ? 1 : 0;
+                if (w.state == Walker_CrewBring) // munitions on their way to the gun
+                    m_frame[job].goodsIncoming[GoodMunitions] += w.load;
+            }
             else
             {
                 ++m_frame[job].walkers;
@@ -693,9 +767,15 @@ void StructureSystem::tickCarriers(float deltaSec)
     if (!m_settings.carriers)
         return;
     bool guardsWanted[GameMaxTeams] = {}; // a waiting walker looks for an Armory only while one of its team wants a guard
+    bool crewsWanted[GameMaxTeams] = {};  // ... for a Cannon only while one of its team wants a crew
     for (int i = 0; i < (int)m_frame.size(); ++i)
-        if (armsGuards(m_frame[i].type) && m_frame[i].state->team < GameMaxTeams)
-            guardsWanted[m_frame[i].state->team] |= guardWanted(i, (uint8)m_frame[i].state->team);
+        if (m_frame[i].state->team < GameMaxTeams)
+        {
+            if (armsGuards(m_frame[i].type))
+                guardsWanted[m_frame[i].state->team] |= guardWanted(i, (uint8)m_frame[i].state->team);
+            else if (m_frame[i].type == EStructureType::Cannon)
+                crewsWanted[m_frame[i].state->team] |= crewWanted(i, (uint8)m_frame[i].state->team);
+        }
 
     m_carrierPassTimer -= deltaSec;
     if (m_carrierPassTimer <= 0.0f)
@@ -722,8 +802,17 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (job >= 0)
             {
                 Ref& old = m_frame[job];
-                if (w.state >= Walker_GuardToArmory)
+                if (isGuardState(w.state))
                     old.guards -= old.guards > 0 ? 1 : 0;
+                else if (isCrewState(w.state))
+                {
+                    old.crew -= old.crew > 0 ? 1 : 0;
+                    if (w.state == Walker_Crewing)
+                        old.crewAtGun -= old.crewAtGun > 0 ? 1 : 0;
+                    if (w.state == Walker_CrewFetch || w.state == Walker_CrewBring)
+                        old.crewFetching -= old.crewFetching > 0 ? 1 : 0;
+                    w.load = 0.0f; // (munitions on their way to a gun that is gone: lost)
+                }
                 else if (old.walkers > 0)
                     --old.walkers;
                 if ((w.state == Walker_ToJob || w.state == Walker_Waiting) && old.walkersIdle > 0)
@@ -782,12 +871,41 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.state = Walker_GuardToArmory;
             return true;
         };
+        // An alarmed Cannon on this road that is short of crew: the walker goes to man it.
+        const auto seekCannon = [&]
+        {
+            oc::vector<glm::vec3> path;
+            const int found = roadSearch(-1, hereCell, [&](int index) { return crewWanted(index, team) ? 2 : 0; }, path);
+            if (found < 0 || path.empty())
+                return false;
+            leaveJob();
+            job = found;
+            w.jobId = m_frame[found].state->structureId;
+            ++m_frame[found].crew;
+            w.load = 0.0f;
+            w.work = CarrierWork_Goods;
+            w.path = oc::move(path);
+            w.along = 0.0f;
+            w.state = Walker_CrewToCannon;
+            return true;
+        };
+        // A crew's walk back to its gun from here, as `state` (CrewToCannon empty, CrewBring loaded); false: no way there.
+        const auto toGun = [&](uint8 state)
+        {
+            oc::vector<glm::vec3> path;
+            if (job < 0 || roadSearch(-1, hereCell, [&](int index) { return index == job ? 2 : 0; }, path) < 0 || path.empty())
+                return false;
+            w.path = oc::move(path);
+            w.along = 0.0f;
+            w.state = state;
+            return true;
+        };
 
         // THE ROAD UNDER IT IS GONE (destroyed to rubble, or removed): the walker moves to a road cell next to it and
         // goes on from there - a standing one stands there, a walking one finds a new way to where it was going (or
         // home). No road cell next to it: the walker is gone, and its house sends a worker again.
         {
-            const bool standing = w.state == Walker_Waiting || w.state == Walker_Working || w.state == Walker_Guarding;
+            const bool standing = w.state == Walker_Waiting || w.state == Walker_Working || w.state == Walker_Guarding || w.state == Walker_Crewing;
             const glm::ivec2 at = standing ? hereCell : cellOf(here);
             float roadY = 0.0f;
             if (!roadAt(at.x, at.y, roadY))
@@ -813,7 +931,8 @@ void StructureSystem::tickCarriers(float deltaSec)
                 }
                 else
                 {
-                    const int dest = w.state == Walker_Delivering ? structureIndexById(w.targetId) : w.state == Walker_Home ? home : job;
+                    const int dest = w.state == Walker_Delivering || w.state == Walker_CrewFetch ? structureIndexById(w.targetId)
+                        : w.state == Walker_Home ? home : job;
                     oc::vector<glm::vec3> path;
                     const bool way = w.state == Walker_GuardToPost ? job >= 0 && guardPost(hereCell, job, k, path)
                         : dest >= 0 && roadSearch(-1, hereCell, [&](int index) { return index == dest ? 2 : 0; }, path) >= 0;
@@ -892,6 +1011,56 @@ void StructureSystem::tickCarriers(float deltaSec)
             continue;
         }
 
+        // CREWING: at the gun, side by side, looking where it points. The alarm is over, the cannon is gone (or rubble),
+        // or production took its worker: it takes other work, or goes home. KEEPING IT ARMED: every half second, while no
+        // other one of its crew is on a munitions trip and the gun has room for one more (with what is on its way), it
+        // walks to the nearest Ammo store / Ammo works for them - only while another one stays at the gun, or the gun is
+        // empty (a lone crew fires what it has first).
+        if (w.state == Walker_Crewing)
+        {
+            if (job < 0 || m_frame[job].alarm <= 0.0f || w.dismissed)
+            {
+                if (!((!w.dismissed && seekJob(1)) || goHome()))
+                    removeWalker(k--);
+                continue;
+            }
+            Ref& gun = m_frame[job];
+            const int rank = gun.waitRank++;
+            if (w.entity)
+            {
+                // ONE ON EACH SIDE of the gun, just outside its wheels and a little behind the axle (a third and fourth
+                // one behind those), on the gun's stand: they turn with it.
+                const glm::vec3 side = gun.entity->rot * glm::vec3(1.0f, 0.0f, 0.0f);
+                const glm::vec3 back = gun.entity->rot * glm::vec3(0.0f, 0.0f, 1.0f);
+                const float across = (rank & 1) ? -1.05f : 1.05f, behind = 0.35f + 0.7f * (float)(rank / 2);
+                const glm::vec3 stand = gun.entity->pos - glm::vec3(0.0f, spawnHeightOf(gun.type) - c_walkHeight, 0.0f);
+                w.entity->pos = stand + glm::vec3(side.x, 0.0f, side.z) * across + glm::vec3(back.x, 0.0f, back.z) * behind;
+                w.entity->rot = gun.entity->rot;
+                if (const SceneComponent* scene = getComponent<SceneComponent>(w.entity.get()))
+                    for (size_t c = 1; c < scene->children.size(); ++c) // no load, no cart
+                        scene->children[c]->setEnabled(false);
+            }
+            w.wait -= deltaSec;
+            if (w.wait > 0.0f)
+                continue;
+            w.wait = 0.5f;
+            const GameStructureComponent& g = *gun.state;
+            const float held = g.store[GoodMunitions] + gun.goodsIncoming[GoodMunitions];
+            if (gun.crewFetching > 0 || held > g.capacity[GoodMunitions] - 1.0f || (gun.crewAtGun < 2 && g.store[GoodMunitions] >= 1.0f))
+                continue;
+            oc::vector<glm::vec3> path;
+            if (const int source = crewAmmoSource(hereCell, team, path); source >= 0 && !path.empty())
+            {
+                gun.crewAtGun -= gun.crewAtGun > 0 ? 1 : 0;
+                ++gun.crewFetching;
+                w.targetId = m_frame[source].state->structureId;
+                w.path = oc::move(path);
+                w.along = 0.0f;
+                w.state = Walker_CrewFetch;
+            }
+            continue;
+        }
+
         if (w.state == Walker_Waiting)
         {
             if (w.dismissed || job < 0)
@@ -916,10 +1085,12 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.wait = c_retrySeconds;
             if (guardsWanted[team] && seekArmory()) // the alarm: a waiting worker goes for a bow before any load
                 continue;
+            if (crewsWanted[team] && seekCannon()) // ... and to man a cannon
+                continue;
             if (rank == 0) // the first in line loads
             {
                 GameStructureComponent& s = *jobRef.state;
-                for (int good = 1; good <= 2 && w.state == Walker_Waiting; ++good)
+                for (int good = 1; good <= GoodMunitions && w.state == Walker_Waiting; ++good)
                 {
                     bool consumersOnly = false;
                     if (!carrierSendGood(job, good, consumersOnly))
@@ -928,7 +1099,10 @@ void StructureSystem::tickCarriers(float deltaSec)
                     const int target = findRoadTarget(job, -1, hereCell, good, consumersOnly, CarrierWork_Goods, path);
                     if (target < 0 || path.empty())
                         continue;
-                    w.load = glm::min(glm::min(loadSize, s.store[good]), m_frame[target].state->capacity[good]); // it fits in full (carrierAccepts)
+                    const Ref& to = m_frame[target];
+                    w.load = glm::min(glm::min(loadSize, s.store[good]), to.state->capacity[good]); // it fits in full (carrierAccepts)
+                    if (good == GoodMunitions) // whole munitions, as many as the room
+                        w.load = glm::min(w.load, glm::floor(to.state->capacity[good] - to.state->store[good] - to.goodsIncoming[good] + 1e-3f));
                     s.store[good] -= w.load;
                     m_frame[target].goodsIncoming[good] += w.load;
                     w.good = (uint8)good;
@@ -967,7 +1141,7 @@ void StructureSystem::tickCarriers(float deltaSec)
                     }
                 }
                 // LAST: TRANSPORT. A cart load to a much emptier storage of the same good on this road (transportAmount).
-                for (int good = 1; good <= 2 && w.state == Walker_Waiting; ++good)
+                for (int good = 1; good <= GoodMunitions && w.state == Walker_Waiting; ++good)
                 {
                     oc::vector<glm::vec3> path;
                     const int target = findRoadTarget(job, -1, hereCell, good, false, CarrierWork_Transport, path);
@@ -994,7 +1168,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (rank > 0 ? seekJob(1) : (w.idle > c_idleLeave && seekJob(2)))
                 continue;
             bool producer = false;
-            for (int good = 1; good <= 2; ++good)
+            for (int good = 1; good <= GoodMunitions; ++good)
                 producer = producer || (jobRef.state->capacity[good] > 0.0f && transportRoleOf(jobRef.type, good) == ETransportRole::Producer);
             if (w.idle > c_idleHome && (rank > 0 || !producer) && !goHome())
                 removeWalker(k--);
@@ -1066,12 +1240,16 @@ void StructureSystem::tickCarriers(float deltaSec)
             if (dir.x * dir.x + dir.z * dir.z > 1e-6f) // an entity's forward is -Z
                 w.entity->rot = glm::angleAxis(std::atan2(-dir.x, -dir.z), glm::vec3(0.0f, 1.0f, 0.0f));
             // carrier.pre's children: [1] the LOAD in its hands, only while it carries one on foot; [2] the cart's load and
-            // [3..] the CART, on a transport trip (the cart comes back with it, empty).
+            // [3..6] the CART, on a transport trip (the cart comes back with it, empty); [7] the MUNITIONS crystal, in its
+            // hands instead of [1] while the load is munitions.
             if (const SceneComponent* scene = w.guard ? nullptr : getComponent<SceneComponent>(w.entity.get())) // (guard.pre: all shown)
             {
+                constexpr size_t c_ammoChild = 7;
                 const bool cart = w.work == CarrierWork_Transport;
+                const bool ammo = w.good == GoodMunitions;
                 for (size_t c = 1; c < scene->children.size(); ++c)
-                    scene->children[c]->setEnabled(c == 1 ? !cart && w.load > 0.0f : cart && (c > 2 || w.load > 0.0f));
+                    scene->children[c]->setEnabled(c == c_ammoChild ? !cart && ammo && w.load > 0.0f
+                        : c == 1 ? !cart && !ammo && w.load > 0.0f : cart && (c > 2 || w.load > 0.0f));
             }
         }
         if (!arrived)
@@ -1143,6 +1321,48 @@ void StructureSystem::tickCarriers(float deltaSec)
             w.state = Walker_Guarding;
             w.wait = 0.0f;
             w.idle = 0.0f;
+            break;
+        case Walker_CrewToCannon: // at the gun: manned
+            w.wait = 0.0f;
+            if (job >= 0)
+                w.state = Walker_Crewing;
+            else if (!goHome())
+                removeWalker(k--);
+            break;
+        case Walker_CrewFetch: // at the munitions: as many as the gun has room for (at most a load), then back to it
+        {
+            const int source = structureIndexById(w.targetId);
+            if (job >= 0 && source >= 0 && !m_frame[source].state->blueprint)
+            {
+                GameStructureComponent& s = *m_frame[source].state;
+                const GameStructureComponent& g = *m_frame[job].state;
+                const float room = glm::floor(g.capacity[GoodMunitions] - g.store[GoodMunitions] - m_frame[job].goodsIncoming[GoodMunitions] + 1e-3f);
+                w.load = glm::max(glm::min(glm::min(loadSize, glm::floor(s.store[GoodMunitions] + 1e-3f)), room), 0.0f);
+                s.store[GoodMunitions] -= w.load;
+                w.good = GoodMunitions;
+                w.work = CarrierWork_Goods;
+            }
+            if (!toGun(w.load > 0.0f ? Walker_CrewBring : Walker_CrewToCannon))
+            {
+                if (job >= 0 && source >= 0) // no way back: the munitions go back in
+                    m_frame[source].state->store[GoodMunitions] += w.load;
+                w.load = 0.0f;
+                if (!goHome())
+                    removeWalker(k--);
+            }
+            break;
+        }
+        case Walker_CrewBring: // at the gun with the munitions: they go in, and it mans the gun again
+            if (job >= 0)
+            {
+                GameStructureComponent& g = *m_frame[job].state;
+                g.store[GoodMunitions] = glm::min(g.store[GoodMunitions] + w.load, g.capacity[GoodMunitions]);
+                w.load = 0.0f;
+                w.state = Walker_Crewing;
+                w.wait = 0.0f;
+            }
+            else if (w.load = 0.0f; !goHome())
+                removeWalker(k--);
             break;
         default: // Walker_Home: back in its house
             removeWalker(k--);

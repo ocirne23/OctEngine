@@ -1,0 +1,45 @@
+# CANNON shell: a light charge lobbed by a Cannon (NpcSystem::fireCannonShell sets its team and launch velocity). On ANY
+# contact it damages EVERY enemy-team unit within SplashRadius of the impact (GameProjectileComponent::onContact), then
+# despawns. SplashEdge: the full UnitDamage at the centre, falling linearly to 15 % of it at the edge. HitsShadows: it is light, so a SHADOW (a demon that is not solid) takes its damage too. ImpactPuff: the
+# impact bursts (Effects/shell_blast.pfx, made by GameMatch), on every role. MuzzleFlash: its launch flashes where it
+# starts, 1 m ahead of the barrel's mouth (muzzle_flash.pfx, muzzle_smoke.pfx and a short point light), on every role.
+# The crystal glows far over the bloom threshold (Emissive 15.9: the cap, it is stored in sixteenths - Scene.md
+# "Emissive"), so the bloom puts a halo around it in flight.
+# Its own POINT LIGHT (Component Light): a cyan glow that lights the ground and the walls under its flight. It flies
+# 5 - 10 m up and the light falls off with the square of the distance, so it is a tenth as bright as the impact's light. It
+# sits at the crystal's centre and casts ray-traced shadows (walls, buildings): the crystal itself is out of ray tracing
+# (an emissive tint, Scene.md "Emissive"), so it does not block its own light. No field of its own (the enemy has no
+# fields to brake it). Replicated (Component Network).
+Prefab gameCannonShell
+	Component Render
+		ObjectContainer gemsGlow
+		Node Diamond
+		Type StaticMesh
+		Color 0.6 0.95 1
+		Emissive 15.9
+		Scale 0.26
+	Component Physics
+		Body Dynamic
+		Layer Projectile
+		Shape Sphere
+		Radius 0.35
+		Density 140
+		Restitution 0.1
+		ContactEvents true
+	Component Light
+		Light Point
+			Color 0.6 0.95 1
+			Intensity 50
+			Range 8
+	Component Network
+	Component GameProjectile
+		UnitDamage 35
+		StructureDamage 0
+		Lifetime 8
+		EmitterDrain 0
+		EmitterDrainRadius 0
+		SplashRadius 4
+		SplashEdge 0.15
+		HitsShadows true
+		ImpactPuff true
+		MuzzleFlash true

@@ -30,7 +30,8 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
     "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre",
-    "Entities/Game/magetower.pre", "Entities/Game/shipRail.pre" };
+    "Entities/Game/magetower.pre", "Entities/Game/shipRail.pre", "Entities/Game/cannon.pre",
+    "Entities/Game/ammoWorks.pre", "Entities/Game/ammoStore.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -127,6 +128,14 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
             free = false;
             return;
         }
+        // THE CANNON may stand ON a road piece (the Road, the Bridge) or a walkway DECK: it rides the cell's underId.
+        if (type == EStructureType::Cannon && occIdx >= 0 && entry.underId == 0)
+        {
+            const Ref& o = m_frame[occIdx];
+            if (o.type == EStructureType::CableConveyor || o.type == EStructureType::Bridge
+                || (o.type == EStructureType::Walkway && o.walkDir < 0))
+                return;
+        }
         free = false; // buildings refuse any occupied cell (cables included - no building on a cable)
     });
     return free;
@@ -221,7 +230,9 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
     // (red ghost) AND in placeStructure (the MP seam) - actors move between the two.
     // Cables/crossings/solars are WALK-THROUGH (their collider ignores bodies), so standing on the
     // cells never blocks them; a GATE's collider ignores the players, so a player does not block a gate.
-    if (isWalkThrough(type))
+    // The SHIP'S RAIL too: its tile is walked on (a deck tile), and its pieces are thin boxes on the deck's outer edge - the
+    // player who rebuilds its rubble, and the units on the deck beside it, stand on and around that tile.
+    if (isWalkThrough(type) || type == EStructureType::ShipRail)
         return false;
     const bool playersPass = type == EStructureType::Gate;
     constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
@@ -385,6 +396,13 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
             dir = glm::vec2(0.0f, facing.z > 0.0f ? 1.0f : -1.0f);
         rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
+    // A CANNON faces the given direction, in eighths of a turn (an entity's forward is -Z).
+    if (isRotatedPlacement(type) && glm::abs(facing.x) + glm::abs(facing.z) > 1e-4f)
+    {
+        const float step = glm::quarter_pi<float>();
+        const float yaw = glm::round(std::atan2(-facing.x, -facing.z) / step) * step;
+        rot = glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    }
     // GRID: every placement snaps and occupied cells
     // refuse - validated HERE, the MP seam, not just at aim time. A CROSSING goes through
     // planCrossing instead: its END cells may hold own-medium cables, which it REPLACES (below,
@@ -404,8 +422,11 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     // client building far from the server's camera, outside the server's collider ring - the requester's own height
     // stands (its aim ran the full test against its own colliders).
     float groundY = 0.0f;
-    const EGroundFit fit = groundFit(type, snappedGround, rot, groundY);
-    if (fit == EGroundFit::NoGround)
+    if (type == EStructureType::Cannon && cannonStandY(snappedGround, groundY))
+    {
+        // on a road piece or a walkway deck: it stands on that, whatever the ground under it
+    }
+    else if (const EGroundFit fit = groundFit(type, snappedGround, rot, groundY); fit == EGroundFit::NoGround)
         groundY = groundPos.y;
     else if (fit != EGroundFit::Ok)
         return;

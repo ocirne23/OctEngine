@@ -270,7 +270,7 @@ draws it once per frame over the viewport.
 
 | Element | Notes |
 |---|---|
-| **Hotbar** | `NumSlots` = 12. Default keys `1`..`9`, `0`, `-`, `=` in one row; `setHotbarLayout(columns, keyLabels)` folds it into a GRID — the RTS QWER/ASDF/ZXCV pattern. `HudSlot{ label, count, used, tooltip }`; count > 0 draws a stack number, a non-empty `tooltip` is a hover card. |
+| **Hotbar** | `NumSlots` = 12. Default keys `1`..`9`, `0`, `-`, `=` in one row; `setHotbarLayout(columns, keyLabels)` folds it into a GRID — the RTS QWER/ASDF/ZXCV pattern. `HudSlot{ label, count, used, tooltip }`; count > 0 draws a stack number, a non-empty `tooltip` is a hover card. **A one-row BAR draws only up to its last assigned slot**, and may carry a **TAB STRIP** over it (`setTabs(labels, selected)`, at most `MaxTabs` 8; empty = none; the overlay reports the rects, `tabAtScreenPos` hit-tests them): the game's build pages. |
 | **Bars** | `HudBar{ name, value, maxValue, color }` — keyed by display name, insertion order is display order. |
 | **Counters** | `HudCounter{ name, value, decimals, text, color }`, stacked from the top left; a non-empty `text` shows instead of the number. |
 | **World labels** | `HudWorldLabel` — gameplay **PRE-PROJECTS** the world position into viewport pixels (`Camera::worldToScreen`) and **replaces the whole list every frame**: no keys, no persistence, and off-screen entities are simply not submitted. Title, info lines, up to THREE stacked bars, a `warning` badge, and an `emphasized` flag for the selected entity. |
@@ -487,8 +487,8 @@ Seconds are formatted InvariantCulture — a Dutch locale would print "10,5".
 
 Script side: `-Scenario` only applies with `-Game`; `""` = none, `"default"` = F10's `Local/gamesave.txt`.
 `-Scenario` defaults to `Scenarios/march-64-units.txt`, **which is no longer in `Assets/Scenarios/`** (the
-only checked-in save is `coop-base-38k.txt`, a generated-map save: add
-`-Tweak "Game/Coop/Sandbox world=0","Game/Coop/Spawn enemies=1"`) — pass `-Scenario` explicitly. `-Server` = `--server --port 27999`,
+only checked-in save is `coop-base.txt`, a co-op sandbox-world save: add `-AppArgs "--coop"`) — pass `-Scenario`
+explicitly. `-Server` = `--server --port 27999`,
 so the networking path is live without colliding with a manually running instance on 27888.
 
 It calls `GameMatch::runScenario` on the authority (single player or server):

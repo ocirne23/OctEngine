@@ -120,6 +120,7 @@ export struct GameUnitComponent
     bool puppet = false;
     float pendingDamage = 0.0f; // damage inbox: units drain it in their own tick (shield-first),
                                 // puppets' is routed to the owning GamePlayer by the game
+    float pendingShadowDamage = 0.0f; // ... the part that hurts a SHADOW too (damage's throughShadow: a cannon shell)
     float materialsFrac = 0.0f; // players: carried construction stock (server-authoritative)
     bool collapsed = false;     // latched at empty battery; only a heal lifts it
     bool deathReported = false;
@@ -162,8 +163,9 @@ export struct GameUnitComponent
     glm::vec3 wakeVelocity(const Entity& entity); // World's SIM LOD wake edge -> PhysicsComponent::unpark
     void kill(Entity& entity); // health to 0 + the one-shot death report
     static constexpr uint32 UnknownTeam = UINT32_MAX;
-    void damage(float amount, uint32 sourceTeam = UnknownTeam); // atomic; sourceTeam colours the hurt light
-    float takePendingDamage(); // main thread: drain the puppet inbox
+    // atomic; sourceTeam colours the hurt light. throughShadow: it hurts the unit even while it is a shadow (not solid).
+    void damage(float amount, uint32 sourceTeam = UnknownTeam, bool throughShadow = false);
+    float takePendingDamage(); // main thread: drain the puppet inbox (both parts)
     bool alive() const { return health > 0.0f; }
     void heal(float amount); // atomic inbox; applied in the unit's own tick (keeps `energy` single-writer)
     float pendingHeal = 0.0f;

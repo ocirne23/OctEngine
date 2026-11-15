@@ -1662,6 +1662,10 @@ void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = projNode->find("EmitterDrain"))    info->emitterDrain = n->asFloat(0, info->emitterDrain);
         if (const AssetNode* n = projNode->find("EmitterDrainRadius")) info->emitterDrainRadius = n->asFloat(0, info->emitterDrainRadius);
         if (const AssetNode* n = projNode->find("SplashRadius"))    info->splashRadius = n->asFloat(0, info->splashRadius);
+        if (const AssetNode* n = projNode->find("SplashEdge"))      info->splashEdge = n->asFloat(0, info->splashEdge);
+        if (const AssetNode* n = projNode->find("HitsShadows"))     info->hitsShadows = n->asBool();
+        if (const AssetNode* n = projNode->find("ImpactPuff"))      info->impactPuff = n->asBool();
+        if (const AssetNode* n = projNode->find("MuzzleFlash"))     info->muzzleFlash = n->asBool();
         typeBits |= uint16(1 << EComponentID_GameProjectile);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }

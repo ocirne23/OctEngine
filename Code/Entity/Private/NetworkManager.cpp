@@ -17,7 +17,7 @@ import :NetworkManager;
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
 constexpr uint32 GameProtocolId = 0x4F43534B; // batched Spawn/Despawn (u16 count + records)
-constexpr uint16 GameNetVersion = 15;
+constexpr uint16 GameNetVersion = 16; // 16: GSt carries munitions, GMp only the PvP arena, LbS no co-op map
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
 // re-broadcast on change). Intercepted in fireEventAttributed - never reaches scripts or the

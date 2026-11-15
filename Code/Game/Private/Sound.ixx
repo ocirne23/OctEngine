@@ -24,9 +24,8 @@ import :Structures;
 // THE AMBIENCE (the sandbox world) is POSITIONAL: the flat beds (wind, day, night) are only the far background. In front
 // of them, PERCHES - places in the world around the ear, each with one animal that has its own song (a sound variant)
 // and sings from there again and again: birds by day, crickets and an owl by night. A perch stays where it is while the
-// player walks, and moves only when the player has left it behind. Wind GUSTS come from a new place every time. WATER:
-// a scan of points around the ear finds the nearest water in two directions; a loop voice stands on each, with single
-// laps on top.
+// player walks, and moves only when the player has left it behind. Wind GUSTS come from a new place every time. The
+// water has no sound.
 //
 // THE SOUNDS are synthesized at the first update (SoundSynth.cpp). A file `Sounds/Game/<name>.wav` (`<name>2.wav`,
 // `<name>3.wav` for the variants) replaces a synthesized sound: the names are in c_soundDefs (Sound.cpp).
@@ -36,13 +35,13 @@ export enum class EGameSound : uint8
     MeleeHit, UnitReveal, UnitDeath, ShotFired, LobFired, ShotImpact, SplashImpact, TurretFire,
     StructurePlaced, StructureBuilt, StructureCollapse,
     // The ambient one-shots in the world: GameSound places them itself, around the ear (THE AMBIENCE, below)
-    BirdSong, CricketBout, OwlCall, WindGust, WaterLap,
+    BirdSong, CricketBout, OwlCall, WindGust,
     // One-shots with a direction but no distance (the far field)
     Thunder, ThunderCrack,
     // One-shots with no place
     Alarm, PlayerHurt,
     // Loops
-    LoopWind, LoopDay, LoopNight, LoopBattle, LoopHorde, LoopHum, LoopFire, LoopWorks, LoopWater,
+    LoopWind, LoopDay, LoopNight, LoopBattle, LoopHorde, LoopHum, LoopFire, LoopWorks,
     Count,
 };
 export constexpr int c_gameSoundVariants = 8; // buffers per one-shot at most
@@ -78,7 +77,6 @@ private:
     void drainCues(const Frame& frame);
     void startVoice(EGameSound sound, const glm::vec3& pos, float loudness, float size, bool positional, int variant = -1, float pitch = 1.0f);
     void updateAmbience(const Frame& frame, const StructureSystem& structures, float dt);
-    void updateWater(const Frame& frame, const StructureSystem& structures, float dt);
     void updateBeds(const Frame& frame, float dt);
     void updateHorde(const Frame& frame);
     void updateStructureLoops(const Frame& frame, const StructureSystem& structures, float dt);
@@ -186,20 +184,6 @@ private:
     static constexpr int c_perches = 18; // 8 birds, 7 crickets, 1 owl, 2 gusts
     Perch m_perches[c_perches];
     bool m_perchesInit = false;
-
-    static constexpr int c_waterProbes = 48; // 16 directions x 3 distances
-    struct WaterVoice
-    {
-        AudioSource source;
-        glm::vec3 pos{ 0.0f }, target{ 0.0f };
-        float gain = 0.0f;
-        bool wanted = false, playing = false;
-    };
-    WaterVoice m_water[2];
-    glm::vec3 m_waterHit[c_waterProbes];
-    bool m_waterWet[c_waterProbes] = {};
-    int m_waterProbe = 0;
-    float m_waterLapTimer = 2.0f;
 
     float m_alarmTimer = 0.0f;
     float m_alarmCooldown = 0.0f;

@@ -42,10 +42,9 @@ page and mode slots get a one-liner instead.
 
 | Slot | Root page | Category page |
 |---|---|---|
-| Q / W | **CMBT / PROD** | the category's items, in order (slots 0–8) |
-| A / S / D | **CBL-P / CBL-F / CBL-M** — the cables arm straight from the root (a hidden `c_cableCategory`, still drawn as the root page: `isRootPage`) | items 4–6 |
+| Q / W / E / R / A (slots 0–4) | **EMPL / UNIT / STRC / PROD / RSRC** — the five build pages (`c_buildCategories`, below) | the category's items, in order (slots 0–8) |
 | X (slot 9) | **DEL** — toggles Delete mode: one demolish, then straight back to Select (the held press starts no box select: `m_boxSelectBlocked`, set by `setMode`) | **DEL** (category pages cap at 9 items so X stays Delete) |
-| C (slot 10) | **CNCL** — leaves Delete mode / disarms a cable, back to Select | **CNCL** — straight back to Select |
+| C (slot 10) | **CNCL** — leaves Delete mode, back to Select | **CNCL** — straight back to Select |
 | V (slot 11) | — | — |
 
 **Esc / Tab = `cancelOneLevel`**: a two-click step drops → the armed item disarms → the page or
@@ -65,18 +64,30 @@ Two states (`GameMatch::m_buildUi`). The grid pages above are the flat modes'; t
 | Aim | the crosshair (the viewport centre) | the cursor: placement, hover, picking, the wall drag and the road paint all ray through it |
 | Bar | none (no slot is assigned) | the BUILD BAR |
 
-**The build bar** (`refreshBuildBar`; `setHotbarLayout(0, ...)` = one row, which the overlay draws as a centred bar of
-wide slots on a dark plate, the armed slot in gold): slots 0-2 are the PAGE TABS (Defence, Works, Logistics; the open
-one in brackets), slots 3-11 the open page's items with their affordable counts. **Logistics** (`c_cableItems`) =
-the Road, the House, the Storehouse (Mineral silo: it banks stone AND wood - `fuelCapacityOf`, a Storage port in
-both media; the Fuel tank is off the hotbar and new goods go to the Storehouse too) and the Battery; Works (`c_productionItems`) holds the rest. Every slot is a button with its hover
-card. `activateSlot`: a tab shows its page with nothing armed; an item slot arms it (`armPageItem`).
+**The build bar** (`refreshBuildBar`; `setHotbarLayout(0, c_buildBarKeyLabels)` = one row, which the overlay draws as
+a centred bar of wide slots on a dark plate, only as many as are assigned, the armed slot in gold): **the bar is the
+OPEN PAGE's items**, slot k on number key k + 1 (1 .. 9, 0, -, =), with their affordable counts and hover cards
+(`activateSlot` arms one: `armPageItem`). **The PAGES are a TAB STRIP over the bar** (`GameHud::setTabs`, drawn by the
+overlay, clicks through `tabAtScreenPos` → `activateTab`: shows that page with nothing armed): Emplacement, Unit,
+Structure, Production, Resource (`c_buildBarTabs` 5), the open one in gold. Tried the tabs as the bar's first slots,
+dropped because the number keys and their labels then fell on the tabs.
+
+**THE BUILD PAGES** (`buildCategoryItems`, MatchInput.cpp; the same five on the flat maps' root page):
+
+| Page | Items, in slot order |
+|---|---|
+| Emplacement (`c_emplacementItems`) | Lantern (Emitter) · Great lantern (Bastion) · Tower (Turret) · Searchlight · Cannon |
+| Unit (`c_unitItems`) | Barracks · Armory · Mage tower · Healer's hut (MedicStation) |
+| Structure (`c_structureItems`) | Road (CableConveyor; over water its stroke places the Bridge by itself, so the Bridge has no slot) · Walkway · Wall · Gate · Builder's hut (Constructor) |
+| Production (`c_productionItems`) | Quarry · Lumberyard · Stone works (Fabricator) · Hearth (Generator) · Mirror (Solar) · Ammo works |
+| Resource (`c_resourceItems`) | House · Storehouse (Mineral silo: it banks stone AND wood - `fuelCapacityOf`, a Storage port in both media; the Fuel tank is off the hotbar) · Crystal store (Battery) · Lens · Ammo store |
 
 | Key | What |
 |---|---|
-| **Tab** | `toggleBuildUi`: opens the build UI on the LAST armed item (Tab + a click builds again). While it is open: the NEXT PAGE (Defence → Works → Logistics → Defence), armed on that page's last item. |
+| **Tab** | `toggleBuildUi`: opens the build UI on the LAST armed item (Tab + a click builds again). While it is open: the NEXT PAGE (Emplacement → Unit → Structure → Production → Resource → Emplacement), **Shift+Tab the previous one**, armed on that page's last item. |
 | **Q / E** | `stepSelection`: the previous / next item in ONE list over all pages (past a page's end comes the next page), wrapping. Opens the build UI. |
-| **1 .. 9** | the item slots of the open page. Opens the build UI. |
+| **1 .. 9, 0, -, =** | the item slots of the open page (slot k = key k + 1). Opens the build UI. |
+| **R** | With a ROTATED placement armed (`isRotatedPlacement`: the Cannon): turns it an eighth of a turn (`m_buildTurn`; kept across placements). The ghost shows the arc it fires in. On the flat maps R is a grid key too: with a rotated piece armed it turns instead. |
 | **X** | Delete mode (opens the build UI: a click needs the cursor), and back to the page from it. |
 | **RMB** | CLOSES the build UI at once, whatever is armed or half done (`updateGameInput`). The item stays the page's last one, so Tab arms it again. |
 | **Esc** | `cancelOneLevel`: the two-click step, then the armed item, then the bar. |
@@ -84,13 +95,13 @@ card. `activateSlot`: a tab shows its page with nothing armed; an item slot arms
 **The build UI closes whenever the mode is back at Select** (`updateModeSwitching`): a right click, Esc at the end of
 its chain, a finished demolish. Tab does not close it. The HUD counter "Build" names the page, the armed item, its cost and the keys.
 
-### Q — Combat
+### Emplacement and Unit
 
-**Emitter · Bastion · Wall · Gate · Turret · Searchlight · Barracks · Armory · Mage tower** (the Armory and the Mage
-tower: see The Armory in [Economy.md](Economy.md); the Bridge is with the Road, on the Logistics page)
+(The Armory and the Mage tower: see The Armory in [Economy.md](Economy.md).)
 
-* **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (26 m), a
-  shadow too. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed
+* **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (40 m), a
+  shadow too. Its spot light reaches 1.15 x the range, and "Searchlight brightness" is for a 26 m range: `publishSearchlights`
+  scales it by (range / 26)^2 (the lights fall off with the square of the distance), so the far end is as bright at any range. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed
   cones burn twice as fast. It shines only while an enemy is in range, and only then draws "Searchlight light/s" (1)
   from its store (the internal buffer, fed over its light link like any consumer).
   > **Who does what.** `GameStructureComponent::update` (`EMachineKind::Searchlight`) AIMS: nearest enemy by flat
@@ -233,12 +244,9 @@ nothing (no intent: the flag is the authority's).
 > The route plumbing (`Structure::route`, GRt / GqW, the save key `Route`, `seedRouteLane`, the green route lines) is
 > still in the code, but nothing sets a route any more and no unit takes one.
 
-### W — Production
+### Production and Resource
 
-**Generator · Solar · Lens (a light relay - Light on beams in [Economy.md](Economy.md)) · Lumberyard · Quarry · Fabricator · Constructor · Battery · Mineral silo · Fuel tank ·
-Medic station**
-
-Solar is a free trickle with no fuel (a flat `CubeQuarter` slab; in the sandbox world its yield follows the daylight,
+(The Lens is a light relay - Light on beams in [Economy.md](Economy.md).) Solar is a free trickle with no fuel (a flat `CubeQuarter` slab; in the sandbox world its yield follows the daylight,
 see the light rules in [Modes.md](Modes.md)); the fabricator turns energy + fuel
 into minerals; the mineral silo is the team's spendable bank.
 
@@ -258,11 +266,10 @@ into minerals; the mineral silo is the team's spendable bank.
   owner-computed, `powered` arrives through GSt), once per tick however many overlap. The reach/rate/cost
   tweaks bind `GameStructureParams::medicRange/medicHealRate/medicHealCost`. The ghost shows the reach.
 
-### A / S / D — Cables (root page)
+### The Road (the Structure page)
 
-The root page shows `c_cableItems` from slot `c_rootCableSlot` (3) up to the Delete slot: Road, House, Storehouse,
-Crystal store, Bridge, **Walkway** (a road piece too: it paints like the road).
-**Conveyor** only (the "Roads" page): it is the carriers' ROAD. The Power cable and the Pipeline are off the
+The **Road** (Conveyor) and the **Walkway** (a road piece too: it paints like the road) are on the Structure page; the
+Bridge has no slot (the road's stroke places it over water). The Road is the carriers' ROAD. The Power cable and the Pipeline are off the
 hotbar: light moves on beams and wood by carrier (see Light on beams and Carriers in [Economy.md](Economy.md)). **The crossings are NOT on the hotbar** —
 only the paint stroke places them (auto-crossing below).
 
@@ -377,8 +384,7 @@ cannot pull it back — **0 by default, since a fresh order SEEDS its own lane.*
 MOVE ORDER to it. In the sandbox world's PLAY, HOLDING LMB is also the STAFF BEAM (The player in
 [Modes.md](Modes.md)); the press still selects what is under the crosshair.
 
-**Q/W on the root page = Build** with that category, **A/S/D = Build with a cable armed** — **the
-hotbar page doubles as the mode indicator.**
+**Q/W/E/R/A on the root page = Build** with that page — **the hotbar page doubles as the mode indicator.**
 
 **Build mode ALSO click-selects** (`updateSelectionClick`, shared with Select mode): with nothing armed
 every LMB inspects (and box-selects as in Select), and **with a ghost armed, a click the

@@ -16,7 +16,7 @@
 
 #include "hash_grid.inc.glsl"
 
-// Finer than the shared GRID_SIZE (32) of the light grid: the gather cost scales with how many small emitters one cell
+// Finer than the shared GRID_SIZE (64) of the light grid: the gather cost scales with how many small emitters one cell
 // collects, and a swarm battle packs dozens of unit bubbles into a 32 m cell. Also the union march's empty-space skip
 // granularity. MIRRORED in ForceFieldPipeline.cpp.
 #define FORCE_GRID_CELL_SIZE 16.0

@@ -4,14 +4,13 @@
 
 ## Co-op PvE (`--coop`)
 
-Co-op has two worlds, picked by "Game/Coop" "Sandbox world" (default on, read when `GameMatch` is constructed:
-`GameMatch::sandboxWorld()`). "Spawn enemies" (on) gates the waves AND the ambient scatter in both worlds (the wave
-HUD counters go with them); off = a peaceful building game.
+**Co-op is the SANDBOX WORLD** (`GameMatch::m_sandboxWorld` = `m_coop`; `sandboxWorld()`): the flat maps and the
+rock grid are PvP's. "Game/Coop" "Spawn enemies" (on) gates the waves (the wave HUD counters go with them); off = a
+peaceful building game.
 
-**The setting is [`Docs/GDD.md`](../../GDD.md)**: light is safety, demons come at night. The sandbox world runs its
-first rules — see "The light rules" below. The flat maps keep the abstract rules.
+**The setting is [`Docs/GDD.md`](../../GDD.md)**: light is safety, demons come at night - see "The light rules" below.
 
-### The sandbox world (the default)
+### The sandbox world
 
 The procedural terrain, trees, rocks and ocean of the sandbox, with the third-person player. `Session::startWorldAndGame`
 switches `Terrain/Enabled` and `Ocean/Enabled` on through overrides (exit-to-menu's `unseedWorld` switches them off) and
@@ -70,10 +69,10 @@ sandbox world: PLAY and the BUILD UI in [Hotbar.md](Hotbar.md).
 false here, which drops the height ceiling, the void floor and the bite height window. Barracks units spawn 1 m over
 the terrain under their spawn point.
 
-**With "Spawn enemies" on:** waves only (the ambient scatter needs the generated map's depth). **A wave comes down on
-ENEMY LAND** (`queueWave`, the faction layer): out from the Base along a random direction, from "Sandbox wave distance
+**With "Spawn enemies" on: the waves** (Waves, below). **A wave comes down on
+ENEMY LAND** (`queueWave`, the faction layer): out from the Base along a random direction, from "Wave distance
 (m)" (70, the nearest) on in 8 m steps, at the first point whose value is under neutral (untouched land or the enemy's) and stays
-so for the next step, + 16 m; "Sandbox wave max distance (m)" (400) at the latest. So the demons come from farther
+so for the next step, + 16 m; "Wave max distance (m)" (400) at the latest. So the demons come from farther
 away as the players' land grows. With the layer off it is the plain ring at the nearest distance. The bodies appear in
 a disc of at most half the nearest distance, 1 m over the terrain, and march to the NEAREST own building that can be
 attacked (`waveTargetFrom`: a flying ship's are out of reach; none → the ground under the ship), 6 m short of it. **THE GROUND FAR
@@ -83,7 +82,7 @@ around the camera), else the Base's height; the far tick keeps a far unit `farLi
 and the terrain collider reaches as far from each physics focus as the SIM LOD keeps a body live (the App passes its
 outer radius + the query margin to `TerrainCollider::update`), so a unit that goes live always has a tile under it.
 
-#### The light rules (sandbox world only)
+#### The light rules
 
 The sun is the wave clock. `SkyParams::sunHeight()` (Settings: the sun cycle's elevation from "Time of day (h)", valid
 the moment the time is written) is the one input; a day's length is "Sky/Sun cycle" "Speed (x real time)".
@@ -91,8 +90,8 @@ the moment the time is written) is the one input; a day's length is "Sky/Sun cyc
 | Rule | What |
 |---|---|
 | The start | The authority sets the time to "Start time of day (h)" (7; < 0 = keep it) in `spawnWorld` and switches the sun cycle on. |
-| Night waves | `tickWaves`: the dusk edge (`m_night`) counts a night (`m_nightIndex`) and launches the first wave at once; then one wave every `nightWaveInterval()` until dawn - the night's length (from the sun cycle's latitude, day of year and speed) over "Waves per night" (14), held to 5 .. 300 s, so the COUNT of a night's waves is a setting and the sun cycle only says when they come - each from its own random direction. **A night builds up** (`m_nightWave`, `m_waveScale`): wave n of the night (0-based) has the night's budget x (1 + "Night wave growth per wave" (0.5) x n), every "Night surge every N waves" (4)th one is x "Night surge size" (2), and "Night wave variation" (0.4) is a random +- on the size and on the pause to the next wave. The scale is rolled AHEAD (at dawn for the night's first wave, at each launch for the one after) and is in `nextWaveBudget`, so the HUD's "Next wave power" is the wave that will come. "Wave size multiplier" (1) scales every wave (and that HUD value) at once. The dawn edge drops the points still queued. "First wave delay" and "Wave interval" are not used. |
-| Wave size | **A night's BASE power is the AVERAGE wave power of the night before**, in closed form (no night's power is kept): a night's k-th wave is base x (1 + "Night wave growth per wave" x k) x the surge size on every Nth wave, so a night's average is base x `nightAverageScale()` and night n (0-based) has the base "Wave budget" x `nightAverageScale()`^n (`nextWaveBudget`; the flat modes keep "Wave budget growth" / "Wave growth growth"). `nightAverageScale()` is the mean of those scales over "Waves per night" (the defaults: "Wave budget" 100, "Night wave growth per wave" 0.5, 14 waves - a scale of 5.2. A night's total is the budget x scale^(n+1) x 14, so the first night is ~80% of what 200 / 0.25 (scale 3.2) gave, the second ~1.3x, and the later nights grow faster; inside a night the last wave is 7.5x the first). **It does not depend on the sun cycle**: a faster cycle, another latitude or day of the year moves the waves closer together or farther apart, never their count, so the wave power is the same at any time speed. `waveLevel()`: the NIGHT number sizes every wave of a night and gates the recipes (`minWave` = the first night), not the wave count. **The first night has variety of its own**: a recipe with `WaveArchetype::firstNight` = N also rolls from that night's wave N on (0-based, `m_nightWave`), under its `minWave` - the first wave is the plain swarm, then swarm + runners and the grunt push (1), the skirmish (2), the runner rush (3), the warrior scouts (4). No spitter comes on the first night. `m_waveIndex` still counts waves (GWv, the log). |
+| Night waves | `tickWaves`: the dusk edge (`m_night`) counts a night (`m_nightIndex`) and launches the first wave at once; then one wave every `nightWaveInterval()` until dawn - the night's length (from the sun cycle's latitude, day of year and speed) over "Waves per night" (14), held to 5 .. 300 s, so the COUNT of a night's waves is a setting and the sun cycle only says when they come - each from its own random direction. **A night builds up** (`m_nightWave`, `m_waveScale`): see Wave size. "Wave variation" (0.4) is also a random +- on the pause to the next wave. The scale is rolled AHEAD (at dawn for the night's first wave, at each launch for the one after) and is in `nextWaveBudget`, so the HUD's "Next wave power" is the wave that will come. The dawn edge drops the points still queued and sets `m_nightWave` back to 0. |
+| Wave size | **Two separate growths** (`nextWaveBudget`): wave k (0-based) of night n (0-based) = "Wave budget" (200) x "Night growth (x)" (2.5)^n x (1 + "Wave growth per wave" (0.25) x k) x random(1 +- "Wave variation" (0.4)). INSIDE a night the waves grow (the last of 14 is 4.25x the first), and that build-up starts again at every dusk; ACROSS nights the whole night grows by "Night growth". **It does not depend on the sun cycle**: a faster cycle, another latitude or day of the year moves the waves closer together or farther apart, never their count, so the wave power is the same at any time speed. `waveLevel()`: the NIGHT number (0-based; by day the coming night) sizes every wave of a night; the recipes unlock by the 1-based night (`minWave` = the first night). **The first night has variety of its own**: a recipe with `WaveArchetype::firstNight` = N also rolls from that night's wave N on (0-based, `m_nightWave`), under its `minWave` - the first wave is the plain swarm, then swarm + runners and the grunt push (1), the skirmish (2), the runner rush (3), the warrior scouts (4). No spitter comes on the first night. `m_waveIndex` still counts waves (GWv, the log). |
 | Daylight burn | `stampLightRules` (authority, per frame) writes `GameUnitParams::sunBurnTeam` (the AI team) and `sunDps` = "Sunlight damage/s" (20) × a smooth step over the sun height 0.02 .. 0.2: only with the sun OVER the horizon (the `daylight()` of the fields and the mirrors starts a little under it, and a wave that comes out right after sunset must not burn in the dark). The unit's tick and the far tick both apply it, so a demon nobody is near burns too. |
 | Fields | `GameUnitParams::fieldPush` is false: a field does not push a demon. It walks through the shell, takes the graded exposure damage ("Field damage/s", 0 by default: a field does not hurt a demon, it only makes it solid) and drains the emitter (`addLoad`). "Fields block demons" brings the push back for all; `FieldBlocked true` in a `Component GameUnit` brings it back for one type. |
 | Shadow form | `GameUnitParams::shadowTeam` (the AI team; "Demon shadow form" off = none): a demon is SOLID only where the opposing field is at least half the iso value (a little outside the drawn shell), in daylight, or within "Staff light radius (m)" of a PLAYER (default 0 = OFF: a player does not reveal a demon, and carries no field of its own; above 0, `GameUnitParams::lightPoints` is stamped per frame from our player and the client twins) (`GameUnitComponent::solid`, set in its `tickField`). Not solid: its damage inbox is dropped (turret, melee, shells, the player aura), turrets do not pick it, and its model is near-black. Field exposure and the daylight burn write health directly, so they always land. The tint is not replicated: a client sees every demon solid. |
@@ -260,44 +259,6 @@ client building far from the server's player has its height trusted (`placeStruc
 units near a far client have no terrain under them. Client twins joined before the site exists spawn at the anchor.
 A lumberyard's / quarry's yield is its placer's survey (the tree records exist only around each instance's own camera). Remote players do not run the strafe animation.
 
-### The map (`Sandbox world` off)
-
-Everything from here to PvP describes the GENERATED map with the top-down player; the waves apply to both worlds.
-
-
-A big square — `c_coopHalfSize` 270 m on the 600 m ground plane — of RANDOM IMPASSABLE TERRAIN.
-`rebuildCoopMap(seed, fill, lanes)` ("Game/Coop" "Map seed" (0 = random each run), "Terrain fill"
-0.3, "Terrain lanes" 6):
-
-1. Two-octave value noise thresholded to EXACTLY "Terrain fill" (a sorted-copy threshold).
-2. A rock-free Base zone, `c_coopBaseClearRadius` 26 m.
-3. "Terrain lanes" carves wobbling attack lanes from the Base ring out past the edge.
-4. `finishGrid` flood-fills from the Base. **`CoopMap::depth` is the geodesic BFS distance**, which
-   the ambient scatter gates on.
-
-**Edge barrier at ±270:** a `barrier.pre` ring (20 m segments, E/W yaw'd 90°) whose collider is
-`Layer Barrier, CollidesWith Player`. **It blocks ONLY player capsules** (`player.pre` carries
-`Layer Player`) — units and shots walk through. Visuals are a post per segment plus
-`drawCoopBarrier`'s pulsing energy lines on the real clock.
-
-**Edge WALL at ±299:** an `edgewall.pre` ring just inside the 600 m ground rim — **invisible** (no
-Render component) and, unlike the barrier, on the Default layer, so it is **solid for everyone**
-exactly like `rock.pre`. Waves spawn in the band BETWEEN the barrier and the rim, where crowd
-pressure can shove bodies off the world. 100 m segments — nothing sees it, so long boxes hold the
-ring to 6 static bodies a side, each side spanning the WHOLE rim (±300) so the four seal the corners
-between them. Co-op only: a PvP arena's rock border is already solid.
-
-> **Spawn clearance is a `static_assert`.** A wave spawn point is clamped to ±`c_coopGroundEdge`
-> (296) on BOTH axes — the push-out writes 272–282, also inside — so no spawn CENTRE can land in
-> the wall. The body around it still has to fit: `c_edgeWallClearance` = wall − half-thickness −
-> clamp = **2.5 m**, against the largest unit radius (Titan, 2.0 m in `enemyTitan.pre`). The assert
-> (≥ 2 m) fails the build if anyone moves `c_coopGroundEdge` out or the wall in;
-> `c_edgeWallHalfThick` must be kept in step with `edgewall.pre`'s `HalfExtents`.
-
-**Nodes:** a STARTER mineral + fuel pair ~11 m from the Base, then up to 48 golden-angle-spiral
-candidates SNAPPED to reachable open cells with a 13 m spacing floor. A node is a DEPOSIT: a Lumberyard (fuel node)
-or a Quarry (mineral node) with one in its harvest radius has a full yield (The harvest in [Economy.md](Economy.md)).
-
 ### Teams
 
 Every player is on **team 0** around ONE central Base (`allocateClientTeam` returns 0, and
@@ -337,68 +298,20 @@ A shield-less body spawns with a **ZERO battery** (`energy = energyMax = 0` when
 so the label pass's shield-vs-health branch and the damage absorb never mistake it for shielded, and
 damaged swarm show health bars like any unit. They still deposit `addLoad` strain.
 
-### Ambient scatter
-
-"Ambient budget" (500000) POINTS of units placed at world start, in small **GROUPS** (3–9 bodies in a
-4–9 m disc): `AmbientSpawn` holds one archetype and a remaining count, so the trickle fills the
-current group — a disc around a reachable anchor — before rolling the next. **Loose blobs, not a
-lattice.**
-
-`ambientPointNear` rejection-samples open ground and slides bodies 1.2 m off rock edges, **so nothing
-lines up on the cell lattice.**
-
-**The archetype roll is gated by GEODESIC spawn depth**, the same `minWave` gate driven by depth
-instead of time, as a **WINDOW**: only recipes whose gate lies within "Ambient recipe window" (3)
-bands below the cell's depth band roll. The band is the cell's depth over `maxDepth` × "Ambient depth
-scale" (0.9), clamped to 1 — **so the top band starts before the deepest cell and titans are not
-confined to the corners** (the corners are the geodesic maximum; at 0.9 the mid-edges qualify too).
-
-> So the near ring is swarm-grade and **the deep map holds ONLY the elite tier** — giants, titans and
-> lobbers never sit near the Base.
-
-The scatter keeps clear of the planar "Ambient safe radius" (45 m) around the Base.
-
-**Wander** (`tickAmbientWander`, co-op authority, **a POST-UPDATE job** — it only writes idle units'
-order fields and reads the World's root list + the immutable map, so it runs during present, never in
-front of the entity batch submit; its orders land in the next pass; its own RNG, never `linearRand`):
-an IDLE AI unit — not hunting, locked or routing — now and then strolls 0.4–1× "Ambient wander
-distance" (12 m) with its heading = a random unit vector + "Ambient wander base bias" (0.5) × toward
-the Base, clamped to open ground. **Cheap and SMOOTH by design:** the expected strolls per frame =
-SELECTED units / "Ambient wander interval (s)" (90) × dt (the unit count is
-`GameUnitComponent::liveCount`, the selected fraction a smoothed estimate from the random probes —
-sizing from every unit would dump every far unit's strolls on the few near a player), carried as a
-fractional budget (`m_wanderBudget`), each costing at most 32 random probes into the root list (a
-non-unit root is a wasted probe) to find an idle unit — no per-unit timer, no burst.
-
-The order is a **wander order** (`GameUnitComponent::orderWander`): it never seeds a lane (not even
-on the hunt-seed AI team — a stroll is a direction, not a route), **walks at "Wander speed mult"
-(0.25) × the unit's move speed, capped at "Wander speed max (m/s)" (0.75) so runners stroll too**
-(the far tick's teleport as well), and self-expires after "Ambient wander timeout (s)" (12 — ticked
-by the far tick as well), so a target behind rock cannot pin the unit. **Only SELECTED units (inside
-some player's outer SIM LOD tier) are candidates**: a far unit is invisible, would walk the order by
-the far tick's teleport and then arrive in view mid-stroll — a whole patch visibly "starting to
-wander" as a player approached.
-
 ### Waves
 
-They-are-Billions style. `tickWaves` arms the clock ("First wave delay (s)" 40, then "Wave interval
-(s)" 120).
+At NIGHT only (`tickWaves`: The light rules, above). **`queueWave`:**
 
-**`queueWave`:**
+1. Picks a RANDOM compass direction and the spawn point on enemy land ("Wave distance" .. "Wave max distance", see The
+   sandbox world).
+2. **Sizes the wave in BUDGET POINTS**, not unit counts (`nextWaveBudget`: Wave size in The light rules). Each type
+   spends its "Cost \<type\>" tweak, **so a brute-heavy archetype fields far fewer bodies than a swarm flood of the
+   same budget.** The "Max enemy units" cap (100000, counting every live unit) converts at the cheapest cost, minus
+   the points still queued; the clock and the wave index advance even at the cap.
+3. Rolls the archetype, sizes the spawn blob, seeds ONE lane, raises the spawn fog and fires "GWv" at clients.
 
-1. Picks a RANDOM compass direction projected onto the barrier square and stepped 8 m OUTSIDE it —
-   **the swarm spawns in the open ring between barrier and ground edge and walks in THROUGH the
-   player-only barrier.**
-2. **Sizes the wave in BUDGET POINTS**, not unit counts: "Wave budget" (60) plus "Wave budget growth"
-   (60) per wave, where the growth itself climbs by "Wave growth growth" (30) every wave — wave i =
-   base + growth·i + growthGrowth·i(i−1)/2 (`nextWaveBudget`). Each type spends its "Cost \<type\>"
-   tweak, **so a brute-heavy archetype fields far fewer bodies than a swarm flood of the same
-   budget.** The "Max enemy units" cap (100000, counting every live unit) converts at the cheapest
-   cost, minus the points still queued; the clock and the wave index advance even at the cap.
-3. Rolls the archetype, sizes the spawn blob, seeds ONE lane and fires "GWv" (u16 index) at clients.
-
-**`tickCoopSpawns` TRICKLES the actual spawns** ("Spawns per frame" 100 — wave first, then ambient),
-so a huge wave enters over seconds rather than one hitch. An unaffordable roll downgrades to the mix's
+**`tickCoopSpawns` TRICKLES the actual spawns** ("Spawns per frame" 150), so a huge wave enters over seconds rather
+than one hitch. An unaffordable roll downgrades to the mix's
 cheapest type; if even that does not fit, the wave ends. **The trickle is THREADED:** the frame's
 rolls (budget math plus glm RNG, main-thread — `linearRand` is not thread-safe) collect into
 `NpcSystem::spawnLooseUnits`, one `World::spawnBatch` fan-out per frame, with team/order fixup serial
@@ -406,24 +319,20 @@ after the join.
 
 ### The spawn blob
 
-Bodies land in a disc around `m_waveOrigin` (the ring point), **sized ONCE per wave in `queueWave`
+Bodies land in a disc around `m_waveOrigin` (the spawn point), **sized ONCE per wave in `queueWave`
 by `waveSpawnRadius`: the AREA scales with the wave's expected body count, so the areal density is
 the same in wave 1 and wave 20.** Body count = the queued points / the MIX's weighted mean cost, and
-`r = sqrt(bodies · "Wave spawn area per unit" (6 m²) / π)`, clamped to [8 m, `c_coopGroundEdge`]. It
+`r = sqrt(bodies · "Wave spawn area per unit" (6 m²) / π)`, clamped to [8 m, `c_waveRadiusMax` 300 m]; the trickle
+holds the disc to half the "Wave distance", so it never reaches the Base, and puts each body 1 m over the terrain. It
 rides the save (`WaveTrickle/Radius`), so a mid-wave load keeps the same blob.
 
-> Do not size the radius off the REMAINING budget or cap it: parked bodies never push each other
-> apart, so a stacked disc only resolves as box3d shoves them out once a player comes near, and a
-> shrinking disc packs the wave's tail tightest.
-
-The blob is clamped to the ground plane and any point inside the barrier square pushes back out
-along the wave's dominant axis, **so an oversized disc becomes a wide BAND along the barrier face** —
-the only direction with room, since the spawn band is just `c_coopGroundEdge − c_coopHalfSize` deep.
+> Do not size the radius off the REMAINING budget: parked bodies never push each other apart, so a stacked disc only
+> resolves as box3d shoves them out once a player comes near, and a shrinking disc packs the wave's tail tightest.
 
 Spawn points then roll up to 6 times against the last `c_waveRecentSpawns` (32) spawns at 2 m
 spacing, **so parked bodies rarely overlap in the first place.**
 
-Each unit is `orderMove`d to the Base's near face on the incoming side (`m_waveDest`, ±4 m jitter);
+Each unit is `orderMove`d to the nearest own building on the incoming side (`m_waveDest` = `waveTargetFrom`, ±4 m jitter);
 the lock releases on arrival OR at the first enemy structure inside "Order break radius" (15 m —
 `GameUnitParams::orderBreakRadius`, checked by the unit's combat probe), and the AI takes over,
 hunting the NEAREST structure — without the break the whole wave marches past everything to the Base.
@@ -452,10 +361,10 @@ Costs are the "Game/Coop" "Cost \<type\>" defaults.
 #### Archetypes (`c_waveArchetypes`, [MatchCoop.cpp](../../../Code/Game/Private/MatchCoop.cpp))
 
 ONE archetype per wave: a named recipe of weighted types (up to 5 — "endgame"), **gated by a minimum
-wave index**, weights jittered ×0.6–1.4, and **never the same recipe twice in a row** when a choice
+night** (`minWave`, 1-based), weights jittered ×0.6–1.4, and **never the same recipe twice in a row** when a choice
 exists.
 
-| Min wave | Recipes |
+| Min night | Recipes |
 |---|---|
 | 1–3 | swarm · swarm + runners (2) · grunt push (2) · brute pack (2, the first Brutes) · runner rush (3) |
 | 4–6 | warrior line (4) · spitter siege (4) · brute hammer (5) · shield wall (6) · combined arms (6) |
@@ -463,16 +372,16 @@ exists.
 | 9–10 | **giant push** · **hive** (9) · siege column (10) |
 | 11–13 | **titan** (11) · **hive siege** (12) · endgame (13, all four elites) |
 
-**THE SPRINKLE** (`queueWave`, waves only — not the ambient scatter): each wave adds ONE strong type on top of its
+**THE SPRINKLE** (`queueWave`): each wave adds ONE strong type on top of its
 recipe, with a weight that gives it 15 % of the wave's points (`c_sprinkleShare`; the mix weights are per body, so
-the weight is `share * sum(w * cost) / ((1 - share) * cost)`). Candidates by level (the wave index; the night in
-the sandbox world): Warrior 1, Brute 2, Elite 3, Spawner 4, Giant 5, Titan 6 — only a type the recipe does not have, and only
+the weight is `share * sum(w * cost) / ((1 - share) * cost)`). Candidates by the night (1-based): Warrior 1, Brute 2, Elite 3, Spawner 4, Giant 5, Titan 6, and RARE before that -
+the Giant from night 3 and the Titan from night 4 are candidates in only 15 % of the waves (`c_rareChance`, rolled per
+wave) — only a type the recipe does not have, and only
 when the share pays for half a body or more, so the budget decides when a Giant or a Titan can come. The roll is
 between the two most expensive candidates. The entry is part of `m_waveMix` (capacity 6: a recipe's 5 + this), so
 the save holds it.
 
-`sampleMix` samples the wave's stored jittered copy per spawn; the ambient scatter samples the
-archetype directly per spawn. The wave log names the recipe.
+`sampleMix` samples the wave's stored jittered copy per spawn. The wave log names the recipe.
 
 ### Targeting range gates
 
@@ -489,7 +398,7 @@ then the same gated AI takes over.
 
 **That standing order is therefore the ONLY thing that marks a wave unit**, so the F9 save carries it
 per unit (`Order`, see Save / load ([CONTEXT.md](CONTEXT.md))): without it a loaded wave stops where it
-stands and holds its patch like ambient scatter.
+stands and holds its patch.
 
 ### Known gaps
 

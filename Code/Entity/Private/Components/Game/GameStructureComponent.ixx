@@ -44,8 +44,9 @@ export struct GameStructureComponent
     float meleeRadius = 1.0f;
     float bubbleRadius = 0.0f; // active emitters, game-stamped (main-write, worker-read): shield-less
                                // units take field damage inside it when the bake is off
-    float store[3] = {};       // energy, fuel, minerals
-    float capacity[3] = {};    // 0 = this structure does not carry the medium; game-stamped per tick
+    static constexpr int NumStores = 4;
+    float store[NumStores] = {};    // energy, fuel, minerals, munitions (the last moves by carrier only, never on a cable)
+    float capacity[NumStores] = {}; // 0 = this structure does not carry the good; game-stamped per tick
     uint8 attachedMask = 0;    // bit m = a cable network of medium m touches this structure
     uint8 storePriority = 0;   // stores: the game's EStorePriority (0 Balance, 1 Fill, 2 Drain) - a player order, synced/saved by the game
     float flowUtil = 0.0f;     // EMA of the served fraction of the transport demand (gauge, game-stamped)

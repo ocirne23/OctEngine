@@ -8,7 +8,8 @@ namespace
 {
     constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX", "AgX Punchy" };
     constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size", "Terrain march steps" };
-    constexpr oc::string_view s_cloudDebugNames[] = { "Off", "Step count", "Density only", "History rejection" };
+    constexpr oc::string_view s_lightGridDebugNames[] = { "Off", "Grids", "Light count heat", "Light ranges" };
+    constexpr oc::string_view s_cloudDebugNames[] ={ "Off", "Step count", "Density only", "History rejection" };
     constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame", "1/64 per frame" };
     constexpr oc::string_view s_dlssModeNames[] = { "Off", "DLAA", "Quality", "Balanced", "Performance", "Ultra Performance" };
     constexpr oc::string_view s_dlssPresetNames[] = { "Default", "J", "K", "L", "M" };
@@ -550,12 +551,12 @@ void Settings::registerLightGrid(LightGridParams& s)
     Tweak::floatVar("LOD/Light grid", "LOD start (m)", &s.lodStart, 0.0f, 1000.0f, 1.0f);
     Tweak::floatVar("LOD/Light grid", "LOD step (m)", &s.lodStep, 0.5f, 1000.0f, 0.5f);
     Tweak::floatVar("LOD/Light grid", "LOD power", &s.lodPower, 0.1f, 4.0f, 0.05f);
-    Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &s.minCellLog2, 0, 5, 1.0f);
-    Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &s.maxCellLog2, 0, 5, 1.0f);
+    // (Min cell 1 = 2 m, 1.7 MB a near grid: 1 m cells make a 64 m grid 262 144 cells - 13.6 MB.)
+    Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &s.minCellLog2, 1, 6, 1.0f);
+    Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &s.maxCellLog2, 1, 6, 1.0f);
     Tweak::intVar("LOD/Light grid", "Per-cell budget (cells)", &s.cellBudget, 8, 32768, 8.0f);
-    // 0 off, 1 grid cells, 2 light count heat, 3 light ranges - the LIGHT_GRID_DEBUG define on the lit fragments.
-    // Sun cascades: the baked "Shadows/Debug mode".
-    Tweak::intVar("LOD/Light grid", "Debug Mode", &s.debugMode, 0, 3, 0.0f, {}, ETweakFlags::None);
+    // The LIGHT_GRID_DEBUG define on the lit fragments (the listener reloads them). Sun cascades: the baked "Shadows/Debug mode".
+    Tweak::enumVar("LOD/Light grid", "Debug mode", &s.debugMode, s_lightGridDebugNames);
 }
 
 void Settings::registerRenderer(RendererSettings& s)

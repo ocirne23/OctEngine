@@ -403,7 +403,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
         writer.write<uint16>(0);                  // message seq
         writer.writeVarUInt(3);
         writer.write<uint8>(1);      // ENetMsg::Hello
-        writer.write<uint16>(15);    // GameNetVersion
+        writer.write<uint16>(16);    // GameNetVersion
         sendPayload(socket, target, seq++, writer.data());
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

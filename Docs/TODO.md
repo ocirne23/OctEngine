@@ -401,6 +401,5 @@ See [File](Context/File/CONTEXT.md).
 Values that must be kept in step by hand; a shared source would remove the risk.
 
 * NetFuzz mirrors `GameProtocolId` / `GameNetVersion` (NetFuzz/main.cpp).
-* `c_edgeWallHalfThick` ↔ `edgewall.pre` `HalfExtents`.
 * `loadUnits` fallbacks ↔ the save's omitted-default keys.
 * The Game `Gq*` chat filter repeats App's 256-byte cap.

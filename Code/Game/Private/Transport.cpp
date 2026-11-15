@@ -28,9 +28,13 @@ StructureSystem::ETransportRole StructureSystem::transportRoleOf(EStructureType 
         if (t == EStructureType::Lumberyard) return R::Producer;
         if (t == EStructureType::FuelTank || t == EStructureType::MineralSilo) return R::Storage; // the Storehouse banks wood too
         return R::Consumer;
-    default: // minerals
+    case 2: // minerals
         if (t == EStructureType::Quarry || t == EStructureType::Fabricator) return R::Producer;
         if (t == EStructureType::Base || t == EStructureType::MineralSilo) return R::Storage;
+        return R::Consumer;
+    default: // munitions (GoodMunitions: carriers only, no cable carries them)
+        if (t == EStructureType::AmmoWorks) return R::Producer;
+        if (t == EStructureType::AmmoStore) return R::Storage;
         return R::Consumer;
     }
 }

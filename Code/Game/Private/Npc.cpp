@@ -322,12 +322,26 @@ const EntitySpawnTemplate* NpcSystem::shellTemplate(bool lob)
 {
     if (m_shellGeneration != Globals::world.templateGeneration())
     {
-        static constexpr const char* c_paths[2] = { "Entities/Game/enemyShot.pre", "Entities/Game/enemyLob.pre" };
-        for (int i = 0; i < 2; ++i)
+        static constexpr const char* c_paths[3] = { "Entities/Game/enemyShot.pre", "Entities/Game/enemyLob.pre",
+            "Entities/Game/cannonShell.pre" };
+        for (int i = 0; i < 3; ++i)
             m_shellTemplates[i] = Globals::world.resolveAssetTemplate(c_paths[i]);
         m_shellGeneration = Globals::world.templateGeneration();
     }
     return m_shellTemplates[lob ? 1 : 0].get();
+}
+
+const EntitySpawnTemplate* NpcSystem::cannonShellTemplate()
+{
+    shellTemplate(false); // (re)resolves all three when the template generation moved
+    return m_shellTemplates[2].get();
+}
+
+void NpcSystem::fireCannonShell(const glm::vec3& from, const glm::vec3& velocity, uint8 team)
+{
+    if (const EntitySpawnTemplate* shell = cannonShellTemplate())
+        fireShot(*shell, from, velocity, team);
+    GameSound::post(EGameSound::LobFired, from, 1.4f, 1.5f);
 }
 
 void NpcSystem::fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from,
@@ -435,9 +449,12 @@ void NpcSystem::service(StructureSystem& structures)
             continue; // the barracks died between deciding and servicing - its units died with it
         const StructureSystem::Ref& s = structures.structures()[index];
         const ENpcType unitType = (ENpcType)glm::min((int)s.state->barracks.unitType, (int)ENpcType::Count - 1);
+        // A barracks ON THE SHIP makes no unit while the ship is in the air (not landed): refunded like a failed spawn,
+        // so its build bar stays full and the unit comes out the moment the ship has landed.
         // A random free side: the unit then goes to its team's nearest player (GameMatch::tickFollowers).
-        if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius()),
-            barracksId, (uint8)s.state->team, unitType))
+        if ((s.onShip && !structures.shipJoined())
+            || !spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius()),
+                barracksId, (uint8)s.state->team, unitType))
         {
             s.state->store[0] = glm::min(s.state->store[0] + s.state->barracks.spawnCost,
                 s.state->capacity[0]);

@@ -1,0 +1,149 @@
+# Cannon: lobs a shell of light (cannonShell.pre) at the nearest solid demon in its ARC - "Arc (deg)" around its facing
+# (the entity's -Z; placed in eighths of a turn, R turns the ghost) - one munition a shot (StructureSystem::tickCannons).
+# ONE cell (2x2 m) and 2.2 m tall; the barrel's square mouth reaches ~0.6 m past the cell in front, its top ~1.9 m over
+# the stand: on a walkway deck behind a wall, or on the ship's rail, it fires over the wall. It may stand on a road
+# piece, a walkway deck or a ship rail tile (it rides that cell's underId). Spawned origin 1.1 over its stand.
+# WALK-THROUGH like the Mirror: Layer Cable collides only with Projectile, so players and units pass it
+# (StructureSystem::isWalkThrough keeps it out of the nav obstacles and the ship's collider too).
+# SHAPE (a placeholder; uniform scales of the baseshapes variants, all boxes): A FIELD GUN - a square bronze barrel (the
+# root) raised 15 degrees toward -Z with a wider square mouth and a light glowing in it, on a wooden carriage: two
+# cheeks under the barrel, an axle, two big SQUARE wheels (thin plates), and a trail down to the ground behind. The
+# CHARGE CRYSTAL over the breech: the munitions are light charges. The child pieces are render-only.
+# (The muzzle's place is tickCannons' c_muzzleOut / c_muzzleHeight: keep them in step.)
+Prefab gameCannon
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Pillar3
+		Type StaticMesh
+		Color 0.62 0.45 0.2
+		Position 0 0.25 -0.45
+		Rotation -75 0 0
+		Scale 0.25
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
+		Shape Box
+		HalfExtents 1 1.1 1
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name Mouth
+			Position 0 0.48 -1.28
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.36 0.15
+				Rotation -75 0 0
+				Scale 0.32
+		Entity
+			Name MuzzleLight
+			Position 0 0.57 -1.6
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3
+				Scale 0.14
+		Entity
+			Name Breech
+			Position 0 0.08 0.24
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.36 0.15
+				Scale 0.27
+		Entity
+			Name Charge
+			Position 0 0.6 0.28
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3.5
+				Scale 0.22
+		Entity
+			Name CheekL
+			Position -0.32 -0.12 0.05
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.27 0.15
+				Rotation 90 0 0
+				Scale 0.14
+		Entity
+			Name CheekR
+			Position 0.32 -0.12 0.05
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.27 0.15
+				Rotation 90 0 0
+				Scale 0.14
+		Entity
+			Name Axle
+			Position 0 -0.5 0.15
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.3 0.22 0.13
+				Rotation 0 0 90
+				Scale 0.15
+		Entity
+			Name WheelL
+			Position -0.6 -0.5 0.15
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.32 0.22 0.12
+				Rotation 0 0 90
+				Scale 0.6
+		Entity
+			Name WheelR
+			Position 0.6 -0.5 0.15
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.32 0.22 0.12
+				Rotation 0 0 90
+				Scale 0.6
+		Entity
+			Name HubL
+			Position -0.76 -0.5 0.15
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.36 0.15
+				Scale 0.12
+		Entity
+			Name HubR
+			Position 0.76 -0.5 0.15
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.5 0.36 0.15
+				Scale 0.12
+		Entity
+			Name Trail
+			Position 0 -0.68 0.62
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.27 0.15
+				Rotation -50 0 0
+				Scale 0.15

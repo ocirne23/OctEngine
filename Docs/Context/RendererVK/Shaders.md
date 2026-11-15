@@ -103,14 +103,20 @@ calls `reloadShaders()`.
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):
   * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds (point/spot sphere,
-    spot cone sector, area front-half box, beam capsule) → its cull record; every 32^3 grid the box covers is claimed
+    spot cone sector, area front-half box, beam capsule) → its cull record; every 64^3 grid the box covers is claimed
     in a lock-free CPU hash table (the same `getPositionHash` as the shaders, bit for bit; bump-allocated slots, CAS on
     the table entry, a slot that loses the race for a grid stays DEAD with `cellSize 0`), the grid's distance-LOD cell
     size is picked at the claim, the grid's cell/large count is bumped (`atomic_ref`), and one (slot, light) touch is
     appended to a bounded array (one `fetch_add` per light for its whole block). A light with a reach over
-    `GRID_SIZE / 2` (16 m) or spanning more than **"LOD/Light grid/Per-cell budget (cells)"** (1024) cells inside a grid
-    is that grid's LARGE light (`MAX_LARGE_LIGHTS_PER_GRID` 14, one entry evaluated by every pixel of the grid). A light
+    `GRID_SIZE / 2` (32 m) or spanning more than **"LOD/Light grid/Per-cell budget (cells)"** (32768: a whole 2 m grid,
+    so by default only the reach decides) cells inside a grid is that grid's LARGE light (one entry evaluated by EVERY
+    pixel of the grid, far from it too; `MAX_LARGE_LIGHTS_PER_GRID` 30 a grid, the rest DROPPED); any other is a per-cell
+    light, evaluated only in the cells its range touches (`MAX_LIGHTCELL_LIGHTS` 24 a cell, the rest dropped). A light
     whose block or grid claim does not fit goes to an overflow list; the touch array grows for the next frame.
+  * **THE SIZES FOLLOW THE GAME'S LIGHTS** (reaches of 4 - 46 m, most 8 - 25 m: unit hurt flashes 4 - 8, turret and
+    cannon flashes 8 - 18, the cannon shell 14, the mage and staff cones 18 - 22, field lights 2 x the field radius, the
+    player 35, the Searchlight 46). Tried 32 m grids with 1 m cells and a 1024-cell budget: every light over ~5 m was
+    LARGE, so a grid in a fight passed its 14 large-light slots and lights went dark at random.
   * **The merge job (`build`, `Renderer::kickGridBuilds` from the App loop right after the force update — the frame's
     last light source; `present()` kicks as a fallback):** re-walks the overflow lights serially (reading the mapped,
     write-combined light buffer — a non-goal path), prefix-sums the per-slot counts into per-grid list ranges, data
@@ -141,8 +147,9 @@ calls `reloadShaders()`.
     `GRID_TABLE_NAME`, the gather shader does without them.
   * **The distance LOD** is `LightGridParams` under "LOD/Light grid", read by the CPU build every frame (no reload):
     `level = floor(pow(max(dist - start, 0) / step, power))`, `cellSize = clamp(minCell << level, minCell, maxCell)` in
-    world units per cell. Min cell 0 (log2) = the full GRID_SIZE cells per axis; min == max pins one resolution
-    everywhere; the defaults (0 m, 16 m, 0.5, min 0, max 1) stop at 2 m cells.
+    world units per cell (`dist` = to the grid's CENTRE). Min == max pins one resolution everywhere; the defaults
+    (48 m, 32 m, 0.5, min 1, max 3): 2 m cells (32^3, 1.7 MB) in the grid the camera is in - its centre is up to 55 m
+    away - then 4 m and 8 m. The tweak's minimum is 1 (2 m): 1 m cells make a 64 m grid 13.6 MB.
   * The three grid constants (`GRID_SIZE`, the two caps) and the header layout are mirrored in
     `LightGridComputePipeline.cpp`: **change both.**
 * **Debug overlays are `#define`-driven, NEVER uniforms** — a debug switch rebuilds its pipeline (GPU idle + reload, the
@@ -156,11 +163,11 @@ calls `reloadShaders()`.
   sun visibility, 4 shadow-map texel size heat (green 5 cm → red 1 m), PCSS path only. 5 the terrain march's steps, on both
   paths (`terrainMarchDebugColor`, see [Terrain](Terrain.md)). `~GameMatch`'s shadow-preset restore leaves this field alone
   for the same reason.
-* **"LOD/Light grid/Debug Mode"** (`LightGridParams::debugMode`) is BAKED as the `LIGHT_GRID_DEBUG` define on the same
-  lit fragments (its own listener; at 0 every debug branch folds away) and overlays the forward pass's
-  `computeLitColor` (`instanced_indirect_lit.inc.glsl`): 1 light grid cells (random colour per grid), 2 per-cell light
-  count heat (green → red at the cell cap, magenta = the point's grid is missing from the hash table), 3 light ranges
-  (a step of blue per covering light). Not saved.
+* **"LOD/Light grid/Debug mode"** (`LightGridParams::debugMode`, a named list) is BAKED as the `LIGHT_GRID_DEBUG` define
+  on the same lit fragments (its own listener; at Off every debug branch folds away) and overlays the forward pass's
+  `computeLitColor` (`instanced_indirect_lit.inc.glsl`): Grids (a random colour per 64 m grid), Light count heat (the
+  lights a point evaluates, its grid's LARGE lights included: green → red at the cell cap of 24, magenta = the point's
+  grid is missing from the hash table), Light ranges (a step of blue per covering light). Not saved.
 * SPIR-V plus source dumps land in `Assets/Local/` for Aftermath crash analysis.
 
 ## Pipeline statistics (register counts)

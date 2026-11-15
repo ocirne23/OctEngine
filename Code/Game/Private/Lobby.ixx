@@ -18,19 +18,14 @@ import :Chat;    // ChatSystem (the chat event the lobby-phase filter lets throu
 //   "LbT" client->server [u8 team]    team pick request (PvP; server validates < numTeams)
 //   "LbG" client->server              start request (server re-validates all-ready)
 //   "LbS" server->clients [u8 flags: 1 coop | 2 countdown | 4 started][f32 remaining]
-//         [u32 mapSeed][f32 terrainFill][u8 terrainLanes]   - the host's co-op MAP settings
 //         [u8 numTeams][u8 pvpMap]                          - the host's PvP team count + arena
 //         [u8 count]{[u32 clientId][u8 ready][u8 team]}   - the full state, broadcast on every change
 // PVP TEAMS: the host sets "Number of teams" (2..GameMaxTeams, SetNumTeams action); every player
 // picks their own team on the lobby page (SetTeam action -> LbT on a client). A joiner lands on
 // the least-populated team; lowering the count re-seats anyone above it the same way. At launch
 // main hands the count + the roster's picks to the host's GameMatch (setLobbyTeams, before
-// spawnWorld) - it spawns one Base per team and seats each client's capsule on its pick.
-// CO-OP MAP SETTINGS: the host edits them on the lobby page (SetMapSettings action), every LbS
-// mirrors them so clients see the upcoming map. At launch main hands them to the host's GameMatch
-// (setMapSettings, before spawnWorld); the values that GENERATE reach clients through the game's
-// own "GMp" event, which precedes the world replay - a client never generates from the lobby
-// copy, so the two can never disagree.
+// spawnWorld) - it spawns one Base per team and seats each client's capsule on its pick. (Co-op has no map settings: its
+// map is the procedural terrain.)
 //   "LbX" server->clients [u8 coop]   the countdown finished: launch now
 // Clients ignore relayed LbR/LbG (a client's event also relays to the other clients) and act only
 // on the server's LbS/LbX (sender 0). A client joining an already-RUNNING game gets LbS(started)
@@ -100,17 +95,6 @@ public:
 
 	bool active() const { return m_state == EState::Lobby || m_state == EState::Countdown; }
 	bool coop() const { return m_coop; }
-	// The host's co-op map settings for the launching GameMatch (false = not a co-op host lobby:
-	// the command-line path and clients keep GameMatch's tweak defaults / the GMp inputs).
-	bool hostMapSettings(uint32& seed, float& fill, int& lanes) const
-	{
-		if (!m_host || !m_coop || m_state == EState::Inactive)
-			return false;
-		seed = m_mapSeed;
-		fill = m_mapFill;
-		lanes = m_mapLanes;
-		return true;
-	}
 	// The PvP team setup for the launching GameMatch: the host's team count + every roster
 	// member's pick (clientId, team). False = not a PvP lobby (co-op seats everyone on team 0;
 	// the command-line path keeps GameMatch's defaults).
@@ -212,9 +196,6 @@ public:
 		{
 			const uint8 flags = reader.read<uint8>();
 			const float remaining = reader.read<float>();
-			const uint32 mapSeed = reader.read<uint32>();
-			const float mapFill = reader.read<float>();
-			const uint8 mapLanes = reader.read<uint8>();
 			const uint8 numTeams = reader.read<uint8>();
 			const uint8 pvpMap = reader.read<uint8>();
 			const uint8 count = reader.read<uint8>();
@@ -230,9 +211,6 @@ public:
 			if (reader.overflowed())
 				return;
 			m_players = oc::move(players);
-			m_mapSeed = mapSeed; // display only on a client (see the header: GMp generates)
-			m_mapFill = mapFill;
-			m_mapLanes = mapLanes;
 			m_numTeams = glm::clamp((int)numTeams, 2, c_maxTeams);
 			m_pvpMap = (EPvpMap)glm::min((int)pvpMap, (int)EPvpMap::Count - 1);
 			if ((flags & 4) != 0)
@@ -286,9 +264,6 @@ public:
 		v.coop = m_coop;
 		v.countdownActive = m_state == EState::Countdown;
 		v.countdownRemaining = oc::max(m_countdown, 0.0f);
-		v.mapSeed = m_mapSeed;
-		v.terrainFill = m_mapFill;
-		v.terrainLanes = m_mapLanes;
 		v.numTeams = m_coop ? 1 : m_numTeams;
 		v.pvpMap = (int)m_pvpMap;
 		for (int i = 0; i < (int)EPvpMap::Count; ++i)
@@ -377,15 +352,6 @@ public:
 			m_pvpMap = map;
 			if (m_state == EState::Countdown)
 				cancelCountdown(); // the arena changed under the countdown
-			broadcastState();
-		}
-		else if (action.type == LobbyAction::EType::SetMapSettings && m_host && m_coop)
-		{
-			// Host only (the page shows clients a read-only line, and no client event carries
-			// these). Clamped to what the generator accepts; every change mirrors at once.
-			m_mapSeed = action.mapSeed & 0x7fffffffu;
-			m_mapFill = glm::clamp(action.terrainFill, 0.0f, 0.6f);
-			m_mapLanes = glm::clamp(action.terrainLanes, 2, 12);
 			broadcastState();
 		}
 	}
@@ -510,9 +476,6 @@ private:
 		writer.write<uint8>(uint8((m_coop ? 1 : 0) | (m_state == EState::Countdown ? 2 : 0)
 			| (m_state == EState::Started ? 4 : 0)));
 		writer.write<float>(oc::max(m_countdown, 0.0f));
-		writer.write<uint32>(m_mapSeed);
-		writer.write<float>(m_mapFill);
-		writer.write<uint8>((uint8)m_mapLanes);
 		writer.write<uint8>((uint8)m_numTeams);
 		writer.write<uint8>((uint8)m_pvpMap);
 		const uint8 count = (uint8)oc::min(m_players.size(), (size_t)32);
@@ -538,8 +501,4 @@ private:
 	float m_countdown = 0.0f;
 	int m_numTeams = 2; // PvP: the host's team count (2..c_maxTeams). Mirrored in LbS.
 	EPvpMap m_pvpMap = EPvpMap::Lane; // PvP: the host's arena pick. Mirrored in LbS.
-	// Co-op map settings (host-authored; defaults = GameMatch's tweak defaults). Mirrored in LbS.
-	uint32 m_mapSeed = 0;
-	float m_mapFill = 0.4f;
-	int m_mapLanes = 6;
 };

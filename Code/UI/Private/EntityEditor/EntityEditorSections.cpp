@@ -1081,6 +1081,10 @@ void EntityEditor::renderGameProjectileSection(EntityDocNode& node)
 	edited |= fieldFloat("Emitter Drain", projectile.emitterDrain, 0.01f, 0.0f, 1000.0f, "Energy/s sapped from the nearest active enemy emitter");
 	edited |= fieldFloat("Drain Radius", projectile.emitterDrainRadius, 0.05f, 0.0f, 1000.0f);
 	edited |= fieldFloat("Splash Radius", projectile.splashRadius, 0.05f, 0.0f, 1000.0f, "> 0: the contact damages every enemy within it");
+	edited |= fieldFloat("Splash Edge", projectile.splashEdge, 0.01f, 0.0f, 1.0f, "The splash damage's share at the edge (linear from full at the centre; 1 = flat)");
+	edited |= fieldCheck("Hits Shadows", projectile.hitsShadows, "Its damage hurts a shadow (a unit that is not solid) too");
+	edited |= fieldCheck("Impact Puff", projectile.impactPuff, "Its impact bursts (the game's shell blast puffs)");
+	edited |= fieldCheck("Muzzle Flash", projectile.muzzleFlash, "Its launch flashes where it starts: a burst, smoke and a short light");
 	if (edited)
 		markEdited();
 	ImGui::PopID();

@@ -160,6 +160,43 @@ public:
 		m_selectedSlot = glm::clamp(index, -1, NumSlots - 1);
 	}
 
+	// THE TAB STRIP: page names drawn in a row OVER a one-row bar (the slots below are the open page's), one of them
+	// selected (-1 = none). An empty span = no strip. Unchanged labels are a no-op (it is re-stated every frame).
+	static constexpr int MaxTabs = 8;
+	void setTabs(oc::span<const oc::string_view> labels, int selected)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_tabCount = glm::min((int)labels.size(), MaxTabs);
+		for (int i = 0; i < m_tabCount; ++i)
+			if (oc::string_view(m_tabLabels[i]) != labels[i])
+				m_tabLabels[i].assign(labels[i].data(), labels[i].size());
+		m_selectedTab = glm::clamp(selected, -1, m_tabCount - 1);
+	}
+
+	// The overlay reports where it drew each tab (or nothing when no strip was drawn).
+	void setTabScreenRects(oc::span<const glm::vec4> minMax)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_tabRectCount = glm::min((int)minMax.size(), MaxTabs);
+		for (int i = 0; i < m_tabRectCount; ++i)
+			m_tabRects[i] = minMax[i];
+	}
+
+	// The tab drawn under a screen position last frame (-1 = none / no strip).
+	int tabAtScreenPos(const glm::vec2& pos) const
+	{
+		const std::lock_guard lock(m_mutex);
+		if (!hotbarActiveLocked() || m_tabCount == 0)
+			return -1;
+		for (int i = 0; i < glm::min(m_tabRectCount, m_tabCount); ++i)
+		{
+			const glm::vec4& r = m_tabRects[i];
+			if (pos.x >= r.x && pos.y >= r.y && pos.x <= r.z && pos.y <= r.w)
+				return i;
+		}
+		return -1;
+	}
+
 	void setHotbarVisible(bool visible)
 	{
 		const std::lock_guard lock(m_mutex);
@@ -263,6 +300,9 @@ public:
 		m_popup = HudPopup();
 		m_popupRects.clear();
 		m_selectedSlot = 0;
+		m_tabCount = 0;
+		m_tabRectCount = 0;
+		m_selectedTab = -1;
 	}
 
 	// ---- reads ----
@@ -309,6 +349,9 @@ public:
 		oc::vector<HudCounter> counters;
 		oc::vector<HudWorldLabel> worldLabels;
 		HudPopup popup;
+		oc::string tabLabels[MaxTabs];
+		int     tabCount = 0;
+		int     selectedTab = -1;
 	};
 
 	// One copy per frame for the overlay (UI thread), INTO a snapshot the caller keeps: the copy
@@ -329,6 +372,10 @@ public:
 		out.counters = m_counters;
 		out.worldLabels = m_worldLabels;
 		out.popup = m_popup;
+		out.tabCount = m_tabCount;
+		out.selectedTab = m_selectedTab;
+		for (int i = 0; i < m_tabCount; ++i)
+			out.tabLabels[i] = m_tabLabels[i];
 	}
 
 private:
@@ -367,6 +414,11 @@ private:
 	oc::vector<HudWorldLabel> m_worldLabels;
 	HudPopup m_popup;
 	oc::vector<glm::vec4> m_popupRects; // per button: (minX, minY, maxX, maxY), last frame
+	oc::string m_tabLabels[MaxTabs];
+	glm::vec4 m_tabRects[MaxTabs] = {};
+	int m_tabCount = 0;
+	int m_tabRectCount = 0;
+	int m_selectedTab = -1;
 };
 
 export namespace Globals

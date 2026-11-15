@@ -344,7 +344,7 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 	return wsum > 1e-4 ? sum / wsum : vec4(0.0, 0.0, 0.0, 1.0);
 }
 
-// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light count heat,
+// Light debug overlay ("Graphics/LOD/Light grid/Debug mode"): 0 off, 1 grid cells, 2 per-cell light count heat,
 // 3 light ranges. BAKED (the tweak reloads the pipeline), so at 0 every debug branch folds away.
 #ifndef LIGHT_GRID_DEBUG
 #define LIGHT_GRID_DEBUG 0

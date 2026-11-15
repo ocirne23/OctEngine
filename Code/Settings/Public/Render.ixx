@@ -802,20 +802,23 @@ export struct RTParams
 // view distance:
 //   level    = floor(pow(max(dist - lodStart, 0) / lodStep, lodPower))
 //   cellSize = clamp(minCell << level, minCell, maxCell)
-// so cells start at minCell (1 = a cell per world unit, the full GRID_SIZE^3 resolution) and double
-// every "step" of the curve; lodPower 0.5 gives the old sqrt ramp, 1 a linear one. minCell ==
-// maxCell pins one resolution everywhere. Read every frame: a change takes effect at once.
+// so cells start at minCell and double every "step" of the curve; lodPower 0.5 gives a sqrt ramp,
+// 1 a linear one. minCell == maxCell pins one resolution everywhere. Read every frame: a change takes
+// effect at once. THE DEFAULTS FOLLOW THE GAME'S LIGHTS (reaches of 4 - 46 m, most 8 - 25 m): 64 m
+// grids, 2 m cells near the camera (32^3 cells: a grid's centre is up to 55 m away while the camera is
+// in it, so the start is 48 m), 4 m and then 8 m cells further out.
 export struct LightGridParams
 {
-    float lodStart = 0.0f;  // m: no coarsening inside this distance
-    float lodStep = 16.0f;  // m: the curve's unit distance (one doubling at lodPower 1)
+    float lodStart = 48.0f; // m: no coarsening inside this distance (of a grid's centre)
+    float lodStep = 32.0f;  // m: the curve's unit distance (one doubling at lodPower 1)
     float lodPower = 0.5f;  // curve exponent on (dist - start) / step
-    int   minCellLog2 = 0;  // finest cell size = 2^n world units (0 = 1 m: GRID_SIZE cells per axis)
-    int   maxCellLog2 = 1;  // coarsest cell size = 2^n world units (5 = 32 = one cell per grid)
+    int   minCellLog2 = 1;  // finest cell size = 2^n world units (1 = 2 m: 32 cells per axis of the 64 m grid)
+    int   maxCellLog2 = 3;  // coarsest cell size = 2^n world units (6 = 64 = one cell per grid)
     // A light spanning more cells than this inside ONE grid becomes that grid's LARGE light (one
     // entry, evaluated by every pixel in the grid) instead of a per-cell candidate: it bounds the
-    // candidate list every cell of a full-res grid loops, and the header entry is one uint16.
-    int   cellBudget = 1024;
+    // candidate list every cell of a full-res grid loops, and the header entry is one uint16. At the
+    // default (a whole 2 m grid) only the reach decides: a light over half a grid (32 m) is large.
+    int   cellBudget = 32768;
     // Forward-pass lighting debug overlay (computeLitColor, instanced_indirect_lit.inc.glsl), BAKED as
     // the LIGHT_GRID_DEBUG define on the lit fragment variants (a change reloads the static mesh
     // pipeline; every debug branch folds away at 0): 0 off, 1 light grid cells (random colour per

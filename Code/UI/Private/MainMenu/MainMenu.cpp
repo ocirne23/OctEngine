@@ -345,62 +345,7 @@ void MainMenu::renderLobby()
 	}
 
 	const float width = ImGui::GetContentRegionAvail().x;
-	if (m_lobbyView.coop)
-	{
-		ImGui::SeparatorText("Map");
-		if (m_lobbyView.hosting)
-		{
-			// The host edits; every widget commits on RELEASE (one lobby-state broadcast per edit,
-			// not one per drag frame). Between edits the fields track the model's snapshot.
-			if (!m_mapEditActive)
-			{
-				m_mapEditSeed = (int)m_lobbyView.mapSeed;
-				m_mapEditFill = m_lobbyView.terrainFill;
-				m_mapEditLanes = m_lobbyView.terrainLanes;
-			}
-			bool active = false, commit = false;
-			ImGui::SetNextItemWidth(width - 90.0f);
-			ImGui::InputInt("##lobbyMapSeed", &m_mapEditSeed, 0, 0);
-			active |= ImGui::IsItemActive();
-			commit |= ImGui::IsItemDeactivatedAfterEdit();
-			ImGui::SameLine();
-			if (ImGui::Button("Random", ImVec2(82.0f, 0.0f)))
-			{
-				m_mapEditSeed = 0;
-				commit = true;
-			}
-			ImGui::TextDisabled("Map seed (0 = random at start)");
-			ImGui::SetNextItemWidth(-FLT_MIN);
-			ImGui::SliderFloat("##lobbyMapFill", &m_mapEditFill, 0.0f, 0.6f, "Terrain fill %.2f");
-			active |= ImGui::IsItemActive();
-			commit |= ImGui::IsItemDeactivatedAfterEdit();
-			ImGui::SetNextItemWidth(-FLT_MIN);
-			ImGui::SliderInt("##lobbyMapLanes", &m_mapEditLanes, 2, 12, "Attack lanes %d");
-			active |= ImGui::IsItemActive();
-			commit |= ImGui::IsItemDeactivatedAfterEdit();
-			m_mapEditActive = active;
-			if (commit)
-			{
-				m_lobbyAction.type = LobbyAction::EType::SetMapSettings;
-				m_lobbyAction.mapSeed = (uint32)glm::max(m_mapEditSeed, 0);
-				m_lobbyAction.terrainFill = glm::clamp(m_mapEditFill, 0.0f, 0.6f);
-				m_lobbyAction.terrainLanes = glm::clamp(m_mapEditLanes, 2, 12);
-			}
-		}
-		else
-		{
-			char seed[32];
-			if (m_lobbyView.mapSeed == 0)
-				snprintf(seed, sizeof(seed), "random");
-			else
-				snprintf(seed, sizeof(seed), "%u", m_lobbyView.mapSeed);
-			ImGui::Text("Seed %s   |   terrain fill %.0f%%   |   %d attack lanes", seed,
-				m_lobbyView.terrainFill * 100.0f, m_lobbyView.terrainLanes);
-			ImGui::TextDisabled("Chosen by the host");
-		}
-		ImGui::Spacing();
-	}
-	else
+	if (!m_lobbyView.coop) // (co-op has no map settings: its map is the procedural terrain)
 	{
 		ImGui::SeparatorText("Match");
 		const int mapCount = (int)m_lobbyView.pvpMapNames.size();

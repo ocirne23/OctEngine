@@ -88,11 +88,6 @@ export struct LobbyView
 	bool allReady = false;
 	bool countdownActive = false;
 	float countdownRemaining = 0.0f;
-	// Co-op MAP settings (host-chosen, mirrored to every client through the lobby state so the
-	// page shows the upcoming map; the values that actually generate ride the GMp event at start).
-	uint32 mapSeed = 0;        // 0 = the host rolls a random one at start
-	float terrainFill = 0.3f;
-	int terrainLanes = 6;
 	// LOCAL (offline) lobby: no roster, no ready check - Start launches at once - and the page
 	// carries the WORLD block: a terrain seed, its preview map and the "Seed world" pick (below).
 	bool local = false;
@@ -105,15 +100,12 @@ export struct LobbyAction
 	// every client, a client's leave is just its disconnect)
 	enum class EType : uint8
 	{
-		None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, SetPvpMap, Leave,
+		None, ToggleReady, Start, SetTeam, SetNumTeams, SetPvpMap, Leave,
 		GeneratePreview, // local: preview the terrain seed (terrainSeed)
 		SeedWorld,       // local: build the full-detail world at the picked spot (pickU/pickV)
 		UnseedWorld,     // local: drop the seeded world (back to the flat default)
 	};
 	EType type = EType::None;
-	uint32 mapSeed = 0; // SetMapSettings (host only): the edited values
-	float terrainFill = 0.3f;
-	int terrainLanes = 6;
 	uint8 team = 0;     // SetTeam: the local player's pick (0-based)
 	int numTeams = 2;   // SetNumTeams (host only)
 	int pvpMap = 0;     // SetPvpMap (host only): index into LobbyView::pvpMapNames
@@ -245,12 +237,6 @@ private:
 	ChatPanel* m_chat = nullptr; // see setChatPanel
 	LobbyView m_lobbyView;
 	LobbyAction m_lobbyAction;
-	// Host's map-setting widgets: local edit copies that track the view snapshot while no widget
-	// is active, committed as ONE SetMapSettings on release (not per drag frame).
-	int m_mapEditSeed = 0;
-	float m_mapEditFill = 0.3f;
-	int m_mapEditLanes = 6;
-	bool m_mapEditActive = false;
 	// The world block's widgets: the seed field (an edit copy; the view's seed is what was last
 	// previewed), the pick on the map (page-local until Seed world sends it), and which image
 	// generation the ImGui texture currently holds (0 = no texture yet).

@@ -173,7 +173,8 @@ The equivalent `Layer Walk` block for CubeGuy is the comment at the top of `Enti
 A **LIST** of lights. `Component Light` with `Light Point/Spot/Area/Beam` children: `Color` /
 `Intensity` / `Range`, entity-space `Offset` / `Direction`, `Enabled`, plus `ConeAngle` /
 `EdgeSoftness` (Spot), `Width` / `Height` / `Rotation` (Area), `Radius` / `Length` (Beam: a line of light centred on the entity, see Beam lights in
-[`Docs/Context/RendererVK/Lighting.md`](../RendererVK/Lighting.md)). Component
+[`Docs/Context/RendererVK/Lighting.md`](../RendererVK/Lighting.md)). A light inside a GLOWING piece (the cannon shell's)
+is not shadowed by it: an emissive tint is out of ray tracing (Scene.md "Emissive"). Component
 `Debug true` plus the "Editor/Light debug geometry" tweak draw wireframes. Demo:
 `Entities/Debug/lightRig.pre`.
 
@@ -298,7 +299,8 @@ smoke (`ParticleSystem::emitPuff` with `params.revealPuff`, the game's puff stre
 (`params.deathPuff`, `Effects/demon_death.pfx`): one request for a unit that is no puppet and not of the viewer's
 team (`localTeam`), on the authority (a client's units are removed by replication and ask for none). **A searchlight cone does the same and burns:** `setSolid` also tests `params.lightCones` (runtime, the
 game's shining Searchlights as flat wedges, each with its team) - a unit of another team in one is solid and loses
-`lightConeDps` health/s per cone. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid, and the turret's target query
+`lightConeDps` health/s per cone. `applyDamageAndHeal` drops the damage inbox of a unit that is not solid - but not its
+SHADOW inbox (`pendingShadowDamage`: `damage(..., throughShadow)`, a `HitsShadows` projectile such as the cannon shell) - and the turret's target query
 skips it. `params.sunBurnTeam` / `sunDps` (runtime too) drain that team's health in `applyDamageAndHeal` and in
 `updateFar`, which then also runs the death check.
 
@@ -331,7 +333,13 @@ everything else shows them only while selected. The health bar is separate: dama
 
 **`Component GameProjectile`** — Team / UnitDamage / StructureDamage / Lifetime / EmitterDrain /
 EmitterDrainRadius / SplashRadius (**> 0 damages EVERY enemy unit and structure within that radius of
-the impact** through a spatial query — the lobber shell).
+the impact** through a spatial query — the lobber shell) / SplashEdge (the splash damage's share at the edge: linear from
+the full damage at the centre; default 1 = flat) / HitsShadows (its unit damage hurts a shadow too) / ImpactPuff
+(its impact bursts in `params.impactPuff` + `impactFlash`, puff streams the game makes; on every role, in `destroy`; and
+it lights up: `destroy` records the impact in a 32-slot ring under a mutex, and the game calls the static
+`drawImpactLights` every frame, a point light that fades out in 0.3 s) /
+MuzzleFlash (its launch flashes where it starts: `params.muzzlePuff` (three puffs), `impactFlash` and `muzzleSmoke` in `spawn`, and a point light for its
+first 0.15 s in `update`, on every role - `update` counts `age` on a client too, before the client early-out).
 
 All three are skipped headless.
 

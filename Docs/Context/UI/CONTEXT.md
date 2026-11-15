@@ -295,9 +295,10 @@ takes focus or eats input.** The widget pass calls `render()` while the Viewport
 window is current.
 
 It takes ONE `GameHud::Snapshot` per frame and, crucially, **reports back where it drew**:
-`setSlotScreenRects` and `setPopupButtonRects`, or empty spans when nothing was drawn — **nothing drawn
-means nothing clickable.** That is how gameplay hit-tests clicks against the hotbar and the barracks
-popup.
+`setSlotScreenRects`, `setTabScreenRects` and `setPopupButtonRects`, or empty spans when nothing was drawn — **nothing
+drawn means nothing clickable.** That is how gameplay hit-tests clicks against the hotbar, its tab strip and the
+barracks popup. A one-row bar shows only up to its last assigned slot; its TAB STRIP (`GameHud::setTabs`) is a row of
+text tabs centred over the bar's plate, the selected one in gold.
 
 Tweaks under `HUD`: Enabled, Scale, Opacity, Hotbar slot size, Hotbar text scale (plus Game's "Label max
 distance").

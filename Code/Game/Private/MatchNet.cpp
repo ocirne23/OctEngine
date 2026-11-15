@@ -82,13 +82,12 @@ void GameMatch::onClientJoined(uint32 clientId)
         m_clientPlayers[clientId] = oc::move(player);
         Log::info("Game: client " + oc::to_string(clientId) + " assigned team " + oc::to_string(team));
     }
-    // World-state replay for the late joiner: the co-op map seed FIRST (the joiner builds its
-    // terrain + nodes from it before any structure mirror below arrives - reliable ch1 is
-    // ordered), then every structure, broadcast (mirrorPlace is idempotent, so already-connected
-    // clients shrug the duplicates off; rebuildCoopMap no-ops on the repeated seed). Links need
-    // no replay - each client derives them locally from the mirrored cable segments.
+    // World-state replay for the late joiner: the PvP arena FIRST (the joiner builds its terrain + nodes from it before
+    // any structure mirror below arrives - reliable ch1 is ordered), then every structure, broadcast (mirrorPlace is
+    // idempotent, so already-connected clients shrug the duplicates off; rebuildPvpMap no-ops on the repeated arena).
+    // Links need no replay - each client derives them locally from the mirrored cable segments.
     if (m_isServer && m_coopMap.built)
-        sendMapSeed(); // co-op inputs or the PvP arena - the joiner's terrain + nodes
+        sendMapSeed(); // the PvP arena - the joiner's terrain + nodes
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -181,7 +180,7 @@ void GameMatch::sendStats()
     writer.write<float>(m_structures.energyUsePerSec());
     // CABLE SEGMENTS are excluded: they carry no stores, hundreds of them would blow the 79-record
     // cap, and their built flip mirrors through the GPl re-send instead (onStructureBuilt).
-    constexpr int c_maxRecords = 79; // 11B each + the 146B header stays under the 1024B event cap
+    constexpr int c_maxRecords = 72; // 12B each + the 146B header stays under the 1024B event cap
     int indices[c_maxRecords];
     int count = 0;
     for (int i = 0; i < m_structures.structureCount() && count < c_maxRecords; ++i)
@@ -198,9 +197,12 @@ void GameMatch::sendStats()
         writer.write<uint8>(frac8(m_structures.structureCharge(i), m_structures.structureCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureFuel(i), m_structures.structureFuelCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMinerals(i), m_structures.structureMineralCapacity(i)));
-        // The output byte doubles as the barracks' POPULATION tally (no emitter there).
+        writer.write<uint8>(frac8(m_structures.structureMunitions(i), m_structures.structureMunitionCapacity(i)));
+        // The output byte doubles as the barracks' POPULATION tally and the Cannon's GUN TURN (no emitter there).
         writer.write<uint8>(isBarracksType(m_structures.structureType(i))
             ? (uint8)glm::clamp(m_structures.structurePopulation(i), 0, 255)
+            : m_structures.structureType(i) == EStructureType::Cannon
+            ? (uint8)glm::clamp(glm::round((m_structures.structureCannonAim(i) / glm::two_pi<float>() + 0.5f) * 255.0f), 0.0f, 255.0f)
             : frac8(m_structures.structureOutputFrac(i), 1.0f));
         writer.write<uint8>(frac8(m_structures.structureFlowUtil(i), 1.0f));
         writer.write<uint8>((uint8)((m_structures.structurePowered(i) ? 1u : 0u)
@@ -403,11 +405,12 @@ void GameMatch::handleNetEvent(oc::string_view name)
                 const uint32 id = reader.read<uint32>();
                 const uint8 health = reader.read<uint8>(), charge = reader.read<uint8>();
                 const uint8 fuelFrac = reader.read<uint8>(), mineralFrac = reader.read<uint8>();
+                const uint8 ammoFrac = reader.read<uint8>();
                 const uint8 output = reader.read<uint8>(), util = reader.read<uint8>();
                 const uint8 status = reader.read<uint8>();
                 if (!reader.overflowed())
                     m_structures.mirrorStructureState(id, health / 255.0f, charge / 255.0f,
-                        fuelFrac / 255.0f, mineralFrac / 255.0f, output / 255.0f, util / 255.0f,
+                        fuelFrac / 255.0f, mineralFrac / 255.0f, ammoFrac / 255.0f, output / 255.0f, util / 255.0f,
                         (status & 1u) != 0, (status & 2u) != 0, (status & 4u) != 0);
             }
             if (!reader.overflowed())
@@ -504,25 +507,11 @@ void GameMatch::handleNetEvent(oc::string_view name)
         }
         else if (name == "GMp")
         {
-            // The server's terrain: the co-op map's inputs or the PvP arena - build the identical
-            // terrain (+ barrier) + nodes locally (the rebuilds are no-ops on the re-broadcasts
-            // later joiners trigger). Sent FIRST in the join replay, so the map exists before any
-            // structure mirror lands.
-            const uint8 mode = reader.read<uint8>();
-            if (mode == 1)
-            {
-                const uint8 map = reader.read<uint8>();
-                if (!reader.overflowed() && !m_coop && map < (uint8)EPvpMap::Count)
-                    rebuildPvpMap((EPvpMap)map);
-            }
-            else
-            {
-                const uint32 seed = reader.read<uint32>();
-                const float fill = reader.read<float>();
-                const uint8 lanes = reader.read<uint8>();
-                if (!reader.overflowed() && m_coop && !m_sandboxWorld && seed != 0 && fill >= 0.0f && fill <= 1.0f)
-                    rebuildCoopMap(seed, fill, (int)lanes);
-            }
+            // The server's PvP arena - build the identical terrain + nodes locally (a no-op on the re-broadcasts later
+            // joiners trigger). Sent FIRST in the join replay, so the map exists before any structure mirror lands.
+            const uint8 map = reader.read<uint8>();
+            if (!reader.overflowed() && !m_coop && map < (uint8)EPvpMap::Count)
+                rebuildPvpMap((EPvpMap)map);
         }
         // (shield/materials state rides the entity snapshot's game blob now - no GSh event)
         return;

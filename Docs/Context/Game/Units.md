@@ -127,7 +127,7 @@ bubble needs nothing here: every bubble spawns dark, and only the World's SIM LO
 **The World's wake edge** (a fresh entity starts at `schedTier` 3, so its first stamped visit IS a
 wake) zeroes the velocities and enables it once a player is near.
 
-This is what makes a WAVE — spawned outside the barrier, far from everyone — reach the Base. A unit
+This is what makes a WAVE — spawned on enemy land, far from everyone — reach the Base. A unit
 that arrives at a shielded base enters its ZONE (see SIM LOD focus ([CONTEXT.md](CONTEXT.md))) and
 ticks at tier 1 there, so the field pushes it. **One that arrives at an UNSHIELDED target while no
 player is near stands frozen there** (known).

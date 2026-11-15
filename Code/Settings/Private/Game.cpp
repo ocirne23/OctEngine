@@ -8,11 +8,18 @@ import Settings.Tweaks;
 static void registerMatch(GameMatchSettings& s)
 {
     const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
-    Tweak::floatVar("Game/Coop", "First wave delay (s)", &s.waveFirstDelay, 5.0f, 600.0f, 5.0f);
-    Tweak::floatVar("Game/Coop", "Wave interval (s)", &s.waveInterval, 10.0f, 600.0f, 5.0f);
+    // THE WAVES: wave k of night n = "Wave budget" x "Night growth (x)"^n x (1 + "Wave growth per wave" x k), +- "Wave variation".
+    Tweak::boolean("Game/Coop", "Spawn enemies", &s.coopEnemies);
     Tweak::intVar("Game/Coop", "Wave budget", &s.waveBudget, 1, 5000, 10);
-    Tweak::floatVar("Game/Coop", "Wave budget growth", &s.waveBudgetGrowth, 0.0f, 1000.0f, 5.0f);
-    Tweak::floatVar("Game/Coop", "Wave growth growth", &s.waveGrowthGrowth, 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Coop", "Night growth (x)", &s.nightGrowth, 1.0f, 20.0f, 0.1f);
+    Tweak::intVar("Game/Coop", "Waves per night", &s.nightWaves, 1, 100, 1);
+    Tweak::floatVar("Game/Coop", "Wave growth per wave", &s.waveGrowthPerWave, 0.0f, 2.0f, 0.05f);
+    Tweak::floatVar("Game/Coop", "Wave variation", &s.waveVariation, 0.0f, 0.9f, 0.05f);
+    Tweak::floatVar("Game/Coop", "Wave distance (m)", &s.sandboxWaveDistance, 20.0f, 90.0f, 1.0f);
+    Tweak::floatVar("Game/Coop", "Wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
+    Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &s.waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
+    Tweak::intVar("Game/Coop", "Max enemy units", &s.waveMaxAlive, 1, 100000, 50);
+    Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);
     // waveCost is indexed by ENpcType.
     Tweak::floatVar("Game/Coop", "Cost grunt", &s.waveCost[0], 0.1f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Cost brute", &s.waveCost[1], 0.1f, 100.0f, 0.5f);
@@ -25,32 +32,12 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Cost lobber", &s.waveCost[8], 0.1f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Cost spawner", &s.waveCost[9], 0.1f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Cost warrior", &s.waveCost[10], 0.1f, 500.0f, 0.5f);
-    Tweak::intVar("Game/Coop", "Max enemy units", &s.waveMaxAlive, 1, 100000, 50);
-    Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &s.waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
-    Tweak::intVar("Game/Coop", "Ambient budget", &s.ambientBudget, 0, 1000000, 10);
-    Tweak::floatVar("Game/Coop", "Ambient safe radius", &s.ambientSafeRadius, 10.0f, 200.0f, 1.0f);
-    Tweak::intVar("Game/Coop", "Ambient recipe window", &s.ambientRecipeWindow, 0, 20, 1);
-    Tweak::floatVar("Game/Coop", "Ambient depth scale", &s.ambientDepthScale, 0.5f, 1.0f, 0.01f);
-    Tweak::floatVar("Game/Coop", "Ambient wander interval (s)", &s.ambientWanderInterval, 0.0f, 600.0f, 5.0f);
-    Tweak::floatVar("Game/Coop", "Ambient wander distance", &s.ambientWanderDistance, 2.0f, 60.0f, 1.0f);
-    Tweak::floatVar("Game/Coop", "Ambient wander base bias", &s.ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
-    Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &s.ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
     Tweak::floatVar("HUD", "Label max distance", &s.labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
     Tweak::floatVar("HUD", "Building bar distance (m)", &s.labelBarDistance, 0.0f, 2000.0f, 5.0f, {}, ETweakFlags::None);
     Tweak::floatVar("HUD", "Unit bar strength (x common enemy)", &s.labelUnitStrength, 0.0f, 10.0f, 0.1f, {}, ETweakFlags::None);
     Tweak::floatVar("Game/Nav", "Nav unit source reach", &s.navUnitSourceReach, 8.0f, 400.0f, 4.0f);
     Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &s.focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
-    Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);
-    Tweak::boolean("Game/Coop", "Sandbox world", &s.coopSandboxWorld);
-    Tweak::boolean("Game/Coop", "Spawn enemies", &s.coopEnemies);
-    Tweak::floatVar("Game/Coop", "Sandbox wave distance (m)", &s.sandboxWaveDistance, 20.0f, 90.0f, 1.0f);
-    Tweak::floatVar("Game/Coop", "Sandbox wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Start time of day (h)", &s.startTimeOfDay, -1.0f, 24.0f, 0.25f);
-    Tweak::intVar("Game/Coop", "Waves per night", &s.nightWaves, 1, 100, 1);
-    Tweak::floatVar("Game/Coop", "Wave size multiplier", &s.waveSizeMult, 0.0f, 20.0f, 0.05f);    Tweak::floatVar("Game/Coop", "Night wave growth per wave", &s.nightWaveRamp, 0.0f, 2.0f, 0.05f);
-    Tweak::floatVar("Game/Coop", "Night wave variation", &s.nightWaveVariation, 0.0f, 0.9f, 0.05f);
-    Tweak::intVar("Game/Coop", "Night surge every N waves", &s.nightSurgeEvery, 0, 20, 1);
-    Tweak::floatVar("Game/Coop", "Night surge size", &s.nightSurgeSize, 1.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Coop", "Sunlight damage/s", &s.sunlightDps, 0.0f, 500.0f, 1.0f);
     Tweak::boolean("Game/Coop", "Fields block demons", &s.fieldsBlockDemons);
     Tweak::boolean("Game/Coop", "Demon shadow form", &s.demonShadowForm);
@@ -96,11 +83,6 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Lightning", "Arc radius (m)", &s.lightningArcRadius, 0.05f, 50.0f, 0.05f);
     Tweak::floatVar("Game/Lightning", "Arc zigzag", &s.lightningArcJitter, 0.0f, 0.5f, 0.005f);
     Tweak::floatVar("Game/Lightning", "Fork share", &s.lightningForkShare, 0.0f, 1.0f, 0.01f);
-    // Map generation inputs, read once at generation on the AUTHORITY. Clients never read them: the values actually
-    // used ride the GMp event (and the save) with the seed - a joiner's tweak sync lands after the world replay.
-    Tweak::intVar("Game/Coop", "Map seed", &s.mapSeed, 0, 0x7fffffff, 1);
-    Tweak::floatVar("Game/Coop", "Terrain fill", &s.terrainFill, 0.0f, 0.6f, 0.02f);
-    Tweak::intVar("Game/Coop", "Terrain lanes", &s.terrainLanes, 2, 12, 1);
     Tweak::floatVar("Game/Construction", "Refill radius", &s.refillRadius, 1.0f, 30.0f, 0.25f);
     Tweak::floatVar("Game/Construction", "Refill rate", &s.refillRate, 0.5f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Construction", "Player build radius", &s.buildRadius, 1.0f, 30.0f, 0.25f);
@@ -186,8 +168,30 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
     // Solar 5, Fabricator 6, Bastion 7, Barracks 8, Wall 9, Turret 10, MineralSilo 11, Constructor 12, Base 13,
     // CablePower 14, CablePipe 15, CableConveyor 16, CrossingPower 17, CrossingPipe 18, CrossingConveyor 19, House 20,
-    // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29, ShipRail 30.
+    // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29, ShipRail 30,
+    // Cannon 31, AmmoWorks 32, AmmoStore 33.
     Tweak::floatVar("Game/Economy", "Ship rail repair cost", &s.costs[30], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Cannon cost", &s.costs[31], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Ammo works cost", &s.costs[32], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Ammo store cost", &s.costs[33], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Range (m)", &s.cannonRange, 5.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Min range (m)", &s.cannonMinRange, 0.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Cannon", "Arc (deg)", &s.cannonArcDeg, 10.0f, 360.0f, 5.0f);
+    Tweak::floatVar("Game/Cannon", "Fire interval (s)", &s.cannonFireInterval, 0.2f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Cannon", "Shot speed (m/s)", &s.cannonShotSpeed, 5.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Cannon", "Munitions held", &s.cannonAmmoCapacity, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Turn rate (deg/s)", &s.cannonTurnRate, 5.0f, 720.0f, 5.0f);
+    Tweak::intVar("Game/Cannon", "Crew", &s.cannonCrew, 1, 6, 1);
+    Tweak::floatVar("Game/Cannon", "Crew call range (m)", &s.cannonCallRange, 5.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Crew stand down (s)", &s.cannonStandDown, 0.0f, 120.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Ammo works munitions/s", &s.ammoRate, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Game/Cannon", "Stone per munition", &s.ammoStonePer, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Cannon", "Light per munition", &s.ammoLightPer, 0.0f, 50.0f, 0.1f);
+    Tweak::intVar("Game/Cannon", "Ammo works workers", &s.workersAmmo, 0, 20, 1);
+    Tweak::floatVar("Game/Cannon", "Ammo works buffer", &s.ammoWorksBuffer, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Cannon", "Ammo store capacity", &s.ammoStoreCapacity, 1.0f, 2000.0f, 5.0f);
+    Tweak::floatVar("Game/Cannon", "Blast radius (m)", &s.ammoBlastRadius, 0.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Cannon", "Blast damage", &s.ammoBlastDamage, 0.0f, 5000.0f, 10.0f);
     Tweak::floatVar("Game/Economy", "Armory cost", &s.costs[28], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Mage tower cost", &s.costs[29], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
@@ -220,7 +224,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
             "Barracks health", "Wall health", "Light tower health", "Storehouse health", "Builder's hut health", "Beacon health",
             "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
-            "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health", "Ship rail health" };
+            "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health", "Ship rail health",
+            "Cannon health", "Ammo works health", "Ammo store health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -457,9 +462,9 @@ static void registerSound(GameSoundSettings& s)
     // In EGameSound's order (Game:Sound), after "-": the pick plays that sound once. Every pick is another variant.
     static constexpr oc::string_view SOUND_NAMES[] = { "-", "Melee hit", "Unit reveal", "Unit death", "Shot fired", "Lob fired",
         "Shot impact", "Splash impact", "Turret fire", "Structure placed", "Structure built", "Structure collapse",
-        "Bird song", "Cricket bout", "Owl call", "Wind gust", "Water lap", "Thunder", "Thunder crack",
+        "Bird song", "Cricket bout", "Owl call", "Wind gust", "Thunder", "Thunder crack",
         "Alarm", "Player hurt", "Loop: wind", "Loop: day", "Loop: night", "Loop: battle", "Loop: horde",
-        "Loop: hum", "Loop: fire", "Loop: works", "Loop: water" };
+        "Loop: hum", "Loop: fire", "Loop: works" };
     Tweak::enumVar("Game/Sound", "Play a sound", &s.audition, SOUND_NAMES, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Game/Sound/Ambience", "Enemies that silence the animals", &s.fearUnits, 0.5f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Sound/Ambience", "Animals return (s)", &s.fearReturn, 1.0f, 300.0f, 1.0f);

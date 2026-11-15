@@ -380,7 +380,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     }
 
     // Debug overlays are BAKED defines, never uniforms: SHADOW_DEBUG ("Shadows/Debug mode") and
-    // LIGHT_GRID_DEBUG ("Graphics/LOD/Light grid/Debug Mode") live in the lit core
+    // LIGHT_GRID_DEBUG ("Graphics/LOD/Light grid/Debug mode") live in the lit core
     // (instanced_indirect_lit.inc.glsl / shadows.inc.glsl), and each switch reloads this pipeline
     // through the Renderer's tweak callback. Only the shaders that include the lit core get them: the
     // lit opaque/transparent fragment, the terrain fragments and the rock fragment.

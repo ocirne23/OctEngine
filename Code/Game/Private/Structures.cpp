@@ -25,7 +25,7 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
     "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower",
-    "Ship rail" };
+    "Ship rail", "Cannon", "Ammo works", "Ammo store" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
@@ -33,7 +33,10 @@ static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f,
     StructureSystem::WalkwayDeckHeight + 0.1f,          // the Walkway: its origin is 0.1 over the deck, like the Bridge's
     2.0f,                                               // the Armory
     2.0f,                                               // the Mage tower
-    0.5f };                                             // the Ship rail (1 m over the deck)
+    0.5f,                                               // the Ship rail (1 m over the deck)
+    1.1f,                                               // the Cannon (on the ground, a road piece, a walkway deck or a ship rail)
+    1.5f,                                               // the Ammo works
+    0.75f };                                            // the Ammo store
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -198,6 +201,24 @@ oc::string StructureSystem::describeType(EStructureType type) const
     case EStructureType::ShipRail:
         desc = "The ship's wall. While the ship is landed demons can break it; repair it like any building.";
         break;
+    case EStructureType::Cannon:
+        desc = "Lobs a shell of light over walls at the demons in front of it: the blast hurts every demon near the hit. One munition a shot - the workers bring them. Place it on a walkway behind a wall, or on a road; R turns it. Demons and units walk through it.";
+        line(oc::format("Fires in a {:g} degree arc, every {:g} s", m_settings.cannonArcDeg, m_settings.cannonFireInterval));
+        banks(m_settings.cannonAmmoCapacity, "munitions");
+        range(m_settings.cannonRange);
+        break;
+    case EStructureType::AmmoWorks:
+        desc = "Packs stone and light into munitions: light charges for the cannons. The workers bring the stone and take the munitions away. It needs a light store in reach and a road.";
+        line(oc::format("Needs {} workers", m_settings.workersAmmo));
+        in(m_settings.ammoRate * m_settings.ammoStonePer, "stone");
+        in(m_settings.ammoRate * m_settings.ammoLightPer, "light");
+        out_(m_settings.ammoRate, "munitions");
+        break;
+    case EStructureType::AmmoStore:
+        desc = "Holds munitions for the cannons around it. It explodes when it is destroyed with munitions inside: keep it away from the wall.";
+        banks(m_settings.ammoStoreCapacity, "munitions");
+        line(oc::format("Blast: up to {:g} damage within {:g} m", m_settings.ammoBlastDamage, m_settings.ammoBlastRadius));
+        break;
     case EStructureType::CablePower:
     case EStructureType::CablePipe:
     case EStructureType::CableConveyor:
@@ -284,9 +305,10 @@ glm::vec2 StructureSystem::structureFacing(int index) const
 {
     // Crossings carry an authored facing (join replay + save); it decides which cells their 1x3 footprint covers,
     // so it MUST survive the wire or client derivation diverges.
-    if (!isCrossingType(m_frame[index].type))
+    // A rotated placement (the Cannon) too: its placed facing, without the gun's turn.
+    if (!isCrossingType(m_frame[index].type) && !isRotatedPlacement(m_frame[index].type))
         return glm::vec2(0.0f);
-    const glm::vec3 forward = m_frame[index].entity->rot * glm::vec3(0.0f, 0.0f, -1.0f);
+    const glm::vec3 forward = cannonFacingRot(m_frame[index]) * glm::vec3(0.0f, 0.0f, -1.0f);
     return glm::vec2(forward.x, forward.z);
 }
 
@@ -387,6 +409,7 @@ void StructureSystem::stampTuning(const Ref& s)
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
+    c.capacity[GoodMunitions] = munitionCapacityOf(s.type);
     // A BARRACKS' energy capacity is its selected unit's cost (the build bar) - resolved HERE,
     // before the store clamp below: energyCapacityOf's 1.0 attach placeholder would otherwise
     // clamp the store to 1 every tick (the bar sat at 1 forever).
@@ -401,7 +424,7 @@ void StructureSystem::stampTuning(const Ref& s)
     // and a full one fires. Resolved here for the same reason: before the store clamp.
     else if (s.type == EStructureType::Turret)
         c.capacity[0] = glm::max(Globals::settings.game.structureParams.turretShotEnergy, 0.01f);
-    for (int m = 0; m < 3; ++m)
+    for (int m = 0; m < GameStructureComponent::NumStores; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
     // (Cables hold NO stores - capacity 0 everywhere: they are transport nodes, never endpoints.
     // Roles - producer / consumer / storage per medium - and the METERED intakes of the barracks
@@ -801,7 +824,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     for (const PlaceRequest& req : m_requests)
     {
         if (req.ship)
-            placeShipStructure(req.type, req.pos, req.yield, req.team);
+            placeShipStructure(req.type, req.pos, req.yield, req.team, req.turn);
         else
             placeStructure(req.type, req.pos, req.yield, req.facing, req.team);
     }
@@ -866,7 +889,8 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
     tickConstructors(deltaSec);
-    tickCarriers(deltaSec); // wood and stone: the walkers on the road
+    tickCannons(deltaSec);
+    tickCarriers(deltaSec); // wood, stone and munitions: the walkers on the road
     tickLight(deltaSec);    // light: the beams between the buildings and their hubs
     drawLightLinks();       // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
     publishSearchlights();  // the same rule: its spot lights are light records
@@ -912,6 +936,9 @@ void StructureSystem::tickMirror(float deltaSec)
         drawLightLinks();
     }
     publishSearchlights(); // the cones: aimed by the mirrored components themselves (see GameStructureComponent::update)
+    for (Ref& ref : m_frame) // the cannons' guns turn toward the synced aim
+        if (ref.type == EStructureType::Cannon)
+            turnCannon(ref, deltaSec);
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it - the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)

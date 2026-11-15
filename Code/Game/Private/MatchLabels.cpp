@@ -55,7 +55,7 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     //    The BASE is exempt: it is the hub, and starts every match bare.
     // ENERGY: burnt by the emitters/machines/turrets, banked by batteries, made by gen + solar.
     const bool energy = hasShieldEmitter(type) || isBarracksType(type) // (production runs on workers: no light)
-        || type == EStructureType::MedicStation
+        || type == EStructureType::MedicStation || type == EStructureType::AmmoWorks // (its munitions are light charges)
         || type == EStructureType::Turret || type == EStructureType::Searchlight || type == EStructureType::Generator
         || type == EStructureType::Solar || type == EStructureType::Battery || type == EStructureType::Lens;
     // FUEL: burnt by generators and fabricators, banked by tanks, made by the lumberyards.
@@ -64,7 +64,9 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
         || type == EStructureType::Lumberyard;
     // MINERALS: spent by constructors, banked by silos, made by fabricators + quarries.
     const bool minerals = type == EStructureType::Constructor || type == EStructureType::MineralSilo
-        || type == EStructureType::Fabricator || type == EStructureType::Quarry;
+        || type == EStructureType::Fabricator || type == EStructureType::Quarry || type == EStructureType::AmmoWorks;
+    // MUNITIONS (by carrier only): made by the Ammo works, banked by the Ammo store, used by the Cannon.
+    const bool munitions = type == EStructureType::Cannon || type == EStructureType::AmmoStore;
     if (type != EStructureType::Base)
     {
         if (m_structures.lightBeams())
@@ -90,7 +92,7 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
             // building (the Hearth, the Lumberyard) never had it and always showed the badge.
             // The House: its workers cannot go out to carry.
             // The Armory: the workers cannot come for a bow.
-            if ((fuel || minerals || type == EStructureType::House || type == EStructureType::Armory
+            if ((fuel || minerals || munitions || type == EStructureType::House || type == EStructureType::Armory
                 || type == EStructureType::MageTower) && !m_structures.structureOnRoad(index))
             {
                 color = c_amber;
@@ -210,7 +212,7 @@ void GameMatch::buildWorldLabels()
             label.warningColor = m_structures.structureWarningColor(i);
         }
         const bool consumer = hasShieldEmitter(type)
-            || type == EStructureType::Fabricator || type == EStructureType::MedicStation;
+            || type == EStructureType::Fabricator || type == EStructureType::MedicStation || type == EStructureType::AmmoWorks;
         label.barValue = m_structures.structureHealth(i);
         label.barMax = healthMax; // per-type: cables are softer than buildings
         {
@@ -228,10 +230,13 @@ void GameMatch::buildWorldLabels()
         const float energyCap = m_structures.structureCapacity(i);
         const float fuelCap = m_structures.structureFuelCapacity(i);
         const float mineralCap = m_structures.structureMineralCapacity(i);
+        const float ammoCap = m_structures.structureMunitionCapacity(i);
         // Second bar: fuel (orange) on the fuel holders, MINERALS (blue) on the mineral stores and
-        // on anything that runs on minerals alone, energy (yellow) elsewhere (barracks included).
+        // on anything that runs on minerals alone, MUNITIONS (pale cyan) on what holds them, energy (yellow) elsewhere
+        // (barracks included).
         const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank
             || type == EStructureType::Lumberyard;
+        const bool ammoBar = ammoCap > 0.0f;
         const bool mineralBar = type == EStructureType::MineralSilo
             || (mineralCap > 0.0f && energyCap <= 0.0f);
         // The STORE bars are opt-in when unselected: only the prefabs that author
@@ -255,6 +260,12 @@ void GameMatch::buildWorldLabels()
                 label.bar2Color = ci.medium == 1 ? glm::vec3(1.0f, 0.6f, 0.2f)
                     : ci.medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.9f, 0.3f);
             }
+        }
+        else if (ammoBar)
+        {
+            label.bar2Value = m_structures.structureMunitions(i);
+            label.bar2Max = ammoCap;
+            label.bar2Color = glm::vec3(0.55f, 0.9f, 1.0f);
         }
         else if (fuelBar)
         {
@@ -301,6 +312,9 @@ void GameMatch::buildWorldLabels()
             if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nStone %.0f / %.0f",
                     m_structures.structureMinerals(i), mineralCap);
+            if (ammoCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nMunitions %.0f / %.0f",
+                    m_structures.structureMunitions(i), ammoCap);
             if (isHarvestType(type) && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nYield %.0f %%", m_structures.structureYield(i) * 100.0f);
             if (isBarracksType(type) && len > 0 && len < (int)sizeof(info))

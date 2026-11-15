@@ -382,10 +382,10 @@ is the former tube light's (`radius < 0`, `width` = the core radius, `direction`
 * **The frame's first `RendererState::MAX_BEAM_COLUMNS` (32, `BEAM_COLUMNS` in the shader: change both) beams** get a column: `addLightInfo` claims a slot
   (lock-free, reset in the begin-frame job), and they ride the UBO's PRESENT values (`u_present_beamCount` /
   `beamFoot` / `beamAxis` / `beamColor`) - lights are added after the begin-frame build.
-* **The light grid** bins a beam over at most 1024 m of its height from its lower end (`MAX_GRIDS_PER_AXIS`): surfaces
+* **The light grid** bins a beam over at most 2048 m of its height from its lower end (`MAX_GRIDS_PER_AXIS`): surfaces
   above that get no light from it. **A tall beam with a wide range does not belong in the grid:** the grid holds every
-  32 m grid in the light's bound (the range on all sides), about 147 KB each at 2 m cells, so the count grows with
-  range^3 (a 300 m range = ~8000 grids, over 1 GB). `Renderer::addBeamColumn` adds the glow in the air ALONE (a column
+  64 m grid in the light's bound (the range on all sides), 1.7 MB each at 2 m cells (26 KB at 8 m), so the count grows
+  with range^3 (a 300 m range = ~1000 grids). `Renderer::addBeamColumn` adds the glow in the air ALONE (a column
   slot, no light record), and `addLightInfo(light, false)` a beam with no column: the co-op beacon is a tall column
   plus a short surface beam at its foot. The fog froxels, GI and particles see a beam as a point at its centre.
 

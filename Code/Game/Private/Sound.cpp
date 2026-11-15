@@ -7,7 +7,6 @@ import Core.Time;
 import Core.Log;
 import Audio;
 import Entity;
-import Physics; // the water surface
 import File;
 import Settings;
 import :Sound;
@@ -56,7 +55,6 @@ namespace
         { "cricket_bout",       GroupAmbience,   PlaceWorld, 4, 4, 0.35f, 0.10f,  0.02f, 0.20f, 0.0f },
         { "owl_call",           GroupAmbience,   PlaceWorld, 2, 1, 0.50f, 1.00f,  0.03f, 0.15f, 0.0f },
         { "wind_gust",          GroupAmbience,   PlaceWorld, 4, 3, 0.60f, 0.50f,  0.00f, 0.30f, 0.0f }, // long noise: pitch 1 (see the loops)
-        { "water_lap",          GroupAmbience,   PlaceWorld, 4, 2, 0.50f, 0.30f,  0.10f, 0.30f, 0.0f },
         { "thunder",            GroupAmbience,   PlaceFar,   6, 2, 1.00f, 0.50f,  0.00f, 0.15f, 0.0f }, // the variant is the distance (tickLightning); long noise: pitch 1
         { "thunder_crack",      GroupAmbience,   PlaceFar,   4, 3, 0.80f, 0.02f,  0.00f, 0.15f, 0.0f }, // one per later stroke of a flash; variants 0, 1 near, 2, 3 middle
         { "alarm",              GroupInterface,  PlaceFlat,  1, 1, 0.60f, 1.00f,  0.00f, 0.00f, 0.0f },
@@ -75,7 +73,6 @@ namespace
         { "loop_hum",           GroupStructures, PlaceWorld, 1, 1, 0.22f, 0.0f,   0.0f,  0.10f, 0.0f }, // a steady field: a little
         { "loop_fire",          GroupStructures, PlaceWorld, 1, 1, 0.70f, 0.0f,   0.0f,  0.25f, 0.0f }, // a fire is never steady
         { "loop_works",         GroupStructures, PlaceWorld, 1, 1, 0.60f, 0.0f,   0.0f,  0.15f, 0.0f },
-        { "loop_water",         GroupAmbience,   PlaceWorld, 1, 1, 0.70f, 0.0f,   0.0f,  0.20f, 0.0f },
     };
     static_assert(oc::size(c_soundDefs) == (size_t)EGameSound::Count);
 
@@ -320,8 +317,6 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
         m_loops.clear();
         for (Bed& bed : m_beds)
             bed = Bed{};
-        for (WaterVoice& water : m_water)
-            water = WaterVoice{};
         discardPosted();
         m_settings.voicesPlaying = 0;
         return;
@@ -455,7 +450,6 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
 
     updateLoudnessLimit(dt);
     updateAmbience(frame, structures, dt); // posts for the next frame
-    updateWater(frame, structures, dt);
     updateHorde(frame);
     updateBeds(frame, dt);
     updateStructureLoops(frame, structures, dt);
@@ -480,7 +474,7 @@ void GameSound::update(const Frame& frame, const StructureSystem& structures)
 
 glm::vec3 GameSound::heardAt(const glm::vec3& pos) const
 {
-    // A sound AT the ear (a blow on the player, water the player stands in) has no direction: it goes half a metre
+    // A sound AT the ear (a blow on the player) has no direction: it goes half a metre
     // ahead. (The engine guards a source at its listener too; this keeps such a sound in front, where it belongs.)
     glm::vec3 offset = pos - m_ear;
     if (glm::dot(offset, offset) < 0.25f)
@@ -499,8 +493,8 @@ void GameSound::applyDistance(AudioSource& source, float dist) const
     source.setLowpass(18000.0f * std::exp(-dist / glm::max(m_settings.airDistance, 1.0f)));
 }
 
-// THE LOUDNESS LIMIT (see m_duck): the power sum of every one-shot, bed, building loop and water voice at its own gain.
-// The beds, the loops and the water set their gain every frame and take m_duck there; the one-shots get it here.
+// THE LOUDNESS LIMIT (see m_duck): the power sum of every one-shot, bed and building loop at its own gain.
+// The beds and the loops set their gain every frame and take m_duck there; the one-shots get it here.
 void GameSound::updateLoudnessLimit(float dt)
 {
     // A one-shot dies away: it counts with the part of its time that is left, not at its full gain to its last
@@ -519,9 +513,6 @@ void GameSound::updateLoudnessLimit(float dt)
     for (const LoopVoice& loop : m_loops)
         if (loop.structureId != 0)
             power += loop.gain * loop.gain;
-    for (const WaterVoice& water : m_water)
-        if (water.playing)
-            power += water.gain * water.gain;
     const float level = std::sqrt(power);
     const float limit = glm::max(m_settings.loudnessLimit, 0.05f);
     const float target = level > limit ? limit / level : 1.0f;
@@ -1042,136 +1033,6 @@ void GameSound::singBird(const Perch& perch)
             t += roll(0.7f, 1.0f);
         }
         break;
-    }
-}
-
-// THE WATER: 48 points around the ear (16 directions, at 6, 18 and 40 m), four of them tested a frame: a point is water
-// where the water surface is over the ground. When the round is over, the nearest wet point, and the nearest one on the
-// other side of the ear from it, each get a loop voice (it glides to a new place, it does not jump); single laps
-// sound near the first.
-void GameSound::updateWater(const Frame& frame, const StructureSystem& structures, float dt)
-{
-    const SoundDef& def = c_soundDefs[(int)EGameSound::LoopWater];
-    const bool active = frame.outdoors && Globals::physics.isWaterActive();
-    if (active)
-    {
-        constexpr float c_ring[3] = { 6.0f, 18.0f, 40.0f };
-        const auto wetAt = [&](float x, float z, float& water)
-        {
-            const float ground = structures.groundHeightAt(x, z, -FLT_MAX, true);
-            water = Globals::physics.sampleWaterHeight(x, z);
-            return ground != -FLT_MAX && water > ground + 0.1f;
-        };
-        for (int n = 0; n < 4; ++n)
-        {
-            const int i = m_waterProbe;
-            const float angle = glm::two_pi<float>() * (float)(i % 16) / 16.0f;
-            const float x = frame.ear.x + std::cos(angle) * c_ring[i / 16], z = frame.ear.z + std::sin(angle) * c_ring[i / 16];
-            float water = 0.0f;
-            m_waterWet[i] = wetAt(x, z, water);
-            m_waterHit[i] = glm::vec3(x, water, z);
-            if (++m_waterProbe < c_waterProbes)
-                continue;
-            m_waterProbe = 0;
-            // THE NEAREST WATER, AS A PLACE THAT DOES NOT JUMP. The nearest ring with water in it; the MIDDLE of its
-            // wet directions (not the first one found: that one changed with every step along a bank); and on that line
-            // the SHORE itself, by halving between this ring and the dry one inside it (not the ring's own distance:
-            // 6, 18 or 40 m, so the level stepped as the player walked to the water - heard as a chop).
-            int ring = -1;
-            for (int k = 0; k < c_waterProbes && ring < 0; ++k)
-                if (m_waterWet[k])
-                    ring = k / 16;
-            int other = -1;
-            bool found = false;
-            if (ring >= 0)
-            {
-                glm::vec2 middle(0.0f);
-                for (int k = ring * 16; k < ring * 16 + 16; ++k)
-                    if (m_waterWet[k])
-                        middle += glm::vec2(std::cos(glm::two_pi<float>() * (float)(k % 16) / 16.0f), std::sin(glm::two_pi<float>() * (float)(k % 16) / 16.0f));
-                float surface = 0.0f;
-                found = true;
-                if (glm::dot(middle, middle) < 0.01f) // water all around: the player stands in it
-                {
-                    // Just ahead of the ear, never AT it: a sound at the listener has no direction (the engine guards
-                    // that too - at a distance of 0 its direction was NaN, and the whole output went with it).
-                    wetAt(frame.ear.x, frame.ear.z, surface);
-                    m_water[0].target = glm::vec3(frame.ear.x, surface, frame.ear.z) + m_earForward * 1.5f;
-                }
-                else
-                {
-                    middle = glm::normalize(middle);
-                    float dry = ring > 0 ? c_ring[ring - 1] : 0.0f, wet = c_ring[ring];
-                    for (int step = 0; step < 4; ++step)
-                    {
-                        const float half = 0.5f * (dry + wet);
-                        (wetAt(frame.ear.x + middle.x * half, frame.ear.z + middle.y * half, surface) ? wet : dry) = half;
-                    }
-                    wetAt(frame.ear.x + middle.x * wet, frame.ear.z + middle.y * wet, surface);
-                    m_water[0].target = glm::vec3(frame.ear.x + middle.x * wet, surface, frame.ear.z + middle.y * wet);
-                    // The second voice: the nearest water on the other side of the ear from the first.
-                    for (int k = 0; k < c_waterProbes && other < 0; ++k)
-                    {
-                        const float a = glm::two_pi<float>() * (float)(k % 16) / 16.0f;
-                        if (m_waterWet[k] && std::cos(a) * middle.x + std::sin(a) * middle.y < 0.0f)
-                            other = k;
-                    }
-                }
-            }
-            m_water[0].wanted = found;
-            m_water[1].wanted = other >= 0;
-            if (other >= 0)
-                m_water[1].target = m_waterHit[other];
-            for (WaterVoice& voice : m_water)
-                if (voice.wanted && !voice.playing)
-                    voice.pos = voice.target;
-        }
-    }
-    for (int v = 0; v < 2; ++v)
-    {
-        WaterVoice& voice = m_water[v];
-        if (!active)
-            voice.wanted = false;
-        // Slowly, both: water does not move and does not switch. A second and more to a new place or level.
-        voice.pos += (voice.target - voice.pos) * glm::min(dt * 1.0f, 1.0f);
-        const float target = voice.wanted ? attenuation(glm::distance(voice.pos, frame.ear)) * def.gain * m_settings.ambienceVolume : 0.0f;
-        voice.gain += (target - voice.gain) * glm::min(dt * 0.8f, 1.0f);
-        if (voice.gain < 0.003f && !voice.wanted)
-        {
-            if (voice.playing)
-                voice.source.stop();
-            voice.playing = false;
-            continue;
-        }
-        if (!voice.playing)
-        {
-            if (!voice.source.isValid())
-            {
-                voice.source = Globals::audio.createSource();
-                if (!voice.source.isValid())
-                    continue;
-                voice.source.setLooping(true);
-                voice.source.setRelative(false);
-                voice.source.setAttenuation(1.0f, c_noFalloff, 0.0f);
-                voice.source.setPosition(voice.pos);
-                voice.source.setGain(0.0f); // every value before the buffer (see startVoice on the order)
-                voice.source.setBuffer(bufferOf(EGameSound::LoopWater, 0));
-            }
-            voice.source.play();
-            voice.playing = true;
-        }
-        voice.source.setPosition(heardAt(voice.pos));
-        applyDistance(voice.source, glm::distance(voice.pos, m_ear));
-        voice.source.setGain(voice.gain * m_duck * (1.0f + drift(40.0f + (float)v * 9.0f, 0.3f) * def.gainJitter));
-        voice.source.setPitch(1.0f); // pitch 1, as every loop (c_soundDefs); the two voices start at other moments
-    }
-    // Single laps, near the first voice: the water is never the loop alone.
-    m_waterLapTimer -= dt;
-    if (m_waterLapTimer <= 0.0f)
-    {
-        m_waterLapTimer = 4.0f + 6.0f * rand01(); // now and then, and soft: a detail on the rush, not its rhythm
-        if (m_water[0].wanted)
-            post(EGameSound::WaterLap, m_water[0].target + glm::vec3(rand01() * 8.0f - 4.0f, 0.0f, rand01() * 8.0f - 4.0f), 0.3f + 0.25f * rand01());
     }
 }
 

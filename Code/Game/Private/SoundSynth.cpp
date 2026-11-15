@@ -635,7 +635,7 @@ namespace
             // that band, but it takes the headroom (the peak that is set to 0.9 below is then mostly rumble, and the
             // sound one hears is quiet under it), it moves the speaker, and every stage after it that is not exactly
             // linear turns it into a random wobble of what one does hear. (Measured before this: 30 - 50 % of the
-            // energy of the wind, the fire, the hum, the water and the thunder was under 40 Hz.)
+            // energy of the wind, the fire, the hum and the thunder was under 40 Hz.)
             bool finite = true;
             for (uint32 channel = 0; channel < channels; ++channel)
             {
@@ -676,34 +676,6 @@ namespace
                 s *= scale;
         }
     };
-
-    // ---- A bubble ----
-    // Air caught in water: it rings for a few hundredths of a second at the pitch that goes with its size - a big one
-    // low and loud, a small one high and soft - and its pitch rises a little as it closes. A TONE IS RIGHT HERE: a
-    // bubble is one (a short one that dies at once: a drip, no beep).
-    // A DETAIL, NEVER THE SOUND: a river is a rush with a few of these in it (LoopWater has the whole story).
-    void bubble(Canvas& c, Rng& rng, float start, float hz, float gain)
-    {
-        const float decay = 0.004f + 5.0f / hz; // s: a big bubble rings longer
-        const uint32 n = framesOf(decay * 5.0f), first = framesOf(start);
-        const float rise = rng.range(0.1f, 0.35f);
-        float phase = rng.uni() * c_tau;
-        for (uint32 i = 0; i < n; ++i)
-        {
-            uint32 frame = first + i;
-            if (frame >= c.frames)
-            {
-                if (!c.loop)
-                    return;
-                frame %= c.frames;
-            }
-            const float t = (float)i / c_sr;
-            phase += c_tau * hz * (1.0f + rise * (float)i / (float)n) / c_sr;
-            const float v = std::sin(phase) * std::exp(-t / decay) * glm::min(t / 0.0008f, 1.0f) * gain;
-            for (uint32 channel = 0; channel < c.channels; ++channel)
-                c.addAt(frame, channel, v);
-        }
-    }
 
     // ---- A CROWD IS A TEXTURE, NOT A SUM OF EVENTS ----
     // Many voices at once are not heard as voices: the ear hears ONE sound with a colour (where the mouths are) and
@@ -1641,79 +1613,6 @@ void synthGameSound(EGameSound sound, int variant, oc::vector<float>& out, bool&
         const float body = 1.0f / peakOf(out);
         for (uint32 i = 0; i < c.frames; ++i)
             out[i] = out[i] * body + rustle[i] * (variant & 1 ? 0.45f : 0.2f); // an odd variant goes through more leaves
-        c.finish();
-        break;
-    }
-    case EGameSound::WaterLap:
-    {
-        // One small slosh at the bank: the water comes up and falls back (a soft band of noise that rises and dies),
-        // with a few bubbles as it turns over - a few, and under the slosh (a river is not made of bubbles).
-        const float length = rng.range(0.7f, 1.2f);
-        Canvas c = begin(length + 0.6f, false, false);
-        Buf slosh = noise(rng, length, Pink, Band, rng.range(450.0f, 700.0f), rng.range(1200.0f, 1900.0f), 1.0f, length * 0.35f, length * 0.4f);
-        level(slosh);
-        c.mix(slosh, 0.0f, 0.9f);
-        for (int i = 0, bubbles = 5 + rng.pick(8); i < bubbles; ++i)
-        {
-            const float hz = 700.0f * std::pow(5.0f, rng.uni());
-            // Two rolls: most of them in the middle of the wave.
-            bubble(c, rng, length * (0.15f + 0.45f * (rng.uni() + rng.uni())), hz, std::sqrt(1000.0f / hz) * rng.range(0.08f, 0.22f));
-        }
-        Buf foam = noise(rng, length, White, Band, 3500.0f, 5500.0f, 0.8f, length * 0.4f, length * 0.35f);
-        level(foam);
-        c.mix(foam, length * 0.2f, 0.08f);
-        c.reverb(0.2f, 0.5f, 0.08f);
-        c.finish();
-        break;
-    }
-    case EGameSound::LoopWater:
-    {
-        // A RIVER IS A RUSH: one unbroken sound of moving water, with a COLOUR THAT MOVES. The rush is a wide band of
-        // noise around 1 kHz (no hiss on top: nothing much above 5 kHz). The colour is three softer peaks in it - near
-        // 480 Hz, 1 kHz and 2.1 kHz - that each drift up and down by themselves over seconds: the water going round the
-        // stones, and what tells the ear "water" and not "wind" or "static". The level breathes a little (15 %); it does
-        // NOT come and go. On top, a TRACE of bubbles (12 a second, far under the rush): a river is not made of them.
-        // (Tried, in this order: a band of noise with big swells and quiet noise drops - a hiss that pumps; then the
-        // sound built FROM bubbles, 110 to 400 a second - a babble, a kettle, "too bubbly: a river does not sound like
-        // bubbles". Both got one half right: it is noise, and the noise must have something in it that moves.)
-        Canvas c = begin(12.0f, false, true);
-        const LoopLfo breathe(rng, 1, 2, 3, 5), drift0(rng, 2, 3, 5, 7), drift1(rng, 1, 3, 4, 8), drift2(rng, 2, 4, 5, 9), spray(rng, 3, 4, 6, 7);
-        Svf rush, colour[3], sparkle;
-        Noise pink;
-        rush.set(1100.0f, 0.45f);
-        sparkle.set(4800.0f, 0.8f);
-        for (int pass = 0; pass < 2; ++pass)
-        {
-            Rng r{ 0x0a7e2u };
-            for (uint32 i = 0; i < c.frames; ++i)
-            {
-                const float u = (float)i / (float)c.frames;
-                if ((i & 31) == 0)
-                {
-                    colour[0].set(480.0f * (0.6f + 0.8f * drift0.at(u)), 4.5f);
-                    colour[1].set(1050.0f * (0.6f + 0.8f * drift1.at(u)), 4.5f);
-                    colour[2].set(2100.0f * (0.6f + 0.8f * drift2.at(u)), 4.5f);
-                }
-                const float p = pink.next(r, Pink);
-                rush.step(p);
-                colour[0].step(p);
-                colour[1].step(p);
-                colour[2].step(p);
-                sparkle.step(r.bi());
-                if (pass == 1)
-                    // The colours LEAD and the plain rush is under them. (At 0.6 - 0.9 of the rush and a wide band each,
-                    // they did not show in the spectrogram at all: plain noise again.)
-                    out[i] = (rush.bp * 0.45f + colour[0].bp * 2.2f + colour[1].bp * 2.0f + colour[2].bp * 1.5f + sparkle.bp * 0.04f * (0.5f + 0.5f * spray.at(u)))
-                        * (0.85f + 0.15f * breathe.at(u));
-            }
-        }
-        for (int i = 0; i < 140; ++i)
-        {
-            const float hz = 700.0f * std::pow(5.0f, rng.uni());
-            const float size = rng.uni();
-            bubble(c, rng, rng.range(0.0f, 12.0f), hz, std::sqrt(1000.0f / hz) * (0.1f + size * size) * 0.035f);
-        }
-        c.reverb(0.2f, 0.5f, 0.08f);
         c.finish();
         break;
     }

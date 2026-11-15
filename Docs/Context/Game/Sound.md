@@ -30,7 +30,7 @@ The cue sites:
 | `Thunder`, `ThunderCrack` | `tickLightning`, IN STEP with the flash: the thunder at its first stroke, a crack at every later stroke (see Thunder under The sounds); the distance picks the variant (near / middle / far) |
 | `Alarm` | `GameSound::updateAlarm`: the own team's built structures lost health between two samples (0.5 s) with none removed; 10 s between two alarms |
 | `PlayerHurt` | `GameSound::update`: the local player's health fell |
-| `BirdSong`, `CricketBout`, `OwlCall`, `WindGust`, `WaterLap` | `GameSound::updateAmbience` / `updateWater` (The ambience is positional, below) |
+| `BirdSong`, `CricketBout`, `OwlCall`, `WindGust` | `GameSound::updateAmbience` (The ambience is positional, below) |
 
 ## The limits
 
@@ -64,12 +64,12 @@ Two columns of `c_soundDefs`, `pitchJitter` and `gainJitter`, per sound:
   its 10 s loop. A building loop drifts by itself, seeded by its structure id: one fire flares while the one next to
   it dies down. Small for the hum (a steady field), large for the fire and the wind.
 * **EVERY LOOP, AND EVERY LONG NOISE ONE-SHOT (a gust, thunder), PLAYS AT PITCH 1** (`pitchJitter` 0; no pitch per
-  building, per water voice or by the battle's level). The engine changes a pitch by linear interpolation with no
+  building or by the battle's level). The engine changes a pitch by linear interpolation with no
   filter (The playback path, checked). Between two samples that is a low pass, on a sample it is none: at a pitch a
   little off 1 the highs go down and up thousands of times a second, at a rate that moves with the pitch. On a tone
-  or a short hit nobody hears it; on NOISE that goes on (wind, leaves, water, fire, a crowd) it is a grit over the
+  or a short hit nobody hears it; on NOISE that goes on (wind, leaves, fire, a crowd) it is a grit over the
   whole sound - "grainy". At exactly 1 the engine copies samples. Tried and dropped: a pitch drift of 1 - 7 % on
-  every loop, a pitch per building, the second water voice at 0.88.
+  every loop, a pitch per building.
 
 ## The listener is the player, turned like the camera
 
@@ -77,22 +77,22 @@ The audio engine's listener is the CAMERA (`AudioSystem::update(camera)` in main
 behind the player, so from there everything around the player is "in front and below": hardly any left / right,
 nothing behind, and the HRTF's dull "from below" colour on every sound.
 
-`GameSound::heardAt(pos)` moves every positional game voice (one-shots, the horde bed, building loops, water) before
+`GameSound::heardAt(pos)` moves every positional game voice (one-shots, the horde bed, building loops) before
 the engine gets it: the sound's offset from the EAR (`Frame::ear`, the player) in the ear's frame - right and
 forward are the camera's, laid flat on the ground; up is the world's, x "Height in the panning" (0.5) - is put on
 the camera's own axes. A sound 10 m to the player's left is then 10 m to the left of the engine's listener. Every
 frame, for every playing voice: the player turns while a long sound plays, and the sound stays where it is.
 The DISTANCE was never the engine's (the gain holds it, from the ear).
 
-**A sound AT the ear** (a blow on the player, water the player stands in) would land exactly on the engine's
-listener, where a sound has no direction. `heardAt` puts anything within half a metre of the ear half a metre ahead,
-and `updateWater` puts the water of a player who stands in it 1.5 m ahead. (The engine guards a source at its
+**A sound AT the ear** (a blow on the player) would land exactly on the engine's
+listener, where a sound has no direction. `heardAt` puts anything within half a metre of the ear half a metre ahead.
+(The engine guards a source at its
 listener too - see "No value that is not a number" in the Audio CONTEXT: this once took the whole output down.)
 
 ## The distance is more than a gain
 
 `GameSound::applyDistance(source, dist)`, for every positional world voice (a one-shot at its start; the horde bed,
-the building loops and the water every frame). A far sound is:
+the building loops every frame). A far sound is:
 
 | | How |
 |---|---|
@@ -127,7 +127,7 @@ Every path that can start a sound has a bound. The ones that are not in the list
 | No update for a while (the lobby or the main menu is up, the sounds are being synthesized, a hitch) | the cues of the whole gap play as one late burst, and their counts - read as one frame's - throw the battle bed to its full level | a gap of more than 0.5 s between two updates: `discardPosted` and the battle bed's sum to 0 |
 | A match starts; F10 loads a save | a collapse per removed structure, a "placed" per blueprint | `discardPosted` in the `GameMatch` constructor and after the load (it drops the components' cues too). The shots a load removes are destroyed by a job after it: at most one impact sound |
 | MANY sounds at once, each at a fair level | the sum goes over full scale at the output and DISTORTS: many quiet sounds become one loud noise | THE LOUDNESS LIMIT: `updateLoudnessLimit` sums everything that plays (as power: the sounds are not in step; a one-shot counts with the share of its time that is left) and holds it under "Loudness limit" (2.0) with one factor on every game voice (`m_duck`). It is SLOW both ways (down in about 0.2 s, up in over a second): a hand on the master fader for a mix that STAYS too loud, not a limiter that follows single sounds. Tried and dropped: a fast one that counted a one-shot at full gain to its last moment - every start and end of a sound jerked the volume of everything else, and the whole mix pumped. "Game/Sound/Stats" shows the sum before the limit |
-| The audio thread's cost | each spatial voice is an HRTF convolution | at most "Max one-shot voices" (24, up to 48) + 5 beds + "Max building loops" (6, up to 12) + 2 water voices, whatever the game does |
+| The audio thread's cost | each spatial voice is an HRTF convolution | at most "Max one-shot voices" (24, up to 48) + 5 beds + "Max building loops" (6, up to 12), whatever the game does |
 
 ## The beds: what the limits drop is not lost
 
@@ -164,7 +164,7 @@ and the two beds make room for each other and for the one-shots:
 
 ## The ambience is positional (the sandbox world)
 
-`GameSound::updateAmbience` / `updateWater`. Every ambient sound in front of the background is a MONO sound at a place
+`GameSound::updateAmbience`. Every ambient sound in front of the background is a MONO sound at a place
 in the world, through the same cue limits as everything else (so in a battle the louder combat cues take their voices).
 
 **PERCHES** (`m_perches`, 18): a place around the ear with one animal that sings from there again and again.
@@ -209,11 +209,8 @@ its sound is x `1 - fear / 0.7` (none from a fear of 0.7), rolled per perch - so
 one moment - and the night loop (the far cricket field) goes down to 15 %. **The wind and the gusts do not care**:
 what is left is the wind alone.
 
-**WATER** (`m_water`, 2 loop voices): 48 points around the ear (16 directions at 6, 18 and 40 m), 4 tested a frame. A
-point is water where `PhysicsWorld::sampleWaterHeight` is over the ground. At the end of a round the nearest wet
-point, and the nearest wet point on the other side of the ear, each get a `LoopWater` voice. A voice GLIDES to a new
-place (no jump), the two have different pitches (never the same water twice), and single `WaterLap`s sound near the
-first every 1.5 - 5 s. No water in 40 m: both fade out.
+**The water (the ocean, the rivers, the lakes) has NO sound.** Tried and dropped: a river rush loop on the nearest water
+around the ear (two voices) with single laps on top - removed at the user's request.
 
 ## Building loops
 
@@ -230,7 +227,7 @@ also the quietest loop (gain 0.22): it says "a field is here" and no more.
 
 ## The sounds
 
-All 28 sounds are SYNTHESIZED (`synthGameSound` in `SoundSynth.cpp`, 48 kHz - the engine's rate) and kept in a
+All 27 sounds are SYNTHESIZED (`synthGameSound` in `SoundSynth.cpp`, 48 kHz - the engine's rate) and kept in a
 file, so a run synthesizes only what the file does not hold.
 
 ### The sound cache
@@ -264,11 +261,11 @@ that is not finite is made silent and logged).
 >
 > * **NOTHING UNDER 35 Hz.** `Canvas::finish` ends every sound with a 24 dB / octave high pass at 35 Hz, and the
 >   brown noise (`Noise`) has no sub-bass in it (its slope starts at 40 Hz). Before this, 30 - 50 % of the energy of
->   the wind, the fire, the hum, the water and the thunder was under 40 Hz: nothing to hear, but it takes the
+>   the wind, the fire, the hum and the thunder was under 40 Hz: nothing to hear, but it takes the
 >   headroom (the peak that is set to 0.9 is then mostly rumble), it moves the speaker, and every stage after it that
 >   is not exactly linear turns it into a random wobble of what one does hear. For the same reason NO soft clip on a
 >   whole sound that has much low sound in it (the lows then chop the highs).
->   A layer that is "the low body" of an air or water sound (wind, fire, water, night) is a TRACE, a few percent.
+>   A layer that is "the low body" of an air sound (wind, fire, night) is a TRACE, a few percent.
 > * **NOTHING IS CHOPPED 30 - 150 TIMES A SECOND.** A level that changes at that rate is not heard as a change of
 >   level: it is heard as ROUGHNESS, a jitter in the sound itself. This holds for a `flutter` (keep it under 20 Hz),
 >   for a voice's pulses (60 - 130 a second: they only LEAN on a breath that is always there - `vocal`, `Murmur`),
@@ -283,21 +280,6 @@ that is not finite is made silent and logged).
 | `modal` | a STRUCK BODY: noise that dies away, through one resonance per mode (`c_wood`, `c_metal`, `c_tube`, `c_drum`, `c_glow`, `rockClack`). The noise drives the resonances while they ring, so a mode is a narrow band of noise, never a sine; `maxQ` bounds how near a tone it gets | the mallet, the chisel, stones, the drum |
 | `vocal` | a THROAT: soft pulses whose length and strength change from one to the next, plus breath that gets louder with every pulse, through three wide formants; `VocalKey`s move the pitch, the mouth, the breath and the roughness | the single creature sounds: `makeDeathCry` (the death grunt), the player's grunt (a crowd is not made of these: see A CROWD IS A TEXTURE) |
 | `whistle` | a tone with an unsteady pitch and a band of breath at the same pitch (a real whistle is a tone) | birds, crickets, the owl |
-| `bubble` | air caught in water: a short tone that dies in a few hundredths of a second, at the pitch of its size, rising a little as it closes. A tone is right here: a bubble is one. A DETAIL, never the sound | a trace in the water loop (12 a second, far under the rush), a few in the water lap |
-
-**A RIVER IS A RUSH WITH A COLOUR THAT MOVES** (`LoopWater`, 12 s). One unbroken sound: a wide band of noise around
-1 kHz (little above 5 kHz), and LEADING it three narrower peaks - near 480 Hz, 1 kHz and 2.1 kHz - that each drift up
-and down by themselves over seconds (the water going round the stones: what says "water" and not "wind" or
-"static"). The level breathes by 15 %; it does not come and go. Tried and dropped, in this order: a band of noise
-with big swells and quiet noise drops (a hiss that pumps); the sound built FROM bubbles, 110 - 400 a second (a babble,
-"too bubbly: a river does not sound like bubbles"); the rush with the three peaks at 0.6 - 0.9 of its level and wide
-(they did not show in the spectrogram: plain noise again).
-
-**The water's PLACE does not jump** (`GameSound::updateWater`): the nearest ring of the scan with water in it, the
-MIDDLE of its wet directions (not the first one found: that changed with every step along a bank), and on that line
-the shore itself, by halving between this ring and the dry one inside it (not the ring's own 6, 18 or 40 m: the level
-stepped as the player walked to the water - a chop). The voice's place and level follow in a second or more. The
-single laps are rare (4 - 10 s) and soft.
 | `Canvas::reverb` | THE ROOM, by CONVOLUTION with a made impulse response (`makeImpulse`: a short gap, a few single reflections, then dense noise that dies over 0.15 - 2.7 s, its highs first; an own one per channel). A loop's tail runs over the end into the start. Tried and dropped: eight comb filters and four allpasses, the classic digital reverb of the 1980s - it rings at its combs' own pitches (horizontal lines in the spectrogram), a metallic colour on every sound | every sound that has a room |
 | `flutter` | an uneven level (random values with straight lines between), where a regular tremolo would sound like a machine | the saw's teeth, a gurgle |
 
@@ -382,8 +364,8 @@ to hide them - a steady drone. A continuous low noise ("roar") under the battle 
 (`<name>2.wav`, `<name>3.wav` for the variants) replaces a synthesized sound** — the names are the first column of
 `c_soundDefs`: `melee_hit`, `unit_reveal`, `unit_death`, `shot_fired`, `lob_fired`, `shot_impact`, `splash_impact`,
 `turret_fire`, `structure_placed`, `structure_built`, `structure_collapse`, `thunder`, `alarm`,
-`player_hurt`, `bird_song`, `cricket_bout`, `owl_call`, `wind_gust`, `water_lap`, `loop_wind`, `loop_day`,
-`loop_night`, `loop_battle`, `loop_horde`, `loop_hum`, `loop_fire`, `loop_works`, `loop_water`. A MONO file is spatialized (HRTF); a stereo file plays flat, so a world sound must be mono.
+`player_hurt`, `bird_song`, `cricket_bout`, `owl_call`, `wind_gust`, `loop_wind`, `loop_day`,
+`loop_night`, `loop_battle`, `loop_horde`, `loop_hum`, `loop_fire`, `loop_works`. A MONO file is spatialized (HRTF); a stereo file plays flat, so a world sound must be mono.
 
 ## Looking at a sound
 

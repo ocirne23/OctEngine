@@ -71,15 +71,6 @@ public:
     ~GameMatch();
 
     void spawnWorld();
-    // Co-op map inputs chosen OUTSIDE (the lobby page's host settings): call before spawnWorld on
-    // the authority. Writes the "Game/Coop" settings, so the panel shows what generated; seed 0
-    // still rolls a random map.
-    void setMapSettings(uint32 seed, float fill, int lanes)
-    {
-        m_settings.mapSeed = (int)(seed & 0x7fffffffu);
-        m_settings.terrainFill = fill;
-        m_settings.terrainLanes = lanes;
-    }
     // PvP team setup chosen OUTSIDE (the lobby): the host's team count (2..GameMaxTeams - one
     // Base per team, spread along the corridor) and the roster's picks (clientId, team; clientId
     // 0 = the server's own team). Call before spawnWorld on the authority. A client whose id is
@@ -105,8 +96,8 @@ public:
     // camera owns LMB-look and WASD, which are the game's place/select and grid hotkeys).
     bool cameraDetached() const { return m_player.cameraDetached(); }
 
-    // CO-OP IN THE SANDBOX WORLD ("Game/Coop/Sandbox world", read at construction): the procedural terrain, trees and
-    // ocean instead of the generated rock map, the third-person player (WASD, mouse look, crosshair aim), the grid
+    // CO-OP IS THE SANDBOX WORLD (m_sandboxWorld = m_coop; the flat maps are PvP's): the procedural terrain, trees and
+    // ocean, the third-person player (WASD, mouse look, crosshair aim), the grid
     // hotkeys on the number keys, and placement on the terrain (flat enough, dry, no tree or rock). The App switches
     // the terrain and ocean on for it (Session::startWorldAndGame).
     bool sandboxWorld() const { return m_sandboxWorld; }
@@ -242,6 +233,7 @@ private:
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
     void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
+    void activateTab(int page);  // the sandbox world's tab strip: a click on a page tab
     void cancelOneLevel();       // Esc, Tab: two-click step -> armed item -> page/mode, one per press
     // Cable segments place by PAINTING: LMB press starts a stroke, holding + dragging places the
     // cells the cursor crosses (L-filled between samples so the run stays connected). The newest
@@ -279,10 +271,6 @@ private:
     void updateHud();
     void tickBaseHealing(float deltaSec); // own player only - the owner computes its own health
     void tickMedicHealing(float deltaSec); // medic stations: the own player (every instance); units heal in the station's component update
-    void tickAmbientWander(float deltaSec); // co-op POST-UPDATE job: idle AI units stroll now and then, biased toward the Base (a steady per-frame budget)
-    float m_wanderBudget = 0.0f;           // fractional strolls carried to the next frame
-    float m_wanderSelectedFrac = 0.05f;    // smoothed share of the roster inside the SIM LOD selection (from the probes)
-    std::mt19937 m_wanderRng{ 0x5eedu };   // the job's own generator (never the shared C rand from a worker)
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
     // THE STAFF BEAM (the sandbox world, PLAY, LMB held - updateGameInput sets the two below): a light cone along the aim
     // into GameUnitParams::lightCones, after the structures published theirs; it costs the player's staff light.
@@ -340,7 +328,7 @@ private:
     bool m_hasShipHome = false;
     glm::vec3 m_shipHome{ 0.0f };
     int m_shipHomeTurns = 0;
-    void requestShipPlace(EStructureType type, const glm::vec3& local, float yield);
+    void requestShipPlace(EStructureType type, const glm::vec3& local, float yield, int turn = 0); // turn: a rotated placement (eighths, relative to the ship)
     void drawShipGhost(EStructureType type, const glm::vec3& local, uint32 color) const;
     // Where a wave marches: the nearest own building on the land from `origin` (one on a flying ship is out of reach),
     // else the ground under the ship (else the Base site).
@@ -367,9 +355,8 @@ private:
     // loaded state and teleports the local capsule.
     void saveGame();
     void loadGame(oc::string_view path = {}); // empty = the F10 path (Local/gamesave.txt)
-    // The co-op TRICKLE state (`WaveTrickle` / `AmbientTrickle`): points still queued to spawn plus
-    // what the trickle needs to spawn them - so an F9 during a wave does not shrink it. loadTrickle
-    // must run AFTER rebuildCoopMap, which voids the in-progress ambient group.
+    // The co-op TRICKLE state (`WaveTrickle`): points still queued to spawn plus what the trickle needs to spawn them -
+    // so an F9 during a wave does not shrink it.
     void saveTrickle(AssetNode& root) const;
     void loadTrickle(const AssetNode& root);
 
@@ -386,6 +373,7 @@ private:
     GameSound m_sound; // every game sound: the cue limits, the beds, the building loops (updateWindowed runs it)
 
     EntityPtr m_ground;
+    uint32 m_blastPuff = UINT32_MAX; // the Ammo store blast's puff stream (made at the first blast)
     oc::vector<Nav::NavObstacle> m_wallObstacles; // rock terrain rects (static, both modes)
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
@@ -524,13 +512,21 @@ private:
     int buildBarPage() const;      // the page the bar shows: the armed one, else the last used
     bool m_buildKeyWasDown[4] = {}; // Tab, Q, E, X edges
     bool m_flyKeyWasDown = false;   // F3 edge (the fly camera)
-    int m_pageSelection[3] = {};    // the last armed item of each page
+    int m_pageSelection[5] = {};    // the last armed item of each page (c_buildBarTabs)
     int m_lastPage = 0;
+    // A ROTATED placement (isRotatedPlacement: the Cannon): its facing in eighths of a turn; R turns it (the ghost shows
+    // the arc it fires in). Kept across placements.
+    int m_buildTurn = 0;
+    bool m_rotateKeyWasDown = false;
+    glm::vec3 buildFacing() const // the facing direction placeStructure turns the piece to (an entity's forward is -Z)
+    {
+        const float yaw = (float)m_buildTurn * glm::quarter_pi<float>();
+        return glm::vec3(-std::sin(yaw), 0.0f, -std::cos(yaw));
+    }
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;
     int m_buildCategory = -1;    // grid hotbar page: -1 = ROOT (categories), else index into the categories
-                                 // (c_cableCategory = a cable armed FROM the root page - still drawn as root)
-    bool isRootPage() const;     // the hotbar shows the root layout (categories, cables, Delete)
+    bool isRootPage() const;     // the hotbar shows the root layout (categories, Delete, Cancel)
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
     bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled - one per hotbar slot)
     bool m_wallPlacing = false;  // Wall drag placement: the press anchored the line start, release places
@@ -557,94 +553,67 @@ private:
     glm::vec3 teamStartPos(uint8 team) const; // spawn/respawn anchor beside that team's Base
 
     // ---- CO-OP (see the constructor comment) ----
-    // The ambient/wave team. Team 1, NOT a high slot: co-op runs the Force system at TWO live
+    // The wave team. Team 1, NOT a high slot: co-op runs the Force system at TWO live
     // teams (setNumTeams(2) - the renderer's per-team costs shrink to fit), so every team index
     // must stay below 2. (< Nav::MaxTeams as well.)
     static constexpr uint8 CoopAiTeam = 1;
-    // GENERATED MAP: impassable rock over a coarse cell grid (seeded noise + carved attack lanes),
-    // a player-blocking barrier ring at the edge, and everything placed on it (resource nodes,
-    // ambient spawns) guaranteed reachable from the Base by a flood fill that turns unreachable
-    // open pockets into rock. The SERVER picks the seed (tweak "Map seed", 0 = random) and
-    // broadcasts it as the "GMp" event (first thing in onClientJoined, before the structure
-    // replay; also into F9 saves) - clients defer terrain + nodes until it arrives and build the
-    // identical set locally from pure seeded math.
-    // THE TERRAIN GRID serves BOTH modes: the co-op generator fills a 36² grid of 10 m cells, the
-    // PvP arenas (generatePvpGrid) a per-arena rectangle of 5 m cells (rock.pre spawned at half
-    // scale) - everything downstream (cell math, flood fill, rects, rock spawn, clampToOpenGround)
-    // reads the grid's own dimensions.
+    // THE PVP ARENA (generatePvpGrid): impassable rock over a per-arena rectangle of 5 m cells (rock.pre spawned at half
+    // scale), a flood fill from team 0's Base that turns unreachable open pockets into rock, and the arena's nodes. The
+    // SERVER broadcasts the arena as the "GMp" event (first thing in onClientJoined, before the structure replay; also
+    // into F9 saves) - clients build the identical layout locally from pure math. Co-op has no grid (its map is the
+    // procedural terrain).
     struct CoopMap
     {
         oc::vector<uint8> blocked;  // one per cell, row-major z * cellsX + x (1 = rock)
-        oc::vector<uint16> depth;   // BFS steps from the Base over open cells (0xFFFF unreachable)
-        oc::vector<int> reachable;  // open + reachable cell indices (node/ambient placement pool)
+        oc::vector<uint16> depth;   // BFS steps from the seed cells over open cells (0xFFFF unreachable)
+        oc::vector<int> reachable;  // open + reachable cell indices
         int cellsX = 0, cellsZ = 0; // grid size
-        float cellSize = 10.0f;     // one rock block (co-op 10 m, PvP 5 m)
+        float cellSize = 5.0f;      // one rock block
         glm::vec2 origin{ 0.0f };   // world (x, z) of cell (0, 0)'s min corner
         uint16 maxDepth = 1;
-        bool pvp = false;           // which generator built it (the no-op tests compare per mode)
+        bool pvp = false;           // the grid is built (a PvP arena)
         EPvpMap pvpMap = EPvpMap::Lane;
-        uint32 seed = 0;
-        float fill = 0.3f;          // generation inputs as USED (ride GMp + the save with the seed:
-        int lanes = 6;              //  a joiner's tweak sync lands after the replay, too late)
         bool built = false;
     };
-    // Both roles; no-op when already built from those exact inputs.
-    void rebuildCoopMap(uint32 seed, float fill, int lanes);
+    // No-op when already built for that arena.
     void rebuildPvpMap(EPvpMap map);
-    void generateCoopGrid();             // the pure-math half: blocked cells, flood fill, rects
-    void generatePvpGrid();              // the PvP arena layouts (+ rock border), same outputs
+    void generatePvpGrid();              // the PvP arena layouts (+ rock border): blocked cells, flood fill, rects
     void finishGrid(oc::span<const int> seedCells); // BFS from the seeds, seal pockets, merged rects
-    void spawnTerrain();                 // rocks (+ the co-op barrier) under m_terrainRoot, nodes
+    void spawnTerrain();                 // rocks under m_terrainRoot, then the arena's nodes
     void spawnPvpNodes();                // the arena's node table (skips cells that landed in rock)
-    void sendMapSeed();                  // server: the GMp broadcast (co-op inputs / the PvP arena)
+    void sendMapSeed();                  // server: the GMp broadcast (the PvP arena)
     glm::vec3 coopCellCenter(int index) const;
     int coopCellAt(const glm::vec3& pos) const; // -1 outside the map square
     // A move destination inside a rock is unreachable (the A* and every unit plan to it fail):
     // clamp it to the nearest open cell center. Identity when the map is absent or the cell open.
     glm::vec3 clampToOpenGround(const glm::vec3& pos) const;
-    glm::vec3 ambientPointNear(const glm::vec3& center, float radius) const; // ambient body spot on open ground
-    void drawCoopBarrier(); // pulsing energy lines strung between the barrier posts
-    // The AMBIENT scatter spawns in small groups: the trickle fills the current group (one
-    // archetype, a disc around a reachable anchor) before rolling the next - loose blobs, not a
-    // lattice.
-    struct AmbientSpawn
-    {
-        glm::vec3 center{ 0.0f };
-        float radius = 6.0f;
-        int remaining = 0;  // bodies still to place in this group (0 = roll a new one)
-        int archetype = 0;  // index into c_waveArchetypes
-    };
-    AmbientSpawn m_ambientSpawn;
     CoopMap m_coopMap;
-    EntityPtr m_terrainRoot; // rocks + barrier segments live under it; removed on regeneration
+    EntityPtr m_terrainRoot; // the arena's rocks live under it; removed on regeneration
     oc::vector<glm::vec4> m_terrainRects; // merged blocked runs (minX, minZ, maxX, maxZ)
     EPvpMap m_pvpMap = EPvpMap::Lane; // PvP arena (setPvpMap; clients follow GMp)
     glm::vec2 m_pvpInterior{ 65.0f, 20.0f }; // the arena's open half-extents (placement bounds)
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
-    void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
-    // COMPOSITION recipes, sampled per spawned unit. The wave's is rolled once per wave in
-    // queueWave: an ARCHETYPE (single-type rush, screened siege, combined arms, ... - gated by the
-    // wave index so early waves stay simple) with its weights jittered. The AMBIENT scatter picks
-    // its spawn position FIRST and gates the archetype roll by DISTANCE from the Base - the same
-    // minWave gate, driven by depth instead of time, so the deep map holds the heavy recipes and
-    // the near ring stays swarm-grade. Authority-only (clients never spawn).
+    void tickCoopSpawns();           // trickle: the wave's spawns on a per-frame budget
+    // COMPOSITION recipes, sampled per spawned unit. The wave's is rolled once per wave in queueWave: an ARCHETYPE
+    // (single-type rush, screened siege, combined arms, ... - gated by the night so early nights stay simple) with its
+    // weights jittered. Authority-only (clients never spawn).
     struct WaveMixEntry { ENpcType type; float weight; };
     ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 6>& mix) const; // weighted type roll
     oc::fixed_vector<WaveMixEntry, 6> m_waveMix; // a recipe's 5 at most + the sprinkle
     int m_lastArchetype = -1;    // never the same recipe twice in a row (when a choice exists)
     bool m_coop = false;
     float m_matchTime = 0.0f;    // authority sim seconds since the world spawned: the HUD "Time" clock, saved/restored
-    float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
+    float m_waveTimer = 0.0f;    // seconds to the next wave of the night (0 at dusk)
     int m_waveIndex = 0;         // waves launched so far
-    // THE LIGHT RULES (the sandbox world): the waves come at night only - the first at dusk, then one every "Night wave
-    // interval (s)" until dawn - sized and gated by the NIGHT number; daylight burns the AI team and scales the solar yield.
+    // THE LIGHT RULES: the waves come at night only - the first at dusk, then "Waves per night" spread over the night -
+    // sized and gated by the NIGHT number; daylight burns the AI team and scales the solar yield.
     bool m_night = false;        // the sun is down (the wave clock's edge detector), saved
     bool m_timeOfDayEdited = false; // the "Time of day (h)" tweak was set by hand since the last tickWaves (a Tweak::onChange listener): no night is counted for it
     int m_nightIndex = 0;        // nights started so far, saved
     int m_nightWave = 0;         // waves launched this night (the night's build-up)
-    float m_waveScale = 1.0f;    // x the NEXT wave's budget, rolled ahead (tickWaves: the night's build-up, variation and surges)
-    int waveLevel() const;       // what sizes a wave and gates its recipe, 0-based: the night (sandbox world) or the wave
+    float m_waveScale = 1.0f;    // x the NEXT wave's budget, rolled ahead (tickWaves: the night's build-up and variation)
+    int waveLevel() const;       // what sizes a wave, 0-based: the night (by day the coming one)
     void stampLightRules();      // authority, per frame: the runtime unit / structure params the light rules own
     float daylight() const;      // 0 = night .. 1 = full day (a smooth step over the sun's height); 1 outside the sandbox world
     // THE BEACON (the sandbox world, every instance): the Base's power drives the cloud hole - the clouds' VORTEX, centred
@@ -688,7 +657,6 @@ private:
     struct BeaconSaved { bool vortexEnabled; float centreXKm, centreZKm, strength, spin, coverage, coverageVariation, macroVariation, eyeScale, lightIntensity; glm::vec3 lightColor; } m_beaconSaved{};
     float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):
                                          // each spawned unit spends its type's cost (waveCostOf)
-    float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
     // The blob's radius, sized ONCE per wave in queueWave so the AREA scales with the wave's
     // expected BODY COUNT (see waveSpawnRadius) - a big wave gets room instead of stacking bodies
@@ -704,8 +672,7 @@ private:
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Waves are sized in BUDGET POINTS ("Game/Coop" settings), each type at its own cost.
     float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
-    float nightAverageScale() const;  // the sandbox world: a night's average wave power over its base (the next night's base grows by it)
-    float nightWaveInterval() const;  // the sandbox world: seconds between two waves = the night's length / "Waves per night"
+    float nightWaveInterval() const;  // seconds between two waves = the night's length / "Waves per night"
     float waveCostOf(ENpcType t) const { return glm::max(m_settings.waveCost[(int)t], 0.1f); }
     // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" -
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.
@@ -755,10 +722,9 @@ private:
 // GameMatch's bodies are split by topic:
 //   Match.cpp        construction, spawnWorld, the three frame entry points, the nav feed, the
 //                    player ticks (melee, healing), the HUD, the sandbox world's Base site + nodes
-//   MatchMap.cpp     the generated terrain: the co-op grid, the PvP arenas, rocks/nodes, the
-//                    per-team Base anchors
-//   MatchCoop.cpp    the co-op director: waves, the spawn trickle, the ambient wander, the trickle
-//                    save state
+//   MatchMap.cpp     the PvP arenas: the rock grid, rocks/nodes, the per-team Base anchors
+//   MatchCoop.cpp    the co-op director: waves, the spawn trickle, the trickle save state, the light rules, the
+//                    Beacon, the fog, the faction layer, the outposts, lightning
 //   MatchNet.cpp     teams, the join replay, every game event (send + handle), the requests
 //   MatchSave.cpp    F9/F10 save/load + the profiling scenario
 //   MatchInput.cpp   the hotbar, the interaction modes, placement, selection, orders
@@ -766,25 +732,20 @@ private:
 // Everything more than one of them reads is declared here.
 inline constexpr float c_corridorHalfLength = 65.0f; // Lane/Wide/Chokepoints x extent of the play area
 inline constexpr float c_corridorHalfWidth = 20.0f;  // Lane z extent
-// The CO-OP map: a big square centred on the shared Base - impassable rock terrain over a coarse
-// cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see MatchMap.cpp). The ground
-// plane (ground.pre) is 600 m, so ±300 is the hard edge; waves spawn in the open ring BETWEEN the
-// barrier and the ground edge and walk in through it (the barrier's collider only matches the
-// Player layer).
-inline constexpr float c_coopHalfSize = 270.0f;
-inline constexpr float c_coopGroundEdge = 296.0f;    // spawn clamp just inside the 600 m ground
+inline constexpr float c_waveRadiusMax = 300.0f; // the largest wave blob (waveSpawnRadius)
 // The 12 hotbar slots' key captions: QWER / ASDF / ZXCV, row-major (see MatchInput.cpp).
 inline constexpr oc::string_view c_gridKeyLabels[12] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
 // The same slots on the number row (the sandbox world: WASD walk the third-person player).
 inline constexpr oc::string_view c_gridNumberKeyLabels[12] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
-// The sandbox world's BUILD BAR (one row): three page tabs (no key), then nine item slots on the number row.
-inline constexpr int c_buildBarTabs = 3;
-inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+// The sandbox world's BUILD BAR (one row): the open page's items on the number row (slot k = key k + 1), and the page
+// TABS in the HUD's tab strip over it (GameHud::setTabs; click, or Tab / Shift+Tab).
+inline constexpr int c_buildBarTabs = 5; // the pages
+inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
 // 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL", "CANN", "AMMO", "AMST" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

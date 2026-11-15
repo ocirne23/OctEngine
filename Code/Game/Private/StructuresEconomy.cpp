@@ -149,8 +149,8 @@ float StructureSystem::investMaterials(const Ref& s, float amount, float repairH
     // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp - the same price builds a
     // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
     // against the COMPONENT's healthMax (cables are softer than buildings).
-    if (amount <= 0.0f || (!isPlaceableType(s.type) && s.type != EStructureType::Base))
-        return 0.0f; // the Base is never placed, but it repairs at its m_settings.costs entry like the rest
+    if (amount <= 0.0f || !isRepairableType(s.type))
+        return 0.0f; // the Base and the ship's rail are never placed, but they repair at their m_settings.costs entry like the rest
     const float healthMax = glm::max(s.state->healthMax, 1e-3f);
     const float materialsPerHp = glm::max(m_settings.costs[(int)s.type], 0.01f) / healthMax;
     // A REPAIR has a health rate of its own (repairHealCap): by the stone price alone, a cheap structure with much
@@ -208,7 +208,8 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         const Ref& s = m_frame[i];
-        if (s.state->team != team)
+        // A type stone does not build would take nothing: as the nearest it would stall the hut for good.
+        if (s.state->team != team || !isRepairableType(s.type))
             continue;
         // The Base is never a blueprint, but it IS repairable now that it takes damage.
         const bool wantsMaterials = s.state->blueprint
@@ -284,6 +285,25 @@ void StructureSystem::tickProduction(float deltaSec)
             s.store[2] = glm::min(s.store[2] + m_settings.fabricatorMineralsPerSec * staff * dt, s.capacity[2]);
         else if (ref.type == EStructureType::Base)
             s.store[2] = glm::min(s.store[2] + m_settings.mineralRate * m_settings.baseIncomeMult * dt, s.capacity[2]);
+        else if (ref.type == EStructureType::AmmoWorks)
+        {
+            // THE AMMO WORKS packs stone (by carrier) and light (its light link) into MUNITIONS in its own buffer, at
+            // "Ammo works munitions/s" x its staffing; short of either input it makes what they pay for. Full = it stalls.
+            // powered = it made munitions this tick (or it is full).
+            const float room = glm::max(s.capacity[GoodMunitions] - s.store[GoodMunitions], 0.0f);
+            float make = glm::min(m_settings.ammoRate * staff * dt, room);
+            if (m_settings.ammoStonePer > 0.0f)
+                make = glm::min(make, s.store[2] / m_settings.ammoStonePer);
+            if (m_settings.ammoLightPer > 0.0f)
+                make = glm::min(make, s.store[0] / m_settings.ammoLightPer);
+            make = glm::max(make, 0.0f);
+            s.store[GoodMunitions] += make;
+            s.store[2] = glm::max(s.store[2] - make * m_settings.ammoStonePer, 0.0f);
+            s.store[0] = glm::max(s.store[0] - make * m_settings.ammoLightPer, 0.0f);
+            if (dt > 1e-9f)
+                m_useRateTotal += make * m_settings.ammoLightPer / dt;
+            s.powered = make > 0.0f || room <= 1e-3f;
+        }
 
         // ---- producers: generators burn their OWN tank into their OWN buffer (full buffer =
         // export-limited = no fuel burn), solar trickles for free. (The Base's own generation is with its field, below.)
@@ -378,6 +398,8 @@ void StructureSystem::tickProduction(float deltaSec)
             s.powered = s.store[0] > 0.01f;
             continue;
         }
+        if (ref.type == EStructureType::AmmoWorks)
+            continue; // powered by the income above (it made munitions)
         if (draw <= 0.0f && ref.type != EStructureType::Fabricator)
         {
             // Nothing to pay: a production building (it runs on workers) counts as working.
@@ -456,7 +478,10 @@ void StructureSystem::tickDamage(float)
             GameStructureComponent& c = *s.state;
             c.blueprint = true;
             c.health = glm::max(c.healthMax * (1.0f - glm::clamp(m_settings.rubbleCost, 0.0f, 1.0f)), 1.0f);
-            c.store[0] = c.store[1] = c.store[2] = 0.0f;
+            if (s.type == EStructureType::AmmoStore && c.store[GoodMunitions] >= 1.0f)
+                ammoBlast(s); // its munitions go up
+            for (float& store : c.store)
+                store = 0.0f;
             c.powered = false;
             setRubble(s, true);
             m_linksDirty = true; // what it joined is no longer joined
@@ -464,8 +489,181 @@ void StructureSystem::tickDamage(float)
             continue;
         }
         Log::info(oc::string(structureTypeName(s.type)) + " destroyed");
+        if (s.type == EStructureType::AmmoStore && !s.state->blueprint && s.state->store[GoodMunitions] >= 1.0f)
+            ammoBlast(s);
         destroyStructureAt(i);
     }
+}
+
+// THE CANNONS (authority). A built Cannon is MANNED while a worker of its crew stands at the gun (Ref::crewAtGun,
+// Carriers.cpp): only then it reloads (at "Crew" at the gun the full rate, with fewer the reload is that much slower),
+// looks for a target and turns. Every 0.2 s it looks for the nearest enemy unit (a SHADOW too) in its arc - within "Arc (deg)" /
+// 2 of its placed facing, between "Min range" and "Range" (planar) - and its gun turns toward it at "Turn rate (deg/s)".
+// It fires when the gun points at the target (within 3 degrees), its reload is done and it holds a munition: a LOB with
+// a flight time of the distance / "Shot speed" (at least 1 s, so even a near target gets a high arc over the wall in
+// front), the vertical speed solved for the gravity so the shell comes down on the target's spot. The match spawns it
+// (cannonShots). With the carriers off ("Game/Carriers" "Enabled") there are no crews: every cannon is manned.
+void StructureSystem::tickCannons(float deltaSec)
+{
+    ProfileScope scope("Structures cannons", EProfileCategory::Game);
+    const float range = glm::max(m_settings.cannonRange, 1.0f);
+    const float minRange = glm::clamp(m_settings.cannonMinRange, 0.0f, range * 0.9f);
+    const float halfArc = glm::radians(glm::clamp(m_settings.cannonArcDeg, 1.0f, 360.0f) * 0.5f);
+    const float cosHalfArc = std::cos(halfArc);
+    const float gravity = glm::max(-Globals::settings.physics.gravity.y, 0.1f);
+    const int crewFull = glm::max(m_settings.cannonCrew, 1);
+    constexpr float c_muzzleHeight = 0.55f, c_muzzleOut = 1.65f; // the barrel's mouth over / ahead of the origin (cannon.pre's Mouth)
+    constexpr float c_seekSeconds = 0.2f, c_aimTolerance = 0.05f; // (radians: ~3 degrees)
+    for (Ref& ref : m_frame)
+    {
+        if (ref.type != EStructureType::Cannon)
+            continue;
+        GameStructureComponent& s = *ref.state;
+        const int manned = m_settings.carriers ? glm::min((int)ref.crewAtGun, crewFull) : crewFull;
+        if (s.blueprint || manned == 0)
+        {
+            ref.cannonHasTarget = false;
+            continue;
+        }
+        ref.cannonReload = glm::max(ref.cannonReload - deltaSec * (float)manned / (float)crewFull, 0.0f);
+        const glm::quat facing = cannonFacingRot(ref);
+        const glm::vec3 pos = ref.entity->pos;
+        ref.cannonSeek -= deltaSec;
+        if (ref.cannonSeek <= 0.0f)
+        {
+            ref.cannonSeek = c_seekSeconds;
+            const glm::vec3 fwd3 = facing * glm::vec3(0.0f, 0.0f, -1.0f); // an entity's forward is -Z
+            const glm::vec2 fwd = glm::length(glm::vec2(fwd3.x, fwd3.z)) > 1e-4f ? glm::normalize(glm::vec2(fwd3.x, fwd3.z)) : glm::vec2(0.0f, -1.0f);
+            Entity* target = nullptr;
+            float bestDistSq = range * range;
+            Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), range, SpatialLayer_Render, [&](uint64 user)
+            {
+                Entity* other = reinterpret_cast<Entity*>(user);
+                const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
+                if (!u || u->puppet || u->team == s.team || !u->alive()) // (a shadow too: the shell hurts it - HitsShadows)
+                    return;
+                const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+                const float distSq = glm::dot(d, d);
+                if (distSq >= bestDistSq || distSq < minRange * minRange)
+                    return;
+                if (glm::dot(d, fwd) < cosHalfArc * std::sqrt(distSq))
+                    return; // outside the arc
+                bestDistSq = distSq;
+                target = other;
+            });
+            ref.cannonHasTarget = target != nullptr;
+            if (target)
+            {
+                ref.cannonTargetPos = target->pos;
+                const glm::vec3 local = glm::inverse(facing) * (target->pos - pos); // the bearing in the facing's frame
+                ref.cannonAimGoal = glm::clamp(std::atan2(-local.x, -local.z), -halfArc, halfArc);
+            }
+        }
+        turnCannon(ref, deltaSec);
+        if (!ref.cannonHasTarget || ref.cannonReload > 0.0f || s.store[GoodMunitions] < 1.0f
+            || glm::abs(ref.cannonAimGoal - ref.cannonAim) > c_aimTolerance)
+            continue;
+        const glm::vec3 aimed3 = ref.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f); // the gun as it points now
+        const glm::vec2 fwd = glm::length(glm::vec2(aimed3.x, aimed3.z)) > 1e-4f ? glm::normalize(glm::vec2(aimed3.x, aimed3.z)) : glm::vec2(0.0f, -1.0f);
+        const glm::vec3 muzzle = pos + glm::vec3(fwd.x * c_muzzleOut, c_muzzleHeight, fwd.y * c_muzzleOut);
+        const glm::vec3 aim = ref.cannonTargetPos;
+        const glm::vec2 flat(aim.x - muzzle.x, aim.z - muzzle.z);
+        const float dist = glm::length(flat);
+        // THE FLIGHT TIME: the distance / "Shot speed", at least 1 s, and long enough for a launch at least 45 degrees up
+        // (vertical >= horizontal: dy + g t^2 / 2 >= dist), so the shell climbs steeply out of the muzzle. A cannon on a
+        // walkway deck has its muzzle only ~0.65 m over the wall in front.
+        const float rise = aim.y - muzzle.y;
+        float time = glm::max(glm::max(dist / glm::max(m_settings.cannonShotSpeed, 1.0f), 1.0f),
+            std::sqrt(glm::max(2.0f * (dist - rise) / gravity, 0.0f)));
+        // THE CLEARANCE: the arc's first c_clearDist metres (the shell's lowest point: its radius under the path) tested
+        // against the static world - walls, gates, buildings, the terrain. Blocked: a higher lob (a longer flight), a few
+        // tries; still blocked, it fires the highest one.
+        // THE START: the shell begins c_launchAhead metres ALONG ITS OWN ARC from the mouth (the place and the speed it
+        // would have there), so the wall or the ship's rail right in front of the barrel is behind it already. The arc is
+        // the same: it still comes down on the target. The muzzle flash shows there (cannonShell.pre MuzzleFlash).
+        constexpr float c_clearDist = 5.0f, c_shellRadius = 0.35f, c_launchAhead = 1.0f;
+        const uint64 clearMask = PhysicsLayers::bit("Default") | PhysicsLayers::bit("Gate") | PhysicsLayers::bit("Terrain");
+        glm::vec2 horizontal(0.0f);
+        float vertical = 0.0f, startTime = 0.0f;
+        const auto arcAt = [&](float t) { return muzzle + glm::vec3(horizontal.x * t, vertical * t - 0.5f * gravity * t * t, horizontal.y * t); };
+        for (int attempt = 0; attempt < 5; ++attempt, time *= 1.3f)
+        {
+            horizontal = dist > 1e-3f ? flat / time : glm::vec2(0.0f);
+            vertical = (rise + 0.5f * gravity * time * time) / time;
+            startTime = glm::min(c_launchAhead / glm::max(glm::length(glm::vec3(horizontal.x, vertical, horizontal.y)), 0.1f), time * 0.25f);
+            const float clearTime = glm::min(c_clearDist / glm::max(glm::length(horizontal), 0.1f), time * 0.5f);
+            bool blocked = false;
+            const glm::vec3 low(0.0f, c_shellRadius, 0.0f);
+            glm::vec3 prev = arcAt(startTime) - low;
+            constexpr int c_steps = 4;
+            for (int k = 1; k <= c_steps && !blocked; ++k)
+            {
+                const glm::vec3 next = arcAt(startTime + clearTime * (float)k / c_steps) - low;
+                blocked = Globals::physics.castRayClosest(prev, next - prev, clearMask, nullptr, true).hit;
+                prev = next;
+            }
+            if (!blocked)
+                break;
+        }
+        m_cannonShots.push_back({ arcAt(startTime), glm::vec3(horizontal.x, vertical - gravity * startTime, horizontal.y), s.team });
+        s.store[GoodMunitions] -= 1.0f;
+        ref.cannonReload = glm::max(m_settings.cannonFireInterval, 0.1f);
+    }
+}
+
+// A Cannon's stand in the cell of `snappedGround`: the top of a road piece (the Road, the Bridge) or of a walkway DECK
+// there. False = nothing to stand on: the ground.
+bool StructureSystem::cannonStandY(const glm::vec3& snappedGround, float& outY) const
+{
+    const int cx = (int)std::floor(snappedGround.x / GridCellSize), cz = (int)std::floor(snappedGround.z / GridCellSize);
+    const auto it = m_cells.find(cellKey(cx, cz));
+    const int index = it != m_cells.end() ? structureIndexById(it->second.id) : -1;
+    if (index < 0)
+        return false;
+    const Ref& r = m_frame[index];
+    if (r.type == EStructureType::Walkway && r.walkDir < 0) // the deck (or a walkway blueprint: its deck to come)
+    {
+        outY = r.entity->pos.y - spawnHeightOf(r.type) + WalkwayDeckHeight;
+        return true;
+    }
+    if (r.type == EStructureType::CableConveyor || r.type == EStructureType::Bridge)
+    {
+        outY = r.entity->pos.y - spawnHeightOf(r.type) + 0.05f;
+        return true;
+    }
+    return false;
+}
+
+// THE AMMO STORE'S BLAST: a store destroyed with munitions in it explodes. Radius and damage scale with what it held
+// (a full store: "Blast radius (m)" and "Blast damage"; the radius from 40 % up, the damage from 25 % up), and fall off
+// linearly to half at the edge. It hurts units of EVERY team (player capsules through their damage inbox) and every
+// building in it, its own team's too. Authority only (it runs in the death sweep); the match shows the flash.
+void StructureSystem::ammoBlast(const Ref& s)
+{
+    const float fill = glm::clamp(s.state->store[GoodMunitions] / glm::max(s.state->capacity[GoodMunitions], 1.0f), 0.0f, 1.0f);
+    const float radius = m_settings.ammoBlastRadius * (0.4f + 0.6f * std::sqrt(fill));
+    const float damage = m_settings.ammoBlastDamage * (0.25f + 0.75f * fill);
+    if (radius <= 0.1f || damage <= 0.0f)
+        return;
+    const glm::vec3 centre = s.entity->pos;
+    const auto falloff = [&](const glm::vec3& p)
+    {
+        const float d = glm::distance(glm::vec2(p.x, p.z), glm::vec2(centre.x, centre.z));
+        return d > radius ? 0.0f : 1.0f - 0.5f * d / radius;
+    };
+    Globals::spatialIndex.forEachInSphere(glm::dvec3(centre), radius, SpatialLayer_Render, [&](uint64 user)
+    {
+        Entity* other = reinterpret_cast<Entity*>(user);
+        if (GameUnitComponent* u = getComponent<GameUnitComponent>(other); u && u->alive())
+            if (const float k = falloff(other->pos); k > 0.0f)
+                u->damage(damage * k);
+    });
+    for (const Ref& r : m_frame)
+        if (r.state != s.state && !isCableOrCrossing(r.type))
+            if (const float k = falloff(r.entity->pos); k > 0.0f)
+                r.state->damage(damage * k);
+    m_blasts.push_back({ centre, radius });
+    Log::info(oc::format("Ammo store blew up: {:.0f} damage within {:.1f} m", damage, radius));
 }
 
 // The rubble flag and what follows from it on every instance: the COLLIDER - rubble is walked over (a body-command:

@@ -501,8 +501,13 @@ faceted shape stays readable with no lighting): HDR, and the bloom takes it.
 * **The lit shaders are untouched** (no emissive term, no register): a lit pipeline draws such a material as its
   plain colour. So a glowing piece must be a node of a container with `PipelineIdx UnlitOpaque` (`eyes.oc`,
   `gemsGlow.oc`), authored `Color r g b` + `Emissive s` in its `Component Render`.
-* No other pass tests for the Emissive alpha mode: they see an opaque material. Those two containers are out of ray
-  tracing (`ExcludeFromRayTracing`), so a glowing piece casts no shadow and lights nothing - it is a look, not a light.
+* No other pass tests for the Emissive alpha mode: they see an opaque material. A glowing piece is OUT OF RAY TRACING
+  and casts no sun shadow - a look, not a light: the emissive solid colour carries `MATERIAL_FLAG_NO_RAYTRACING` itself,
+  because the tint REPLACES the container's material (and with it the container's `ExcludeFromRayTracing`). A plain
+  tint keeps its shadows. A light placed inside a glowing piece (the cannon shell's) is therefore not blocked by it.
+  `getOrCreateSolidColorMaterial` builds the row in ONE initializer. Tried: `material.flags |= NO_RAYTRACING` inside an
+  `if` after the plain fields - in the RelWithDebInfo build the flag never reached the table (the alpha mode and the
+  strength from the same `if` did), seen with a runtime probe.
 
 ---
 

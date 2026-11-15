@@ -3,7 +3,7 @@
 # Spawned with its feet on the road.
 # SHAPE (a placeholder; uniform scales): a tunic (the root), a head, and the LOAD it holds in FRONT of its body
 # (-Z: an entity's forward is -Z). The load is the SECOND child: tickCarriers shows it only while the walker
-# carries one on foot. The children after it are the CART of a transport trip (see below).
+# carries one on foot. The children after it are the CART of a transport trip (see below), then the munitions crystal.
 # CullMode RootOnly: the root culls for the head and the load. With an entry of its own, a load that was hidden when
 # the walker left its house would keep that entry at the house, and the pass would not visit it when it is shown.
 Prefab gameCarrier
@@ -83,3 +83,15 @@ Prefab gameCarrier
 				Color 0.4 0.28 0.16
 				Rotation 90 0 0
 				Scale 0.06
+		# THE MUNITIONS (the EIGHTH child, index 7): a light charge held in front, shown INSTEAD of the Pack while the
+		# load is munitions (tickCarriers).
+		Entity
+			Name AmmoLoad
+			Position 0 0.68 -0.36
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3
+				Scale 0.16

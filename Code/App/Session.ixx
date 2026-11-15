@@ -276,11 +276,6 @@ public:
                     return Globals::trees.surveyHarvest(glm::vec2(x, z), radius, visit, user);
                 });
         }
-        uint32 mapSeed;
-        float mapFill;
-        int mapLanes;
-        if (startCoop && m_lobby.hostMapSettings(mapSeed, mapFill, mapLanes))
-            m_game->setMapSettings(mapSeed, mapFill, mapLanes);
         uint8 numTeams;
         oc::vector<oc::pair<uint32, uint8>> teamPicks;
         if (!startCoop && m_lobby.teamSettings(numTeams, teamPicks))
@@ -573,7 +568,7 @@ private:
             // Co-op in the sandbox world plays third person - the view reaches the horizon - so it keeps the WHOLE
             // world: the seeded area only came first. The ring goes back to its size, the generated bounds come off
             // and the models stay, so the chunks past the area generate live like the sandbox's.
-            const bool fullWorld = m_lobby.coop() && Globals::settings.game.match.coopSandboxWorld;
+            const bool fullWorld = m_lobby.coop();
             if (m_worldSeeded && fullWorld)
             {
                 TweakRegistry::get().setOverride(oc::format("Terrain/Range (chunks)={}", m_ringRadiusBeforeSeed));

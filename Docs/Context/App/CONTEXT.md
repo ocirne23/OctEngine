@@ -87,7 +87,7 @@ Parsed by `parseCommandLine` (Session.ixx); an unknown argument logs a warning.
 | Flag | Effect |
 |---|---|
 | `--game` | The whitebox game instead of the testbed scene. **Ignored with a headless server** — GPU field readbacks drive the authority sim. |
-| `--coop` | Co-op. **Needs `--game`**; clients pass it too, since the layout is local. The sandbox world by default; `--tweak "Game/Coop/Sandbox world=0"` for the generated map, `"Game/Coop/Spawn enemies=1"` for enemies. |
+| `--coop` | Co-op in the sandbox world. **Needs `--game`**; clients pass it too, since the layout is local. `--tweak "Game/Coop/Spawn enemies=0"` for a game without waves. |
 | `--sandbox` | Skips the main menu and boots straight into the sandbox (`startWorldAndGame(false, ...)`). Ignored with `--game`. |
 | `--server` / `--connect <ip>` / `--port N` (default 27888) / `--tickrate N` (10..240, default 60; the headless tick) / `--headless` (only with `--server`) / `--no-encrypt` | |
 | `--scenario <save\|default>` / `--scenario-at <sec>` (default 1) | Runs `GameMatch::runScenario` once; needs `--game`. |

@@ -6,7 +6,10 @@
 #ifndef HASH_GRID_INC_GLSL
 #define HASH_GRID_INC_GLSL
 
-#define GRID_SIZE 32
+// THE LIGHT GRID's size (getGridPos; the force grid has its own cell size). 64 m: a light with a reach up to half of it
+// (32 m - every game light but the player's, the Searchlight, the big fields and the long beams) is a per-cell light,
+// not a LARGE one. MIRRORED in LightGridComputePipeline.cpp.
+#define GRID_SIZE 64
 
 uint getPositionHash(ivec3 p)
 {

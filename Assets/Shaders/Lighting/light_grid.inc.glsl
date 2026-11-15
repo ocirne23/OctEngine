@@ -14,8 +14,8 @@ uint getLightId(uint cellOffset, uint lightIdx);
 uint getLargeLightCount(uint gridIdx);
 uint getLargeLightId(uint gridIdx, uint lightIdx);
 
-#define MAX_LARGE_LIGHTS_PER_GRID 14 // Must be even
-#define MAX_LIGHTCELL_LIGHTS 16      // Must be even
+#define MAX_LARGE_LIGHTS_PER_GRID 30 // Must be even. Past it a grid drops the rest of its large lights
+#define MAX_LIGHTCELL_LIGHTS 24      // Must be even. Past it a cell drops the rest of its lights
 #define GRID_HEADER_SIZE (4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1)) // uints before the cells
 // LightGridComputePipeline.cpp mirrors these three constants and the layout below: keep them in sync.
 
