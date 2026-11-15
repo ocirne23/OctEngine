@@ -1,0 +1,76 @@
+# THE SHIP'S RAIL (Entities/Game/shipRail.pre): one piece of the ship's wall along one edge of a 2 m deck tile, 1 m
+# tall, 0.4 m thick. Centred meshes (the prefab moves them to the tile's edge): RailX runs along X, RailZ along Z.
+# RailSill: the tile's plate under the rail (5 cm over the deck; the structure's own mesh - the units find a structure
+# by its mesh). GangwayStep: one step of the stairs out of an entrance tile (gangwayStep.pre): 0.5 m deep (along X), 2 m wide,
+# its top at the origin and 1 m deep under it. Hand-written boxes: 1 +X  2 -X  3 +Y  4 -Y  5 +Z  6 -Z
+vt 0.5 0.5
+vn 1 0 0
+vn -1 0 0
+vn 0 1 0
+vn 0 -1 0
+vn 0 0 1
+vn 0 0 -1
+v -1 -0.5 -0.2
+v 1 -0.5 -0.2
+v 1 -0.5 0.2
+v -1 -0.5 0.2
+v -1 0.5 -0.2
+v 1 0.5 -0.2
+v 1 0.5 0.2
+v -1 0.5 0.2
+v -0.2 -0.5 -1
+v 0.2 -0.5 -1
+v 0.2 -0.5 1
+v -0.2 -0.5 1
+v -0.2 0.5 -1
+v 0.2 0.5 -1
+v 0.2 0.5 1
+v -0.2 0.5 1
+v -1 -0.5 -1
+v 1 -0.5 -1
+v 1 -0.5 1
+v -1 -0.5 1
+v -1 -0.45 -1
+v 1 -0.45 -1
+v 1 -0.45 1
+v -1 -0.45 1
+v -0.25 -1 -1
+v 0.25 -1 -1
+v 0.25 -1 1
+v -0.25 -1 1
+v -0.25 0 -1
+v 0.25 0 -1
+v 0.25 0 1
+v -0.25 0 1
+
+o RailX
+f 5/1/3 8/1/3 7/1/3 6/1/3
+f 1/1/4 2/1/4 3/1/4 4/1/4
+f 2/1/1 6/1/1 7/1/1 3/1/1
+f 1/1/2 4/1/2 8/1/2 5/1/2
+f 4/1/5 3/1/5 7/1/5 8/1/5
+f 1/1/6 5/1/6 6/1/6 2/1/6
+
+o RailZ
+f 13/1/3 16/1/3 15/1/3 14/1/3
+f 9/1/4 10/1/4 11/1/4 12/1/4
+f 10/1/1 14/1/1 15/1/1 11/1/1
+f 9/1/2 12/1/2 16/1/2 13/1/2
+f 12/1/5 11/1/5 15/1/5 16/1/5
+f 9/1/6 13/1/6 14/1/6 10/1/6
+
+o RailSill
+f 21/1/3 24/1/3 23/1/3 22/1/3
+f 17/1/4 18/1/4 19/1/4 20/1/4
+f 18/1/1 22/1/1 23/1/1 19/1/1
+f 17/1/2 20/1/2 24/1/2 21/1/2
+f 20/1/5 19/1/5 23/1/5 24/1/5
+f 17/1/6 21/1/6 22/1/6 18/1/6
+
+o GangwayStep
+f 29/1/3 32/1/3 31/1/3 30/1/3
+f 25/1/4 26/1/4 27/1/4 28/1/4
+f 26/1/1 30/1/1 31/1/1 27/1/1
+f 25/1/2 28/1/2 32/1/2 29/1/2
+f 28/1/5 27/1/5 31/1/5 32/1/5
+f 25/1/6 29/1/6 30/1/6 26/1/6

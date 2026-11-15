@@ -15,6 +15,7 @@ import Settings;
 import :GameCamera;
 import :Faction;
 import :Player;
+import :Ship;
 import :Structures;
 import :Npc;
 import :Sound;
@@ -196,6 +197,8 @@ private:
         EStructureType type = EStructureType::Emitter;
         float yield = 1.0f; // Lumberyard / Quarry: the survey's yield at pos (m_harvestProbe); affordable only once it is known
         StructureSystem::EGroundFit ground = StructureSystem::EGroundFit::Ok; // the sandbox world's ground test
+        bool ship = false;         // the aim is on the ship's deck: local is the snapped ship-local ground point
+        glm::vec3 local{ 0.0f };
     };
     // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W open
     // the build categories (Combat/Production), A/S/D arm a cable straight from the root page,
@@ -224,7 +227,9 @@ private:
     bool fitGround(EStructureType type, glm::vec3& p, const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) const;
     StructureSystem::EGroundFit m_frameGroundFit = StructureSystem::EGroundFit::Ok; // this frame's refused ghost
     StructureSystem::EGroundFit m_shownGroundFit = StructureSystem::EGroundFit::Ok; // what the HUD line shows
-    bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
+    // Cursor ray vs colliders/ground plane. The sandbox world: the SHIP's deck when the ray meets it before the terrain
+    // (onDeck set; outPos on the deck top).
+    bool aimGroundPoint(const Camera& camera, glm::vec3& outPos, bool* onDeck = nullptr) const;
     void refreshBuildHotbar(); // repopulates slot labels/counts/hover cards for the current grid level
     // The hotbar hover cards, one per structure type: rebuilt once a REAL second (the tweaks they
     // quote are live, but nobody drags one 60 times a second) - see refreshBuildHotbar.
@@ -290,6 +295,56 @@ private:
     // calls it back. No routes, no waypoints.
     void tickFollowers(float deltaSec);
     float m_followTimer = 0.0f;
+    // THE SHIP (the sandbox world, authority): spawned LANDED by tickBaseSite with the Beacon on its deck; F at its
+    // helm takes it (WASD steer, Space / Ctrl height, L land / take off), F again lets go. tickShip runs in updatePlayer
+    // (pre-physics): the flight, the structures on the deck, then the own player's platform velocity. See
+    // Docs/Context/Game/Ship.md.
+    GameShip m_ship;
+    bool m_piloting = false;
+    bool m_shipKeyWasDown = false; // F (the ship and the rally flag)
+    // THE RALLY FLAG (the authority's own team; Docs/Context/Game/Units.md): an F TAP puts it where the crosshair aims
+    // (onFTap - when the tap is not the ship's), and every friendly barracks unit goes to it instead of following the
+    // player (tickFollowers); F HELD for a second clears it. A glowing marker stands on it (rallyFlag.pre).
+    bool m_rallyActive = false;
+    glm::vec3 m_rallyPos{ 0.0f };
+    EntityPtr m_rallyMarker;
+    double m_fPressTime = 0.0;  // real seconds at the F press
+    bool m_fHoldFired = false;  // this press already cleared the flag (its release is no tap)
+    bool m_fTapPending = false; // a tap to resolve in updateGameInput (it needs the camera's aim)
+    void onFTap(const Camera& camera);
+    void setRally(bool active, const glm::vec3& pos);
+    bool m_landKeyWasDown = false;
+    float m_helmGrace = 0.0f; // s after boarding: the teleport is queued, so "too far from the wheel" waits
+    uint32 m_shipBoxRevision = ~0u; // StructureSystem::shipRevision of the ship body's structure boxes
+    const char* m_shipNote = nullptr; // a short HUD note (why it cannot land), shown for m_shipNoteTimer s
+    float m_shipNoteTimer = 0.0f;
+    void tickShip(float deltaSec);
+    void updateShipHud();
+    // A LANDING SITE near `at` for `turns` quarter turns: the centre snapped to a tile corner, the deck top at the
+    // highest ground under the deck. nullptr = it can land there (outCentre); else why not.
+    const char* shipLandingSite(const glm::vec3& at, int turns, glm::vec3& outCentre) const;
+    void toggleShipLanding(); // L at the helm: take off, or start / cancel the LANDING PLACEMENT
+    // THE LANDING PLACEMENT (L at the helm while flying): like a building's ghost - the deck's outline on the ground at the
+    // crosshair, snapped to the grid, Q / E turn it a quarter, green where it can land (shipLandingSite), LMB lands
+    // there (the ship flies over and sets down), RMB / L cancels. THE HOME SITE (the last place it landed) pulls the
+    // ghost to it within 8 m while the turn is the home's: take off and come back to the very same spot.
+    void updateLandPlacement(const Camera& camera, bool confirmEdge, bool rmbEdge);
+    void drawShipFootprint(const glm::vec3& centre, int turns, uint32 color) const;
+    bool m_landPlacing = false;
+    int m_landPlaceTurns = 0;
+    bool m_landRotKeyWasDown[2] = {};
+    glm::vec3 m_landCacheAt{ FLT_MAX };  // the last site tested (snapped centre) + turns, and the answer
+    int m_landCacheTurns = -1;
+    glm::vec3 m_landCacheCentre{ 0.0f };
+    const char* m_landCacheWhy = nullptr;
+    bool m_hasShipHome = false;
+    glm::vec3 m_shipHome{ 0.0f };
+    int m_shipHomeTurns = 0;
+    void requestShipPlace(EStructureType type, const glm::vec3& local, float yield);
+    void drawShipGhost(EStructureType type, const glm::vec3& local, uint32 color) const;
+    // Where a wave marches: the nearest own building on the land from `origin` (one on a flying ship is out of reach),
+    // else the ground under the ship (else the Base site).
+    glm::vec3 waveTargetFrom(const glm::vec3& origin) const;
     void requestPlace(EStructureType type, const glm::vec3& pos, float yield, const glm::vec3& facing);
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
@@ -729,7 +784,7 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "", "", "", "1", "2
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

@@ -24,14 +24,16 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Crystal store", "Woodshed", "Mirror", "Stoneworks", "Great lantern", "Barracks",
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
-    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower" };
+    "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower",
+    "Ship rail" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
     0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f, // (the Wall and the Gate: 3 m tall)
     StructureSystem::WalkwayDeckHeight + 0.1f,          // the Walkway: its origin is 0.1 over the deck, like the Bridge's
     2.0f,                                               // the Armory
-    2.0f };                                             // the Mage tower
+    2.0f,                                               // the Mage tower
+    0.5f };                                             // the Ship rail (1 m over the deck)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -161,7 +163,8 @@ oc::string StructureSystem::describeType(EStructureType type) const
         break;
     case EStructureType::MedicStation:
         desc = "Heals own units and players standing in its radius.";
-        in(m_settings.medicEnergyPerSec, "light");
+        line(oc::format("Uses light only while it heals: a full heal costs {:g}x the unit's light cost",
+            Globals::settings.game.structureParams.medicHealCost));
         out_(medicHealRate(), "health", " and staff light, per body");
         range(medicHealRadius());
         break;
@@ -191,6 +194,9 @@ oc::string StructureSystem::describeType(EStructureType type) const
         line(oc::format("Up to {} mages", m_settings.mageCount));
         line(oc::format("A mage: {:g} damage/s to each demon in its cone, {:g} m", m_settings.mageDps, m_settings.mageRange));
         range(m_settings.armoryRange);
+        break;
+    case EStructureType::ShipRail:
+        desc = "The ship's wall. While the ship is landed demons can break it; repair it like any building.";
         break;
     case EStructureType::CablePower:
     case EStructureType::CablePipe:
@@ -448,6 +454,7 @@ void StructureSystem::clear()
     m_demolishRequests.clear();
     m_routeRequests.clear();
     m_cells.clear();
+    clearGangways();
     joinTransport();
     m_net = TransportNet{};
     m_savedFills.clear();
@@ -538,18 +545,22 @@ bool StructureSystem::shareHarvest(bool lumber, oc::span<const glm::vec2> yards,
         return true;
     // Every record of every circle, with the yard that saw it; then one entry per record with all its yards.
     struct Item { uint64 key; float amount; uint64 mask; };
-    struct Visit { oc::vector<Item>* items; uint64 bit; bool lumber; };
+    // THE SIZE COUNTS: a record's amount is (its size / the reference) ^ "Harvest size exponent" - a tree's size relative
+    // to the world's average tree (the source gives it), a rock's longest axis over "Harvest reference rock (m)". So one
+    // average tree or one reference rock counts 1, and a big one far more (x 4 at twice the size with the exponent 2).
+    struct Visit { oc::vector<Item>* items; uint64 bit; bool lumber; float exponent; float rockRef; };
     oc::vector<Item> items;
     const float radius = m_settings.harvestRadius;
     for (int y = 0; y < count; ++y)
     {
-        Visit visit{ &items, 1ull << y, lumber };
+        Visit visit{ &items, 1ull << y, lumber, glm::max(m_settings.harvestSizeExponent, 0.0f), glm::max(m_settings.harvestRockRef, 0.1f) };
         const auto add = [](void* user, float x, float z, float wood, float stone)
         {
             const Visit& v = *static_cast<const Visit*>(user);
-            const float amount = v.lumber ? wood : stone;
-            if (amount <= 0.0f)
+            const float size = v.lumber ? wood : stone / v.rockRef;
+            if (size <= 0.0f)
                 return;
+            const float amount = std::pow(size, v.exponent);
             // The record's position is its identity (the source gives one record the same position in every survey).
             const uint64 key = ((uint64)(uint32)(int32)glm::round(x * 16.0f) << 32) | (uint64)(uint32)(int32)glm::round(z * 16.0f);
             v.items->push_back(Item{ key, amount, v.bit });
@@ -788,7 +799,12 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     refresh(); // the frame view every request/tick below works on
     ProfileScope requestScope("Structure requests", EProfileCategory::Game);
     for (const PlaceRequest& req : m_requests)
-        placeStructure(req.type, req.pos, req.yield, req.facing, req.team);
+    {
+        if (req.ship)
+            placeShipStructure(req.type, req.pos, req.yield, req.team);
+        else
+            placeStructure(req.type, req.pos, req.yield, req.facing, req.team);
+    }
     m_requests.clear();
     for (const auto& [id, team] : m_demolishRequests)
         applyDemolishRequest(id, team);

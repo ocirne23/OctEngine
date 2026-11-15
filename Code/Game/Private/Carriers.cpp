@@ -58,7 +58,23 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY) const
 {
     const auto it = m_cells.find(cellKey(cx, cz));
     if (it == m_cells.end())
+    {
+        // THE LANDED SHIP's free deck tiles are road (at the deck top), so a road up to an entrance in its rail joins
+        // the deck: the workers walk on and off, and every building on the deck is on the road.
+        if (worldCellOnDeck(cx, cz))
+        {
+            outY = m_shipPos.y + 0.25f;
+            return true;
+        }
+        if (m_gangwayRoad.empty())
+            return false;
+        if (const auto g = m_gangwayRoad.find(cellKey(cx, cz)); g != m_gangwayRoad.end()) // its stairs down to the ground
+        {
+            outY = g->second;
+            return true;
+        }
         return false;
+    }
     for (const uint32 id : { it->second.id, it->second.underId })
     {
         if (id == 0)
@@ -67,6 +83,11 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY) const
         if (index < 0 || m_frame[index].state->blueprint)
             continue;
         const EStructureType type = m_frame[index].type;
+        if (type == EStructureType::ShipRail && m_frame[index].onShip && m_shipJoined) // the landed ship's rail tile: walked on, at the deck top
+        {
+            outY = m_shipPos.y + 0.25f;
+            return true;
+        }
         if (cableMediumOf(type) == 2 || type == EStructureType::CrossingConveyor) // the Road, the Bridge, the road crossing
         {
             outY = m_frame[index].entity->pos.y;
@@ -86,7 +107,7 @@ bool StructureSystem::touchesRoad(int index) const
     {
         float y;
         for (const glm::ivec2& n : c_neighbours)
-            road = road || roadAt(cx + n.x, cz + n.y, y);
+            road = road || (!railEdgeBetween(cx, cz, cx + n.x, cz + n.y) && roadAt(cx + n.x, cz + n.y, y));
     });
     return road;
 }
@@ -236,6 +257,40 @@ bool StructureSystem::walkwayDeckAt(int cx, int cz) const
     return index >= 0 && m_frame[index].type == EStructureType::Walkway && !m_frame[index].state->blueprint && m_frame[index].walkDir == -1;
 }
 
+// A RAIL PIECE between two neighbour cells: one of them is a built rail tile of the landed ship whose rail runs along
+// the side they share (railWorldSides). The walkers' road search does not step across it.
+bool StructureSystem::railEdgeBetween(int ax, int az, int bx, int bz) const
+{
+    if (!m_shipJoined || (!nearDeck(ax, az) && !nearDeck(bx, bz)))
+        return false; // nowhere near the landed deck: two compares, no lookups
+    const auto sidesAt = [&](int cx, int cz) -> uint8
+    {
+        const auto it = m_cells.find(cellKey(cx, cz));
+        const int index = it != m_cells.end() ? structureIndexById(it->second.id) : -1;
+        if (index < 0 || m_frame[index].type != EStructureType::ShipRail || !m_frame[index].onShip || m_frame[index].state->blueprint)
+            return 0;
+        return railWorldSides(m_frame[index]);
+    };
+    const int dx = bx - ax, dz = bz - az;
+    const auto bit = [](int x, int z) -> uint8 { return uint8(x > 0 ? 1 : x < 0 ? 2 : z > 0 ? 4 : 8); };
+    return (sidesAt(ax, az) & bit(dx, dz)) != 0 || (sidesAt(bx, bz) & bit(-dx, -dz)) != 0;
+}
+
+// A GUARD'S HIGH PLACE: a Walkway deck, or a built RAIL tile of the LANDED SHIP (on the ship's wall; the rest of the
+// deck is plain road). A guard or a mage there needs no clear line (it shoots over the walls), and its post search
+// takes such a cell first.
+bool StructureSystem::guardDeckAt(int cx, int cz) const
+{
+    if (walkwayDeckAt(cx, cz))
+        return true;
+    if (!m_shipJoined || !nearDeck(cx, cz))
+        return false;
+    const auto it = m_cells.find(cellKey(cx, cz));
+    const int index = it != m_cells.end() ? structureIndexById(it->second.id) : -1;
+    return index >= 0 && m_frame[index].type == EStructureType::ShipRail && m_frame[index].onShip && m_shipJoined
+        && !m_frame[index].state->blueprint;
+}
+
 // An alarmed, built Armory of the team that has fewer guards than "Guards".
 bool StructureSystem::guardWanted(int index, uint8 team) const
 {
@@ -276,13 +331,14 @@ bool StructureSystem::guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self,
         const Visit cell = open[i]; // a copy: visit() grows the vector
         const glm::vec2 pos(((float)cell.cx + 0.5f) * GridCellSize, ((float)cell.cz + 0.5f) * GridCellSize);
         if (glm::dot(pos - centre, pos - centre) <= rangeSq && oc::find(taken.begin(), taken.end(), cellKey(cell.cx, cell.cz)) == taken.end())
-            if (const float score = glm::distance(pos, threat) - (walkwayDeckAt(cell.cx, cell.cz) ? 10000.0f : 0.0f); score < bestScore)
+            if (const float score = glm::distance(pos, threat) - (guardDeckAt(cell.cx, cell.cz) ? 10000.0f : 0.0f); score < bestScore)
             {
                 bestScore = score;
                 best = i;
             }
         for (const glm::ivec2& n : c_neighbours)
-            visit(cell.cx + n.x, cell.cz + n.y, i);
+            if (!railEdgeBetween(cell.cx, cell.cz, cell.cx + n.x, cell.cz + n.y))
+                visit(cell.cx + n.x, cell.cz + n.y, i);
     }
     if (best < 0)
         return false;
@@ -326,7 +382,8 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
         forEachFootprintCell(source.type, source.entity->pos, source.entity->rot, [&](int cx, int cz)
         {
             for (const glm::ivec2& n : c_neighbours)
-                visit(cx + n.x, cz + n.y, -1);
+                if (!railEdgeBetween(cx, cz, cx + n.x, cz + n.y))
+                    visit(cx + n.x, cz + n.y, -1);
         });
     }
     else
@@ -340,6 +397,8 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
         for (const glm::ivec2& n : c_neighbours)
         {
             const int cx = cell.cx + n.x, cz = cell.cz + n.y;
+            if (railEdgeBetween(cell.cx, cell.cz, cx, cz))
+                continue; // the ship's rail between them: not off the ship that way
             if (const auto it = m_cells.find(cellKey(cx, cz)); it != m_cells.end() && it->second.id != 0)
                 if (const int index = structureIndexById(it->second.id); index >= 0)
                 {
@@ -788,7 +847,7 @@ void StructureSystem::tickCarriers(float deltaSec)
             glm::vec3 victimPos;
             const glm::vec3 eyes = here + glm::vec3(0.0f, 1.3f, 0.0f);
             if (GameUnitComponent* victim = nearestEnemyUnit(here, w.mage ? m_settings.mageRange : m_settings.guardRange, team, victimPos,
-                walkwayDeckAt(hereCell.x, hereCell.y) ? nullptr : &eyes))
+                guardDeckAt(hereCell.x, hereCell.y) ? nullptr : &eyes))
             {
                 const glm::vec3 d = victimPos - here;
                 if (w.mage)

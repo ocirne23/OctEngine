@@ -1,15 +1,17 @@
-# Medic station: a powered CONSUMER ("Medic energy/s" from its own energy buffer, cable-fed) that,
-# while powered, heals the own player and own-team units inside "Medic heal radius" at "Medic
-# heal/s" (GameMatch::tickMedicHealing). A 4x2x4 m block (2x2 cells), pale green with a taller
-# white core. Spawned origin 1.0 above the ground hit.
+# Healer's hut (MedicStation): heals own-team units and the player inside "Medic heal radius". A 4x2x4 m box (2x2
+# cells), spawned origin 1.0 above the ground.
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a stone plinth (the root), white walls with timber
+# corner posts, a dark door in the -Z face with a herb bed at each side of it, a green healing cross on the +X and -X
+# faces, a stepped green roof and a green light crystal floating over its peak. The child pieces are render-only.
 Prefab gameMedicStation
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeQuarter
 		Type StaticMesh
-		Color 0.55 0.9 0.6
-		Scale 2 1 2
+		Color 0.5 0.49 0.46
+		Position 0 -0.8 0
+		Scale 1.95
 	Component Physics
 		Body Static
 		ContactEvents true
@@ -19,11 +21,149 @@ Prefab gameMedicStation
 		MeleeRadius 2
 	Component Scene
 		Entity
-			Name Core
-			Position 0 1.5 0
+			Name Walls
+			Position 0 0.4 0
 			Component Render
 				ObjectContainer baseshapes
-				Node Cube
+				Node CubeHalf
 				Type StaticMesh
-				Color 0.95 0.95 0.95
-				Scale 0.5 0.5 0.5
+				Color 0.88 0.86 0.78
+				Scale 1.5
+		Entity
+			Name PostPP
+			Position 1.5 0.25 1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.17
+				Scale 0.2
+		Entity
+			Name PostNP
+			Position -1.5 0.25 1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.17
+				Scale 0.2
+		Entity
+			Name PostPN
+			Position 1.5 0.25 -1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.17
+				Scale 0.2
+		Entity
+			Name PostNN
+			Position -1.5 0.25 -1.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.28 0.17
+				Scale 0.2
+		Entity
+			Name Door
+			Position 0 0.15 -1.42
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar2
+				Type StaticMesh
+				Color 0.3 0.2 0.12
+				Scale 0.25
+		Entity
+			Name HerbsL
+			Position -0.85 -0.25 -1.72
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.3 0.55 0.25
+				Scale 0.25
+		Entity
+			Name HerbsR
+			Position 0.85 -0.25 -1.72
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.3 0.55 0.25
+				Scale 0.25
+		Entity
+			Name CrossPV
+			Position 1.55 0.3 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.2 0.7 0.32
+				Scale 0.12
+		Entity
+			Name CrossPH
+			Position 1.55 0.38 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.2 0.7 0.32
+				Rotation 90 0 0
+				Scale 0.12
+		Entity
+			Name CrossNV
+			Position -1.55 0.3 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.2 0.7 0.32
+				Scale 0.12
+		Entity
+			Name CrossNH
+			Position -1.55 0.38 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.2 0.7 0.32
+				Rotation 90 0 0
+				Scale 0.12
+		Entity
+			Name Roof
+			Position 0 1.3 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.24 0.4 0.27
+				Scale 1.8
+		Entity
+			Name RoofMid
+			Position 0 1.75 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.21 0.35 0.24
+				Scale 1.2
+		Entity
+			Name RoofTop
+			Position 0 2.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.18 0.3 0.21
+				Scale 0.6
+		Entity
+			Name Crystal
+			Position 0 2.6 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 1 0.7
+				Emissive 3
+				Scale 0.3

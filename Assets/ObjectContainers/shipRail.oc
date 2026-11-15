@@ -1,0 +1,3 @@
+# The ship's rail pieces (Models/shipRail.obj): RailX, RailZ, RailSill (shipRail.pre), and GangwayStep (gangwayStep.pre).
+ObjectContainer shipRail
+	Path "Models/shipRail.obj"

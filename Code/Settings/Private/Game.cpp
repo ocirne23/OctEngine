@@ -47,8 +47,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Sandbox wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Start time of day (h)", &s.startTimeOfDay, -1.0f, 24.0f, 0.25f);
     Tweak::intVar("Game/Coop", "Waves per night", &s.nightWaves, 1, 100, 1);
-    Tweak::floatVar("Game/Coop", "Wave size multiplier", &s.waveSizeMult, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Game/Coop", "Night wave growth per wave", &s.nightWaveRamp, 0.0f, 2.0f, 0.05f);
+    Tweak::floatVar("Game/Coop", "Wave size multiplier", &s.waveSizeMult, 0.0f, 20.0f, 0.05f);    Tweak::floatVar("Game/Coop", "Night wave growth per wave", &s.nightWaveRamp, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Coop", "Night wave variation", &s.nightWaveVariation, 0.0f, 0.9f, 0.05f);
     Tweak::intVar("Game/Coop", "Night surge every N waves", &s.nightSurgeEvery, 0, 20, 1);
     Tweak::floatVar("Game/Coop", "Night surge size", &s.nightSurgeSize, 1.0f, 10.0f, 0.1f);
@@ -174,8 +173,10 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Structures", "Pressure draw tension", &s.pressureDrawTension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Start minerals", &s.startMinerals, 0.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Harvest radius", &s.harvestRadius, 4.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Trees for full lumberyard yield", &s.harvestTreesFull, 1.0f, 200.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Rock (m) for full quarry yield", &s.harvestStoneFull, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Trees for full lumberyard yield", &s.harvestTreesFull, 1.0f, 200.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Rocks for full quarry yield", &s.harvestStoneFull, 0.5f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Harvest size exponent", &s.harvestSizeExponent, 0.0f, 4.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Harvest reference rock (m)", &s.harvestRockRef, 0.5f, 30.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Harvest minimum yield", &s.harvestMinYield, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Economy", "Quarry minerals/s", &s.mineralRate, 0.0f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Lumberyard fuel/s", &s.fuelRate, 0.0f, 50.0f, 0.1f);
@@ -185,7 +186,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // The indices are EStructureType's (Game:StructureTypes): Emitter 0, Generator 1, Lumberyard 2, Battery 3, FuelTank 4,
     // Solar 5, Fabricator 6, Bastion 7, Barracks 8, Wall 9, Turret 10, MineralSilo 11, Constructor 12, Base 13,
     // CablePower 14, CablePipe 15, CableConveyor 16, CrossingPower 17, CrossingPipe 18, CrossingConveyor 19, House 20,
-    // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29.
+    // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29, ShipRail 30.
+    Tweak::floatVar("Game/Economy", "Ship rail repair cost", &s.costs[30], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Armory cost", &s.costs[28], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Mage tower cost", &s.costs[29], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Searchlight cost", &s.costs[26], 0.0f, 500.0f, 1.0f);
@@ -218,7 +220,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
             "Barracks health", "Wall health", "Light tower health", "Storehouse health", "Builder's hut health", "Beacon health",
             "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
-            "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health" };
+            "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health", "Ship rail health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -321,9 +323,9 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Friendlies", "Barracks unit damage (x)", &s.barracksUnitDamageMult, 0.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Friendlies", "House population", &s.housePopulation, 0, 100, 1);
     Tweak::floatVar("Game/Friendlies", "House link radius", &s.houseLinkRadius, 2.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Medic energy/s", &s.medicEnergyPerSec, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Friendlies", "Medic heal radius", &sp.medicRange, 2.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Medic heal/s", &sp.medicHealRate, 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Medic full heal cost (x unit cost)", &sp.medicHealCost, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Grunt spawn energy", &s.spawnEnergy[0], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Brute spawn energy", &s.spawnEnergy[1], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Runner spawn energy", &s.spawnEnergy[2], 0.0f, 100.0f, 0.5f);
@@ -468,8 +470,42 @@ static void registerSound(GameSoundSettings& s)
     Tweak::intVar("Game/Sound/Stats", "One-shots started/s", &s.cuesPlayed, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
 }
 
+static void registerShip(GameShipSettings& s)
+{
+    const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
+    Tweak::boolean("Game/Ship", "Enabled", &s.enabled);
+    Tweak::floatVar("Game/Ship", "Thrust (m/s2)", &s.thrust, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Throttle rate (/s)", &s.throttleRate, 0.05f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Max speed (m/s)", &s.maxSpeed, 1.0f, 80.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Side drag (/s)", &s.sideDrag, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Turn rate (deg/s)", &s.turnRate, 1.0f, 90.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Turn accel (deg/s2)", &s.turnAccel, 0.5f, 90.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Turn drag (/s)", &s.turnDrag, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Min height (m)", &s.minHeight, 0.5f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Max height (m)", &s.maxHeight, 1.0f, 300.0f, 1.0f);
+    Tweak::floatVar("Game/Ship", "Climb rate (m/s)", &s.climbRate, 0.5f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Vertical stiffness", &s.verticalStiffness, 0.05f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Vertical damping", &s.verticalDamping, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Max vertical accel (m/s2)", &s.maxVerticalAccel, 0.1f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Look ahead (s)", &s.lookAhead, 0.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Deep water (m)", &s.deepWater, 0.5f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Sea speed (x)", &s.seaSpeedMult, 0.05f, 2.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Freeboard (m)", &s.freeboard, -5.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Sea stiffness", &s.seaStiffness, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Sea damping", &s.seaDamping, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Wave follow (x)", &s.waveFollow, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Bank per turn", &s.bankPerTurn, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Ship", "Max bank (deg)", &s.maxBank, 0.0f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Pitch per accel", &s.pitchPerAccel, 0.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Max pitch (deg)", &s.maxPitch, 0.0f, 20.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Bob height (m)", &s.bobHeight, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Bob period (s)", &s.bobPeriod, 0.5f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Ship", "Camera distance (m)", &s.cameraDistance, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
+}
+
 void Settings::registerGame(GameSettings& s)
 {
+    registerShip(s.ship);
     registerSound(s.sound);
     registerMatch(s.match);
     registerFaction(s.faction);

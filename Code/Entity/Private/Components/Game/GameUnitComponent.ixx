@@ -125,6 +125,7 @@ export struct GameUnitComponent
     bool deathReported = false;
     uint32 sourceId = 0;        // the spawner's stable id (rides the death event)
     uint8 popCost = 0;          // population this unit holds on its barracks (game-stamped at spawn)
+    float buildCost = 0.0f;     // light its type costs a barracks (game-stamped at spawn); a medic's heal is paid from it
 
     bool targetLocked = false;  // explicit DSL/game target overrides auto-targeting
     bool hasTarget = false;

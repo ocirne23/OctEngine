@@ -33,6 +33,7 @@ documentation lives in topic files in this folder — read the ones for the area
 | [Economy.md](Economy.md) | Economy: the cable transport, physical cables and crossings, derived networks, the cell hash, construction, grid placement |
 | [Hotbar.md](Hotbar.md) | Hotbar and interaction modes: the grid hotbar and hover cards, Combat (turret, barracks, followers), Production, cable painting, the Bases, structure health and labels, unit selection, RMB move orders |
 | [Units.md](Units.md) | Units and the player: the unit sim / NpcSystem split, targets, melee, damage, the far tick, parked loose units, friction; the player shield, problem bubbles, world labels, HUD |
+| [Ship.md](Ship.md) | The players' flying ship (`Game:Ship`): the kinematic deck and its pose servo, the flight model, the sea rule, the player on board and the helm (F) |
 | [Sound.md](Sound.md) | Sound: cues (posted, never played), the limits for crowds, the battle and horde beds, ambience, building loops, the synthesized sounds and their file overrides |
 
 ## The names: code words and player words
@@ -57,6 +58,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Walkway | Walkway (WALK): a road segment on a scaffold, to stand behind a wall and see over it (Economy.md, Grid placement) |
 | Armory | Armory (ARMR): free workers take a bow and stand guard while enemies are near (Economy.md, The Armory) |
 | MageTower | Mage tower (MAGE): free workers take a staff and turn small light cones on the enemies (Economy.md, The Armory) |
+| ShipRail | Ship rail (RAIL): the ship's wall, one per edge tile of its deck (Ship.md, Building on the ship) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages Combat / Production | Defence (DFNC) / Works (WORK) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
@@ -101,7 +103,7 @@ or LOCAL: offline, one player, Start launches at once — ready checks, the star
 host's team/map picks; the `Lb*` events) and `Game:Chat` (the TEXT CHAT model, `ChatSystem` — the
 "ChM" event's log). Barrel `Public/Game.ixx`.
 
-**`StructureSystem`'s bodies are split over six implementation units by topic** (all
+**`StructureSystem`'s bodies are split over implementation units by topic** (all
 `module Game;`, the list is repeated at the end of `Structures.ixx`): `Structures.cpp` (the
 type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, the settings listeners,
 `refresh` / `stampTuning`, `clear`, the nodes, `harvestYield`, request queueing, `tickAuthority` / `tickMirror`),
@@ -111,7 +113,9 @@ prefab table lives here), `StructuresNetwork.cpp` (`rebuildNetworks` + `updateAr
 `StructuresEconomy.cpp` (`tickProduction`, the death sweep, constructors, materials / repairs,
 the tint, `drawDebug`), `StructuresSync.cpp` (the `mirror*` appliers, `saveTo` / `loadFrom` /
 `clearAllStructures`), `Transport.cpp` (the cable transport tick), `Carriers.cpp` (the walkers that move wood and
-stone on the road) and `Light.cpp` (the light links and their flow) - see [Economy.md](Economy.md).
+stone on the road) and `Light.cpp` (the light links and their flow) - see [Economy.md](Economy.md) - and
+`StructuresShip.cpp` (the structures on the ship's deck: their pose, the landing edges, the deck placement, the rails,
+the Beacon on the deck - see [Ship.md](Ship.md)).
 
 **`GameMatch`'s bodies are split over seven implementation units by topic** (all `module Game;`,
 the list is repeated at the end of `Match.ixx`): `Match.cpp` (construction, `spawnWorld`, the three

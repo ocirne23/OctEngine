@@ -149,7 +149,8 @@ tower: see The Armory in [Economy.md](Economy.md); the Bridge is with the Road, 
 * **Barracks** — ONE type, 3×3; its owner picks the unit type it makes. See below.
 * **House** — 2×2, no grid role. Every built house links to the nearest built own-team barracks within
   "House link radius" (25 m), **one barracks per house**, re-derived every `refresh()` on every
-  instance by `linkHouses`. Drawn as a line to its barracks plus the radius ring while selected.
+  instance by `linkHouses`. The line to its barracks shows only while the house or that barracks is selected (bright,
+  plus the radius ring for a selected house), or, for every house, while a barracks or a house is on the build ghost (dim).
 
 #### Barracks detail
 
@@ -200,6 +201,16 @@ The order is `orderMove(place, fresh false)`: the unit's own plan requests keep 
 selected barracks unit lasts only to the next follow tick** (the order follows the place again). A unit with no
 player of its team keeps its AI.
 
+**THE RALLY FLAG** (the sandbox world, the authority's own team: `m_rallyActive` / `m_rallyPos`, `setRally`): while it
+stands, it is the LEADER of every follower of that team instead of the player - the same ring of places around it,
+the same three rules (a hunt leashed to the flag). **F**: a TAP (released within a second; resolved in
+`updateGameInput` → `onFTap`, which needs the crosshair) is the SHIP's first - let go of the helm when piloting; take the
+helm with the crosshair ON THE BEACON (see [Ship.md](Ship.md)) - and otherwise puts the flag where the crosshair aims (`aimGroundPoint`: the terrain, or a deck).
+HELD for a second (the real clock) it CLEARS the flag, and its release is then no tap. The marker is
+`Entities/Game/rallyFlag.pre` (a glowing gold crystal 2.5 m over the point) plus a gold ring drawn on the ground; the
+HUD counter "Flag" says "hold F: clear". Saved as `RallyPos` (a load without it clears the flag). A client's F does
+nothing (no intent: the flag is the authority's).
+
 > The route plumbing (`Structure::route`, GRt / GqW, the save key `Route`, `seedRouteLane`, the green route lines) is
 > still in the code, but nothing sets a route any more and no unit takes one.
 
@@ -212,17 +223,21 @@ Solar is a free trickle with no fuel (a flat `CubeQuarter` slab; in the sandbox 
 see the light rules in [Modes.md](Modes.md)); the fabricator turns energy + fuel
 into minerals; the mineral silo is the team's spendable bank.
 
-* **Medic station** — 2×2, a plain powered consumer ("Medic energy/s" 1.5 from its internal buffer,
-  unpowered = red ring). While built AND powered it heals every body inside "Medic heal radius"
-  (12 m, green ring) at "Medic heal/s" (40) — **HEALTH and the SHIELD BATTERY both**, the same rate
+* **Medic station** (the Healer's hut) — 2×2. **It draws light only for what it heals**: no fixed draw. It is
+  POWERED while its internal buffer holds light (empty = red ring). While built AND powered it heals every body inside
+  "Medic heal radius" (12 m, green ring) at "Medic heal/s" (40) — **HEALTH and the SHIELD BATTERY both**, the same rate
   each. **UNITS: the station's own component update** (`EMachineKind::Medic`, the turret pattern —
   one spatial query of the radius per powered station inside the parallel pass, banking
   `GameUnitComponent::heal` into the unit's heal inbox; the unit's own tick applies it to health and
   battery — after the death check, so a heal never revives — and clears its `collapsed` latch once
-  the battery holds charge). Stations STACK on units (two radii = two heals). **The own player**:
+  the battery holds charge). **The heal of a unit is paid from the station's store**: a full heal (0 to `healthMax`)
+  costs "Medic full heal cost (x unit cost)" (0.5) x the unit's `buildCost` (its type's spawn energy, stamped by
+  `NpcSystem::spawnUnit`), pro rata per point healed (the larger of the missing health and the missing shield). A
+  full unit costs nothing; a store that cannot pay the step cuts the heal to what it can pay. Stations STACK on units
+  (two radii = two heals, each paid by its own station). **The own player** (healed free while the station is powered):
   `GameMatch::tickMedicHealing` on every instance (`GamePlayer::heal` + `charge`; health/energy are
-  owner-computed, `powered` arrives through GSt), once per tick however many overlap. The reach/rate
-  tweaks bind `GameStructureParams::medicRange/medicHealRate`. The ghost shows the reach.
+  owner-computed, `powered` arrives through GSt), once per tick however many overlap. The reach/rate/cost
+  tweaks bind `GameStructureParams::medicRange/medicHealRate/medicHealCost`. The ghost shows the reach.
 
 ### A / S / D — Cables (root page)
 
@@ -253,7 +268,9 @@ One placement burst caps at `c_cableMaxSegments` 32 cells.
 
 ### The Bases
 
-They exist from game start only (`spawnBase`; `isPlaceableType` keeps the Base off placement), one per team.
+They exist from game start only (`spawnBase`; `isPlaceableType` keeps the Base off placement), one per team. In the
+sandbox world with the ship on, the Base stands ON THE SHIP's deck (`spawnShipBase`): it flies with it, out of reach,
+and is part of the base where the ship lands ([Ship.md](Ship.md)).
 
 * Respawn anchor.
 * A passive trickle of Minerals at "Base income mult" (0.25) of a full-yield Quarry.

@@ -5,8 +5,10 @@ import Core.glm;
 import Entity;
 import File; // AssetNode (save/load)
 import Force;
+import Physics; // the gangways' colliders
 import Threading; // the transport job
 import Settings;
+import :Ship; // the deck's tiles (the ship's structures)
 export import :StructureTypes; // EStructureType + the type predicates, GameMaxTeams, ENodeType
 
 static_assert((int)EStructureType::Count == GameStructureTypeCount); // the Settings.Game cost table
@@ -88,6 +90,15 @@ public:
         uint32 lightId = 0;
         bool lightBlocked = false;
         float lightFlow = 0.0f; // light/s on the link, smoothed (tickLight; an estimate on a mirror): the beam shows while > 0
+        // ON THE SHIP (see "The ship's structures" below): its ground point on the deck in SHIP space (y 0 = the deck
+        // top; x, z snapped to the deck's tiles like snapToGrid). Its pose follows the ship. authoredInvulnerable: the
+        // prefab's flag, restored when the ship lands (aloft every ship structure is invulnerable).
+        bool onShip = false;
+        glm::vec3 shipLocal{ 0.0f };
+        bool authoredInvulnerable = false;
+        // A SHIP RAIL's collider (buildRailBody): the rail pieces on its open sides only, so the tile is walked on. Landed
+        // and not rubble only (aloft the ship's body carries them). Shared: the roster hands out copies of a Ref.
+        mutable oc::shared_ptr<PhysicsBody> railBody;
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -546,7 +557,76 @@ public:
     struct GuardShot { glm::vec3 from, to; };
     oc::vector<GuardShot>& guardShots() { return m_guardShots; }
 
+    // ---- THE SHIP'S STRUCTURES (Docs/Context/Game/Ship.md "Building on the ship") ----
+    // A structure ON THE SHIP keeps its place on the deck in SHIP space (Ref::shipLocal). GameMatch hands in the
+    // ship's pose every tick (setShipPose, before tickShipStructures). FLYING it rides the ship and is OUT OF THE WORLD:
+    // no grid cells, its own collider off (the ship's body carries its box: shipColliderBoxes), invulnerable (no unit
+    // bites it, no shot or field hurts it, no Nav obstacle). LANDED, the ship sits on the world grid (a quarter-turn
+    // yaw, its centre on a cell corner), so every deck tile IS a world cell: the structures join the world like any
+    // other (cells, collider, damage, Nav, the light links), and the deck's FREE tiles are ROAD (roadAt). The
+    // authority only: clients see no ship and get none of these (no GPl).
+    void setShipPose(bool exists, const glm::vec3& pos, const glm::quat& rot, bool landed);
+    void tickShipStructures(); // the poses, and the join / leave edges of a landing / take-off
+    // Changes whenever the boxes shipColliderBoxes gives change (a ship structure came, went or became rubble, the
+    // ship landed or took off): GameMatch rebuilds the ship's body then.
+    uint32 shipRevision() const { return m_shipRevision; }
+    void shipColliderBoxes(oc::vector<GameShip::Box>& out) const; // empty while landed
+    bool structureOnShip(int index) const { return m_frame[index].onShip; }
+    bool shipJoined() const { return m_shipJoined; } // the ship's structures are in the world (it has landed)
+    // A landed ship rail's open sides in WORLD axes (bit 0 +X, 1 -X, 2 +Z, 3 -Z): its rail pieces, which no path crosses.
+    uint8 railWorldSides(const Ref& s) const;
+    // A ship-local ground point snapped to the deck's tiles for `type` (snapToGrid's rule, in ship space).
+    static glm::vec3 snapToDeck(EStructureType type, const glm::vec3& local) { return snapToGrid(type, local); }
+    // Can `type` stand at the snapped ship-local point: every footprint tile on the deck, off the helm, free of the
+    // other ship structures.
+    bool deckCellsFree(EStructureType type, const glm::vec3& snappedLocal) const;
+    void queueShipPlaceRequest(EStructureType type, const glm::vec3& snappedLocal, float yield, uint8 team);
+    // The ship's world pose of a ship-local point (setShipPose's pose).
+    glm::vec3 shipToWorld(const glm::vec3& local) const { return m_shipPos + m_shipRot * local; }
+    // The Beacon on the deck (the start) and the rails on the edge tiles that have none yet (the start, after a load).
+    void spawnShipBase(uint8 team = 0);
+    void ensureShipRails(uint8 team = 0);
+    // A LANDING SITE: can the ship land with its centre at `centre` (a tile corner) and `turns` quarter turns? Free
+    // of the other structures' cells. The ground, the water and the trees are the match's tests.
+    bool shipLandingClear(const glm::vec3& centre, int turns) const;
+
 private:
+    // The ship-local tile of a world cell (landed: the inverse of the quarter-turn pose); false = no deck tile there.
+    bool worldCellOnDeck(int cx, int cz) const;
+    void placeShipStructure(EStructureType type, const glm::vec3& local, float yield, uint8 team); // the ship request's validation + spawn
+    int spawnShipStructure(uint32 id, EStructureType type, const glm::vec3& local, uint8 team, bool built, float yield = 1.0f);
+    void shipJoin(const Ref& s);  // into the world (landed)
+    void shipLeave(const Ref& s); // out of it (aloft)
+    void applyRailSides(const Ref& s); // a ShipRail's rail pieces: the sides of its tile that face off the deck
+    void buildRailBody(const Ref& s);  // a ShipRail's collider (none aloft or as rubble)
+    // The rail pieces of a rail tile in ship space, from the tile's centre on the deck top: (centre, half) per open side.
+    static int railPieces(const glm::vec3& tileLocal, glm::vec3 (&centres)[4], glm::vec3 (&halves)[4]);
+    // THE GANGWAYS (landed): stairs out of every ENTRANCE down to the ground - render-only steps (gangwayStep.pre), one
+    // sloped collider, and their cells as ROAD (m_gangwayRoad: cell -> the road height), so the walkers go down them.
+    // Built at the landing edge, gone at the take-off.
+    struct Gangway
+    {
+        oc::vector<EntityPtr> steps;
+        PhysicsBody body;
+    };
+    Gangway m_gangways[8]; // one per entry of GameShip::entrances
+    oc::unordered_map<uint64, float> m_gangwayRoad;
+    void buildGangways();
+    void clearGangways();
+    bool m_shipExists = false;
+    bool m_shipLanded = false;
+    bool m_shipJoined = false; // the ship structures are in the world (the last tickShipStructures saw it landed)
+    // The landed deck's world cells (inclusive, one cell of margin): the deck / rail checks of the road search and roadAt
+    // answer "no" outside it with two compares instead of hash lookups and the pose math (set at the landing edge).
+    glm::ivec2 m_deckCellMin{ 0 }, m_deckCellMax{ -1 };
+    bool nearDeck(int cx, int cz) const
+    {
+        return cx >= m_deckCellMin.x && cx <= m_deckCellMax.x && cz >= m_deckCellMin.y && cz <= m_deckCellMax.y;
+    }
+    glm::vec3 m_shipPos{ 0.0f };
+    glm::quat m_shipRot{ 1.0f, 0.0f, 0.0f, 0.0f };
+    uint32 m_shipRevision = 0;
+
     oc::vector<GuardShot> m_guardShots;
     struct Node
     {
@@ -561,6 +641,7 @@ private:
         glm::vec3 facing{ 0.0f };
         float yield = 1.0f;
         uint8 team = 0;
+        bool ship = false; // pos is a ship-local ground point on the deck
     };
     struct RouteRequest
     {
@@ -591,7 +672,7 @@ private:
     // The one placement path: spawns the prefab, stamps the component, registers into the frame.
     // Returns the frame index or -1. rot = authored orientation (a crossing's facing).
     int spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos, const glm::quat& rot,
-        uint8 team, bool built, float yield = 1.0f);
+        uint8 team, bool built, float yield = 1.0f, bool insert = true); // insert: into the cell hash (a ship structure aloft: no)
     void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
     void removeStructureBookkeeping(size_t index); // unlink, erase + reindex, fire GRm
     void applyStructureTint(const Ref& s);
@@ -652,6 +733,8 @@ private:
     GameUnitComponent* nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
         const glm::vec3* sightFrom = nullptr) const;
     bool walkwayDeckAt(int cx, int cz) const;
+    bool guardDeckAt(int cx, int cz) const; // a Walkway deck, or a built rail tile of the landed ship: no clear line needed
+    bool railEdgeBetween(int ax, int az, int bx, int bz) const; // a landed ship's rail piece between two neighbour cells
     bool guardWanted(int index, uint8 team) const;
     bool guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const;
     void setGuardLook(Walker& w, bool guard);
@@ -893,4 +976,5 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
 //   Carriers.cpp            - the walkers that move wood and stone on the road (tickCarriers, findRoadTarget)
 //   Light.cpp               - light on beams: the derived links to the hubs, their flow, their lines
 //   StructuresSync.cpp      - the mirror* appliers, saveTo / loadFrom / clearAllStructures
+//   StructuresShip.cpp      - the structures on the ship's deck (their pose, the landing edges, the deck placement, the rails)
 //   Transport.cpp           - the cable transport tick (see the block above)

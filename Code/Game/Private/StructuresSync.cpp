@@ -131,6 +131,11 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Id", oc::to_string(s.state->structureId));
         n.set("Type", oc::to_string((int)s.type));
         n.set("Position", s.entity->pos);
+        if (s.onShip) // its place on the deck (ship space): the load puts it there on the loaded ship
+        {
+            n.set("Ship", true);
+            n.set("Local", s.shipLocal);
+        }
         const glm::vec3 forward = isCrossingType(s.type)
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         if (glm::dot(glm::vec2(forward.x, forward.z), glm::vec2(forward.x, forward.z)) > 1e-4f)
@@ -215,12 +220,17 @@ void StructureSystem::loadFrom(const AssetNode& root)
         // A save holds the origin, which is the ground + the type's half height at the time it was made - a type
         // whose model got taller or lower since would float or sink. The saved height stays only where this
         // instance has no ground under the place (outside its collider ring).
-        if (float groundY = 0.0f; groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
+        const bool onShip = n->find("Ship") && n->find("Ship")->asBool();
+        if (onShip && !m_shipExists)
+            continue; // no ship to stand on (the ship is off)
+        if (float groundY = 0.0f; !onShip && groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
             pos.y = groundY + spawnHeightOf((EStructureType)typeInt);
         const float yield = n->find("Yield") ? n->find("Yield")->asFloat() : 1.0f;
         const uint8 team = (uint8)glm::clamp(n->find("Team") ? n->find("Team")->asInt() : 0, 0, GameMaxTeams - 1);
         const bool blueprint = n->find("Blueprint") ? n->find("Blueprint")->asBool() : false;
-        const int index = spawnStructure(id, (EStructureType)typeInt, pos, rot, team, !blueprint, yield);
+        const int index = onShip
+            ? spawnShipStructure(id, (EStructureType)typeInt, n->find("Local") ? n->find("Local")->asVec3() : glm::vec3(0.0f), team, !blueprint, yield)
+            : spawnStructure(id, (EStructureType)typeInt, pos, rot, team, !blueprint, yield);
         if (index < 0)
             continue;
         GameStructureComponent& s = *m_frame[index].state;

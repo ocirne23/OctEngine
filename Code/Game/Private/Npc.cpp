@@ -240,6 +240,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     GameUnitComponent::applyTeamTint(*entity); // own-team units read green
     unit->sourceId = sourceId;
     unit->popCost = (uint8)glm::clamp(structures.unitPopulation((int)type), 0, 255);
+    unit->buildCost = structures.unitSpawnEnergy((int)type);
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 1 - units carry their builder's team
     // A BARRACKS unit is a FOLLOWER: it goes with its team's nearest player (GameMatch::tickFollowers), no route.

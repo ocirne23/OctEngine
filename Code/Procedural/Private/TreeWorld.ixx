@@ -118,7 +118,8 @@ export namespace Procedural
 		{
 			uint8 kind = 0;           // 0 = nothing (not placed), 1 = a tree (or a bush placed on its own), 2 = a rock, 3 = dead wood (a rock type of `Surface Wood`)
 			float crown = 0.0f;       // tree: the crown's radius (m, at the species' mean scale)
-			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m)
+			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m, at the species' mean scale)
+			glm::vec2 treeScale{ 1.0f }; // tree: the species' Scale range (a record's scale: surveyHarvest, as the expansion)
 			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
 			RockFootprint footprint;  // rock / wood: its capsule x the record's scale (along the record's yaw, hash 104)
 			uint8 harvest = 0;        // surveyHarvest: 0 = nothing (a bush, a cactus), 1 = wood (a tree, dead wood), 2 = stone (a rock)
@@ -126,8 +127,9 @@ export namespace Procedural
 		const oc::vector<FloorType>& floorTypes() const { return m_floorTypes; }
 		// THE HARVEST SURVEY (the game's lumberyard and quarry): every tree and rock within `radius` of a point, one
 		// visit each - its world position (the same in every survey: the game shares the records of overlapping
-		// circles by it), then wood (a tree 1, dead wood 0.5; 0 for a rock) and stone (a rock's size in m, its longest
-		// axis; 0 for a tree). Main thread, between update and kickUpdate (as cpuRecords). false = the CPU does not hold
+		// circles by it), then wood (a tree's SIZE: its trunk over the world's average tree's, 1 = average; dead wood 0.7
+		// at its mean length; 0 for a rock) and stone (a rock's size in m, its longest axis; 0 for a tree). The game
+		// weights both by its size exponent. Main thread, between update and kickUpdate (as cpuRecords). false = the CPU does not hold
 		// every chunk the circle touches (too far from the camera, or not generated yet): no answer, and the visits made
 		// so far do not count. Disabled = true with no visit.
 		using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone);

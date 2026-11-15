@@ -58,6 +58,23 @@ void GameMatch::saveGame()
     // Headless (no capsule) writes nothing, and a load without the key leaves the player put.
     if (m_player.entity())
         root.set("PlayerPos", m_player.bodyPos());
+    if (m_rallyActive) // the rally flag (the friendly barracks units gather there)
+        root.set("RallyPos", m_rallyPos);
+    if (m_ship.exists()) // the ship's pose (at rest on the load); a ship that is landing loads landed
+    {
+        root.set("ShipPos", m_ship.grounded() ? m_ship.landedPos() : m_ship.position());
+        root.set("ShipYaw", m_ship.yaw());
+        if (m_ship.grounded())
+        {
+            root.set("ShipLanded", true);
+            root.set("ShipTurns", oc::to_string(m_ship.quarterTurns()));
+        }
+        if (m_hasShipHome) // where it last landed: the landing ghost snaps back to it
+        {
+            root.set("ShipHome", m_shipHome);
+            root.set("ShipHomeTurns", oc::to_string(m_shipHomeTurns));
+        }
+    }
     m_structures.saveTo(root);
     m_npcs.saveUnits(root);
     // F9: an explicit user action, main thread.
@@ -109,10 +126,35 @@ void GameMatch::loadGame(oc::string_view path)
                 sendMapSeed();
         }
     }
+    // THE SHIP FIRST: the structures on its deck load in ship space, onto the ship's loaded pose (landed: they join the
+    // world at once).
+    if (const AssetNode* n = root.find("ShipPos"); n && m_ship.exists())
+    {
+        m_piloting = false;
+        // Lift the present deck out of the world first (its cells, its stairs), so a landed load joins it at the new
+        // place (tickShipStructures acts on the edge only).
+        m_structures.setShipPose(true, m_ship.position(), m_ship.rotation(), false);
+        m_structures.tickShipStructures();
+        const glm::vec3 shipPos = n->asVec3(m_ship.position());
+        if (root.find("ShipLanded") && root.find("ShipLanded")->asBool())
+            m_ship.landAt(shipPos, root.find("ShipTurns") ? root.find("ShipTurns")->asInt() : 0);
+        else
+            m_ship.teleport(shipPos, root.find("ShipYaw") ? root.find("ShipYaw")->asFloat() : m_ship.yaw());
+        m_structures.setShipPose(true, m_ship.position(), m_ship.rotation(), m_ship.landed());
+        m_structures.tickShipStructures();
+        m_landPlacing = false;
+        m_hasShipHome = root.find("ShipHome") != nullptr;
+        if (m_hasShipHome)
+        {
+            m_shipHome = root.find("ShipHome")->asVec3();
+            m_shipHomeTurns = root.find("ShipHomeTurns") ? (root.find("ShipHomeTurns")->asInt() & 3) : 0;
+        }
+    }
     // Replace the sim. Structure removal hooks fire during the clear (GRm to clients), then the
     // loaded state re-broadcasts below; unit entities resync through the normal despawn/spawn
     // replication (Component Network in their prefabs).
     m_structures.loadFrom(root);
+    m_structures.ensureShipRails(); // a save without them (or with fewer): the ship's wall is whole
     m_npcs.loadUnits(root, m_structures);
     GameSound::discardPosted(); // the clear's collapses and the load's placements are no events of the game: silent
     m_selectedId = 0;
@@ -139,6 +181,10 @@ void GameMatch::loadGame(oc::string_view path)
     // The local player back to where it stood. Both call sites (F10 in updateWindowed, the
     // --scenario timer) are main thread and pre-physics, so the direct body setters are sanctioned.
     // Older saves carry no key and leave the player put; remote players keep their own positions.
+    if (const AssetNode* n = root.find("RallyPos")) // the rally flag as saved; none = none
+        setRally(true, n->asVec3());
+    else
+        setRally(false, glm::vec3(0.0f));
     if (const AssetNode* n = root.find("PlayerPos"))
         m_player.teleport(n->asVec3(m_player.bodyPos()));
     loadTrickle(root); // resume the queued wave/ambient spawns (after rebuildCoopMap - see there)
@@ -146,6 +192,8 @@ void GameMatch::loadGame(oc::string_view path)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
         {
+            if (m_structures.structureOnShip(i))
+                continue; // the ship's structures are the authority's (a client sees no ship)
             sendStructurePlaced(i);
             if (!m_structures.structureRoute(i).empty())
                 sendRoute(i);

@@ -78,6 +78,10 @@ public:
     // x "Energy regen" this tick (GameMatch::updatePlayer: the sandbox world's daylight, or a light store in reach;
     // 1 elsewhere). 0 = the staff light does not come back by itself.
     void setRegenScale(float scale) { m_regenScale = glm::clamp(scale, 0.0f, 1.0f); }
+    // THE SHIP (GameMatch::updatePlayer, before tickMovement): the deck's velocity under the player while it stands
+    // on it (the walk is relative to it), and the controls locked while it steers the ship (WASD / Space are the ship's).
+    void setPlatform(const glm::vec3& velocity, bool on) { m_platformVel = velocity; m_onPlatform = on; }
+    void setControlsLocked(bool locked) { m_controlsLocked = locked; }
     float regenScale() const { return m_regenScale; }
 
     // Hard move of the capsule (F10 load). Follows the respawn TELEPORT CONTRACT: physics
@@ -132,6 +136,9 @@ private:
     float m_health = 100.0f;
     float m_energy = 100.0f;
     float m_regenScale = 1.0f;
+    glm::vec3 m_platformVel{ 0.0f };
+    bool m_onPlatform = false;
+    bool m_controlsLocked = false;
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
     float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks - the applied-force

@@ -1,0 +1,13 @@
+# THE RALLY FLAG's marker (GameMatch::setRally): where the friendly barracks units gather instead of following the
+# player. Render only: a gold light crystal floating 2.5 m over the flag's ground point (the origin), glowing (gemsGlow:
+# unlit + Emissive, the bloom takes it). GameMatch also draws a gold ring on the ground around it.
+Prefab gameRallyFlag
+	Global true
+	Component Render
+		ObjectContainer gemsGlow
+		Node Diamond
+		Type StaticMesh
+		Color 1 0.85 0.35
+		Emissive 4
+		Position 0 2.5 0
+		Scale 0.6

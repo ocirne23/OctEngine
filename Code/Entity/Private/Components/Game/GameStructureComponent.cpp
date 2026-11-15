@@ -81,21 +81,34 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             g_spawnRequests.push_back(structureId);
         }
     }
-    else if (machineKind == EMachineKind::Medic && powered)
+    else if (machineKind == EMachineKind::Medic && store[0] > 0.0f)
     {
+        // The light is paid PER HEALTH HEALED: a full heal of a unit costs "Medic full heal cost (x unit cost)" x its
+        // spawn energy, so no damaged unit = no draw. A heal the store cannot pay in full is cut to what it can.
+        // (The unit's health is its own tick's: one tick old here, so a heal can overpay by at most one tick's step.)
         entity.setProfiled();
         const glm::vec3 pos = entity.pos;
         const float amount = params.medicHealRate * deltaSec;
+        const float costMult = glm::max(params.medicHealCost, 0.0f);
         Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), params.medicRange, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             GameUnitComponent* u = getComponent<GameUnitComponent>(other);
-            if (!u || u->puppet || u->team != team || !u->alive())
+            if (!u || u->puppet || u->team != team || !u->alive() || store[0] <= 0.0f)
                 return;
             const glm::vec3 d = other->pos - pos;
             if (d.x * d.x + d.z * d.z > params.medicRange * params.medicRange)
                 return; // the sphere query is a broadphase on bounds
-            u->heal(amount);
+            float heal = glm::min(amount, glm::max(u->healthMax - u->health, u->energyMax - u->energy));
+            if (heal <= 0.0f)
+                return; // not damaged: nothing to heal, nothing to pay
+            const float costPerHealth = u->healthMax > 0.0f ? u->buildCost * costMult / u->healthMax : 0.0f;
+            if (costPerHealth > 0.0f)
+            {
+                heal = glm::min(heal, store[0] / costPerHealth);
+                store[0] = glm::max(store[0] - heal * costPerHealth, 0.0f);
+            }
+            u->heal(heal);
         });
     }
     else if (machineKind == EMachineKind::Searchlight)

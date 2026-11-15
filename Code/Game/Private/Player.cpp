@@ -103,14 +103,20 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     ProfileScope scope("Player movement", EProfileCategory::Game);
     const GamePlayerSettings& s = Globals::settings.game.player;
     Input& input = Globals::input;
-    if (!input.isWindowHasFocus() || !Globals::ui.isViewportFocused() || cameraDetached()) // detached: WASD flies the camera
+    // No input (unfocused, the camera detached: WASD flies it, or the controls locked: the player steers the ship) still
+    // runs the velocity below with no move: a player on the SHIP's deck must go with it.
+    const bool inputOk = input.isWindowHasFocus() && Globals::ui.isViewportFocused() && !cameraDetached() && !m_controlsLocked;
+    if (!inputOk && !m_onPlatform)
         return;
     PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
         return;
 
     glm::vec3 move(0.0f);
-    if (m_directControl)
+    if (!inputOk)
+    {
+    }
+    else if (m_directControl)
     {
         // Third person: camera-relative WASD (the grid hotkeys sit on the number keys in this mode).
         const glm::vec3 forward = glm::dot(cameraForwardPlanar, cameraForwardPlanar) > 1e-6f
@@ -167,7 +173,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     // bit - tickShieldAndHealth's regen runs right after this and lifts the battery off zero
     // before its own latch check ever sees it): emptying the battery collapses the shield HERE,
     // and both the bubble and the boost stay down until the battery refills to "Reboot energy".
-    const bool sprinting = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT)
+    const bool sprinting = inputOk && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT)
         && glm::dot(move, move) > 1e-4f && !m_shieldCollapsed;
     if (sprinting)
     {
@@ -179,23 +185,39 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     const AppControlsSettings& direct = Globals::settings.appControls;
     const float speed = (m_directControl ? direct.playerMoveSpeed : s.moveSpeed) * (sprinting ? s.sprintMult : 1.0f);
 
+    // THE PLATFORM (the ship's deck under the player, setPlatform): the walk is RELATIVE to it - the wanted velocity is
+    // the deck's plus the walk - and the body goes up and down with it, so the deck carries it through every turn and
+    // climb. Off a platform m_platformVel is zero.
     glm::vec3 vel = pc->body.getLinearVelocity();
-    glm::vec3 dv = glm::vec3(move.x * speed - vel.x, 0.0f, move.z * speed - vel.z);
-    const float maxDv = (m_directControl ? direct.playerAccel : s.accel) * deltaSec;
+    const glm::vec3 platform = m_onPlatform ? m_platformVel : glm::vec3(0.0f);
+    glm::vec3 dv = glm::vec3(move.x * speed + platform.x - vel.x, 0.0f, move.z * speed + platform.z - vel.z);
+    const float accel = (m_directControl ? direct.playerAccel : s.accel) * (m_onPlatform ? 3.0f : 1.0f); // the deck grips harder than a walk
+    const float maxDv = accel * deltaSec;
     const float dvLen = glm::length(dv);
     if (dvLen > maxDv && dvLen > 1e-6f)
         dv *= maxDv / dvLen;
     vel.x += dv.x;
     vel.z += dv.z;
-
-    const bool jumpDown = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_SPACE);
-    if (jumpDown && !m_jumpWasDown)
+    // What is under the feet: the jump's test (0.3 m), and the platform hold's (0.5 m: a deck that sinks a little in a
+    // tick still counts). One ray, only while it matters.
+    float footGap = FLT_MAX;
+    const bool jumpDown = inputOk && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_SPACE);
+    if (m_onPlatform || (jumpDown && !m_jumpWasDown))
     {
         const float bottom = shapeBottomDistance(m_entity.get());
         const glm::vec3 pos = pc->body.getPosition();
-        if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
-            vel.y = m_directControl ? direct.playerJumpSpeed : s.jumpSpeed;
+        const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.5f), 0.0f),
+            PhysicsLayers::All, &pc->body);
+        if (hit.hit)
+            footGap = pos.y - hit.point.y - bottom;
     }
+    // STANDING on the deck (not on the way up from a jump, and not in the air over it - a fall must stay a fall): with
+    // the deck.
+    if (m_onPlatform && footGap <= 0.5f && vel.y < platform.y + 0.5f)
+        vel.y = platform.y;
+
+    if (jumpDown && !m_jumpWasDown && footGap <= 0.3f)
+        vel.y = platform.y + (m_directControl ? direct.playerJumpSpeed : s.jumpSpeed);
     m_jumpWasDown = jumpDown;
     pc->body.setLinearVelocity(vel);
     if (m_directControl) // the body faces the camera, the legs run along the velocity

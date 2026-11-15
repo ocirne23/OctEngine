@@ -260,6 +260,7 @@ namespace Procedural
 			floor.kind = 1;
 			floor.crown = desc.crownRadius * meanScale;
 			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
+			floor.treeScale = desc.scale;
 			floor.harvest = desc.bush ? 0 : 1;
 			// A bush with a Placement block grows ON ITS OWN too (the desert's agaves): the bush pass, not the trees'.
 			Species& species = (desc.bush ? m_bushes : m_species).emplace_back();
@@ -538,7 +539,20 @@ namespace Procedural
 	{
 		if (!m_settings.enabled || m_chunkSize <= 0.0f)
 			return true;
-		constexpr float DEAD_WOOD_SHARE = 0.5f; // a fallen log or a stump against a standing tree
+		// A TREE'S SIZE: its trunk at the ground (the species' trunk x this record's scale - the expansion's own scale, from
+		// the same seed) over the AVERAGE trunk of the world's trees (the tree species at their mean scale): 1 = an average
+		// tree. Dead wood: x0.7 at its type's mean length, by its length (with the game's size exponent 2: half a tree).
+		constexpr float DEAD_WOOD_SIZE = 0.7f;
+		float trunkSum = 0.0f;
+		int trunkCount = 0;
+		for (const FloorType& floor : m_floorTypes)
+			if (floor.kind == 1 && floor.harvest == 1)
+			{
+				trunkSum += floor.trunk;
+				++trunkCount;
+			}
+		const float refTrunk = trunkCount > 0 && trunkSum > 0.0f ? trunkSum / (float)trunkCount : 1.0f;
+		const float sizeVariation = Globals::settings.trees.sizeVariation;
 		const glm::ivec2 c0 = glm::ivec2(glm::floor((centre - radius) / m_chunkSize));
 		const glm::ivec2 c1 = glm::ivec2(glm::floor((centre + radius) / m_chunkSize));
 		const float radiusSq = radius * radius;
@@ -563,10 +577,22 @@ namespace Procedural
 					// The world position comes from the chunk and the record alone, so one record has the same position
 					// in every survey (the game tells the records of two overlapping circles apart by it).
 					const glm::vec2 world = glm::vec2(coord) * m_chunkSize + recordLocal;
+					const uint32 recordSeed = treeRecordSeed(seed(), coord, record);
 					if (floor.harvest == 2)
-						visit(user, world.x, world.y, 0.0f, rockRecordScale(treeRecordSeed(seed(), coord, record), floor.rockScale));
+						visit(user, world.x, world.y, 0.0f, rockRecordScale(recordSeed, floor.rockScale));
+					else if (floor.kind == 3)
+					{
+						const float meanLength = glm::max(0.5f * (floor.rockScale.x + floor.rockScale.y), 0.01f);
+						visit(user, world.x, world.y, DEAD_WOOD_SIZE * rockRecordScale(recordSeed, floor.rockScale) / meanLength, 0.0f);
+					}
 					else
-						visit(user, world.x, world.y, floor.kind == 3 ? DEAD_WOOD_SHARE : 1.0f, 0.0f);
+					{
+						// As TreeSystem's expansion: the species range (hash 103) x "Size variation" (hash 105).
+						const float scale = glm::mix(floor.treeScale.x, floor.treeScale.y, treeHash01(treeHash(recordSeed, 103u)))
+							* std::exp2(sizeVariation * (treeHash01(treeHash(recordSeed, 105u)) * 2.0f - 1.0f));
+						const float meanScale = glm::max(0.5f * (floor.treeScale.x + floor.treeScale.y), 0.01f);
+						visit(user, world.x, world.y, floor.trunk / meanScale * scale / refTrunk, 0.0f);
+					}
 				}
 			}
 		return true;

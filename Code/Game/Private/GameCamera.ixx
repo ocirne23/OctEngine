@@ -34,8 +34,9 @@ public:
     // relative mouse counts this frame), the wheel zooms, and a ray from the pivot pulls the eye in front of the
     // TERRAIN only (see below). The crosshair is the view center, so the aim ray is the camera's
     // forward. Shares the yaw with the top-down mode, so forwardPlanar() steers the body either way.
+    // minDistance: the orbit is at least this far out (the ship's helm: the whole ship in view).
     void applyThirdPerson(Camera& camera, const glm::vec3& targetPos, const glm::vec2& lookDelta, float wheelDelta,
-        const PhysicsBody* ignoreBody)
+        const PhysicsBody* ignoreBody, float minDistance = 0.0f)
     {
         GameCameraSettings& s = Globals::settings.game.camera;
         m_yawDeg += glm::degrees(lookDelta.x * s.thirdSensitivity);
@@ -46,7 +47,7 @@ public:
         const float pitchR = glm::radians(m_pitchDeg);
         const glm::vec3 dir = glm::normalize(forwardPlanar() * std::cos(pitchR) + glm::vec3(0.0f, std::sin(pitchR), 0.0f));
         const glm::vec3 pivot = targetPos + glm::vec3(0.0f, s.thirdEyeHeight, 0.0f);
-        const glm::vec3 back = -dir * s.thirdDistance;
+        const glm::vec3 back = -dir * glm::max(s.thirdDistance, minDistance);
         // ONLY THE TERRAIN pulls the eye in: a hill between the two would put the eye under the ground. A building, a
         // tree, a rock or a unit does NOT - the camera keeps its distance and the player may be hidden behind it (a
         // camera that jumps forward each time something passes behind the player is worse than a hidden player).

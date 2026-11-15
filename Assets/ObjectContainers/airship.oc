@@ -1,0 +1,4 @@
+# The players' flying ship (Models/airship.obj): the hull, the deck, the rails, the cabin and its roof, the helm, the
+# masts, the sails and the crystals, one object each. Entities/Game/airship.pre draws them.
+ObjectContainer airship
+	Path "Models/airship.obj"

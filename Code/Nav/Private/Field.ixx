@@ -38,7 +38,11 @@ export namespace Nav
         // game's walkways, which the own army cannot pass under, while the enemy still breaches them (its field keeps the
         // cost). 0 = for no team.
         uint8 wallFor = 0;
-        uint8 pad[1] = {}; // explicit: the obstacle list is change-detected by a byte hash
+        // EDGE WALLS: non-zero = this is no cell obstacle - the given SIDES of every cell it covers are walls (bit 0 +X,
+        // 1 -X, 2 +Z, 3 -Z), and no step crosses them (the flood, the descent, the A*, the line of sight; a diagonal step
+        // when any of its four edges is a wall). In the fields `wallFor` teams walk and in the raster and the goals
+        // (wallFor 0: in every field). The game's ship rails: walked along, never stepped off.
+        uint8 edges = 0;
     };
 
     class TeamField final
@@ -53,13 +57,17 @@ export namespace Nav
         struct Chunk
         {
             uint8 cost[ChunkArea];  // 0 free, Blocked, else an extra step multiplier (1 + cost)
+            uint8 walls[ChunkArea]; // EDGE WALLS (NavObstacle::edges): the cell's walled sides, bit 0 +X, 1 -X, 2 +Z, 3 -Z
             uint16 dist[ChunkArea]; // fixed-point geodesic distance to the nearest source
             uint16 src[ChunkArea];  // index into sources()
             uint8 waveDirty;        // build-time only: already queued for the next wave
             uint8 borderImproved;   // build-time only: dirs (c_offsets bit k) whose neighbour must re-solve
+            uint8 wallsNear;        // an edge wall on a cell within one cell of this chunk: only then is a step from here checked
             Chunk()
             {
                 memset(cost, 0, sizeof(cost));
+                memset(walls, 0, sizeof(walls));
+                wallsNear = 0;
                 memset(dist, 0xFF, sizeof(dist));
                 memset(src, 0xFF, sizeof(src));
                 waveDirty = 0;
@@ -222,7 +230,11 @@ export namespace Nav
         Chunk& chunkAt(const glm::ivec2& cell) { return m_chunks.getOrCreate(chunkKey(chunkOf(cell))); }
         const Chunk* findChunk(const glm::ivec2& cell) const { return m_chunks.find(chunkKey(chunkOf(cell))); }
         uint8 costAt(const glm::ivec2& cell) const;
+        uint8 wallsAt(const glm::ivec2& cell) const; // the cell's walled sides (0 without a chunk)
+        bool stepWalled(const glm::ivec2& cell, const glm::ivec2& offset) const; // an 8-neighbour step crosses an edge wall
+        bool wallsNear(const glm::ivec2& cell) const; // an edge wall within one cell of the cell's chunk (else no step from it is walled)
         void rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 clearanceCost, int fieldTeam = -1);
+        bool m_hasWalls = false; // any edge wall in this field (the checks are skipped without one)
 
         ChunkMap<Chunk> m_chunks;
         oc::vector<NavSource> m_sources;

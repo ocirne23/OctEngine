@@ -10,7 +10,7 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Count };
 
 // LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
 // walk through: its collider is Layer Gate, which leaves the Player layer out).
@@ -28,7 +28,7 @@ export constexpr bool standsOnWater(EStructureType t)
 // a line of it behind a wall must not close a base off.
 export constexpr bool isBreachable(EStructureType t)
 {
-    return t == EStructureType::Wall || t == EStructureType::Gate || t == EStructureType::Walkway;
+    return t == EStructureType::Wall || t == EStructureType::Gate || t == EStructureType::Walkway || t == EStructureType::ShipRail;
 }
 
 // THE HARVEST: a Lumberyard makes fuel (wood) from the trees around it, a Quarry minerals (stone) from the rocks. Each
@@ -38,10 +38,11 @@ export constexpr bool isHarvestType(EStructureType t)
     return t == EStructureType::Lumberyard || t == EStructureType::Quarry;
 }
 
-// Placeable = anything a player may build. The Base only enters through spawnBase.
+// Placeable = anything a player may build. The Base only enters through spawnBase, the ship's rails with the ship
+// (StructureSystem::ensureShipRails).
 export constexpr bool isPlaceableType(EStructureType t)
 {
-    return (int)t < (int)EStructureType::Count && t != EStructureType::Base;
+    return (int)t < (int)EStructureType::Count && t != EStructureType::Base && t != EStructureType::ShipRail;
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
 // BUILT segments is one transport RUN; the buildings it touches are its ports (see
@@ -67,6 +68,11 @@ export constexpr bool isCrossingType(EStructureType t)
 export constexpr bool isCableOrCrossing(EStructureType t)
 {
     return isCableType(t) || isCrossingType(t);
+}
+// What a player may build ON THE SHIP's deck: every placeable type but the road pieces (the deck's free tiles ARE road).
+export constexpr bool isShipPlaceableType(EStructureType t)
+{
+    return isPlaceableType(t) && !isCableOrCrossing(t);
 }
 // WALK-THROUGH structures: players and units pass over them (the prefab's collider is Layer Cable,
 // projectiles only - or, the Bridge, a deck they stand on), so they are no nav obstacle, never block a placement by a standing actor,

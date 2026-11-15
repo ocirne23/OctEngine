@@ -250,9 +250,9 @@ void StructureSystem::tickProduction(float deltaSec)
     updateStaffing();
     // LIGHT runs the fields and the machines of defence; PRODUCTION (the lumberyard, the quarry, the fabricator, the constructor,
     // the generator) draws none: it runs on workers.
+    // (The Healer's hut pays per health it heals, in its own component update: it is powered while its store holds light.)
     const auto consumerDraw = [&](EStructureType type) {
-        return type == EStructureType::Emitter ? m_settings.emitterEnergyPerSec
-             : type == EStructureType::MedicStation ? m_settings.medicEnergyPerSec : 0.0f;
+        return type == EStructureType::Emitter ? m_settings.emitterEnergyPerSec : 0.0f;
     };
 
     m_genRateTotal = 0.0f;
@@ -370,6 +370,11 @@ void StructureSystem::tickProduction(float deltaSec)
             continue;
         }
         const float draw = consumerDraw(ref.type);
+        if (ref.type == EStructureType::MedicStation)
+        {
+            s.powered = s.store[0] > 0.01f;
+            continue;
+        }
         if (draw <= 0.0f && ref.type != EStructureType::Fabricator)
         {
             // Nothing to pay: a production building (it runs on workers) counts as working.
@@ -471,8 +476,11 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
         GameSound::post(EGameSound::StructureCollapse, s.entity->pos, 1.0f, (float)footprintCellsOf(s.type));
     s.state->rubble = rubble ? 1 : 0;
     applyStructureTint(s);
+    const bool aloft = s.onShip && !m_shipJoined; // its collider is the ship's box (shipColliderBoxes): its own stays off
     if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(s.entity))
-        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(rubble ? 0.0f : 1.0f));
+        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(rubble || aloft ? 0.0f : 1.0f));
+    if (s.onShip)
+        ++m_shipRevision;
     RenderComponent* rc = getComponent<RenderComponent>(s.entity);
     if (rubble && !s.rubbleVisual)
     {
@@ -500,6 +508,10 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
     if (const SceneComponent* scene = getComponent<SceneComponent>(s.entity))
         for (const EntityPtr& child : scene->children)
             child->setEnabled(!rubble);
+    if (!rubble && s.type == EStructureType::ShipRail)
+        applyRailSides(s); // only the sides that face off the deck
+    if (s.type == EStructureType::ShipRail)
+        buildRailBody(s); // rubble: no collider; built again: its pieces
 }
 
 void StructureSystem::tickConstructors(float deltaSec)

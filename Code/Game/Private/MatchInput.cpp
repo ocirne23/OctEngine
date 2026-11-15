@@ -154,11 +154,37 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
     aim.type = type;
 
     glm::vec3 pos;
-    if (!aimGroundPoint(camera, pos))
+    bool onDeck = false;
+    if (!aimGroundPoint(camera, pos, &onDeck))
         return aim;
 
-    // Clamp to build range around the player, flatten to the whitebox ground plane.
     const glm::vec3 playerPos = m_player.bodyPos();
+    if (onDeck)
+    {
+        // ON THE SHIP'S DECK: the deck's own tiles (ship space), whatever its pose. The road pieces do not go there:
+        // its free tiles are road already.
+        if (isCableOrCrossing(type))
+            return aim;
+        const glm::vec3 local = m_ship.toLocal(pos);
+        aim.ship = true;
+        aim.local = StructureSystem::snapToDeck(type, glm::vec3(local.x, 0.0f, local.z));
+        aim.pos = m_ship.toWorld(aim.local);
+        aim.valid = true;
+        aim.ground = StructureSystem::EGroundFit::Ok;
+        const float dist = glm::length(glm::vec2(aim.pos.x - playerPos.x, aim.pos.z - playerPos.z));
+        aim.affordable = isShipPlaceableType(type) && dist <= m_structures.placeRange() + 2.0f
+            && m_structures.deckCellsFree(type, aim.local) && !StructureSystem::actorInFootprint(type, aim.pos);
+        if (isHarvestType(aim.type)) // the survey at the tile's place in the world, as on the land
+        {
+            const HarvestProbe& probe = m_harvestProbe;
+            const bool known = probe.known && probe.type == aim.type && probe.pos.x == aim.pos.x && probe.pos.z == aim.pos.z;
+            aim.yield = known ? probe.yield : -1.0f;
+            aim.affordable = aim.affordable && known;
+        }
+        return aim;
+    }
+
+    // Clamp to build range around the player, flatten to the whitebox ground plane.
     glm::vec2 offset = glm::vec2(pos.x, pos.z) - glm::vec2(playerPos.x, playerPos.z);
     const float dist = glm::length(offset);
     if (dist > m_structures.placeRange())
@@ -210,15 +236,45 @@ bool GameMatch::fitGround(EStructureType type, glm::vec3& p, const glm::quat& ro
     return ok;
 }
 
-bool GameMatch::aimGroundPoint(const Camera& camera, glm::vec3& outPos) const
+bool GameMatch::aimGroundPoint(const Camera& camera, glm::vec3& outPos, bool* onDeck) const
 {
     const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
+    if (onDeck)
+        *onDeck = false;
     if (m_sandboxWorld)
     {
-        // The terrain collider alone (trees, structures and the player's own capsule never stop the aim).
+        // The terrain collider alone (trees, structures and the player's own capsule never stop the aim) - and the
+        // SHIP's deck: the plane of its top over its tiles, when the ray meets it first.
         constexpr float c_aimReach = 250.0f;
+        float deckT = FLT_MAX;
+        glm::vec3 deckPoint(0.0f);
+        if (m_ship.exists())
+        {
+            const glm::quat inv = glm::inverse(m_ship.rotation());
+            const glm::vec3 o = m_ship.toLocal(ray.origin);
+            const glm::vec3 d = inv * ray.dir;
+            if (glm::abs(d.y) > 1e-4f)
+            {
+                const float t = -o.y / d.y;
+                const glm::vec3 l = o + d * t;
+                if (t > 0.0f && t < c_aimReach
+                    && GameShip::deckCell((int)std::floor(l.x / StructureSystem::GridCellSize), (int)std::floor(l.z / StructureSystem::GridCellSize)))
+                {
+                    deckT = t;
+                    deckPoint = m_ship.toWorld(l);
+                }
+            }
+        }
         const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(ray.origin, ray.dir * c_aimReach,
             PhysicsLayers::bit("Terrain"));
+        const float dirLen = glm::max(glm::length(ray.dir), 1e-6f);
+        if (deckT < FLT_MAX && (!hit.hit || deckT <= glm::length(hit.point - ray.origin) / dirLen + 0.05f))
+        {
+            outPos = deckPoint;
+            if (onDeck)
+                *onDeck = true;
+            return true;
+        }
         if (!hit.hit)
             return false;
         outPos = hit.point;
@@ -540,17 +596,101 @@ void GameMatch::stepSelection(int direction)
     armPageItem(page, selection);
 }
 
+// F TAPPED: the ship first, else the rally flag. At the helm: let go. With the crosshair ON THE BEACON (the ship's Base,
+// `hoveredStructure`; from under a flying hull too - the aim meets the deck): take the helm - the player goes to its
+// place behind the Beacon (up the ship's side when it was not on board). Anywhere else: the RALLY FLAG where the
+// crosshair aims.
+void GameMatch::onFTap(const Camera& camera)
+{
+    if (m_ship.exists() && m_player.entity())
+    {
+        if (m_piloting)
+        {
+            m_piloting = false;
+            return;
+        }
+        const int hover = hoveredStructure(camera);
+        if (hover >= 0 && m_structures.structureType(hover) == EStructureType::Base && m_structures.structureOnShip(hover))
+        {
+            const glm::vec3 helm = m_ship.toWorld(GameShip::helmLocal() + glm::vec3(0.0f, 2.0f, 0.0f));
+            if (glm::distance(m_player.bodyPos(), helm) >= 4.0f)
+            {
+                m_player.teleport(helm); // onto its place behind the Beacon
+                m_helmGrace = 0.5f;
+            }
+            m_piloting = true;
+            if (m_buildUi)
+                setMode(EPlayerMode::Select);
+            return;
+        }
+    }
+    glm::vec3 aim(0.0f);
+    if (aimGroundPoint(camera, aim))
+        setRally(true, aim);
+}
+
+void GameMatch::setRally(bool active, const glm::vec3& pos)
+{
+    if (m_rallyMarker)
+        Globals::world.removeRootEntity(m_rallyMarker.get());
+    m_rallyMarker = EntityPtr();
+    m_rallyActive = active;
+    m_rallyPos = pos;
+    if (!active)
+        return;
+    m_rallyMarker = Globals::world.spawnAssetFile("Entities/Game/rallyFlag.pre", Transform(pos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), true);
+    if (m_rallyMarker)
+        Globals::world.addRootEntity(m_rallyMarker);
+    m_followTimer = 0.0f; // the units start toward it at once
+}
+
 void GameMatch::updateModeSwitching()
 {
     Input& input = Globals::input;
     const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
     if (m_sandboxWorld)
     {
+        // F: A TAP (released within a second) is the ship's helm or the RALLY FLAG (onFTap, which needs the camera's aim:
+        // updateGameInput runs it right after this); HELD for a second it clears the flag.
+        const bool fKey = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F);
+        const double now = Globals::time.getElapsedSec(); // the real clock: a hold is a hold, paused or not
+        if (fKey && !m_shipKeyWasDown)
+        {
+            m_fPressTime = now;
+            m_fHoldFired = false;
+        }
+        if (fKey && !m_fHoldFired && now - m_fPressTime >= 1.0)
+        {
+            m_fHoldFired = true;
+            setRally(false, glm::vec3(0.0f));
+        }
+        if (!fKey && m_shipKeyWasDown && !m_fHoldFired)
+            m_fTapPending = true;
+        m_shipKeyWasDown = fKey;
+        // L at the helm: LAND on the grid at the ground under the ship (tickShip settles it), or take off again.
+        const bool landKey = focused && m_piloting && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_L);
+        if (landKey && !m_landKeyWasDown)
+            toggleShipLanding();
+        m_landKeyWasDown = landKey;
         static constexpr SDL_Scancode c_buildKeys[4] = { SDL_Scancode::SDL_SCANCODE_TAB, SDL_Scancode::SDL_SCANCODE_Q,
             SDL_Scancode::SDL_SCANCODE_E, SDL_Scancode::SDL_SCANCODE_X };
         for (int k = 0; k < 4; ++k)
         {
             const bool down = focused && input.isKeyDown(c_buildKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+            if (m_piloting)
+            {
+                // AT THE HELM a build key is L (no building there): the landing placement, or take off. While the
+                // landing ghost is up, Q / E turn it (updateLandPlacement) instead.
+                const bool turnKey = k == 1 || k == 2;
+                if (down && !m_buildKeyWasDown[k] && !(m_landPlacing && turnKey))
+                {
+                    toggleShipLanding();
+                    if (turnKey)
+                        m_landRotKeyWasDown[k - 1] = true; // the press that opened the ghost does not also turn it
+                }
+                m_buildKeyWasDown[k] = down;
+                continue;
+            }
             if (down && !m_buildKeyWasDown[k])
                 switch (k)
                 {
@@ -874,8 +1014,11 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
     m_frameGroundFit = aim.ground; // the HUD names a refused ground
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
-    drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
-                                                  // (crossings are auto-placed by the paint stroke)
+    if (aim.ship)
+        drawShipGhost(aim.type, aim.local, color); // on the deck: turned and tilted with the ship
+    else
+        drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
+                                                      // (crossings are auto-placed by the paint stroke)
     if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
@@ -913,7 +1056,9 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         const glm::vec3 hue = aim.yield < 0.0f ? glm::vec3(0.6f) : glm::mix(glm::vec3(1.0f, 0.4f, 0.3f), glm::vec3(0.4f, 1.0f, 0.5f), aim.yield);
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.harvestRadius(), packColor(hue), 64);
     }
-    if (confirmEdge && aim.affordable)
+    if (confirmEdge && aim.affordable && aim.ship)
+        requestShipPlace(aim.type, aim.local, aim.yield); // one piece (a wall line is not dragged on the deck)
+    else if (confirmEdge && aim.affordable)
     {
         if (isLineType(aim.type))
         {
@@ -933,7 +1078,8 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
     const int hover = hoveredStructure(camera);
     if (hover < 0)
         return;
-    const bool deletable = m_structures.structureType(hover) != EStructureType::Base;
+    const bool deletable = m_structures.structureType(hover) != EStructureType::Base
+        && m_structures.structureType(hover) != EStructureType::ShipRail;
     drawCircle(m_structures.structureGroundPos(hover) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
         packColor(deletable ? glm::vec3(1.0f, 0.25f, 0.2f) : glm::vec3(0.5f, 0.5f, 0.5f)), 20);
     if (confirmEdge && deletable)

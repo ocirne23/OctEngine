@@ -13,6 +13,44 @@ uint8 TeamField::costAt(const glm::ivec2& cell) const
     return chunk ? chunk->cost[cellIndex(cell)] : 0; // no chunk yet = open ground
 }
 
+namespace
+{
+    // EDGE WALLS: the side bit of an orthogonal step, and whether a step (orthogonal or diagonal) crosses a walled side.
+    // Symmetric: the step a -> b is walled exactly when b -> a is (the flood's fixpoint needs that). A diagonal step is
+    // walled when any of the four edges around its corner is.
+    constexpr uint8 sideBit(int dx, int dz) { return uint8(dx > 0 ? 1 : dx < 0 ? 2 : dz > 0 ? 4 : 8); }
+    template <typename Walls>
+    bool walledStep(const glm::ivec2& c, const glm::ivec2& o, const Walls& walls)
+    {
+        if (o.x != 0 && o.y != 0)
+            return walledStep(c, glm::ivec2(o.x, 0), walls) || walledStep(c, glm::ivec2(0, o.y), walls)
+                || walledStep(c + glm::ivec2(o.x, 0), glm::ivec2(0, o.y), walls) || walledStep(c + glm::ivec2(0, o.y), glm::ivec2(o.x, 0), walls);
+        return (walls(c) & sideBit(o.x, o.y)) != 0 || (walls(c + o) & sideBit(-o.x, -o.y)) != 0;
+    }
+}
+
+uint8 TeamField::wallsAt(const glm::ivec2& cell) const
+{
+    const Chunk* chunk = findChunk(cell);
+    return chunk ? chunk->walls[cellIndex(cell)] : 0;
+}
+
+bool TeamField::stepWalled(const glm::ivec2& cell, const glm::ivec2& offset) const
+{
+    if (!m_hasWalls)
+        return false;
+    const Chunk* chunk = findChunk(cell);
+    return chunk && chunk->wallsNear && walledStep(cell, offset, [this](const glm::ivec2& c) { return wallsAt(c); });
+}
+
+bool TeamField::wallsNear(const glm::ivec2& cell) const
+{
+    if (!m_hasWalls)
+        return false;
+    const Chunk* chunk = findChunk(cell);
+    return chunk && chunk->wallsNear;
+}
+
 void TeamField::snapshotCosts(const glm::vec2& center, int radiusCells, CostWindow& out) const
 {
     radiusCells = glm::clamp(radiusCells, 1, CostWindow::MaxRadius);
@@ -108,8 +146,15 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
     // when a rule applies.
     oc::span<const NavObstacle> obstacles = allObstacles;
     const uint8 walkers = fieldTeam >= 0 ? uint8(~(1u << fieldTeam)) : uint8(0xFF);
-    const auto opens = [&](const NavObstacle& o) { return fieldTeam >= 0 && (o.openFor & walkers) != 0; };
-    const auto walls = [&](const NavObstacle& o) { return (o.wallFor & walkers) != 0 && o.cost != 0; };
+    // EDGE WALLS (o.edges) apply in the fields their wallFor teams walk, in the raster and the goals, and everywhere
+    // with wallFor 0; elsewhere they are left out.
+    const auto opens = [&](const NavObstacle& o)
+    {
+        if (o.edges)
+            return fieldTeam >= 0 && o.wallFor != 0 && (o.wallFor & walkers) == 0;
+        return fieldTeam >= 0 && (o.openFor & walkers) != 0;
+    };
+    const auto walls = [&](const NavObstacle& o) { return !o.edges && (o.wallFor & walkers) != 0 && o.cost != 0; };
     bool any = false;
     for (const NavObstacle& o : allObstacles)
         any = any || opens(o) || walls(o);
@@ -140,6 +185,28 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
             for (int x = lo.x; x <= hi.x; ++x)
                 m_chunks.getOrCreate(chunkKey(glm::ivec2(x, z)));
     }
+    // EDGE WALLS: serial (a handful of obstacles), into the pre-created chunks; no cost is stamped for them.
+    m_hasWalls = false;
+    for (const NavObstacle& o : obstacles)
+    {
+        if (!o.edges)
+            continue;
+        const glm::ivec2 lo = cellOf(o.min + 1e-3f);
+        const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+        for (int z = lo.y; z <= hi.y; ++z)
+            for (int x = lo.x; x <= hi.x; ++x)
+                if (Chunk* chunk = m_chunks.find(chunkKey(chunkOf(glm::ivec2(x, z)))))
+                {
+                    chunk->walls[cellIndex(glm::ivec2(x, z))] |= o.edges;
+                    m_hasWalls = true;
+                    // Every chunk holding a cell within one cell of it: a step from there may cross this wall (the
+                    // inflated pre-creation above made those chunks).
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx)
+                            if (Chunk* near = m_chunks.find(chunkKey(chunkOf(glm::ivec2(x + dx, z + dz)))))
+                                near->wallsNear = 1;
+                }
+    }
     // Pre-emption points between the phases (each phase boundary is a barrier, nothing is half-
     // done), and the parallelFors run at the build's own LOW priority so their automatic points
     // between chunks yield to Normal work too, not just High.
@@ -155,7 +222,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
         for (uint32 idx = begin; idx < end; ++idx)
         {
             const NavObstacle& o = c->obstacles[idx];
-            if (o.cost != 0)
+            if (o.cost != 0 || o.edges)
                 continue;
             const glm::ivec2 lo = cellOf(o.min + 1e-3f);
             const glm::ivec2 hi = cellOf(o.max - 1e-3f);
@@ -179,7 +246,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
         for (uint32 idx = begin; idx < end; ++idx)
         {
             const NavObstacle& o = c->obstacles[idx];
-            if (o.cost == 0)
+            if (o.cost == 0 || o.edges)
                 continue;
             const glm::ivec2 lo = cellOf(o.min + 1e-3f);
             const glm::ivec2 hi = cellOf(o.max - 1e-3f);
@@ -406,6 +473,12 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
         const Chunk* c = chunkOfRel(rel);
         return c ? c->dist[idxOfRel(rel)] : Unreached;
     };
+    const auto wallsRel = [&](const glm::ivec2& rel) -> uint8
+    {
+        const Chunk* c = chunkOfRel(rel);
+        return c ? c->walls[idxOfRel(rel)] : 0;
+    };
+    const bool hasWalls = m_hasWalls && chunk.wallsNear; // a chunk away from every edge wall checks nothing
 
     // Local lazy-deletion heap over THIS chunk's cells: packed (dist << 16) | cellIndex.
     // Legal ONLY because this solve never waits (no parallelFor, no join, no JobMutex): the pin
@@ -470,6 +543,8 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
             if (k >= 4 && (costRel(rel + glm::ivec2(c_offsets[k].x, 0)) == Blocked
                 || costRel(rel + glm::ivec2(0, c_offsets[k].y)) == Blocked))
                 continue; // no corner cutting
+            if (hasWalls && walledStep(rel, c_offsets[k], wallsRel))
+                continue; // an edge wall between them
             const uint32 d = extDist + c_stepCost[k] * (1u + ownCost);
             if (d <= maxDist && d < Unreached)
                 tryImprove(i, d, chunkOfRel(n)->src[idxOfRel(n)]);
@@ -498,6 +573,8 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
             if (k >= 4 && (costRel(rel + glm::ivec2(c_offsets[k].x, 0)) == Blocked
                 || costRel(rel + glm::ivec2(0, c_offsets[k].y)) == Blocked))
                 continue; // no corner cutting
+            if (hasWalls && walledStep(rel, c_offsets[k], wallsRel))
+                continue; // an edge wall between them
             const uint32 d = dist + c_stepCost[k] * (1u + cost);
             if (d > maxDist || d >= Unreached)
                 continue;
@@ -534,6 +611,7 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
     glm::ivec2 bestCell = c;
     uint16 bestSrc = NoSource;
     uint32 centreDist = Unreached;
+    const bool walls = wallsNear(c); // one lookup: away from every edge wall no neighbour is checked
     for (int dz = -1; dz <= 1; ++dz)
         for (int dx = -1; dx <= 1; ++dx)
         {
@@ -550,6 +628,8 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
             const uint32 d = cached->dist[i];
             if (d == Unreached)
                 continue;
+            if (walls && (dx | dz) && stepWalled(c, glm::ivec2(dx, dz)))
+                continue; // across an edge wall: not this way
             if (dx == 0 && dz == 0)
                 centreDist = d;
             const uint32 jitter = ((seed ^ (uint32(n.x) * 73856093u) ^ (uint32(n.y) * 19349663u)) >> 13) & 7u;
@@ -598,7 +678,7 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
             if (!cached)
                 continue;
             const uint32 d = cached->dist[cellIndex(n)];
-            if (d == Unreached || d >= refDist)
+            if (d == Unreached || d >= refDist || (walls && stepWalled(c, glm::ivec2(dx, dz))))
                 continue;
             const glm::vec2 to = cellCenter(n) - xz;
             const float len = glm::length(to);
@@ -637,7 +717,7 @@ bool TeamField::steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm:
         {
             const glm::ivec2 n = cell + o;
             const Chunk* nc = findChunk(n);
-            if (!nc)
+            if (!nc || stepWalled(cell, o))
                 continue;
             const uint32 d = nc->dist[cellIndex(n)];
             if (d < best)
@@ -674,6 +754,8 @@ bool TeamField::steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm:
                 continue;
             if (k >= 4 && (costAt(cell + glm::ivec2(c_offsets[k].x, 0)) == Blocked
                 || costAt(cell + glm::ivec2(0, c_offsets[k].y)) == Blocked))
+                continue;
+            if (stepWalled(cell, c_offsets[k]))
                 continue;
             bestD = d;
             bestCell = n;
@@ -997,6 +1079,8 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
             if (k >= 4 && (costAt(nodes[top.index].cell + glm::ivec2(c_offsets[k].x, 0)) == Blocked
                 || costAt(nodes[top.index].cell + glm::ivec2(0, c_offsets[k].y)) == Blocked))
                 continue; // no corner cutting
+            if (stepWalled(nodes[top.index].cell, c_offsets[k]))
+                continue; // an edge wall between them
             const uint32 g = nodes[top.index].g + c_stepCost[k] * (1u + (cost == Blocked ? 0u : cost));
             const uint64 key = packCell(n);
             const uint32* known = index.find(key);
@@ -1073,12 +1157,16 @@ bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius
         if (tMax.x < tMax.y)
         {
             if (tMax.x > 1.0f) return true;
+            if (stepWalled(cell, glm::ivec2(step.x, 0)))
+                return false; // the line crosses an edge wall
             cell.x += step.x;
             tMax.x += tDelta.x;
         }
         else
         {
             if (tMax.y > 1.0f) return true;
+            if (stepWalled(cell, glm::ivec2(0, step.y)))
+                return false;
             cell.y += step.y;
             tMax.y += tDelta.y;
         }

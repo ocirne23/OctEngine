@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 30;
+export constexpr int GameStructureTypeCount = 31;
 export constexpr int GameUnitTypeCount = 11;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -15,7 +15,8 @@ export struct GameMatchSettings
     float waveInterval = 120.0f;
     // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost, so a brute-heavy archetype fields far
     // fewer bodies than a swarm flood of the same budget.
-    int waveBudget = 200;             // points in wave 1
+    int waveBudget = 100;             // points in wave 1 (the sandbox world: with the night ramp below, the first night is ~80% of what 200
+                                      // with a 0.25 ramp gave, the second ~1.3x, the later ones grow faster)
     float waveBudgetGrowth = 60.0f;   // extra points per subsequent wave
     float waveGrowthGrowth = 30.0f;   // how much that per-wave growth itself climbs every wave
     float waveCost[GameUnitTypeCount] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
@@ -50,7 +51,7 @@ export struct GameMatchSettings
     float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
     int   nightWaves = 14;            // waves in one night (the first at dusk): the time between them is the night's length / this
     float waveSizeMult = 1.0f;        // x every wave's budget: the one knob for "how many enemies"
-    float nightWaveRamp = 0.25f;     // each later wave of a night is this much bigger (x the night's base size, added per wave)
+    float nightWaveRamp = 0.5f;   // each later wave of a night is this much bigger (x the night's base size, added per wave)
     float nightWaveVariation = 0.4f;  // random +- on a night wave's size and on the time to the next one
     int   nightSurgeEvery = 4;        // every Nth wave of a night is a surge (0 = none)
     float nightSurgeSize = 2.0f;      // x the size of a surge wave
@@ -211,6 +212,7 @@ export struct GameStructureSettings
         4.0f,   // Walkway (per segment)
         40.0f,  // Armory
         50.0f,  // MageTower
+        5.0f,   // ShipRail (spawned with the ship, never placed - this entry only prices its repairs)
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -248,18 +250,22 @@ export struct GameStructureSettings
         120.0f,  // Walkway: a scaffold of wood
         250.0f,  // Armory
         250.0f,  // MageTower
+        600.0f,  // ShipRail: the ship's wall, one per edge tile
     };
     // RUBBLE: a building the enemy destroys stays as rubble and is built up again for this share of its cost (0 = no
     // rubble: a destroyed building is gone).
     float rubbleCost = 0.5f;
     float rubbleSafeRadius = 30.0f; // m: rubble is not built up while a living enemy unit is this near (0 = always)
-    float startMinerals = 200.0f;
+    float startMinerals = 250.0f;
     // THE HARVEST (the Lumberyard and the Quarry): a yard's YIELD (0..1) is what stands within harvestRadius of it
-    // against the "full" amount - trees for the Lumberyard, the rocks' summed size (m) for the Quarry; on the flat maps
-    // one resource node of its kind in the radius is a full yield. Never under harvestMinYield.
+    // against the "full" amount; on the flat maps one resource node of its kind in the radius is a full yield. Never
+    // under harvestMinYield. BY SIZE: each tree counts (its size / the world's average tree) ^ harvestSizeExponent, each
+    // rock (its longest axis / harvestRockRef) ^ harvestSizeExponent - so a big boulder or a big tree counts for many.
     float harvestRadius = 32.0f;
-    float harvestTreesFull = 12.0f;
-    float harvestStoneFull = 12.0f;
+    float harvestTreesFull = 6.7f;    // average trees
+    float harvestStoneFull = 4.0f;    // reference rocks (a 6 m boulder alone is 4 with the defaults, a 20 m monolith 44)
+    float harvestSizeExponent = 2.0f; // 1 = by length, 2 = by area, 3 = by volume
+    float harvestRockRef = 3.0f;      // m: the rock that counts 1
     float harvestMinYield = 0.1f;
     float mineralRate = 2.0f; // the Quarry at full yield (and the Base's trickle, x baseIncomeMult)
     float fuelRate = 1.0f;    // the Lumberyard at full yield
@@ -324,8 +330,7 @@ export struct GameStructureSettings
     float generatorFuelTank = 30.0f;
     float fuelTankCapacity = 1000.0f;    // wood: the Storehouse's (and the Woodshed's)
     float mineralSiloCapacity = 1000.0f; // stone: the Storehouse's
-    float mineralBaseCapacity = 200.0f;
-    float medicEnergyPerSec = 1.5f;
+    float mineralBaseCapacity = 250.0f;
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
     float barracksUnitHealthMult = 5.0f;  // x the prefab's HealthMax for a unit a barracks makes (the demons keep theirs)
     float barracksUnitDamageMult = 2.0f;  // x its AttackDamage and StructureDamage
@@ -349,7 +354,7 @@ export struct GameStructureSettings
     float baseEnergyCapacity = 1500.0f; // the same as one Crystal store
     float baseShieldEnergyPerSec = 1.5f; // the field's standing draw AND the Base's own generation: its idle field is free
     float baseShieldOutput = 2.4f;
-    float baseShieldReach = 54.0f;
+    float baseShieldReach = 75.0f;
     float bastionEnergyPerSec = 2.0f; // (see THE LIGHT BALANCE)
     float bastionOutput = 2.6f;
     float bastionReach = 90.0f;
@@ -525,6 +530,7 @@ export struct GameStructureParams
     float searchlightIntensity = 2500.0f;   // the spot light on the ground and the demons
     float medicRange = 12.0f;
     float medicHealRate = 40.0f;   // health/s AND battery energy/s per body (stations stack)
+    float medicHealCost = 0.5f;    // light to heal a unit from 0 to full health, x its spawn energy (paid per health healed)
 };
 
 // THE FACTION LAYER (Game:Faction, the sandbox world): whose land each cell is, and how that spreads.
@@ -583,8 +589,47 @@ export struct GameSoundSettings
     int cuesPlayed = 0;               // live readout: one-shots started in the last second
 };
 
+// THE SHIP (Game:Ship): the players' flying magic ship in the sandbox world - a kinematic deck 60 x 30 m that a player
+// boards and steers from the helm. See Docs/Context/Game/Ship.md.
+export struct GameShipSettings
+{
+    bool enabled = true;              // the sandbox world spawns one next to the Base
+    // FLIGHT (the throttle is the forward thrust; the drag is quadratic, so it has a top speed)
+    float thrust = 2.2f;              // m/s^2 at full throttle (reverse: a third of it)
+    float throttleRate = 0.6f;        // the throttle's change per second while W / S is held (a ship's telegraph, not a pedal)
+    float maxSpeed = 30.0f;           // m/s: the speed where the drag eats the full thrust
+    float sideDrag = 1.2f;            // 1/s: how fast the sideways slip dies (the hull's keel)
+    float turnRate = 14.0f;           // deg/s at full rudder
+    float turnAccel = 9.0f;           // deg/s^2: the rudder's push (the hull's weight)
+    float turnDrag = 1.6f;            // 1/s: the spin dies at this rate with no rudder
+    // HEIGHT (Space up, Ctrl down: the height over the ground under the hull)
+    float minHeight = 1.0f;          // m from the hull's keel to the highest ground under it
+    float maxHeight = 80.0f;         // m: the limit
+    float climbRate = 4.0f;           // m/s: Space / Ctrl move the wanted height this fast
+    float verticalStiffness = 0.9f;   // 1/s^2: the hover's spring toward the wanted height (low = floaty)
+    float verticalDamping = 1.4f;     // 1/s: and its damping
+    float maxVerticalAccel = 3.0f;    // m/s^2
+    float lookAhead = 2.5f;           // s: the ground ahead along the velocity counts this far (it climbs before a hill)
+    // THE SEA: over deep water the magic does not hold - it comes down and SAILS (rivers and lakes are fine)
+    float deepWater = 8.0f;          // m: a seabed this far under the sea level (with water over it) is the sea
+    float seaSpeedMult = 1.0f;      // x maxSpeed while sailing
+    float freeboard = 2.5f;           // m: the deck over the water while sailing (the hull is 7 m deep: 4.5 m of draft)
+    float seaStiffness = 2.5f;        // 1/s^2: afloat the water carries the hull - far firmer than the hover
+    float seaDamping = 2.2f;          // 1/s
+    float waveFollow = 1.0f;          // x the pitch and roll the waves give it (0 = flat on any sea)
+    // THE LOOK (visual only; the deck tilts too, so a standing player rides it)
+    float bankPerTurn = 1.5f;         // deg of roll per deg/s of turn, at full speed
+    float maxBank = 30.0f;            // deg
+    float pitchPerAccel = 0.8f;       // deg of pitch per m/s^2 of forward / vertical acceleration
+    float maxPitch = 3.0f;            // deg
+    float bobHeight = 0.25f;          // m: the slow hover bob (in the air: at sea the waves move it)
+    float bobPeriod = 6.0f;           // s
+    float cameraDistance = 55.0f;     // m: the camera's distance while a player steers (at least this)
+};
+
 export struct GameSettings
 {
+    GameShipSettings ship;
     GameSoundSettings sound;
     GameFactionSettings faction;
     GameMatchSettings match;

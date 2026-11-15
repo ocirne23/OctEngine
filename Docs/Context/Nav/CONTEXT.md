@@ -55,6 +55,16 @@ consumed at that cadence.
   the raster and the goals; only the other teams' walking keeps its breach cost. So steering, line of sight and the
   lane A* all go around it. **The game's walkways:** a wall for their own team (the enemy still routes through and
   bites them).
+* **`edges`** (bit 0 +X, 1 -X, 2 +Z, 3 -Z): non-zero = no cell obstacle but EDGE WALLS - those sides of every cell it
+  covers are walls (`Chunk::walls`, stamped serially in `rasterizeObstacles`; no cost). No step crosses one: the flood
+  (`floodSolveChunk`, its boundary imports too), the descent (`sample`, `steerPoint`), the A* (`findPath`) and the line
+  of sight (the DDA's every cell step) - a diagonal step when any of the four edges around its corner is a wall
+  (`walledStep`: symmetric, so the flood's fixpoint stands). They apply in the fields the `wallFor` teams walk, in the
+  raster and the goals, and in every field with `wallFor` 0. THE COST stays where the walls are: a field with none
+  checks nothing (`m_hasWalls`), and in one with walls only a chunk flagged `wallsNear` (it holds a cell within one cell
+  of a wall) does - the flood solve of any other chunk, and a `sample` / `stepWalled` from a cell in one, skip the
+  checks after one flag read. Steering's raster probes (`avoid`, `wallPush`, `freeDistance`) do not see them: the bodies' colliders
+  stop a walker there. **The game's ship rails:** the rail tile is walked, its outer sides are never crossed.
 
 **`NavSource`** — `pos`, `stopRadius` (footprint half; it seeds every cell it covers, so a wall is a
 target too), `id`, `kind`:

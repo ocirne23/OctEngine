@@ -1,0 +1,11 @@
+# ONE STEP of the stairs out of one entrance tile of a landed ship (StructureSystem::buildGangways): render only, its top
+# at the origin, 2 m wide, turned so its X runs out from the deck. The stairs' collider is one sloped box the system
+# makes itself.
+Prefab gameGangwayStep
+	Global true
+	Component Render
+		ObjectContainer shipRail
+		Node GangwayStep
+		Type StaticMesh
+		Color 0.5 0.36 0.21
+		Scale 1

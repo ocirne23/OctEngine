@@ -1,0 +1,57 @@
+# THE SHIP'S WALL: one per edge tile of the deck (StructureSystem::ensureShipRails), a ShipRail structure - health,
+# rubble and repair like a Wall, never placed or deleted by a player. Spawned origin 0.5 over the deck (1 m tall). NO
+# Physics component: the tile is walked on (and is road); StructureSystem::buildRailBody makes a body of only the rail
+# pieces on the open sides (a prefab has one shape). The four arm children are the rail along each edge of the tile (+X, -X, +Z, -Z), enabled
+# by StructureSystem::applyRailSides on the sides that face off the deck (GameShip::railSides). The root's mesh is the
+# tile's sill plate: a structure needs a mesh of its own, the units find what to bite by it.
+Prefab gameShipRail
+	Global true
+	Component Render
+		ObjectContainer shipRail
+		Node RailSill
+		Type StaticMesh
+		Color 0.36 0.24 0.13
+		Scale 1
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name ArmPX
+			Enabled false
+			Position 0.8 0 0
+			Component Render
+				ObjectContainer shipRail
+				Node RailZ
+				Type StaticMesh
+				Color 0.42 0.29 0.16
+				Scale 1
+		Entity
+			Name ArmNX
+			Enabled false
+			Position -0.8 0 0
+			Component Render
+				ObjectContainer shipRail
+				Node RailZ
+				Type StaticMesh
+				Color 0.42 0.29 0.16
+				Scale 1
+		Entity
+			Name ArmPZ
+			Enabled false
+			Position 0 0 0.8
+			Component Render
+				ObjectContainer shipRail
+				Node RailX
+				Type StaticMesh
+				Color 0.42 0.29 0.16
+				Scale 1
+		Entity
+			Name ArmNZ
+			Enabled false
+			Position 0 0 -0.8
+			Component Render
+				ObjectContainer shipRail
+				Node RailX
+				Type StaticMesh
+				Color 0.42 0.29 0.16
+				Scale 1

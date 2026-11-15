@@ -187,6 +187,12 @@ GameMatch::~GameMatch()
     if (!m_enabled)
         return;
     Globals::jobSystem.wait(m_labelsCounter); // the labels job reads this object
+    m_ship.despawn(); // its entity off the root list, its body out of the world
+    if (m_rallyMarker)
+        Globals::world.removeRootEntity(m_rallyMarker.get());
+    m_rallyMarker = EntityPtr();
+    Globals::gameHud.removeCounter("Ship");
+    Globals::gameHud.removeCounter("Flag");
     Globals::rendererVK.clearSceneFocus(); // back to camera-based cascades and RTAO falloff for the sandbox/menu
     // The ctor's top-down preset off again. The debug mode stays as it is NOW: it is a baked shader
     // define, and only its tweak callback reloads the pipeline - a silent write would desync the two.
@@ -470,6 +476,37 @@ void GameMatch::tickBaseSite(float deltaSec)
     m_playerStart = glm::vec3(m_worldAnchor.x, startY + 1.5f, m_worldAnchor.z);
     glm::vec2 ahead(m_worldAnchorDir.x, m_worldAnchorDir.z);
     ahead = glm::dot(ahead, ahead) > 1e-6f ? glm::normalize(ahead) : glm::vec2(0.0f, -1.0f);
+    if (Globals::settings.game.ship.enabled)
+    {
+        // THE SHIP IS THE BASE, and the game starts IN THE AIR: the ship flies 50 m over the start (its deck's middle
+        // line over the anchor, the bow along the view) with the Beacon on its deck, and the player is at the helm -
+        // the first thing to do is pick a landing site (L). The respawn point stays on the ground at the anchor.
+        constexpr float c_startHeight = 50.0f; // the deck over the ground at the anchor
+        const float yaw = std::atan2(-ahead.x, -ahead.y);
+        const glm::quat shipRot = glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::vec3 centre = glm::vec3(m_worldAnchor.x, startY + c_startHeight, m_worldAnchor.z)
+            - shipRot * glm::vec3(GameShip::DeckCentreX, 0.0f, 0.0f);
+        m_siteFound = true;
+        m_ship.spawn(centre, yaw);
+        m_ship.setWantedHeight(c_startHeight - GameShip::KeelDepth); // it hovers there until the pilot moves it
+        m_structures.setShipPose(true, m_ship.position(), m_ship.rotation(), false);
+        m_structures.tickShipStructures();
+        m_structures.spawnShipBase();
+        m_structures.ensureShipRails();
+        m_basePos = glm::vec3(m_worldAnchor.x, startY, m_worldAnchor.z); // the ground under it (the waves' and the fields' reference until it lands)
+        m_player.setRespawnPos(m_playerStart);
+        m_playerStart = m_ship.toWorld(GameShip::helmLocal() + glm::vec3(0.0f, 1.5f, 0.0f)); // on board, at the helm
+        spawnLocalPlayer();
+        m_piloting = true;
+        m_helmGrace = 0.5f;
+        Log::info(oc::format("Sandbox world: the ship (the Base) flies over the start at ({:.0f}, {:.1f}, {:.0f})", centre.x, centre.y, centre.z));
+        if (m_scenarioWaitsForSite)
+        {
+            m_scenarioWaitsForSite = false;
+            runScenario(m_scenarioSave);
+        }
+        return;
+    }
     constexpr float c_baseAhead = 14.0f;
     const glm::vec3 searchCenter = m_worldAnchor + glm::vec3(ahead.x, 0.0f, ahead.y) * c_baseAhead;
     const float keepClear = StructureSystem::footprintCellsOf(EStructureType::Base) * StructureSystem::GridCellSize * 0.5f + 2.0f;
@@ -500,7 +537,7 @@ void GameMatch::tickBaseSite(float deltaSec)
         Log::warning("Sandbox world: no flat, dry, tree-free Base site near the start - the Base goes ahead of it anyway");
     m_siteFound = true;
     m_basePos = glm::vec3(site.x, siteY, site.z);
-    m_structures.spawnBase(m_basePos);
+    m_structures.spawnBase(m_basePos); // (no ship: "Game/Ship" "Enabled" off - the Beacon stands on the land)
     m_player.setRespawnPos(m_playerStart);
     spawnLocalPlayer();
     Log::info(oc::format("Sandbox world: the Base stands at ({:.0f}, {:.1f}, {:.0f})", m_basePos.x, m_basePos.y, m_basePos.z));
@@ -542,6 +579,7 @@ void GameMatch::updatePlayer(float deltaSec)
         m_player.clientAdopt(teamStartPos((uint8)m_team));
     }
     // (No building ever stands on a player: a player in the footprint refuses the placement, StructureSystem::actorInFootprint.)
+    tickShip(deltaSec); // the ship moves first: the player's walk is relative to its deck
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
     // THE STAFF LIGHT COMES BACK FROM LIGHT, NOT BY ITSELF (the sandbox world): by day as the daylight, and near a light
     // store - a Crystal store or the Beacon of the own team within "Hub reach (m)" that holds light - as a building
@@ -929,6 +967,8 @@ void GameMatch::gatherNavFeed(float deltaSec)
         // them) and never a NavSource (enemies do not march at power lines).
         if (isWalkThrough(s.type) || s.state->rubble) // rubble is walked over too, and it is no target
             continue;
+        if (s.onShip && !m_structures.shipJoined())
+            continue; // on the FLYING ship: in the air over the ground, no obstacle or target down there
         const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
         // WALLS are BREACHABLE obstacles ("Wall breach cost"): the field routes through one where
@@ -938,11 +978,22 @@ void GameMatch::gatherNavFeed(float deltaSec)
         // A BUILT GATE is OPEN for its own team: its army walks through (the Friend physics layer) and paths through it
         // (Nav leaves it out of the fields that team walks); the enemy still has to breach it.
         const uint8 ownBit = s.state->team < Nav::MaxTeams ? uint8(1u << s.state->team) : uint8(0);
-        const uint8 openFor = s.type == EStructureType::Gate && !s.state->blueprint ? ownBit : uint8(0);
+        // A BUILT SHIP RAIL is open for its own team too: the own army walks along the rail tiles (the enemy breaches it).
+        const uint8 openFor = (s.type == EStructureType::Gate || s.type == EStructureType::ShipRail) && !s.state->blueprint ? ownBit : uint8(0);
         // A WALKWAY is a WALL for its own team (nothing passes under the deck, and Nav is flat: no way up the stairs),
         // and for the raster and the goals; the enemy's field keeps it breachable.
         const uint8 wallFor = s.type == EStructureType::Walkway ? ownBit : uint8(0);
         m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach, openFor, wallFor });
+        // ITS RAIL PIECES are EDGE WALLS for its own team (and the raster and the goals): the own army walks the rail
+        // tile but never steps off the ship across them - only through the entrances. The enemy's field has no such
+        // walls: it comes up to the rail from outside and bites it.
+        if (s.type == EStructureType::ShipRail && !s.state->blueprint && s.onShip)
+            if (const uint8 sides = m_structures.railWorldSides(s))
+            {
+                Nav::NavObstacle edge{ c - half, c + half, 0, 0, ownBit };
+                edge.edges = sides;
+                m_navObstacles.push_back(edge);
+            }
         // Sources: what units of OTHER teams walk toward - the same filter the local search used
         // (alive, not the invulnerable Base). Clients run no unit sim: obstacles only, for the
         // local player's goal field.
@@ -1053,6 +1104,284 @@ void GameMatch::tickStaffBeam(float deltaSec)
         -axis, 0.08f, m_settings.staffBeamRange, m_settings.staffBeamRange * 0.3f));
 }
 
+void GameMatch::tickShip(float deltaSec)
+{
+    m_shipNoteTimer = glm::max(m_shipNoteTimer - deltaSec, 0.0f);
+    if (!m_ship.exists())
+    {
+        m_piloting = false;
+        m_player.setPlatform(glm::vec3(0.0f), false);
+        m_player.setControlsLocked(false);
+        m_structures.setShipPose(false, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false);
+        return;
+    }
+    // At the helm: the keys are the ship's (W / S the throttle lever, A / D the rudder, Space / Ctrl the height).
+    GameShip::Input input;
+    const Input& keys = Globals::input;
+    const bool focused = keys.isWindowHasFocus() && Globals::ui.isViewportFocused() && !m_player.cameraDetached();
+    if (m_piloting && focused)
+    {
+        input.piloted = true;
+        input.throttle = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_W) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_S) ? 1.0f : 0.0f);
+        input.turn = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_A) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_D) ? 1.0f : 0.0f);
+        input.climb = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_SPACE) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_LCTRL) ? 1.0f : 0.0f);
+    }
+    else if (m_piloting)
+        input.piloted = true; // the window lost focus: the lever holds, nothing steers
+    m_ship.tick(deltaSec, input, [this](float x, float z, float fallback) { return groundY(x, z, fallback); });
+
+    // THE STRUCTURES ON THE DECK follow it (and join the world when it has landed, leave it when it lifts off); the
+    // ship's body carries their boxes while it flies.
+    m_structures.setShipPose(true, m_ship.position(), m_ship.rotation(), m_ship.landed());
+    m_structures.tickShipStructures();
+    if (m_structures.shipRevision() != m_shipBoxRevision)
+    {
+        m_shipBoxRevision = m_structures.shipRevision();
+        oc::vector<GameShip::Box> boxes;
+        m_structures.shipColliderBoxes(boxes);
+        m_ship.setStructureBoxes(boxes);
+    }
+    if (m_ship.landed()) // THE HOME SITE: where it stands (the landing ghost snaps back to it)
+    {
+        m_hasShipHome = true;
+        m_shipHome = m_ship.landedPos();
+        m_shipHomeTurns = m_ship.quarterTurns();
+    }
+    if (m_ship.landed()) // the Beacon stands on the land: the fields' bake slice and the waves' home follow it there
+        for (const StructureSystem::Ref& ref : m_structures.structures())
+            if (ref.type == EStructureType::Base && ref.onShip && ref.state->team == 0)
+                m_basePos = ref.entity->pos - glm::vec3(0.0f, StructureSystem::spawnHeightOf(EStructureType::Base), 0.0f);
+
+    // The own player on the deck goes with it; at the helm it is also held at the wheel (it does not walk there).
+    if (!m_player.entity())
+        return;
+    const glm::vec3 pos = m_player.bodyPos();
+    const glm::vec3 helm = m_ship.toWorld(GameShip::helmLocal() + glm::vec3(0.0f, 2.0f, 0.0f));
+    m_helmGrace = glm::max(m_helmGrace - deltaSec, 0.0f);
+    if (m_piloting && m_helmGrace <= 0.0f && glm::distance(pos, helm) > 8.0f)
+        m_piloting = false; // knocked off the helm (or it fell off the ship)
+    const bool onDeck = m_ship.onDeck(pos);
+    glm::vec3 platform = onDeck ? m_ship.pointVelocity(pos) : glm::vec3(0.0f);
+    if (m_piloting)
+    {
+        const glm::vec3 pull = (helm - pos) * 4.0f;
+        platform += glm::vec3(pull.x, 0.0f, pull.z);
+    }
+    m_player.setPlatform(platform, onDeck || m_piloting);
+    m_player.setControlsLocked(m_piloting);
+}
+
+const char* GameMatch::shipLandingSite(const glm::vec3& at, int turns, glm::vec3& outCentre) const
+{
+    const glm::vec3 centre = GameShip::snapCentre(at);
+    const glm::quat rot = glm::angleAxis(GameShip::yawOfQuarterTurns(turns), glm::vec3(0.0f, 1.0f, 0.0f));
+    constexpr float c_tile = StructureSystem::GridCellSize;
+    const bool water = Globals::physics.isWaterActive();
+    float high = -FLT_MAX, low = FLT_MAX;
+    for (int cz = -GameShip::DeckRows / 2; cz < GameShip::DeckRows / 2; ++cz)
+        for (int cx = -GameShip::MaxHalfTiles; cx <= GameShip::MaxHalfTiles; ++cx)
+        {
+            if (!GameShip::deckCell(cx, cz))
+                continue;
+            const glm::vec3 w = centre + rot * glm::vec3(((float)cx + 0.5f) * c_tile, 0.0f, ((float)cz + 0.5f) * c_tile);
+            const float h = m_structures.groundHeightAt(w.x, w.z, -FLT_MAX);
+            if (h == -FLT_MAX)
+                return "no ground";
+            if (water && Globals::physics.sampleWaterHeight(w.x, w.z) > h + 0.05f)
+                return "water";
+            high = glm::max(high, h);
+            low = glm::min(low, h);
+        }
+    // The deck top at the HIGHEST ground under it (no ground pokes through it); the hull may not hang in the air at the
+    // low side.
+    if (high - low > GameShip::KeelDepth - 1.0f)
+        return "too steep";
+    outCentre = glm::vec3(centre.x, high + 0.05f, centre.z);
+    // Trees and rocks through the hull or the deck: one box per run of rows of the same width (a quarter turn keeps it
+    // axis aligned in the world).
+    for (int row = 0; row < GameShip::DeckRows;)
+    {
+        const int half = GameShip::rowHalfTiles(row);
+        int last = row;
+        while (last + 1 < GameShip::DeckRows && GameShip::rowHalfTiles(last + 1) == half)
+            ++last;
+        const float z0 = -GameShip::DeckHalfLength + (float)row * c_tile, z1 = -GameShip::DeckHalfLength + (float)(last + 1) * c_tile;
+        const glm::vec3 a = rot * glm::vec3(-(float)half * c_tile + 0.1f, 0.0f, z0 + 0.1f);
+        const glm::vec3 b = rot * glm::vec3((float)(half + 1) * c_tile - 0.1f, 0.0f, z1 - 0.1f); // the tiles -half .. half
+        const glm::vec3 boxMin = glm::min(a, b), boxMax = glm::max(a, b);
+        const glm::vec3 boxCenter(centre.x + (boxMin.x + boxMax.x) * 0.5f, (low + high + 3.0f) * 0.5f, centre.z + (boxMin.z + boxMax.z) * 0.5f);
+        const glm::vec3 boxHalf((boxMax.x - boxMin.x) * 0.5f, (high + 3.0f - low) * 0.5f, (boxMax.z - boxMin.z) * 0.5f);
+        if (Globals::physics.overlapBoxAny(boxCenter, boxHalf, PhysicsLayers::bit("Vegetation")))
+            return "trees in the way";
+        row = last + 1;
+    }
+    if (!m_structures.shipLandingClear(outCentre, turns))
+        return "buildings in the way";
+    return nullptr;
+}
+
+void GameMatch::toggleShipLanding()
+{
+    if (!m_ship.exists())
+        return;
+    if (m_ship.grounded()) // landed, or on its way down: lift off (from there)
+    {
+        m_landPlacing = false;
+        m_ship.takeOff();
+        return;
+    }
+    if (m_landPlacing)
+    {
+        m_landPlacing = false;
+        return;
+    }
+    // The ghost starts in the home site's turn (so it snaps there), else in the ship's own.
+    m_landPlacing = true;
+    m_landPlaceTurns = m_hasShipHome ? m_shipHomeTurns : GameShip::quarterTurnsOf(m_ship.yaw());
+    m_landCacheTurns = -1;
+}
+
+void GameMatch::updateLandPlacement(const Camera& camera, bool confirmEdge, bool rmbEdge)
+{
+    if (!m_piloting || !m_ship.exists() || m_ship.grounded() || rmbEdge)
+    {
+        m_landPlacing = false;
+        return;
+    }
+    GameHud& hud = Globals::gameHud;
+    // Q / E: a quarter turn.
+    const Input& input = Globals::input;
+    const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
+    static constexpr SDL_Scancode c_turnKeys[2] = { SDL_Scancode::SDL_SCANCODE_Q, SDL_Scancode::SDL_SCANCODE_E };
+    for (int k = 0; k < 2; ++k)
+    {
+        const bool down = focused && input.isKeyDown(c_turnKeys[k]);
+        if (down && !m_landRotKeyWasDown[k])
+            m_landPlaceTurns = (m_landPlaceTurns + (k == 0 ? 1 : 3)) & 3;
+        m_landRotKeyWasDown[k] = down;
+    }
+    // The crosshair on the TERRAIN (the ship's own deck never stops this aim).
+    const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
+    constexpr float c_reach = 400.0f;
+    const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(ray.origin, ray.dir * c_reach, PhysicsLayers::bit("Terrain"));
+    if (!hit.hit)
+    {
+        hud.setCounterText("Ship", "aim at the ground", glm::vec3(1.0f, 0.9f, 0.5f));
+        return;
+    }
+    // The ghost's centre is the deck's middle line under the crosshair (the origin is 1 m off it, on a tile corner).
+    const glm::quat rot = glm::angleAxis(GameShip::yawOfQuarterTurns(m_landPlaceTurns), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec3 at = hit.point - rot * glm::vec3(GameShip::DeckCentreX, 0.0f, 0.0f);
+    at = GameShip::snapCentre(at);
+    // THE HOME SITE pulls it (within 8 m, in the home's turn): back to the very same spot.
+    const bool home = m_hasShipHome && m_landPlaceTurns == m_shipHomeTurns
+        && glm::length(glm::vec2(at.x - m_shipHome.x, at.z - m_shipHome.z)) < 8.0f;
+    if (home)
+        at = m_shipHome;
+    // The site test (one ray per deck tile): only when the snapped place or the turn changed.
+    if (at.x != m_landCacheAt.x || at.z != m_landCacheAt.z || m_landPlaceTurns != m_landCacheTurns)
+    {
+        m_landCacheAt = at;
+        m_landCacheTurns = m_landPlaceTurns;
+        m_landCacheWhy = shipLandingSite(at, m_landPlaceTurns, m_landCacheCentre);
+    }
+    const char* why = m_landCacheWhy;
+    constexpr float c_maxRange = 300.0f; // from the ship
+    if (!why && glm::length(glm::vec2(at.x - m_ship.position().x, at.z - m_ship.position().z)) > c_maxRange)
+        why = "too far";
+    const glm::vec3 shown = why ? glm::vec3(at.x, hit.point.y, at.z) : m_landCacheCentre;
+    drawShipFootprint(shown, m_landPlaceTurns, packColor(why ? glm::vec3(1.0f, 0.3f, 0.2f)
+        : home ? glm::vec3(0.4f, 0.8f, 1.0f) : glm::vec3(0.3f, 1.0f, 0.4f)));
+    hud.setCounterText("Ship", why ? why : home ? "LMB: land home" : "LMB: land  Q/E: turn",
+        why ? glm::vec3(1.0f, 0.45f, 0.35f) : glm::vec3(0.6f, 1.0f, 0.6f));
+    if (confirmEdge && !why)
+    {
+        m_ship.land(m_landCacheCentre, m_landPlaceTurns);
+        m_landPlacing = false;
+    }
+}
+
+void GameMatch::drawShipFootprint(const glm::vec3& centre, int turns, uint32 color) const
+{
+    // The deck's outline (every tile edge with no deck tile beyond it), a hand over the ground, and the bow's line.
+    const glm::quat rot = glm::angleAxis(GameShip::yawOfQuarterTurns(turns), glm::vec3(0.0f, 1.0f, 0.0f));
+    constexpr float c_tile = StructureSystem::GridCellSize;
+    const glm::vec3 lift(0.0f, 0.3f, 0.0f);
+    const auto world = [&](float x, float z) { return centre + lift + rot * glm::vec3(x, 0.0f, z); };
+    for (int cz = -GameShip::DeckRows / 2; cz < GameShip::DeckRows / 2; ++cz)
+        for (int cx = -GameShip::MaxHalfTiles; cx <= GameShip::MaxHalfTiles; ++cx)
+        {
+            if (!GameShip::deckCell(cx, cz))
+                continue;
+            const float x0 = (float)cx * c_tile, x1 = x0 + c_tile, z0 = (float)cz * c_tile, z1 = z0 + c_tile;
+            if (!GameShip::deckCell(cx + 1, cz))
+                Globals::rendererVK.addDebugLine(world(x1, z0), world(x1, z1), color);
+            if (!GameShip::deckCell(cx - 1, cz))
+                Globals::rendererVK.addDebugLine(world(x0, z0), world(x0, z1), color);
+            if (!GameShip::deckCell(cx, cz + 1))
+                Globals::rendererVK.addDebugLine(world(x0, z1), world(x1, z1), color);
+            if (!GameShip::deckCell(cx, cz - 1))
+                Globals::rendererVK.addDebugLine(world(x0, z0), world(x1, z0), color);
+        }
+    Globals::rendererVK.addDebugLine(world(GameShip::DeckCentreX, 0.0f), world(GameShip::DeckCentreX, -GameShip::DeckHalfLength - 6.0f), color);
+}
+
+void GameMatch::requestShipPlace(EStructureType type, const glm::vec3& local, float yield)
+{
+    if (m_isClient)
+        return; // the ship is the authority's (a client sees none)
+    m_structures.queueShipPlaceRequest(type, local, yield, (uint8)m_team);
+}
+
+void GameMatch::drawShipGhost(EStructureType type, const glm::vec3& local, uint32 color) const
+{
+    // The footprint box on the deck, turned and tilted with the ship.
+    const float half = StructureSystem::footprintCellsOf(type) * StructureSystem::GridCellSize * 0.5f;
+    const float height = StructureSystem::spawnHeightOf(type) * 2.0f;
+    const glm::vec3 corner[4] = { local + glm::vec3(-half, 0.0f, -half), local + glm::vec3(half, 0.0f, -half),
+        local + glm::vec3(half, 0.0f, half), local + glm::vec3(-half, 0.0f, half) };
+    for (int i = 0; i < 4; ++i)
+    {
+        const glm::vec3& a = corner[i];
+        const glm::vec3& b = corner[(i + 1) % 4];
+        const glm::vec3 up(0.0f, height, 0.0f);
+        Globals::rendererVK.addDebugLine(m_ship.toWorld(a), m_ship.toWorld(b), color);
+        Globals::rendererVK.addDebugLine(m_ship.toWorld(a + up), m_ship.toWorld(b + up), color);
+        Globals::rendererVK.addDebugLine(m_ship.toWorld(a), m_ship.toWorld(a + up), color);
+    }
+}
+
+void GameMatch::updateShipHud()
+{
+    GameHud& hud = Globals::gameHud;
+    if (!m_ship.exists() || !m_player.entity())
+    {
+        hud.removeCounter("Ship");
+        return;
+    }
+    if (m_piloting && m_landPlacing)
+        return; // updateLandPlacement writes the counter
+    if (m_piloting && m_shipNoteTimer > 0.0f && m_shipNote)
+        hud.setCounterText("Ship", m_shipNote, glm::vec3(1.0f, 0.45f, 0.35f));
+    else if (m_piloting && m_ship.grounded())
+        hud.setCounterText("Ship", m_ship.landed() ? "landed  L: lift" : "landing  L: lift", glm::vec3(0.6f, 1.0f, 0.6f));
+    else if (m_piloting)
+    {
+        // Short: the counter's column is narrow (a long line ran over its own label).
+        char text[64];
+        if (m_ship.sailing())
+            snprintf(text, sizeof(text), "sail %d%% %.0fm/s", (int)glm::round(m_ship.throttle() * 100.0f), m_ship.speed());
+        else
+            snprintf(text, sizeof(text), "fly %d%% %.0fm/s %.0fm", (int)glm::round(m_ship.throttle() * 100.0f), m_ship.speed(), m_ship.height());
+        hud.setCounterText("Ship", text, m_ship.sailing() ? glm::vec3(0.5f, 0.75f, 1.0f) : glm::vec3(1.0f, 0.9f, 0.5f));
+    }
+    else if (const int hover = m_labelsHoverId ? m_structures.structureIndexById(m_labelsHoverId) : -1; hover >= 0
+        && m_structures.structureType(hover) == EStructureType::Base && m_structures.structureOnShip(hover))
+        hud.setCounterText("Ship", "F: pilot", glm::vec3(1.0f, 0.9f, 0.5f)); // the crosshair on the Beacon (last frame's hover)
+    else
+        hud.removeCounter("Ship");
+}
+
 void GameMatch::tickFollowers(float deltaSec)
 {
     m_followTimer -= deltaSec;
@@ -1089,16 +1418,19 @@ void GameMatch::tickFollowers(float deltaSec)
                     bestSq = dSq;
                     leader = &l;
                 }
-        if (!leader)
+        // THE RALLY FLAG (the own team's): it is the leader instead of the player.
+        const bool rally = m_rallyActive && u->team == (uint8)m_team;
+        if (!leader && !rally)
             continue; // no player of its team: its AI holds
-        // Its OWN place by the player: a stable angle and radius from its address, so the group stands in a loose ring
-        // around the player instead of in one heap.
+        const glm::vec3 leaderPos = rally ? m_rallyPos : leader->pos;
+        // Its OWN place by the leader: a stable angle and radius from its address, so the group stands in a loose ring
+        // around the player (or the flag) instead of in one heap.
         const uint32 hash = (uint32)(reinterpret_cast<uintptr_t>(followers[i].get()) >> 4) * 2654435761u;
         const float angle = (float)(hash >> 8) / (float)(1u << 24) * glm::two_pi<float>();
         const float ring = 2.5f + (float)(hash & 3u) * 1.0f;
-        const glm::vec3 place = clampToOpenGround(glm::vec3(leader->pos.x + std::cos(angle) * ring, 0.0f, leader->pos.z + std::sin(angle) * ring));
-        const float leaderDist = std::sqrt(bestSq);
-        const bool hunting = u->hasTarget && !u->targetLocked; // the AI has an enemy: let it fight near the player
+        const glm::vec3 place = clampToOpenGround(glm::vec3(leaderPos.x + std::cos(angle) * ring, 0.0f, leaderPos.z + std::sin(angle) * ring));
+        const float leaderDist = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(leaderPos.x, leaderPos.z));
+        const bool hunting = u->hasTarget && !u->targetLocked; // the AI has an enemy: let it fight near the player (the flag)
         const float placeDist = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(place.x, place.z));
         if (u->moveOrder && u->targetLocked)
         {
@@ -1225,6 +1557,19 @@ void GameMatch::updateGameInput(const Camera& camera)
     // path as its key), and neither button reaches the world through the hotbar.
     ProfileScope modeScope("Game mode input", EProfileCategory::Game);
     updateModeSwitching();
+    if (m_fTapPending)
+    {
+        m_fTapPending = false;
+        if (m_sandboxWorld && !m_isClient) // the flag and the ship are the authority's
+            onFTap(camera);
+    }
+    if (m_rallyActive) // the flag on the ground: a gold ring, and the HUD says how to clear it
+    {
+        drawCircle(m_rallyPos + glm::vec3(0.0f, 0.2f, 0.0f), 1.5f, packColor(glm::vec3(1.0f, 0.85f, 0.35f)), 24);
+        Globals::gameHud.setCounterText("Flag", "hold F: clear", glm::vec3(1.0f, 0.85f, 0.35f));
+    }
+    else
+        Globals::gameHud.removeCounter("Flag");
     m_frameGroundFit = StructureSystem::EGroundFit::Ok; // a refused ghost below sets it (the HUD line)
     m_frameYield = -2;                                  // a Lumberyard / Quarry ghost below sets it (the HUD line)
     m_rmbConsumed = false;
@@ -1259,6 +1604,12 @@ void GameMatch::updateGameInput(const Camera& camera)
         rmbEdge = false;
     }
     const bool confirmEdge = lmbEdge;
+    if (m_landPlacing) // the ship's landing ghost takes the clicks (no beam, no build, no move order)
+    {
+        m_beamHeld = false;
+        updateLandPlacement(camera, confirmEdge, rmbEdge);
+        return;
+    }
     // THE STAFF BEAM: LMB held in PLAY (the sandbox world, the build UI closed, Select mode) shines along the crosshair.
     // The press still picks what is under the crosshair (a barracks, to set its unit type with the number keys).
     m_beamHeld = m_sandboxWorld && !m_buildUi && m_mode == EPlayerMode::Select && m_lmbDown && m_player.entity();
@@ -1276,6 +1627,7 @@ void GameMatch::updateGameInput(const Camera& camera)
                            // and in Build with nothing armed)
     showGroundReason(m_frameGroundFit);
     showYield(m_frameYield);
+    updateShipHud();
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
     // same press - disarming a ghost, dropping a Wall anchor or a picked link endpoint, or
@@ -1360,8 +1712,11 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         if (!detached)
         {
             const PhysicsComponent* pc = m_player.entity() ? getComponent<PhysicsComponent>(m_player.entity()) : nullptr;
-            m_camera.applyThirdPerson(camera, m_player.interpolatedPos(), m_lookDelta, m_wheelAccum,
-                pc && pc->body.isValid() ? &pc->body : nullptr);
+            // At the helm the camera orbits the SHIP (its middle, a little up), far enough out to see all of it.
+            const bool helm = m_piloting && m_ship.exists();
+            m_camera.applyThirdPerson(camera, helm ? m_ship.toWorld(glm::vec3(0.0f, 6.0f, 4.0f)) : m_player.interpolatedPos(),
+                m_lookDelta, m_wheelAccum, pc && pc->body.isValid() ? &pc->body : nullptr,
+                helm ? Globals::settings.game.ship.cameraDistance : 0.0f);
         }
         m_lookDelta = glm::vec2(0.0f);
     }
@@ -1442,14 +1797,18 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             prev = p;
         }
     }
-    // House links (own team): a line from each linked house to its barracks - bright when either
-    // end is selected; a selected house also shows its link radius, a selected constructor its
-    // build/repair reach.
-    if (const int sel = m_structures.structureIndexById(m_selectedId);
-        sel >= 0 && m_structures.structureType(sel) == EStructureType::Constructor)
+    // House links (own team): a line from a linked house to its barracks, only while either end is selected (bright), or
+    // while a barracks or a house is on the build ghost (all links, dim). A selected house also shows its link radius, a
+    // selected constructor its build/repair reach.
+    const int sel = m_structures.structureIndexById(m_selectedId);
+    const EStructureType selType = sel >= 0 ? m_structures.structureType(sel) : EStructureType::Count;
+    if (selType == EStructureType::Constructor)
         drawCircle(m_structures.structureGroundPos(sel) + glm::vec3(0.0f, 0.4f, 0.0f),
             m_structures.constructorRange(), packColor(glm::vec3(0.9f, 0.7f, 0.3f)), 40);
-    for (int i = 0; i < m_structures.structureCount(); ++i)
+    const EStructureType armed = armedType();
+    const bool allLinks = armed == EStructureType::Barracks || armed == EStructureType::House;
+    const bool anyLinks = allLinks || selType == EStructureType::Barracks || selType == EStructureType::House;
+    for (int i = 0; anyLinks && i < m_structures.structureCount(); ++i)
     {
         if (m_structures.structureType(i) != EStructureType::House
             || m_structures.structureTeam(i) != (uint8)m_team)
@@ -1463,6 +1822,8 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         if (barracks < 0)
             continue;
         const bool bright = houseSelected || linked == m_selectedId;
+        if (!bright && !allLinks)
+            continue;
         Globals::rendererVK.addDebugLine(housePos,
             m_structures.structureGroundPos(barracks) + glm::vec3(0.0f, 0.4f, 0.0f),
             packColor(glm::vec3(0.9f, 0.7f, 0.3f) * (bright ? 1.0f : 0.4f)));

@@ -13,8 +13,8 @@ staffing. Neither needs energy: only workers (below).
 
 | | The yield |
 |---|---|
-| Lumberyard | the TREES in the radius / "Trees for full lumberyard yield" (12). Dead wood (a log, a stump) counts half a tree; a bush counts nothing. |
-| Quarry | the ROCKS in the radius, their sizes added (m, each rock's longest axis) / "Rock (m) for full quarry yield" (12). A cactus counts nothing. |
+| Lumberyard | the TREES in the radius, each by its SIZE / "Trees for full lumberyard yield" (6.7). A tree counts (its size / the world's average tree) ^ "Harvest size exponent" (2): its size is its trunk at the ground (the species' trunk x the record's own scale, `TreeWorld::surveyHarvest`, the expansion's scale from the same seed) over the average trunk of the world's tree species, so an average tree is 1, a small one ~0.4, a big one 2 and more. Dead wood (a log, a stump) is size 0.7 at its type's mean length (half a tree), by its length; a bush counts nothing. |
+| Quarry | the ROCKS in the radius, each (its longest axis / "Harvest reference rock (m)" (3)) ^ "Harvest size exponent" (2), / "Rocks for full quarry yield" (4): a 3 m rock is 1, a 6 m boulder alone is a full yield (4), a 20 m monolith 44 (it feeds many quarries: they share it). A cactus counts nothing. |
 | The flat maps | no trees or rocks: a RESOURCE NODE of the yard's kind (fuel / mineral) in the radius is a full yield. Several yards can share one node. |
 | Always | at least "Harvest minimum yield" (0.1), at most 1. |
 
@@ -111,7 +111,7 @@ pipeline is off the hotbar; the conveyor is the **Road**.
 | | |
 |---|---|
 | The look | `cableConveyor.pre` + `Models/roads.obj` (hand-written): cobblestones, 5 cm high with a bevel, a road 1.2 m wide. The hub is the centre patch of stones (`RoadHub`); each of the four arm children is a strip of stones from the patch to the cell edge (`RoadArmX` / `RoadArmZ`, centred meshes moved to ±0.83, no rotation), shown toward what the segment joins. So an end, a straight, a corner, a T and a crossing each get their shape, and two neighbour cells' strips meet in one joint on the cell edge. |
-| The road | BUILT `CableConveyor` segments and `CrossingConveyor` pieces (`roadAt`: the cell's occupant or the cable under a crossing). A blueprint is no road. |
+| The road | BUILT `CableConveyor` segments and `CrossingConveyor` pieces (`roadAt`: the cell's occupant or the cable under a crossing). A blueprint is no road. **A LANDED SHIP's free deck tiles are road too** (at the deck top), so the buildings on its deck are on the road and a road up to an entrance in its rail joins the deck ([Ship.md](Ship.md)). |
 | Who walks | A walker (`m_walkers`, a `Walker`) is one FREE WORKER of its team: workers - production jobs (see Population). It comes out of a House or the Beacon that touches a road (`touchesRoad`), at most "House workers" / "Base workers" per building. The HUD's "Workers" reads `jobs + walkers / workers`. |
 | The job | A TRANSPORT JOB is a building that SENDS goods (`carrierSendGood`, by `transportRoleOf`): a PRODUCER sends when its store holds a load ("Load", 10) or half its capacity; a STORAGE (Storehouse, Base) sends a load only to a CONSUMER that is under half full. A walker goes to the job's road cell (the PICKUP) and STAYS: load, deliver, come back, wait there. |
 | Who gets a walker | `carrierJobTier`: 2 = the building has a load to send (`Ref::sendReady`) and no walker waits at it or is on its way (so a long road gets MORE walkers, up to "Max walkers per building" 6); 1 = a producer with no walker at all, or build work (below). `roadSearch` takes the nearest tier 2, else the nearest tier 1. |
@@ -144,8 +144,8 @@ many guards as one Armory, so a base has guards before the first Armory is built
 | The alarm | The ~1 s pass: a living enemy unit within "Range (m)" (60, flat) of a built Armory (`nearestEnemyUnit`) sets `Ref::alarm` to "Stand down after (s)" (10; the tick counts it down) and `Ref::threat` to that unit's place. |
 | Who goes | `guardWanted`: an alarmed Armory with fewer than "Guards" (6) guards (`Ref::guards`, counted fresh each tick: guarding, or on the way). The HOUSES send a worker to it BEFORE any carrier job, and a WAITING walker goes at its next ~1 s search, before any load (`seekArmory`). Both by `roadSearch`, so the Armory must be on the walker's road. A walker on a trip ends its trip first. |
 | The bow | At the Armory the walker's entity is replaced by `guard.pre` (`setGuardLook`, `Walker::guard`). |
-| The post | `guardPost`: one breadth-first search over the road from the guard's cell. A post is a road cell within the Armory's range that no other guard has; **a WALKWAY DECK cell first** (`Ref::walkDir` -1: the place behind a wall - the player sets the posts by where the Walkway is), then any road cell; among those the one nearest to the threat. No free cell: it guards at the Armory. |
-| Shooting | `Walker_Guarding`: every "Guard shot interval (s)" (1.2) the nearest living enemy unit within "Guard range (m)" (20, flat) takes "Guard damage" (12) through `GameUnitComponent::damage`. It never misses (no projectile). **ON A WALKWAY DECK** (`walkwayDeckAt`) nothing blocks it: the guard shoots over the walls. **On any other road cell it needs a CLEAR LINE** from its eyes (1.3 m) to the unit: `nearestEnemyUnit`'s `sightFrom` casts one ray at static bodies only (layers Default, Gate, Terrain, Vegetation: buildings, walls, gates, the ground, trees and rocks; units and the Walkway scaffold do not block), for the 6 nearest units at most, and takes the nearest one in sight. The shot is a `GuardShot` record; the match draws it as a hit line (`NpcSystem::addBeam`, `MeleeHit`, so GLt sends it to clients). |
+| The post | `guardPost`: one breadth-first search over the road from the guard's cell. A post is a road cell within the Armory's range that no other guard has; **a WALKWAY DECK cell first** (`Ref::walkDir` -1: the place behind a wall - the player sets the posts by where the Walkway is) **or a built RAIL tile of the LANDED SHIP** (`guardDeckAt`: on the ship's wall; the rest of its deck is plain road), then any road cell; among those the one nearest to the threat. No free cell: it guards at the Armory. |
+| Shooting | `Walker_Guarding`: every "Guard shot interval (s)" (1.2) the nearest living enemy unit within "Guard range (m)" (20, flat) takes "Guard damage" (12) through `GameUnitComponent::damage`. It never misses (no projectile). **ON A WALKWAY DECK or the landed ship's rail** (`guardDeckAt`) nothing blocks it: the guard shoots over the walls. **On any other road cell it needs a CLEAR LINE** from its eyes (1.3 m) to the unit: `nearestEnemyUnit`'s `sightFrom` casts one ray at static bodies only (layers Default, Gate, Terrain, Vegetation: buildings, walls, gates, the ground, trees and rocks; units and the Walkway scaffold do not block), for the 6 nearest units at most, and takes the nearest one in sight. The shot is a `GuardShot` record; the match draws it as a hit line (`NpcSystem::addBeam`, `MeleeHit`, so GLt sends it to clients). |
 | A new post | With nothing to shoot for 4 s a guard runs `guardPost` again and walks to a better cell (the threat moved). |
 | Stand down | The alarm is over, the Armory is gone or rubble, or production took the worker (`dismissed`): the guard gets its `carrier.pre` look back and takes carrier work from where it stands, or goes home. |
 | Badge | "No road" on an Armory (or a Mage tower) that touches no road. |
@@ -376,6 +376,9 @@ Every placement aligns to a
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 
+**ON THE SHIP'S DECK** the same footprints snap to the deck's own tiles in ship space, and the free deck tiles of a
+LANDED ship are road (`roadAt`): see Building on the ship in [Ship.md](Ship.md).
+
 > A crossing's facing is quantized to ±X/±Z at `placeStructure`, and carried on GPl
 > and in the save's `Facing` — **otherwise client derivation diverges on which cells it covers.**
 > Prefab `Scale` / `HalfExtents` = footprint half, so boxes fill their cells.
@@ -468,8 +471,8 @@ it.
 prefab's height plus the interior cell lines, green when clear and red when refused. **The box is the
 COLLIDER**, which every building still is.
 
-**THE SHAPES.** Ten buildings are placeholder models of the setting (stone, timber, bronze, light crystals):
-the Base, Emitter, Bastion, Turret, Wall, Solar, Battery, Generator, Barracks and House. The ROOT's Render is
+**THE SHAPES.** Eleven buildings are placeholder models of the setting (stone, timber, bronze, light crystals):
+the Base, Emitter, Bastion, Turret, Wall, Solar, Battery, Generator, Barracks, House and Healer's hut. The ROOT's Render is
 one piece (the pedestal or the body) and the rest are render-only child entities (`Component Scene` /
 `Entity`), all inside the collider box (the Base's crystal stands out of it). **A Render `Scale` is ONE number**,
 so every piece is a baseshapes variant at a uniform scale. `applyStructureTint` turns the children gray with a
@@ -481,6 +484,6 @@ a blueprint's crystal is gray and does not glow.
 their bases, the same above and below; scale 1 = 2 m tall, 1.4 m across, the origin at the middle): a large one
 floats INSIDE the Base's beam (the beam starts at the crown under it), one floats high over the tall pedestal of the
 Emitter and of the Bastion (above their collider boxes, to show from far), a large one stands in the Battery (a 4 m
-building now), and small ones sit on the Turret, Solar and Barracks. The flat maps' two resource
+building now), and small ones sit on the Turret, Solar and Barracks (a green one floats over the Healer's hut). The flat maps' two resource
 nodes are models too: a rock outcrop with ore (`mineralNode.pre`) and a log stack (`fuelNode.pre`). The Lumberyard
 (`lumberyard.pre`, brown) and the Quarry (`quarry.pre`, grey) are placeholder boxes.

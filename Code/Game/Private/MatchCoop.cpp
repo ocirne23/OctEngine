@@ -239,6 +239,36 @@ static float shroudNight(float duskFull)
 // THE BEACON. The cloud hole is the clouds' vortex: this only places it on the Base and drives its three live values
 // (the strength is a Runtime row, the spin is CPU-only, the coverage and its two variations are Runtime rows), so nothing here re-bakes a
 // shader after the one-time enable. Every instance runs it off its own structure mirror.
+glm::vec3 GameMatch::waveTargetFrom(const glm::vec3& origin) const
+{
+    // The nearest standing own-team building (no road piece, no rubble). A structure on a FLYING ship is invulnerable
+    // (out of the world), so it never counts; a landed ship's do. 6 m short of it, on the wave's side: the swarm comes
+    // up to it and the AI picks its targets there.
+    float best = FLT_MAX;
+    glm::vec3 target(0.0f);
+    for (const StructureSystem::Ref& ref : m_structures.structures())
+    {
+        const GameStructureComponent& s = *ref.state;
+        if (s.team != 0 || s.invulnerable || s.rubble || !s.alive() || isCableOrCrossing(ref.type))
+            continue;
+        const float d = glm::distance(glm::vec2(ref.entity->pos.x, ref.entity->pos.z), glm::vec2(origin.x, origin.z));
+        if (d < best)
+        {
+            best = d;
+            target = ref.entity->pos - glm::vec3(0.0f, StructureSystem::spawnHeightOf(ref.type), 0.0f);
+        }
+    }
+    if (best == FLT_MAX) // nothing on the land: under the ship (else the Base site)
+    {
+        target = m_ship.exists() ? m_ship.position() : m_basePos;
+        target.y = groundY(target.x, target.z, m_basePos.y);
+    }
+    glm::vec2 toward(origin.x - target.x, origin.z - target.z);
+    const float len = glm::length(toward);
+    toward = len > 1e-3f ? toward / len : glm::vec2(1.0f, 0.0f);
+    return target + glm::vec3(toward.x, 0.0f, toward.y) * glm::min(6.0f, len);
+}
+
 void GameMatch::tickBeacon(float deltaSec)
 {
     if (!m_sandboxWorld)
@@ -262,7 +292,8 @@ void GameMatch::tickBeacon(float deltaSec)
     // The force bake is one horizontal slice of the fields ("Force/Bake" "Sample height", made for the y = 0 maps):
     // on the terrain it goes 1 m over the Base's ground, where the bodies around the base are (the Base's origin is
     // 3 m over its ground). ~GameMatch puts the old height back.
-    Globals::settings.forceSystem.bakeSampleHeight = basePos.y - 2.0f;
+    // On the SHIP the Beacon flies: the slice stays 1 m over its last ground (m_basePos: where the ship last landed).
+    Globals::settings.forceSystem.bakeSampleHeight = m_basePos.y + 1.0f;
     CloudParams& clouds = Globals::settings.clouds;
     if (!m_beaconSet)
     {
@@ -928,7 +959,7 @@ void GameMatch::queueWave()
             distance = glm::min(distance + c_margin, maxDistance);
         }
         m_waveOrigin = m_basePos + dir * distance;
-        m_waveDest = m_basePos + dir * 6.0f;
+        m_waveDest = waveTargetFrom(m_waveOrigin); // the nearest building on the land (a flying ship's are out of reach)
     }
     else
     {

@@ -122,6 +122,8 @@ void GameMatch::onClientLeft(uint32 clientId)
 
 void GameMatch::sendStructurePlaced(int index)
 {
+    if (m_structures.structureOnShip(index))
+        return; // the ship's structures are the authority's: a client sees no ship (no sync yet)
     uint8 buffer[32];
     NetWriter writer(buffer);
     const glm::vec3 pos = m_structures.structurePos(index);

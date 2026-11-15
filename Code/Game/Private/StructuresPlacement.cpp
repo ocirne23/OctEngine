@@ -30,7 +30,7 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/medic.pre", "Entities/Game/quarry.pre",      // mesh; applyStructureTint hues it
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
     "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre",
-    "Entities/Game/magetower.pre" };
+    "Entities/Game/magetower.pre", "Entities/Game/shipRail.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -64,6 +64,17 @@ bool StructureSystem::footprintAreaClear(EStructureType type, const glm::vec3& p
         if (p.x + half.x > r.x + 1e-3f && p.x - half.x < r.z - 1e-3f
             && p.z + half.y > r.y + 1e-3f && p.z - half.y < r.w - 1e-3f)
             return false; // impassable terrain: nothing builds in a rock (unit spawns skip it too)
+    // THE LANDED SHIP's deck: its tiles are the ship's (a placement there aims at the deck: placeShipStructure).
+    if (m_shipJoined)
+    {
+        bool onDeck = false;
+        forEachFootprintCell(type, p, rot, [&](int cx, int cz)
+        {
+            onDeck = onDeck || worldCellOnDeck(cx, cz) || m_gangwayRoad.find(cellKey(cx, cz)) != m_gangwayRoad.end(); // or its stairs
+        });
+        if (onDeck)
+            return false;
+    }
     // A resource node (the flat maps) keeps its own ground, 2x2 cells: nothing builds on the deposit.
     constexpr float c_nodeHalf = GridCellSize;
     for (const Node& n : m_nodes)
@@ -231,7 +242,7 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
 // ---------------------------------------------------------------- spawn/destroy
 
 int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos,
-    const glm::quat& rot, uint8 team, bool built, float yield)
+    const glm::quat& rot, uint8 team, bool built, float yield, bool insert)
 {
     EntityPtr entity = Globals::world.spawnAssetFile(structurePrefabs[(int)type],
         Transform(pos, 1.0f, rot), true);
@@ -277,8 +288,10 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     if (isHarvestType(type)) // the yards of its kind share the trees / rocks again (resolveHarvestYields)
         for (Ref& other : m_frame)
             other.harvestDirty |= other.type == type;
-    insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
+    if (insert)
+        insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
     m_linksDirty = true;
+    m_carrierPassTimer = 0.0f; // the walkers' ~1 s pass at once: a new blueprint gets its stone without the wait
     if (!built) // a blueprint goes down (a load or a join replay spawns built structures: silent)
         GameSound::post(EGameSound::StructurePlaced, pos, isCableOrCrossing(type) ? 0.5f : 1.0f);
     return (int)m_frame.size() - 1;
@@ -297,6 +310,8 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
         Globals::world.removeRootEntity(s.walkPiece.get());
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
+    if (s.onShip)
+        ++m_shipRevision; // its box leaves the ship's body
     m_frame.erase(m_frame.begin() + index);
     if (isHarvestType(s.type)) // what it worked is free for the yards around it (resolveHarvestYields)
         for (Ref& other : m_frame)
@@ -330,8 +345,8 @@ void StructureSystem::applyDemolishRequest(uint32 id, uint8 team)
     const int index = structureIndexById(id);
     if (index < 0)
         return; // already gone
-    if (m_frame[index].type == EStructureType::Base)
-        return; // the respawn anchor is not deletable
+    if (m_frame[index].type == EStructureType::Base || m_frame[index].type == EStructureType::ShipRail)
+        return; // the respawn anchor is not deletable, nor is the ship's wall
     if (m_frame[index].state->team != team)
         return; // only the owning team demolishes its structures
     Log::info(oc::string(structureTypeName(m_frame[index].type)) + " demolished");

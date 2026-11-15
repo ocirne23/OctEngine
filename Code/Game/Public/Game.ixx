@@ -6,6 +6,7 @@ export import :GameCamera;
 export import :Faction;
 export import :PlayerLocomotion;
 export import :Player;
+export import :Ship;
 export import :Structures;
 export import :Npc;
 export import :Sound;
