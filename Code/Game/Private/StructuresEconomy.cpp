@@ -735,9 +735,10 @@ void StructureSystem::tickConstructors(float deltaSec)
 // ---------------------------------------------------------------- debug draw
 
 // buildMode: the player's build UI is open - the builders' and the towers' ranges show. armed: the type on the ghost
-// (Count = none) - the harvest ranges of the built yards show only while a yard of THAT kind is on the ghost, and
-// the light hubs' link ranges only while a type that uses light is.
-void StructureSystem::drawDebug(bool buildMode, EStructureType armed) const
+// (Count = none) - the harvest ranges of the built yards show only while a yard of THAT kind is on the ghost, the light
+// hubs' link ranges only while a type that uses light is, and the Healer's huts' reach only while a Healer's hut is.
+// selectedId: the selected structure (0 = none) - a Healer's hut shows its reach while it is selected.
+void StructureSystem::drawDebug(bool buildMode, EStructureType armed, uint32 selectedId) const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
     // SATURATED segments: a red pulsing ring over every segment whose ~2 s average throughput
@@ -799,7 +800,8 @@ void StructureSystem::drawDebug(bool buildMode, EStructureType armed) const
     }
 
     // In build mode only: constructor build/repair reach (amber), light tower and searchlight range (pale blue).
-    // Always: medic heal reach (green) + red rings on unpowered consumers.
+    // The Healer's hut's heal reach (green): while it is selected, or while a Healer's hut is on the ghost (every built
+    // one, so the new one's place shows against them). Always: red rings on unpowered consumers.
     const uint32 constructorRing = packColor(glm::vec3(1.0f, 0.75f, 0.45f) * 0.6f);
     const uint32 towerRing = packColor(glm::vec3(0.6f, 0.8f, 1.0f) * 0.5f);
     const uint32 medicRing = packColor(glm::vec3(0.4f, 1.0f, 0.5f) * 0.6f);
@@ -813,7 +815,8 @@ void StructureSystem::drawDebug(bool buildMode, EStructureType armed) const
         if (buildMode && (s.type == EStructureType::Turret || s.type == EStructureType::Searchlight) && !s.state->blueprint)
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f),
                 s.type == EStructureType::Turret ? params.turretRange : params.searchlightRange, towerRing, 40);
-        if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered)
+        if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered
+            && (armed == EStructureType::MedicStation || (selectedId != 0 && s.state->structureId == selectedId)))
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), medicHealRadius(), medicRing, 40);
         if ((hasShieldEmitter(s.type) || s.type == EStructureType::MedicStation
             || s.type == EStructureType::Fabricator) && !s.state->powered && !s.state->blueprint)

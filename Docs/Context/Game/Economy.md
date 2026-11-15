@@ -312,7 +312,7 @@ its TYPE's medium hue always, conducting or not.
 
 `drawDebug` draws the BOTTLENECK marker — a pulsing red ring over every segment whose ~2 s average
 throughput sits at or above 90 % of its out-rate (clients read the mirrored GCf average, so they see
-the same rings) — plus the node rings, the built yards' harvest radius, the constructor / medic reach rings and a red ring on every
+the same rings) — plus the node rings, the built yards' harvest radius, the constructor reach rings, the Healer's hut's reach (only the selected hut, or every one while a hut is on the ghost) and a red ring on every
 unpowered consumer.
 
 Segments are full structures: a blueprint phase (**NON-conductive until built**), health (40; a crossing 60 —

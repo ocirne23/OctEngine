@@ -252,7 +252,8 @@ into minerals; the mineral silo is the team's spendable bank.
 
 * **Medic station** (the Healer's hut) — 2×2. **It draws light only for what it heals**: no fixed draw. It is
   POWERED while its internal buffer holds light (empty = red ring). While built AND powered it heals every body inside
-  "Medic heal radius" (12 m, green ring) at "Medic heal/s" (40) — **HEALTH and the SHIELD BATTERY both**, the same rate
+  "Medic heal radius" (12 m; a green ring while the hut is SELECTED, and on every built hut while a Healer's hut is
+  being placed - the ghost shows its own) at "Medic heal/s" (40) — **HEALTH and the SHIELD BATTERY both**, the same rate
   each. **UNITS: the station's own component update** (`EMachineKind::Medic`, the turret pattern —
   one spatial query of the radius per powered station inside the parallel pass, banking
   `GameUnitComponent::heal` into the unit's heal inbox; the unit's own tick applies it to health and

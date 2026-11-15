@@ -1754,7 +1754,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     else
         updateGameInput(camera);
 
-    m_structures.drawDebug(m_mode == EPlayerMode::Build || m_buildUi, armedType());
+    m_structures.drawDebug(m_mode == EPlayerMode::Build || m_buildUi, armedType(), m_selectedId);
     m_npcs.drawBeams(deltaSec); // ages the strikes, draws the melee hit lines (the turret's light: drawBeamLights, in update)
     {
         // THE SOUND: what was posted and reported since the last windowed frame, heard from the player (the camera

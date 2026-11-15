@@ -338,7 +338,7 @@ public:
     }
 
     void tickAuthority(const glm::vec3& playerPos, float deltaSec);
-    void drawDebug(bool buildMode, EStructureType armed) const; // see the definition for the two inputs
+    void drawDebug(bool buildMode, EStructureType armed, uint32 selectedId) const; // see the definition for the inputs
 
     // ---- THE HARVEST (the Lumberyard and the Quarry) ----
     // A yard stands anywhere; what is within "Harvest radius" of it sets its YIELD (0..1, a share of the full rate),
