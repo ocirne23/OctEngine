@@ -183,12 +183,18 @@ public:
         const glm::vec3& facing, uint8 team);
     void queueDemolishRequest(uint32 id, uint8 team);
     void queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team);
-    void queueUnitTypeRequest(uint32 id, uint8 unitType, uint8 team); // barracks: what it produces
+    // The ORDER byte (hasOrderByte): a barracks' unit type, a store's EStorePriority. One request / mirror / wire path.
+    void queueUnitTypeRequest(uint32 id, uint8 unitType, uint8 team);
     static constexpr int MaxRouteWaypoints = GameStructureComponent::MaxRoutePoints;
-    // BARRACKS readouts (union: barracks variant - 0 elsewhere).
+    // The order byte (barracks: the union's barracks variant; a store: storePriority; 0 elsewhere).
     uint8 structureUnitType(int index) const
     {
-        return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.unitType : 0;
+        const Ref& ref = m_frame[index];
+        return isBarracksType(ref.type) ? ref.state->barracks.unitType : hasStorePriority(ref.type) ? ref.state->storePriority : 0;
+    }
+    EStorePriority structurePriority(int index) const
+    {
+        return hasStorePriority(m_frame[index].type) ? (EStorePriority)m_frame[index].state->storePriority : EStorePriority::Balance;
     }
     int structurePopulation(int index) const
     {
@@ -611,6 +617,9 @@ private:
     };
     Gangway m_gangways[8]; // one per entry of GameShip::entrances
     oc::unordered_map<uint64, float> m_gangwayRoad;
+    // > 0: a flight found NO GROUND COLLIDER under it (the terrain collider there is not built yet - a load right after
+    // the start): tickShipStructures builds the stairs again when this counts down to 0 (a tick each).
+    int m_gangwayRetry = 0;
     void buildGangways();
     void clearGangways();
     bool m_shipExists = false;
@@ -898,6 +907,15 @@ private:
     void transportInject(const TransportRun& run);
     void addTransportSlot(int buildingIdx, int medium, uint32 node);
     static ETransportRole transportRoleOf(EStructureType t, int medium);
+    // A store's rank in the trade between stores (EStorePriority): Drain 0 < Balance 1 < Fill 2. Equal ranks level
+    // their fills; otherwise the goods go one way only, from the lower rank to the higher one.
+    static int storeRank(const Ref& ref)
+    {
+        if (!hasStorePriority(ref.type))
+            return 1;
+        const EStorePriority p = (EStorePriority)ref.state->storePriority;
+        return p == EStorePriority::Fill ? 2 : p == EStorePriority::Drain ? 0 : 1;
+    }
 
     oc::unordered_map<uint64, CellEntry> m_cells;
     bool m_linksDirty = true;

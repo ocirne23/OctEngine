@@ -95,8 +95,8 @@ void GameMatch::onClientJoined(uint32 clientId)
     {
         if (!m_structures.structureRoute(i).empty())
             sendRoute(i); // barracks waypoint routes replay too
-        if (isBarracksType(m_structures.structureType(i)))
-            sendUnitType(i); // and the produced unit type
+        if (hasOrderByte(m_structures.structureType(i)))
+            sendUnitType(i); // and the order byte (the produced unit type, a store's priority)
     }
     if (m_paused) // the joiner lands in a paused game: show it the box
     {

@@ -295,8 +295,8 @@ export struct GameStructureSettings
     // The look of a link's beam (the nearest few are BeamLights): its glow, its core, how far it lights surfaces.
     float mirrorGlitterRate = 14.0f;  // sparks/s on a mirror's beam in full daylight (Effects/light_glitter.pfx; 0 = none)
     float lightBeamGlow = 1.5f;       // at the full flow
-    float lightBeamFullFlow = 1.0f;   // light/s at which a beam has its full glow and radius (less light = less beam):
-                                      // a Lantern's draw - a Mirror's 0.21 is a thin beam, a Hearth's 0.45 a half one
+    float lightBeamFullFlow = 20.0f;  // light/s at which a beam has its full glow and radius (less light = less beam):
+                                      // the "Beam rate" (a hub-to-hub link at "Share rate" 10 is a half beam)
     float lightBeamRadius = 0.35f;    // m, at the full flow (half of it at no flow)
     float lightBeamGlowRange = 8.0f;  // m
     // THE CARRIERS: wood and stone move by walkers on the road (the conveyor segments), not as cells on the cables.

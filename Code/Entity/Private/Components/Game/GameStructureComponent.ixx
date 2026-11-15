@@ -47,6 +47,7 @@ export struct GameStructureComponent
     float store[3] = {};       // energy, fuel, minerals
     float capacity[3] = {};    // 0 = this structure does not carry the medium; game-stamped per tick
     uint8 attachedMask = 0;    // bit m = a cable network of medium m touches this structure
+    uint8 storePriority = 0;   // stores: the game's EStorePriority (0 Balance, 1 Fill, 2 Drain) - a player order, synced/saved by the game
     float flowUtil = 0.0f;     // EMA of the served fraction of the transport demand (gauge, game-stamped)
     // Outside the union on purpose: a non-trivial union member needs manual construct/destruct and
     // there is no type tag here to pick it by.

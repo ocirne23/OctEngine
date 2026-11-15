@@ -197,7 +197,7 @@ void GameMatch::loadGame(oc::string_view path)
             sendStructurePlaced(i);
             if (!m_structures.structureRoute(i).empty())
                 sendRoute(i);
-            if (isBarracksType(m_structures.structureType(i)))
+            if (hasOrderByte(m_structures.structureType(i)))
                 sendUnitType(i);
         }
         // (No cable replay: clients re-derive links from the mirrored segments.)

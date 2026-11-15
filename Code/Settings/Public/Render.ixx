@@ -617,7 +617,7 @@ export struct RockParams
 export struct FarTreeParams
 {
     bool enabled = true;          // the far voxel trees ("Trees/Voxel far trees") draw out to its hand-over
-    float startDistance = 4000.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
+    float startDistance = 2000.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
     float endDistance = 15000.0f;  // and ends here (m)
     float overlap = 300.0f;        // the near representations draw to startDistance + this; the volume fades in over it (m)
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).

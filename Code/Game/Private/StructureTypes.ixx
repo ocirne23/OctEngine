@@ -108,6 +108,21 @@ export constexpr bool isBarracksType(EStructureType t)
     return t == EStructureType::Barracks;
 }
 
+// THE STORE PRIORITY (a player order, GameStructureComponent::storePriority): how a store trades with the OTHER stores -
+// the light between linked hubs, the carts between storages. Its consumers it feeds the same in every setting.
+export enum class EStorePriority : uint8 { Balance, Fill, Drain, Count };
+export inline constexpr const char* c_storePriorityNames[] = { "Balance", "Fill", "Drain" };
+export constexpr bool hasStorePriority(EStructureType t)
+{
+    return t == EStructureType::MineralSilo || t == EStructureType::Battery || t == EStructureType::Base
+        || t == EStructureType::FuelTank;
+}
+// A building with a player ORDER byte (the popup, GqU / GBu, the save): a barracks' unit type, a store's priority.
+export constexpr bool hasOrderByte(EStructureType t)
+{
+    return isBarracksType(t) || hasStorePriority(t);
+}
+
 // UNIT TYPES, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant,
 // Titan, Lobber - Npc.ixx static_asserts the count). Structures cannot import Npc, so the
 // per-type prices live there as plain arrays.

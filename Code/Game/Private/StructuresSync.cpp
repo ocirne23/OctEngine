@@ -82,6 +82,12 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
 void StructureSystem::mirrorUnitType(uint32 id, uint8 unitType)
 {
     const int index = structureIndexById(id);
+    if (index >= 0 && hasStorePriority(m_frame[index].type)) // a store: the order byte is its priority
+    {
+        if (unitType < (uint8)EStorePriority::Count)
+            m_frame[index].state->storePriority = unitType;
+        return;
+    }
     if (index < 0 || !isBarracksType(m_frame[index].type) || !isBarracksUnitType(unitType))
         return;
     m_frame[index].state->barracks.unitType = unitType;
@@ -164,6 +170,8 @@ void StructureSystem::saveTo(AssetNode& root) const
             n.set("OutputFrac", s.state->emitter.outputFrac);
         if (isBarracksType(s.type) && s.state->barracks.unitType != 0)
             n.set("UnitType", oc::to_string((int)s.state->barracks.unitType));
+        if (hasStorePriority(s.type) && s.state->storePriority != 0)
+            n.set("Priority", oc::to_string((int)s.state->storePriority));
         if (isBarracksType(s.type) && !s.state->route.empty())
         {
             AssetNode& r = n.addChild("Route");
@@ -253,6 +261,8 @@ void StructureSystem::loadFrom(const AssetNode& root)
             s.barracks.unitType = (uint8)(isBarracksUnitType(unitType) ? unitType : 0);
             stampTuning(m_frame[index]);
         }
+        if (const AssetNode* p = n->find("Priority"); p && hasStorePriority((EStructureType)typeInt))
+            s.storePriority = (uint8)glm::clamp(p->asInt(), 0, (int)EStorePriority::Count - 1);
         if (const AssetNode* r = n->find("Route"); r && isBarracksType((EStructureType)typeInt))
             for (const AssetNode* p : r->findAll("Point"))
                 if ((int)s.route.size() < MaxRouteWaypoints)

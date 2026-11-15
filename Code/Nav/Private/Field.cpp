@@ -191,8 +191,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
     {
         if (!o.edges)
             continue;
-        const glm::ivec2 lo = cellOf(o.min + 1e-3f);
-        const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+        glm::ivec2 lo, hi;
+        cellsCovered(o.min, o.max, lo, hi);
         for (int z = lo.y; z <= hi.y; ++z)
             for (int x = lo.x; x <= hi.x; ++x)
                 if (Chunk* chunk = m_chunks.find(chunkKey(chunkOf(glm::ivec2(x, z)))))
@@ -224,8 +224,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
             const NavObstacle& o = c->obstacles[idx];
             if (o.cost != 0 || o.edges)
                 continue;
-            const glm::ivec2 lo = cellOf(o.min + 1e-3f);
-            const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+            glm::ivec2 lo, hi;
+            cellsCovered(o.min, o.max, lo, hi);
             for (int z = lo.y; z <= hi.y; ++z)
                 for (int x = lo.x; x <= hi.x; ++x)
                 {
@@ -248,8 +248,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> allObstacles, uin
             const NavObstacle& o = c->obstacles[idx];
             if (o.cost == 0 || o.edges)
                 continue;
-            const glm::ivec2 lo = cellOf(o.min + 1e-3f);
-            const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+            glm::ivec2 lo, hi;
+            cellsCovered(o.min, o.max, lo, hi);
             for (int z = lo.y; z <= hi.y; ++z)
                 for (int x = lo.x; x <= hi.x; ++x)
                 {
@@ -354,8 +354,8 @@ void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const
     {
         const NavSource& src = m_sources[s];
         const float half = glm::max(src.stopRadius, 0.01f);
-        const glm::ivec2 lo = cellOf(glm::vec2(src.pos.x, src.pos.z) - half + 1e-3f);
-        const glm::ivec2 hi = cellOf(glm::vec2(src.pos.x, src.pos.z) + half - 1e-3f);
+        glm::ivec2 lo, hi;
+        cellsCovered(glm::vec2(src.pos.x, src.pos.z) - half, glm::vec2(src.pos.x, src.pos.z) + half, lo, hi);
         for (int z = lo.y; z <= hi.y; ++z)
             for (int x = lo.x; x <= hi.x; ++x)
             {

@@ -418,7 +418,7 @@ unswayed trees.
 
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 
-Desktop only, on by default from "Far start" 4000 m - the far voxel trees draw the trees before it ([Scene.md](Scene.md)
+Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw the trees before it ([Scene.md](Scene.md)
 "THE FAR VOXEL TREES"; defaults in `FarTreeParams`). The FAR trees — beyond the billboards, "Far start (m)" to
 "Far end (m)" — as ONE marched volume.
 

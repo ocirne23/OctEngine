@@ -201,6 +201,8 @@ structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX**
 * **Once, when the Base exists:** it saves the cloud values it takes (`m_beaconSaved`), sets the vortex "Enabled" and
   its centre to the Base (`Tweak::notifyChanged`: the one shader re-bake). `restoreBeacon` (the dtor, or "Enabled"
   off) writes them back.
+* **Every tick the vortex's centre follows the Beacon**, so the hole moves with the ship's Beacon while the ship flies
+  (`clouds_vortexCentre` is a live UBO value: no re-bake).
 * **Power** (`m_beaconPower`, eased over ~2 s) = the Base field's `outputFrac` × (0.4 .. 1 by its energy charge); 0
   for a dead Base.
 * **THE IGNITION** (each dusk): the clouds close first, with no hole. "Ignite delay (s)" after the night is full

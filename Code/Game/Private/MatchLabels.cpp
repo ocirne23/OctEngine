@@ -350,6 +350,22 @@ void GameMatch::buildWorldLabels()
                     b.selected = t == (int)produced;
                 }
             }
+            // The STORE PRIORITY picker (a Storehouse, a Crystal store, the Beacon): the same popup, in EStorePriority order.
+            else if (hasStorePriority(type) && m_structures.structureTeam(i) == (uint8)m_team)
+            {
+                popup.active = true;
+                popup.screenPos = label.screenPos;
+                const bool keys = m_sandboxWorld && !m_buildUi;
+                popup.title = keys ? "Priority (number keys)" : "Priority";
+                popup.buttons.reserve((size_t)EStorePriority::Count);
+                const EStorePriority current = m_structures.structurePriority(i);
+                for (int p = 0; p < (int)EStorePriority::Count; ++p)
+                {
+                    HudPopupButton& b = popup.buttons.emplace_back();
+                    b.label = keys ? oc::format("{}  {}", p + 1, c_storePriorityNames[p]) : oc::string(c_storePriorityNames[p]);
+                    b.selected = p == (int)current;
+                }
+            }
         }
         // FAR FROM THE CAMERA ("Building bar distance (m)") a building shows no bars - health / build progress and the
         // stores are too small to read there and fill the view. The selected one keeps them; a badge stays.

@@ -195,12 +195,30 @@ void StructureSystem::tickLight(float deltaSec)
         }
         else if (s.capacity[0] > 0.0f && hub.capacity[0] > 0.0f) // two hubs: toward equal fill fractions
         {
-            const float diff = hub.store[0] / hub.capacity[0] - s.store[0] / s.capacity[0]; // > 0: the other hub is fuller
             // A link with a Lens at an end is a BEAM: it moves light at the beam rate (a relay must keep up with what the
             // producers send into it).
             const float rate = (ref.type == EStructureType::Lens || m_frame[hubIndex].type == EStructureType::Lens
                 ? m_settings.lightBeamRate : m_settings.lightShareRate) * deltaSec;
-            const float move = glm::clamp(diff * glm::min(s.capacity[0], hub.capacity[0]) * 0.5f, -rate, rate);
+            // THE STORE PRIORITY: equal ranks level the fill fractions; otherwise the light goes one way, from the lower
+            // rank (Drain, then Balance) into the higher one (Fill) until the giver is empty or the taker is full. A
+            // giving Beacon keeps its reserve for its own field.
+            const int rankS = storeRank(ref), rankH = storeRank(m_frame[hubIndex]);
+            float move;
+            if (rankS == rankH)
+            {
+                const float diff = hub.store[0] / hub.capacity[0] - s.store[0] / s.capacity[0]; // > 0: the other hub is fuller
+                move = glm::clamp(diff * glm::min(s.capacity[0], hub.capacity[0]) * 0.5f, -rate, rate);
+            }
+            else
+            {
+                const bool intoS = rankS > rankH;
+                const GameStructureComponent& giver = intoS ? hub : s;
+                const GameStructureComponent& taker = intoS ? s : hub;
+                const bool giverBase = (intoS ? m_frame[hubIndex].type : ref.type) == EStructureType::Base;
+                const float spare = glm::max(giver.store[0] - (giverBase ? giver.capacity[0] * c_baseReserve : 0.0f), 0.0f);
+                const float amount = glm::min(glm::min(rate, spare), glm::max(taker.capacity[0] - taker.store[0], 0.0f));
+                move = intoS ? amount : -amount;
+            }
             hub.store[0] -= move;
             s.store[0] += move;
             moved = glm::abs(move);

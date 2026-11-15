@@ -19,6 +19,15 @@ export namespace Nav
     {
         return glm::ivec2(glm::floor(xz / CellSize));
     }
+    // The cells a box covers (lo .. hi, inclusive). Its edges move IN by up to 10 cm (at most a quarter of the box), so
+    // a box on the cell lines covers exactly its cells: far from the origin a float is ~1 mm coarse (11 km: 0.98 mm),
+    // and a footprint's edge one or two steps over a cell line took in the whole next cell.
+    inline void cellsCovered(const glm::vec2& mn, const glm::vec2& mx, glm::ivec2& lo, glm::ivec2& hi)
+    {
+        const glm::vec2 inset = glm::min(glm::vec2(0.1f), glm::max(mx - mn, glm::vec2(0.0f)) * 0.25f);
+        lo = cellOf(mn + inset);
+        hi = cellOf(mx - inset);
+    }
     inline glm::vec2 cellCenter(const glm::ivec2& cell)
     {
         return (glm::vec2(cell) + 0.5f) * CellSize;

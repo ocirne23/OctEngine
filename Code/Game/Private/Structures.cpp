@@ -829,6 +829,16 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     for (const UnitTypeRequest& request : m_unitTypeRequests)
     {
         const int index = structureIndexById(request.id);
+        if (index >= 0 && hasStorePriority(m_frame[index].type)) // a store: the order byte is its priority
+        {
+            GameStructureComponent& s = *m_frame[index].state;
+            if (s.team != request.team || request.unitType >= (uint8)EStorePriority::Count || s.storePriority == request.unitType)
+                continue;
+            s.storePriority = request.unitType;
+            if (onUnitTypeChanged)
+                onUnitTypeChanged(request.id);
+            continue;
+        }
         if (index < 0 || !isBarracksType(m_frame[index].type)
             || m_frame[index].state->team != request.team || !isBarracksUnitType(request.unitType))
             continue; // died, not a barracks, someone else's, or garbage - refused (the MP seam)

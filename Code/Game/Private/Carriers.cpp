@@ -147,10 +147,20 @@ float StructureSystem::transportAmount(int sourceIdx, int targetIdx, int good) c
         || transportRoleOf(source.type, good) != ETransportRole::Storage || transportRoleOf(target.type, good) != ETransportRole::Storage)
         return 0.0f;
     const float held = t.store[good] + target.goodsIncoming[good]; // with what is on its way there
+    const float cart = glm::max(m_settings.carrierCartLoad, 1.0f);
+    // THE STORE PRIORITY: from a lower rank (Drain, then Balance) to a higher one (Fill) a cart takes all it can, whatever
+    // the fills; never the other way. Equal ranks level their fills.
+    const int rankS = storeRank(source), rankT = storeRank(target);
+    if (rankS > rankT)
+        return 0.0f;
+    if (rankS < rankT)
+    {
+        const float amount = glm::min(cart, glm::min(s.store[good], t.capacity[good] - held));
+        return amount >= cart * c_minCart ? amount : 0.0f;
+    }
     const float gap = s.store[good] / s.capacity[good] - held / t.capacity[good];
     if (gap < c_minFillGap)
         return 0.0f;
-    const float cart = glm::max(m_settings.carrierCartLoad, 1.0f);
     const float even = gap * s.capacity[good] * t.capacity[good] / (s.capacity[good] + t.capacity[good]); // the amount that makes the fills equal
     const float amount = glm::min(glm::min(cart, even), glm::min(s.store[good], t.capacity[good] - held));
     return amount >= cart * c_minCart ? amount : 0.0f;
@@ -193,8 +203,9 @@ bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, boo
     const float load = glm::min(glm::max(m_settings.carrierLoad, 1.0f), m_frame[sourceIdx].state->store[good]);
     const float fit = glm::min(load, t.capacity[good]);
     const bool fits = fit > 0.0f && t.capacity[good] - t.store[good] - target.goodsIncoming[good] >= fit - 1e-3f;
+    // A storage tops up a consumer only under half full; a DRAINING one (EStorePriority::Drain) fills it whenever the load fits.
     if (consumersOnly)
-        return isConsumer && fits && t.store[good] < t.capacity[good] * 0.5f;
+        return isConsumer && fits && (t.store[good] < t.capacity[good] * 0.5f || storeRank(m_frame[sourceIdx]) == 0);
     return fits;
 }
 

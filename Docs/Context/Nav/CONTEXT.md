@@ -114,7 +114,10 @@ a field is exactly as big as its reach.**
 
 1. `rasterizeObstacles` pre-creates every reachable chunk serially, then parallelFors the Blocked
    stamping (per obstacle), the breachable stamping (per obstacle) and the clearance ring (per
-   chunk) — racing writers all write the same byte value.
+   chunk) — racing writers all write the same byte value. **Which cells a box covers** (an obstacle, an edge wall, a
+   source's seed square) is `cellsCovered` (Grid.ixx): the box's edges move in by up to 10 cm (at most a quarter of
+   the box), so a footprint on the cell lines covers exactly its cells. Tried a 1 mm margin, dropped because far from
+   the origin (11 km: a float step is ~1 mm) a 2x2 building blocked a third column of cells.
 2. The flood is a **CHUNK-WAVE Dijkstra**. Each wave parallelFors `floodSolveChunk`: a 256-cell
    mini-Dijkstra to the chunk's LOCAL fixpoint, writing ONLY that chunk, with a local lazy heap of
    packed `(dist<<16|idx)` u32s.
@@ -545,7 +548,8 @@ fields on.
 ## Debug draw
 
 `drawDebug(focus, lineSink)` — renderer-agnostic. "Debug team" 0..7 selects a team field; **8 selects
-the local player's move-order goal field**.
+the local player's move-order goal field**. It draws on the y = 0 plane (Nav knows no terrain): the game's sink
+(`GameMatch`, Match.cpp) lifts each line end by the ground under it (`groundY`, one probe per 1 m square per frame).
 
 | Mode | Draws |
 |---|---|

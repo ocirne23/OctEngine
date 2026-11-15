@@ -1579,10 +1579,15 @@ void GameMatch::updateGameInput(const Camera& camera)
     m_rmbClicked = false;
     if (const int button = Globals::gameHud.popupButtonAtScreenPos(m_mousePos); button >= 0)
     {
-        // The barracks' unit-type picker (drawn last frame over the selected barracks) eats
+        // The barracks' unit-type picker or a store's priority picker (drawn last frame over the selected building) eats
         // clicks the same way the hotbar does.
-        if (lmbEdge && m_selectedId != 0)
-            requestSetUnitType(m_selectedId, c_barracksMenu[glm::min(button, (int)oc::size(c_barracksMenu) - 1)]);
+        if (const int sel = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1; lmbEdge && sel >= 0)
+        {
+            if (hasStorePriority(m_structures.structureType(sel)))
+                requestSetUnitType(m_selectedId, (uint8)glm::min(button, (int)EStorePriority::Count - 1));
+            else
+                requestSetUnitType(m_selectedId, c_barracksMenu[glm::min(button, (int)oc::size(c_barracksMenu) - 1)]);
+        }
         lmbEdge = false;
         rmbEdge = false;
         m_rmbMoveDrag = false;
@@ -1774,8 +1779,20 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     if (Globals::navSystem.debugMode() > 0)
     {
         ProfileScope navDrawScope("Nav debug draw", EProfileCategory::Game);
+        // Nav draws on the y = 0 plane (it knows no terrain): each line end goes up by the ground under it. One ground
+        // probe per 1 m square (a debug view: thousands of lines, so the probes are cached for this frame).
+        oc::unordered_map<uint64, float> ground;
+        const auto lift = [&](const glm::vec3& p)
+        {
+            const int qx = (int)std::floor(p.x), qz = (int)std::floor(p.z);
+            const uint64 key = ((uint64)(uint32)qx << 32) | (uint32)qz;
+            auto it = ground.find(key);
+            if (it == ground.end())
+                it = ground.emplace(key, groundY((float)qx + 0.5f, (float)qz + 0.5f, m_basePos.y)).first;
+            return p + glm::vec3(0.0f, it->second, 0.0f);
+        };
         Globals::navSystem.drawDebug(m_player.interpolatedPos(),
-            [](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); });
+            [&](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(lift(a), lift(b), color); });
     }
 
     // Barracks unit routes (own team): line chain from the barracks through its waypoints, each

@@ -168,6 +168,25 @@ open (the cursor is free) the buttons are clicked as on the flat maps.
 `onUnitTypeChanged` → GBu broadcast plus join replay. Clients request through GqU; saved as
 `UnitType`.
 
+#### Store priority
+
+Selecting an OWN STORE (`hasStorePriority`: the Storehouse, the Crystal store, the Beacon, the Wood store) shows the
+same popup with its PRIORITY (`EStorePriority`, `GameStructureComponent::storePriority`): **1 Balance** (the default),
+**2 Fill**, **3 Drain**. Clicks and, in the sandbox world's play, the number keys pick it as for a barracks. It rides
+the barracks' ORDER-BYTE path (`hasOrderByte`): the same `queueUnitTypeRequest` / GqU / GBu / join replay, with the byte
+read as the priority for a store. Saved as `Priority`.
+
+The priority sets how a store trades with the OTHER stores (`storeRank`: Drain 0 < Balance 1 < Fill 2). **Equal ranks
+level their fills** (the rules as before); **otherwise the goods go ONE WAY, from the lower rank to the higher one**,
+until the giver is empty or the taker is full:
+
+* LIGHT: along a hub-to-hub link (`tickLight`); a giving Beacon keeps its reserve for its own field. A Lens is Balance.
+* WOOD and STONE: the cart (`transportAmount`): to a higher rank a cart takes all it can, whatever the fills; to a lower
+  rank none.
+* A DRAINING storage also fills its consumers whenever a load fits (`carrierAccepts`), not only under half full.
+
+Every priority feeds its consumers; producers deliver to the nearest store as before.
+
 Each spawn pays the type's "\<Type\> spawn energy" from the energy store, whose capacity IS that
 cost and which fills at the capped "Barracks energy intake/s" (a TOTAL over all its power links) —
 **full store = a unit, so the bar over the barracks is the build progress and the price IS the build

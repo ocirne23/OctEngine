@@ -723,10 +723,13 @@ void GameMatch::updateModeSwitching()
         {
             // A SELECTED OWN BARRACKS in PLAY (the sandbox world, build UI closed): the number keys pick what it makes,
             // in the order of its popup (c_barracksMenu). The mouse is the camera there, so the popup cannot be clicked.
+            // A selected own STORE (a Storehouse, a Crystal store, the Beacon): 1..3 pick its priority (EStorePriority order).
             const int sel = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
-            if (m_sandboxWorld && !m_buildUi && sel >= 0 && isBarracksType(m_structures.structureType(sel))
-                && m_structures.structureTeam(sel) == (uint8)m_team && k < (int)oc::size(c_barracksMenu))
+            const bool ownSel = m_sandboxWorld && !m_buildUi && sel >= 0 && m_structures.structureTeam(sel) == (uint8)m_team;
+            if (ownSel && isBarracksType(m_structures.structureType(sel)) && k < (int)oc::size(c_barracksMenu))
                 requestSetUnitType(m_selectedId, c_barracksMenu[k]);
+            else if (ownSel && hasStorePriority(m_structures.structureType(sel)) && k < (int)EStorePriority::Count)
+                requestSetUnitType(m_selectedId, (uint8)k);
             else if (!m_sandboxWorld)
                 activateSlot(k);
             else if (k < GameHud::NumSlots - c_buildBarTabs) // the build bar: 1..9 are its item slots

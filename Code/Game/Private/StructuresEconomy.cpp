@@ -355,7 +355,10 @@ void StructureSystem::tickProduction(float deltaSec)
                     s.emitter.down = true;
             }
             s.powered = paid;
-            const float target = paid ? 1.0f : 0.0f;
+            // A FLYING SHIP's Beacon has NO bubble by day (more light than dark: fieldNight < 0.5); it grows back at dusk
+            // or once the ship has landed.
+            const bool shipDay = ref.onShip && !m_shipLanded && m_settings.fieldNight < 0.5f;
+            const float target = paid && !shipDay ? 1.0f : 0.0f;
             const float rampTime = glm::max(target > s.emitter.outputFrac ? m_settings.emitterGrowTime : m_settings.emitterShrinkTime, 0.01f);
             s.emitter.outputFrac = glm::clamp(s.emitter.outputFrac
                 + (target > s.emitter.outputFrac ? dt : -dt) / rampTime, 0.0f, 1.0f);

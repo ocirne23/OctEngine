@@ -186,6 +186,11 @@ void StructureSystem::tickShipStructures()
             r.rubbleVisual->rot = m_shipRot;
         }
     }
+    if (m_shipJoined && m_gangwayRetry > 0 && --m_gangwayRetry == 0)
+    {
+        buildGangways(); // a flight had no ground collider under it: try again (it sets the retry again while one has none)
+        m_linksDirty = true; // the stairs' road cells
+    }
     if (m_shipLanded == m_shipJoined)
         return;
     // THE EDGE: the ship set down on the grid (its tiles are world cells now) or lifted off.
@@ -233,17 +238,22 @@ void StructureSystem::clearGangways()
         g.body = PhysicsBody();
     }
     m_gangwayRoad.clear();
+    m_gangwayRetry = 0;
 }
 
 void StructureSystem::buildGangways()
 {
     // THE STAIRS: out of every ENTRANCE (GameShip::entrances: one to two tiles wide, on a side or the stern), 0.5 m out
-    // and 0.5 m down a step (45 degrees, like the Walkway's stairs), until a step's top meets the ground under it - so a
-    // deck over low ground gets a flight down, and a deck at the ground none. An entrance whose cells out there hold a
-    // land structure gets none.
+    // and 0.375 m down a step (37 degrees: a body walks it, where 45 degrees was a climb), until a step's top meets the
+    // ground under it - so a deck over low ground gets a flight down, and a deck only a little over the ground gets ONE
+    // step (no step only where the ground is at the deck or over it). An entrance whose cells out there hold a land
+    // structure gets none.
     clearGangways();
-    constexpr float c_step = 0.5f;
-    constexpr int c_maxSteps = 16; // 8 m: more than the landing allows (KeelDepth - 1)
+    bool noGround = false; // a probe found no ground collider: try again later (m_gangwayRetry)
+    constexpr float c_tread = 0.5f;   // out per step (gangwayStep.pre is 0.5 m deep)
+    constexpr float c_rise = 0.375f;  // down per step (the step is 1 m tall: the steps overlap, no gap shows)
+    constexpr float c_slope = c_rise / c_tread;
+    constexpr int c_maxSteps = 28; // 8.4 m: more than the landing allows (KeelDepth - 1)
     const float deckY = m_shipPos.y;
     const oc::span<const GameShip::Entrance> entrances = GameShip::entrances();
     static_assert(sizeof(m_gangways) / sizeof(m_gangways[0]) >= 5, "one gangway per entrance");
@@ -265,17 +275,22 @@ void StructureSystem::buildGangways()
                 const glm::vec3 w = shipToWorld(edge + out * o + across * a);
                 const float h = groundHeightAt(w.x, w.z, -FLT_MAX);
                 if (h == -FLT_MAX)
+                {
+                    noGround = true;
                     return 0.0f; // no collider there: as if at the deck (the flight ends)
+                }
                 ground = glm::max(ground, h - deckY);
             }
             return ground;
         };
         int steps = 0;
-        while (steps < c_maxSteps && -c_step * (float)(steps + 1) > groundUnder(c_step * ((float)steps + 0.5f)) + 0.25f)
+        while (steps < c_maxSteps && -c_rise * (float)(steps + 1) > groundUnder(c_tread * ((float)steps + 0.5f)) + 0.15f)
             ++steps;
+        if (steps == 0 && groundUnder(c_tread * 0.5f) < -0.05f)
+            steps = 1; // a small drop: still one step (its top no lower than the ground, below), and the ramp
         if (steps == 0)
             continue;
-        const float run = c_step * (float)steps;
+        const float run = c_tread * (float)steps;
         // Its cells (the world cells out of the entrance tiles): none may hold a land structure.
         const int cellsOut = (int)std::ceil(run / GridCellSize - 1e-3f);
         bool clear = true;
@@ -286,9 +301,9 @@ void StructureSystem::buildGangways()
                 const glm::vec3 w = shipToWorld(tileCentre(ent.first + alongCells * i + ent.out * (j + 1)));
                 const uint64 key = cellKey((int)std::floor(w.x / GridCellSize), (int)std::floor(w.z / GridCellSize));
                 clear = clear && m_cells.find(key) == m_cells.end();
-                // The road height: the flight's surface at the cell's centre, never under the ground there.
+                // The road height: the ramp's surface at the cell's centre (the collider below), never under the ground there.
                 const float o = GridCellSize * ((float)j + 0.5f);
-                road.push_back({ key, deckY + glm::max(-o - 0.25f, groundUnder(o)) + 0.25f });
+                road.push_back({ key, deckY + glm::max(-c_slope * o, groundUnder(o) + 0.25f) });
             }
         if (!clear)
             continue;
@@ -299,31 +314,41 @@ void StructureSystem::buildGangways()
         const float yawOut = std::atan2(-out.z, out.x);
         const glm::quat outRot = glm::angleAxis(yawOut, glm::vec3(0.0f, 1.0f, 0.0f));
         for (int k = 0; k < steps; ++k)
+        {
+            // The step's top: one rise under the one before, never under the ground there (the one step of a small drop).
+            const float top = glm::max(-c_rise * (float)(k + 1), groundUnder(c_tread * ((float)k + 0.5f)) + 0.05f);
             for (int i = 0; i < ent.count; ++i)
             {
                 const float a = ((float)i + 0.5f) * GridCellSize - halfWidth;
-                const glm::vec3 local = edge + out * (c_step * ((float)k + 0.5f)) + across * a + glm::vec3(0.0f, -c_step * (float)(k + 1), 0.0f);
+                const glm::vec3 local = edge + out * (c_tread * ((float)k + 0.5f)) + across * a + glm::vec3(0.0f, top, 0.0f);
                 EntityPtr step = Globals::world.spawnAssetFile("Entities/Game/gangwayStep.pre", Transform(shipToWorld(local), 1.0f, m_shipRot * outRot), true);
                 if (!step)
                     continue;
                 Globals::world.addRootEntity(step);
                 g.steps.push_back(step);
             }
-        // ONE SLOPED BOX under the steps for the bodies (the line through the steps' top middles: y = -out - 0.25): its
-        // long axis turned to OUT, then tilted 45 degrees down about ACROSS.
-        const glm::quat rot = outRot * glm::angleAxis(-glm::quarter_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+        }
+        // ONE SLOPED BOX for the bodies: a smooth RAMP, y = -slope x out, its long axis turned to OUT, then tilted down
+        // about ACROSS. FLUSH WITH THE DECK at the top (it starts at the deck's edge at the deck's height: no lip, and
+        // nothing over the deck), and at the bottom it runs on INTO THE GROUND (to 0.3 m under the ground at the flight's
+        // end), so its end is no lip either. It lies over the steps' tops by at most one rise.
+        const float bottomGround = groundUnder(run);
+        const float length = glm::clamp((0.3f - bottomGround) / c_slope, run, run + 3.0f); // along OUT
+        const float tilt = std::atan(c_slope);
+        const glm::quat rot = outRot * glm::angleAxis(-tilt, glm::vec3(0.0f, 0.0f, 1.0f));
         const glm::vec3 normal = rot * glm::vec3(0.0f, 1.0f, 0.0f);
         constexpr float c_thick = 0.1f; // half
-        const glm::vec3 centre = edge + out * (run * 0.5f) + glm::vec3(0.0f, -run * 0.5f - 0.25f, 0.0f) - normal * c_thick;
+        const glm::vec3 centre = edge + out * (length * 0.5f) + glm::vec3(0.0f, -c_slope * length * 0.5f, 0.0f) - normal * c_thick;
         PhysicsShape shape;
         shape.type = EPhysicsShapeType::Box;
-        shape.halfExtents = glm::vec3(run * glm::root_two<float>() * 0.5f + 0.2f, c_thick, halfWidth);
+        shape.halfExtents = glm::vec3(0.5f * length / std::cos(tilt), c_thick, halfWidth);
         shape.friction = 0.9f;
         PhysicsBodyDesc desc;
         desc.type = EPhysicsBodyType::Static;
         desc.transform = Transform(shipToWorld(centre), 1.0f, m_shipRot * rot);
         g.body = Globals::physics.createBody(desc, oc::span<const PhysicsShape>(&shape, 1));
     }
+    m_gangwayRetry = noGround ? 30 : 0; // ~0.5 s at 60 ticks
 }
 
 void StructureSystem::shipColliderBoxes(oc::vector<GameShip::Box>& out) const

@@ -314,6 +314,10 @@ void GameMatch::tickBeacon(float deltaSec)
         m_beaconGlow = 0.0f;
         m_beaconLit = false;
     }
+    // THE HOLE FOLLOWS THE BEACON (the ship's flies): the eye's centre is a live UBO value (clouds_vortexCentre), so a
+    // move each tick re-bakes nothing.
+    clouds.vortexCentreXKm = basePos.x * 0.001f;
+    clouds.vortexCentreZKm = basePos.z * 0.001f;
     // Power = the Base field's output (it latches dark when starved) x its charge: a low store shows as a weak hole.
     const float charge = base->capacity[0] > 0.0f ? glm::clamp(base->store[0] / base->capacity[0], 0.0f, 1.0f) : 0.0f;
     const bool alive = !base->blueprint && base->health > 0.0f;
