@@ -37,7 +37,6 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 layout (location = 0) in vec4 in_posU;    // xyz = position, w = uv.x: a rock has no uv - the u channel is its CAVITY
 layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y: 0 a rock, 1 + the bark cover dead wood, 3 + ribs / 100 a cactus
 layout (location = 2) in vec4 in_tangent; // dead wood: its wood coordinates - x along (base circumferences), yz across (nominal units)
-layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
@@ -51,7 +50,7 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex]; // written at its draw slot
 
     out_normal = quat_transform(in_normalV.xyz, inst.quat);
     out_pos    = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;

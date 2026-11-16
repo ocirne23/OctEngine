@@ -36,13 +36,11 @@ void IndirectCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
 {
     for (PerFrameData& perFrame : m_perFrameData)
     {
+        // One entry per DRAW SLOT (a bucket's firstInstance + its index): the LOD-expanded bucket total, which present()
+        // keeps within the instance capacity. The shadow cull writes its smaller records here first (it runs before).
         perFrame.outMeshInstancesBuffer.initialize(maxMeshInstances * sizeof(RendererVKLayout::OutMeshInstance), // 6
-            vk::BufferUsageFlagBits2::eVertexBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
+            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutInstances");
-
-        perFrame.outMeshInstanceIndexesBuffer.initialize(maxMeshInstances * sizeof(uint32), // 7
-            vk::BufferUsageFlagBits2::eVertexBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutIndices");
     }
 }
 
@@ -128,12 +126,7 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // OutMeshInstanceIndexesBuffer
-        .binding = 7,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eCompute
-    });
+    // 7 is free: the cull writes each instance at its draw slot (binding 6), with no index list.
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // OutIndirectCommandBuffer
         .binding = 8,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
@@ -184,7 +177,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 23> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 22> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -254,16 +247,6 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 vk::DescriptorBufferInfo {
                     .buffer = frameData.outMeshInstancesBuffer.getBuffer(),
                     .range = frameData.outMeshInstancesBuffer.getSize(),
-                }
-            }
-        },
-        DescriptorSetUpdateInfo { // OutMeshInstanceIndexesBuffer
-            .binding = 7,
-            .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = {
-                vk::DescriptorBufferInfo {
-                    .buffer = frameData.outMeshInstanceIndexesBuffer.getBuffer(),
-                    .range = frameData.outMeshInstanceIndexesBuffer.getSize(),
                 }
             }
         },

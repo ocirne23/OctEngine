@@ -250,8 +250,7 @@ public:
     // ---- Metrics ----
 
     uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
-    uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
-    uint32 getNumMaterials() const { return m_materials.count(); }
+    uint32 getNumMeshTypes() const { return m_meshInfos.count(); }    uint32 getNumMaterials() const { return m_materials.count(); }
     void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
     GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
     static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }

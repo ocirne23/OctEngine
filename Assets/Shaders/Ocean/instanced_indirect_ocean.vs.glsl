@@ -40,7 +40,6 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 // The texCoord (ring cell size, morph weight), baked by OceanGenerator, rides the two .w.
 layout (location = 0) in vec4 in_posU;
 layout (location = 1) in vec4 in_normalV;
-layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 4) out vec2 out_uv;
@@ -51,7 +50,7 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex]; // written at its draw slot
     vec3  inst_pos   = inst.posScale.xyz;
     float inst_scale = inst.posScale.w;
     vec4  inst_quat  = inst.quat;

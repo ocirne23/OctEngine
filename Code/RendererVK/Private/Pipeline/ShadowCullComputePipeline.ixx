@@ -27,9 +27,8 @@ public:
         Buffer& inMeshInstanceOffsetsBuffer;  // 3
         Buffer& inMeshInfoBuffer;             // 4
         Buffer& inFirstInstancesBuffer;       // 5
-        // 6, 7, 8: the MAIN cull's out buffers, borrowed: the shadow cull + draw run before the main cull writes them.
-        Buffer& outMeshInstancesBuffer;       // 6 - OutShadowMeshInstance at the main cull's (larger) stride's capacity
-        Buffer& outMeshInstanceIndexesBuffer; // 7
+        // 6, 8: the MAIN cull's out buffers, borrowed: the shadow cull + draw run before the main cull writes them.
+        Buffer& outMeshInstancesBuffer;       // 6 - OutShadowMeshInstance per draw slot, in the main cull's (larger) stride's capacity
         Buffer& outIndirectCommandBuffer;     // 8 - its opaque list
         Buffer& inMaterialInfoBuffer;         // 9 - resolves the alpha-mask texture per caster
         Buffer& inNodeStatesBuffer;           // 10 - per node: InstanceStream::NodeState (the pass mask)

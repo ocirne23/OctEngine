@@ -59,12 +59,11 @@ public:
     // [4] the trees' voxel tier.
     static constexpr uint32 NUM_DRAW_LISTS = 5;
     Buffer& getDrawCountBuffer(uint32 idx) { return m_perFrameData[idx].drawCountBuffer; }
-    Buffer& getInstanceIdxBuffer(uint32 idx)      { return m_perFrameData[idx].outMeshInstanceIndexesBuffer; }
-    Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; }
+    Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; } // per draw slot (gl_InstanceIndex)
     // Dispatch-size buffer { numInstances, 1, 1 }; reused by the shadow cull which dispatches the
     // same instance set against each cascade's frustum.
     Buffer& getDispatchIndirectBuffer(uint32 idx) { return m_perFrameData[idx].inIndirectCommandBuffer; }
-    
+
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_computePipeline.getDescriptorSetLayout(); }
 
 private:
@@ -78,8 +77,7 @@ private:
     struct PerFrameData
     {
         Buffer inIndirectCommandBuffer;
-        Buffer outMeshInstancesBuffer;            // 6
-        Buffer outMeshInstanceIndexesBuffer;      // 7
+        Buffer outMeshInstancesBuffer;            // 6 - per draw slot
         Buffer outIndirectCommandBuffer;          // 8 - opaque
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)

@@ -34,7 +34,6 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 
 // The vertex is read by gl_VertexIndex: the pipeline's vertex input is the 48-byte MeshVertex of the shared execution set.
 layout (binding = 14, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
-layout (location = 4) in uint inst_idx;
 
 // INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) compute the same
 // position from the same inputs where the film has no lift - their depth must match bit for bit there.
@@ -155,7 +154,7 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex]; // written at its draw slot
 
     const TerrainVertex vertex = in_terrainVertices[gl_VertexIndex];
     const uint lod = terrainVertexLod(vertex.normalLod);

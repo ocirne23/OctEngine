@@ -64,10 +64,6 @@ layout (binding = 5, std430) readonly buffer InFirstInstancesBuffer
 {
     uint in_firstInstances[];
 };
-layout (binding = 7, std430) writeonly buffer OutMeshInstanceIndexesBuffer
-{
-    uint out_meshInstanceIndexes[];
-};
 layout (binding = 8, std430) writeonly buffer OutIndirectCommandBuffer
 {
     OutIndirectCommand out_indirectCommands[]; // the opaque list (the shadow cull's only one)

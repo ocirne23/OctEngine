@@ -34,8 +34,6 @@ layout (binding = 2, std430) readonly buffer InTerrainVertices { TerrainVertex i
 // FAR_SHADOW, tree_voxel_far.cs.glsl) instance-rate - its BILLBOARD, the packed word built here as the shadow cull would.
 layout (location = 5) in vec4 inst_posScale;
 layout (location = 6) in uvec4 inst_data; // the yaw (float bits), the alpha-mask texture | the cascade mask << 16, the trunk-bend scale (float bits), bucket | index
-#else
-layout (location = 4) in uint inst_idx;
 #endif
 
 layout (location = 0) out vec2 out_uv;
@@ -63,7 +61,7 @@ void main()
                                     | (uint(clamp(round(windTrunk * 32.0), 0.0, 127.0)) << 8) | 0x00008000u;
     }
 #else
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex]; // the shadow cull writes it at its draw slot
 #endif
     const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000007Fu;
     out_uv = vec2(0.0);

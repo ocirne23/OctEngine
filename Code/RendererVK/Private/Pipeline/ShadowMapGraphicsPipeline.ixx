@@ -30,10 +30,9 @@ public:
         DescriptorSet& descriptorSet;
         Buffer& ubo;                   // 0 - main UBO (holds cascadeViewProj[]; cascade chosen by gl_ViewIndex)
         // The main cull's buffers, as the shadow cull wrote them this frame (it runs before the main cull).
-        Buffer& meshInstanceBuffer;    // 1 - OutShadowMeshInstance per instance (carries the alpha-mask tex idx)
+        Buffer& meshInstanceBuffer;    // 1 - OutShadowMeshInstance per draw slot (gl_InstanceIndex; carries the alpha-mask tex idx)
         Buffer& vertexBuffer;
         Buffer& indexBuffer;
-        Buffer& instanceIdxBuffer;     // vertex binding 2 - the instance indices per draw
         Buffer& indirectCommandBuffer; // the IndirectDrawSequence list (the opaque one)
         Buffer& drawCountBuffer;       // the cull's compacted counts: [0] the DGC list (sequenceCountAddress), [1] the voxel casters
         Buffer& preprocessBuffer;      // the DGC scratch: the static mesh pass's opaque one, borrowed (sized for both)

@@ -27,12 +27,8 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
     layout.depthBiasSlopeFactor = 2.5f;
     layout.cullMode = vk::CullModeFlagBits::eFront;
 
-    auto& bindings = layout.vertexLayoutInfo.bindingDescriptions;
-    // No vertex attributes: this ONE pipeline draws MeshVertex and TerrainVertex casters, so the VS reads them from the storage buffer (binding 2) by gl_VertexIndex.
-    bindings.push_back(vk::VertexInputBindingDescription{ .binding = 2, .stride = sizeof(uint32), .inputRate = vk::VertexInputRate::eInstance });
-
-    auto& attributes = layout.vertexLayoutInfo.attributeDescriptions;
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 2, .format = vk::Format::eR32Uint, .offset = 0 });
+    // No vertex input at all: this ONE pipeline draws MeshVertex and TerrainVertex casters, so the VS reads them from the storage
+    // buffer (binding 2) by gl_VertexIndex, and the caster from the cull's buffer (binding 1) by gl_InstanceIndex (its draw slot).
 
     auto& descriptorSetBindings = layout.descriptorSetLayoutBindings;
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // main UBO (cascade view-projs)
@@ -191,7 +187,6 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParam
     commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet, updates);
     vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-    vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
     vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
 
     // One multiview execute renders all cascades (gl_ViewIndex selects the layer/matrix).
@@ -221,7 +216,6 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParam
         constexpr vk::DeviceSize stride = sizeof(RendererVKLayout::IndirectDrawSequence);
         vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_voxelPipeline.getPipeline());
         vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_voxelPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-        vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
         vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
         vkCommandBuffer.drawIndexedIndirectCount(params.voxelCommandBuffer.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
             params.drawCountBuffer.getBuffer(), sizeof(uint32), (uint32)(params.voxelCommandBuffer.getSize() / stride), (uint32)stride);

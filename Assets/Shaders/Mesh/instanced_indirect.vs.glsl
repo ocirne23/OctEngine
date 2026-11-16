@@ -15,7 +15,8 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-// The main cull's OutMeshInstance (instanced_indirect.cs.glsl).
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl), written at its draw slot: firstInstance + its index in the
+// bucket, so gl_InstanceIndex reads it directly.
 struct InMeshInstancesData
 {
     vec4 posScale;
@@ -35,7 +36,6 @@ layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertice
 layout (location = 0) in vec4 in_posU;    // MeshVertex: xyz = position, w = uv.x
 layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent;
-layout (location = 4) in uint inst_idx;
 
 // Packed into 4 locations (fewer ISBE / TRAM slots per vertex); the fragment shader rebuilds the bitangent from N, T
 // and the sign. The world position stays INTERPOLATED: an interpolant costs no register until it is read, while a
@@ -82,7 +82,7 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex];
     vec3  inst_pos   = inst.posScale.xyz;
     float inst_scale = inst.posScale.w;
     vec4  inst_quat  = inst.quat;

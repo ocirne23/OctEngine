@@ -38,6 +38,8 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
     for (uint32 i = 0; i <= 16; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14/15 the baked tree pieces / types / list; 16 the voxel casters
     {
+        if (i == 7)
+            continue; // free: the casters go to their draw slots (binding 6), with no index list
         b.push_back(vk::DescriptorSetLayoutBinding{
             .binding = i,
             .descriptorType = (i == 0) ? vk::DescriptorType::eUniformBuffer : vk::DescriptorType::eStorageBuffer,
@@ -51,7 +53,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 17> updates{
+    oc::array<DescriptorSetUpdateInfo, 16> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
@@ -66,8 +68,6 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inFirstInstancesBuffer.getBuffer(), .range = params.inFirstInstancesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outMeshInstancesBuffer.getBuffer(), .range = params.outMeshInstancesBuffer.getSize() } } },
-        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outMeshInstanceIndexesBuffer.getBuffer(), .range = params.outMeshInstanceIndexesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outIndirectCommandBuffer.getBuffer(), .range = params.outIndirectCommandBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer,

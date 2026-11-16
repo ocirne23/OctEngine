@@ -430,11 +430,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stride = sizeof(RendererVKLayout::MeshVertex),
         .inputRate = vk::VertexInputRate::eVertex,
     });
-    bindingDescriptions.push_back(vk::VertexInputBindingDescription{
-        .binding = 2,
-        .stride = sizeof(uint32),
-        .inputRate = vk::VertexInputRate::eInstance,
-    });
+    // No instance attribute: the cull writes each instance at its draw slot and the vertex shaders read it by gl_InstanceIndex.
 
     auto& attributeDescriptions = graphicsPipelineLayout.vertexLayoutInfo.attributeDescriptions;
     // The texCoord rides positionU.w / normalV.w (see MeshVertex): a vertex shader that needs no uv declares
@@ -456,12 +452,6 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 0,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .offset = offsetof(RendererVKLayout::MeshVertex, tangent),
-    });
-    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // inst_idx
-        .location = 4,
-        .binding = 2,
-        .format = vk::Format::eR32Uint,
-        .offset = 0,
     });
 
     // The tessellated terrain's pipeline copies these bindings, so its control / evaluation stages are named on
@@ -1165,7 +1155,6 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         if (m_stereo) // select the eye matrix/view pos for the draws (every stage that reads a view)
             vkCommandBuffer.pushConstants(layout, VIEW_PUSH_STAGES, 0, sizeof(uint32), &params.viewIndex);
         vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer() }, { 0 });
-        vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
         vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
     };
     // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).

@@ -792,7 +792,6 @@ protected:
     FrameSubmission m_submission;   // lights / fog volumes / decals, and the light grid's GPU scratch
     MeshLodRegistry m_meshLods;     // the chains, the per-mesh mapping and the GPU selection buffers
     oc::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
-
     // PARALLEL ENTITY SPAWNING: one coarse mutex over the registries the spawn/despawn path reaches that are
     // not lock-free (the shared tables, LOD groups, skinned bundles, the solid-colour cache's miss). The hot
     // per-entity allocators are lock-free instead: transform slots, LOD state ranges, emitter / query slots

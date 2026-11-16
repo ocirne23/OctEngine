@@ -2,12 +2,15 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_EXT_shader_16bit_storage : enable
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
 //#extension GL_EXT_debug_printf : enable
 
 #include "shared.inc.glsl"
 #include "instance_cull.inc.glsl"
 
-// Matches RendererVKLayout::OutMeshInstance.
+// Matches RendererVKLayout::OutMeshInstance. Written at its DRAW SLOT (firstInstance + its index in the bucket): the scene
+// vertex shaders read it by gl_InstanceIndex, with no index buffer in between.
 struct OutMeshInstance
 {
     vec4 posScale;
@@ -95,6 +98,36 @@ void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out u
     prevQuat = uvec2(packSnorm2x16(q.xy), packSnorm2x16(q.zw));
 }
 
+// The bucket lists a placed instance counts into: 0 opaque, 1 transparent, 2 the trees' voxel tier.
+uint bucketAdd(uint list, uint meshIdx, uint count)
+{
+    if (list == 2u)
+        return atomicAdd(out_treeVoxelCommands[meshIdx].instanceCount, count);
+    if (list == 1u)
+        return atomicAdd(out_transparentIndirectCommands[meshIdx].instanceCount, count);
+    return atomicAdd(out_indirectCommands[meshIdx].instanceCount, count);
+}
+
+// The instance's index in its bucket. ONE atomic per (list, mesh) and subgroup, not one per instance: the lanes with the
+// first remaining lane's key take their ranks in one claim, and the rest go round again. Correct for any set of active
+// lanes (a lane leaves only after its claim), so divergence costs extra rounds, never a wrong index.
+uint bucketClaim(uint list, uint meshIdx)
+{
+    const uint key = (list << 16) | meshIdx;
+    for (;;)
+    {
+        if (key == subgroupBroadcastFirst(key))
+        {
+            const uvec4 lanes = subgroupBallot(true);
+            uint base = 0u;
+            if (subgroupElect())
+                base = bucketAdd(list, meshIdx, subgroupBallotBitCount(lanes));
+            return subgroupBroadcastFirst(base) + subgroupBallotExclusiveBitCount(lanes);
+        }
+    }
+    return 0u;
+}
+
 bool frustumCheck(vec3 pos, float radius)
 {
     for (int i = 0; i < 6; i++)
@@ -108,7 +141,7 @@ bool frustumCheck(vec3 pos, float radius)
 }
 
 // `treeWind`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1).
-void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWind)
+void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWind)
 {
     uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo = in_meshInfos[meshIdx];
@@ -158,11 +191,11 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
         const bool terrainFilm     = isTerrain && terrainOverlayCovers(centerPos, radius);
 
-        uint idx;
-        if (pipelineIdx == uint16_t(PIPELINE_IDX_LIT_TREE_VOXEL))
+        // The voxel tier: its own list and its own bucket counter (no other list draws a voxel box mesh).
+        const bool isVoxel = pipelineIdx == uint16_t(PIPELINE_IDX_LIT_TREE_VOXEL);
+        const uint idx = bucketClaim(isVoxel ? 2u : (isTransparent ? 1u : 0u), meshIdx);
+        if (isVoxel)
         {
-            // Its own list and its own bucket counter: no other list draws a voxel box mesh.
-            idx = atomicAdd(out_treeVoxelCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {
                 out_treeVoxelCommands[meshIdx].pipelineIndex = pipelineIdx;
@@ -174,7 +207,6 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         }
         else if (isTransparent)
         {
-            idx = atomicAdd(out_transparentIndirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {
                 out_transparentIndirectCommands[meshIdx].pipelineIndex = pipelineIdx;
@@ -186,7 +218,6 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         }
         else
         {
-            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {
                 out_indirectCommands[meshIdx].pipelineIndex = pipelineIdx;
@@ -225,13 +256,13 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         uvec2 prevQuat = uvec2(0u);
         if (!isTree)
             prevInstanceTransform(instance, prevPosScale, prevQuat);
-        out_meshInstanceIndexes[firstInstance + idx]      = instanceIdx;
-        out_meshInstances[instanceIdx].posScale           = instancePosScale;
-        out_meshInstances[instanceIdx].quat               = quat;
-        out_meshInstances[instanceIdx].prevPosScale       = prevPosScale;
-        out_meshInstances[instanceIdx].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
-        out_meshInstances[instanceIdx].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: all levels share it
-        out_meshInstances[instanceIdx].prevQuat           = prevQuat;
+        const uint slot = firstInstance + idx; // the draw slot: gl_InstanceIndex in the vertex shaders
+        out_meshInstances[slot].posScale           = instancePosScale;
+        out_meshInstances[slot].quat               = quat;
+        out_meshInstances[slot].prevPosScale       = prevPosScale;
+        out_meshInstances[slot].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
+        out_meshInstances[slot].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: all levels share it
+        out_meshInstances[slot].prevQuat           = prevQuat;
     }
 }
 
@@ -281,6 +312,6 @@ void main()
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        cullInstance(instanceIdx + k, instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWind);
+        cullInstance(instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWind);
     }
 }

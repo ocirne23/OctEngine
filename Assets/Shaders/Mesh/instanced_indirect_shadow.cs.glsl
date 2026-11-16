@@ -2,6 +2,8 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_EXT_shader_16bit_storage : enable
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
 
 #include "shared.inc.glsl"
 #include "instance_cull.inc.glsl"
@@ -12,7 +14,8 @@
 struct MaterialInfo         { uint flags; float opacity; uint diffuseNormalTexIdx; uint metalRoughnessTexIdxAlphaMode; };
 // Matches RendererVKLayout::OutShadowMeshInstance. alphaTexIdxCascadeMask: alpha-mask texture << 16 (0xFFFF = none),
 // bit 15 = sways in the wind, bits 8..14 = its trunk-bend scale x 32 (no bit 15: bit 8 = a terrain node), bit 7 = a tree
-// billboard, bits 0..6 = the cascade mask.
+// billboard, bits 0..6 = the cascade mask. Written at its DRAW SLOT (firstInstance + its index in the bucket): shadow_depth.vs
+// reads it by gl_InstanceIndex.
 struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; };
 
 layout (binding = 6, std430) writeonly buffer OutMeshInstancesBuffer       { OutMeshInstance      out_meshInstances[]; };
@@ -47,8 +50,31 @@ uint cascadeOverlapMask(vec3 center, float radius)
     return mask;
 }
 
+// The caster's index in its bucket (list 0 the casters, 1 the voxel casters): ONE atomic per (list, mesh) and subgroup, as
+// the main cull's bucketClaim (instanced_indirect.cs.glsl).
+uint casterClaim(uint list, uint meshIdx)
+{
+    const uint key = (list << 16) | meshIdx;
+    for (;;)
+    {
+        if (key == subgroupBroadcastFirst(key))
+        {
+            const uvec4 lanes = subgroupBallot(true);
+            uint base = 0u;
+            if (subgroupElect())
+            {
+                const uint count = subgroupBallotBitCount(lanes);
+                base = list == 1u ? atomicAdd(out_voxelCommands[meshIdx].instanceCount, count)
+                                  : atomicAdd(out_indirectCommands[meshIdx].instanceCount, count);
+            }
+            return subgroupBroadcastFirst(base) + subgroupBallotExclusiveBitCount(lanes);
+        }
+    }
+    return 0u;
+}
+
 // `windTrunk`: a tree's trunk-bend scale (treeCullWind), into bits 8..14 of the packed word (shadow_depth.vs.glsl).
-void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool isTree, float windTrunk)
+void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool isTree, float windTrunk)
 {
     const uint materialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) >> 16;
     const MaterialInfo material = in_materialInfos[materialIdx];
@@ -122,11 +148,10 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     }
 
     const uint firstInstance = in_firstInstances[meshIdx];
-    uint idx;
+    // A voxel caster: its own bucket counter (no other list draws a voxel box mesh).
+    const uint idx = casterClaim(voxel ? 1u : 0u, meshIdx);
     if (voxel)
     {
-        // Its own bucket counter: no other list draws a voxel box mesh.
-        idx = atomicAdd(out_voxelCommands[meshIdx].instanceCount, 1);
         if (idx == 0)
         {
             out_voxelCommands[meshIdx].pipelineIndex = 0u;
@@ -138,7 +163,6 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     }
     else
     {
-        idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
         if (idx == 0)
         {
             out_indirectCommands[meshIdx].pipelineIndex = 0u; // one depth pipeline
@@ -149,10 +173,10 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
         }
     }
 
-    out_meshInstanceIndexes[firstInstance + idx]          = instanceIdx;
-    out_meshInstances[instanceIdx].posScale               = instancePosScale;
-    out_meshInstances[instanceIdx].quat                   = quat;
-    out_meshInstances[instanceIdx].alphaTexIdxCascadeMask = packed;
+    const uint slot = firstInstance + idx; // the draw slot: gl_InstanceIndex in shadow_depth.vs
+    out_meshInstances[slot].posScale               = instancePosScale;
+    out_meshInstances[slot].quat                   = quat;
+    out_meshInstances[slot].alphaTexIdxCascadeMask = packed;
 }
 
 layout (local_size_x = 64) in; // one thread per stream instance, and one per tree
@@ -200,6 +224,6 @@ void main()
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        cullCaster(instanceIdx + k, instance, pick.posScale, pick.quat, isTree, treeWindTrunk);
+        cullCaster(instance, pick.posScale, pick.quat, isTree, treeWindTrunk);
     }
 }

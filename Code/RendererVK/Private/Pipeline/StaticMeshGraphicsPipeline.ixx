@@ -33,8 +33,7 @@ public:
         Buffer& vertexBuffer;
         Buffer& indexBuffer;
         Buffer& materialInfoBuffer;
-        Buffer& instanceIdxBuffer;
-        Buffer& meshInstanceBuffer;
+        Buffer& meshInstanceBuffer; // the cull's OutMeshInstance, at each draw slot (read by gl_InstanceIndex)
         Buffer& indirectCommandBuffer;            // opaque draw sequences
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)

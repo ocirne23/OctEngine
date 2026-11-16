@@ -214,7 +214,7 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
     input, push ranges and baked fragment defines. `indirectBindable = false`.
   * **Routing (the cull):** only a `TerrainLit` chunk whose bounding sphere reaches inside "Fade end (m)" (+1 m for
     the VR eyes, from the centre view) goes to the tess draws; a chunk wholly past it is the same surface (edge factor
-    1, no displacement) and takes the plain DGC path. A routed instance still allocates its DGC slot (`atomicAdd`),
+    1, no displacement) and takes the plain DGC path. A routed instance still allocates its DGC slot (the bucket claim),
     but that sequence draws `indexCount = 0`; the real draw goes to `out_terrainTessCommands` (binding 16,
     `atomicMax(idx + 1)` like the film). Same 24 B per-mesh-slot layout. Relies on ONE instance per terrain mesh (one
     `RenderMesh` + node per chunk): the DGC entry is per mesh, the routing per instance.

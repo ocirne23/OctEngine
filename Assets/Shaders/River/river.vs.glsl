@@ -42,7 +42,6 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 layout (location = 0) in vec4 in_posU;
 layout (location = 1) in vec4 in_normalV;
 layout (location = 2) in vec4 in_tangent;
-layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec2 out_uv;          // (across, along)
@@ -55,7 +54,7 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const InMeshInstancesData inst = in_instances[inst_idx];
+    const InMeshInstancesData inst = in_instances[gl_InstanceIndex]; // written at its draw slot
     out_pos = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
     out_uv = vec2(in_posU.w, in_normalV.w);
     out_waveSize = clamp(in_normalV.y / u_river_fullSizeDepth, 0.0, 1.0);

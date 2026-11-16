@@ -63,6 +63,8 @@ calls `reloadShaders()`.
   from it, see "The frame UBO and the tweak locks" ([FrameUbo.md](FrameUbo.md))). So must the main cull's
   `OutMeshInstance` (64 B): it is declared in the cull (`instanced_indirect.cs.glsl`) and in every scene vertex shader
   that reads it (lit, terrain, ocean, rock, river) - a shader that declares fewer fields reads with the wrong stride.
+  They index it by `gl_InstanceIndex` (the cull writes each instance at its draw slot; "Draw-list compaction" in
+  [Scene.md](Scene.md)).
 * **`mathutils.inc.glsl`** (Common/, included by shared.inc.glsl; a shader without shared.inc.glsl includes it
   itself): `quat_transform`, `quat_multiply`, the `hashU` and `pcg3d` integer hashes. Never redefine one locally.
 * `motion_vector.inc.glsl`: the fragment side of the motion vectors (`fragPrevClip`, `motionVector`); fragment shaders

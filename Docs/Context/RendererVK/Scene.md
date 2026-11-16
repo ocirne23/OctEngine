@@ -627,9 +627,19 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 ## Draw-list compaction (`DrawCompactPipeline`, `draw_compact.cs.glsl`)
 
 The culls (main, shadow, rain) accumulate into **PER-MESH-SLOT** sequences: one 24 B entry per registered
-mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx]`, `atomicAdd` on its
+mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx]`, an atomic add on its
 `instanceCount`). Walking them all costs one front-end draw per slot and list (tens of thousands of draws with
 0 instances).
+
+* **THE BUCKET CLAIM** (main and shadow cull, `bucketClaim` / `casterClaim`): ONE atomic per (list, mesh) and
+  subgroup, not per instance. A loop takes the first remaining lane's key, its lanes rank themselves by ballot, the
+  elected lane adds their count, and the others go round again. Correct for any set of active lanes (a lane leaves
+  only after its claim): divergence costs rounds, never a wrong index. A crowd of one mesh no longer serializes on one
+  address.
+* **THE DRAW SLOT**: a placed instance goes to `firstInstance + idx` (its bucket's start + its index) in the
+  out-instance buffer, and the scene vertex shaders (lit, terrain, ocean, rock, river, shadow depth) read it by
+  `gl_InstanceIndex` - the draw's `firstInstance` puts it there. No index list, no instance-rate attribute, no vertex
+  binding 2. The buffer is sized to the instance capacity, which `present()` keeps above the LOD-expanded bucket total.
 
 * Right after each cull's dispatch, ONE workgroup (1024 threads, subgroup ballots) moves the entries with
   `instanceCount > 0 && indexCount > 0` to the front of the SAME buffer and writes one count per list:
@@ -645,6 +655,8 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
   compaction.**
 * No descriptor set: the buffers go in as device addresses (push constants). `meshCount[0]` (the CPU's
   registered mesh count) is the slot count it walks.
+* Tried: a sort of the opaque list by pipeline. Dropped because a co-op battle measured 128 draws with 35 pipeline
+  changes after compaction: slot order already keeps short runs, and the ~25 binds it saves are not worth a second walk.
 * **THE SKY DRAW**: no entity, no mesh, no cull. The `Sky/Enabled` tweak (`SkyParams::enabled`, default
   on; a change re-records) gates ONE `draw(3)` in `StaticMeshGraphicsPipeline::record` on the Sky variant: a fullscreen
   triangle (`sky.vs.glsl`) at z = 0, the reversed-Z far plane and the depth clear value, depth test GREATER_OR_EQUAL,
@@ -659,9 +671,9 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
   requirement the buffers already cover keeps them.
 * **THE SHADOW PASS BORROWS THE MAIN PASS'S MEMORY**: the shadow cull + draw run BEFORE the main cull
   (`recordPrimaryPreScene`), so everything they write is dead again before the main cull and the scene need it:
-  * the shadow cull writes the MAIN cull's out-instance buffer (`OutShadowMeshInstance` at index `instanceIdx`; its
-    48 B fit the main 64 B stride, static_assert in Layout.ixx), its instance-index buffer and its OPAQUE list (binding
-    8). Only the compacted count is the shadow cull's own. No shadow capacity of its own to resize.
+  * the shadow cull writes the MAIN cull's out-instance buffer (`OutShadowMeshInstance` at its draw slot; its
+    48 B fit the main 64 B stride, static_assert in Layout.ixx) and its OPAQUE list (binding 8). Only the compacted
+    count is the shadow cull's own. No shadow capacity of its own to resize.
   * the shadow execute uses the static mesh pass's OPAQUE DGC scratch (`getOpaquePreprocessBuffer`), sized for both:
     `ShadowMapGraphicsPipeline::getPreprocessRequirement` -> `StaticMeshGraphicsPipeline::reserveOpaquePreprocess`,
     called by the Renderer after every shadow-pipeline initialize / reload / mesh-capacity growth. The transparent
