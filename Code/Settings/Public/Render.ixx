@@ -130,7 +130,30 @@ export struct CloudParams
     // Shape
     float bottom = 700.0f;             // shell bottom altitude (m)
     float top = 2500.0f;               // shell top altitude (m)
-    float coverage = 0.2f;            // 0 = clear, 1 = overcast
+    float coverage = 0.2f;            // 0 = clear, 1 = overcast (the day cycle WRITES it while on)
+    // THE DAY CYCLE ("Sky/Clouds/Day cycle"): while on (with the sun cycle), the renderer writes "Coverage" every frame
+    // (advanceSunCycle) = dayCoverage(): the base, more around sunrise and sunset, and a slow drift over the day.
+    bool  dayCycle = true;
+    float baseCoverage = 0.2f;         // the day cycle's coverage with the sun high and no drift
+    float lowSunCoverage = 0.15f;      // added with the sun at the horizon
+    float lowSunCoverageSpanDeg = 20.0f; // gone at this sun elevation above or below the horizon (smoothstep)
+    float dayCoverageVariation = 0.05f; // +- this, a slow drift over the 24 h day (the same each day)
+    // No tweak: the co-op game drives "Coverage" itself (the night shroud) and takes dayCoverage() as its day value, so
+    // the renderer does not write it.
+    bool  coverageDrivenByGame = false;
+    // The day cycle's coverage now (0..1): the base + "Low sun coverage" x (1 - smoothstep(0, span, |sun elevation|)) +
+    // "Daily variation" x three harmonics of the 24 h day (periods 8, 4.8, 3.4 h: it joins at midnight). The base
+    // alone with the sun cycle off; base 0 stays clear.
+    float dayCoverage(const SkyParams& sky) const
+    {
+        if (!sky.sunCycle || baseCoverage <= 0.0f)
+            return glm::clamp(baseCoverage, 0.0f, 1.0f);
+        const float elev = glm::degrees(std::asin(glm::clamp(sky.sunHeight(), -1.0f, 1.0f)));
+        const float lowSun = lowSunCoverage * (1.0f - glm::smoothstep(0.0f, glm::max(lowSunCoverageSpanDeg, 0.1f), std::abs(elev)));
+        const float w = glm::two_pi<float>() * sky.timeOfDay / 24.0f;
+        const float drift = 0.5f * std::sin(3.0f * w + 1.3f) + 0.3f * std::sin(5.0f * w + 4.1f) + 0.2f * std::sin(7.0f * w + 2.2f);
+        return glm::clamp(baseCoverage + lowSun + dayCoverageVariation * drift, 0.0f, 1.0f);
+    }
     float coverageVariation = 2.0f;  // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     // MACRO COVERAGE: the weather map's coverage read over a much larger period, added to every column's coverage (both
     // layers; faded in like the variation): whole regions clear or overcast, instead of one even scatter everywhere.
@@ -216,11 +239,11 @@ export struct CloudParams
     float upperType = 0.1f;            // 0 = stratus (thin sheets), 0.5 = cumulus
     float upperHeightVariation = 0.2f; // per-column lift, fraction of the upper band (the column shrinks to 1 - this)
     float upperDensity = 0.1f;        // x the main layer's density ("Density (1/m)" scales both)
-    float densityScale = 0.015f;       // extinction (1/m) at density 1
+    float densityScale = 0.025f;       // extinction (1/m) at density 1
     float erosion = 0.66f;             // detail noise erosion of the base shapes
     float erosionCutoff = 0.15f;       // densities under this after the erosion are removed (the thin haze rest), the rest remapped to 0..1
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
-    float weatherSizeKm = 20.0f;       // weather map period (km): the size of cloud clusters and gaps
+    float weatherSizeKm = 15.0f;      // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
     float baseBreakupKm = 0.0f;       // the base lookup's smooth warp (km, peak to peak): breaks the base tile's rows (0 = off)
     int   detailRepeats = 12;          // detail noise tiles per base tile
@@ -235,10 +258,14 @@ export struct CloudParams
     float multiScatterStrength = 1.25f; // x the closed-form sum of ALL multiple-scattering octaves (non-physical above 1):
                                        // the sunlit side seen with the sun behind the viewer lives on it alone
     float ambient = 1.0f;              // sky ambient strength
-    float groundAlbedo = 0.15f;      // ground bounce onto the cloud bottoms
+    float groundAlbedo = 0.25f;      // ground bounce onto the cloud bottoms
     float groundNightLight = 1.0f;  // at night the ground under the clouds is lit by the night's Sky Radiance x this (the sun cycle)
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
-    float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
+    float powder = 0.0f;              // dark-edge "powder" term strength (0 = off; above 0 bakes CLOUD_POWDER)
+    // SKY AMBIENT OCCLUSION: one cheap density sample ambientOcclusionHeight above each dense sample dims its sky ambient
+    // by the cloud over it, so the ambient no longer lights a crevice under a lump like an open top.
+    float ambientOcclusion = 0.5f;    // x the optical depth of the sample above (0 = off, no extra sample)
+    float ambientOcclusionHeight = 150.0f; // m: how far above the sample the occluder is read
     float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays); >= 0.01
     float aerialDimming = 1.0f;      // x the air's optical depth on the cloud's own light, per colour (1 = physical): warmer + darker far out
     float aerialFade = 1.0f;         // x the air's mean optical depth on the cloud's OPACITY (0 = off): far clouds fade into the sky
@@ -262,7 +289,11 @@ export struct CloudParams
     // at 10 m/s - under a third of a far texel (~39 m at 40 km).
     int   shadowNearSplit = 1;
     int   shadowFarSplit = 3;
-    bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
+    bool  selfShadowFromMap = true;    // the clouds' own sun shadow from the map (else the light march)
+    // Below selfShadowMapMinSunDeg the self-shadow hands over from the map to the sun march (fully the march at half of
+    // it): along a low sun the map's texel line runs kilometres through the layer, its one mean extinction smears the
+    // shadow, and a moving sun sweeps it fast across the clouds.
+    float selfShadowMapMinSunDeg = 20.0f;
     // Quality
     int   maxSteps = 360;             // view march step budget per pixel
     float maxDistanceKm = 45.0f;       // view march range (km)
@@ -272,6 +303,8 @@ export struct CloudParams
     int   stepsPerRay = 180;          // view march steps over a ray's shell span: each ray solves its step growth to take
                                        // this many, so the quality through the layer holds whatever its top / bottom
     int   lightSteps = 4;              // sun march steps per dense sample
+    float lightFirstStep = 25.0f;      // m: the sun march's first step; the steps grow GEOMETRICALLY to the reach, so a small
+                                       // lump shadows its neighbour (0 = the old quadratic spacing: first step reach / steps^2)
     float lightDistance = 8000.0f;     // MAX sun march reach (m): the reach is the way out of the sample's own layer
                                        // toward the sun, (layer top - altitude) / sun y, capped by this for a low sun
     float temporalBlend = 0.9f;        // history weight of the temporal accumulation

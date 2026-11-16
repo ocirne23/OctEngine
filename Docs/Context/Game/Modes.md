@@ -221,8 +221,10 @@ structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX**
   over a sun-height span of 0.2 down to "Shroud full at sun height (dusk)" (0); at dawn they open from 0 to 0.25. The
   night's first wave waits for the ignition (`tickWaves`).
 * **Per frame, three LIVE cloud values** (no re-bake): the vortex "Strength" = power × max(the pierce, "Day hole
-  strength" × the daylight of the shroud) - the hole follows the ignition, not the shroud; "Spin (deg/min)" = "Calm spin" .. "Pressure spin" by night × the missing charge; "Coverage" = its value
-  at the match start by day, "Shroud coverage" (1) at night (`daylight()`). **The night's deck is uniform:** "Coverage
+  strength" × the daylight of the shroud) - the hole follows the ignition, not the shroud; "Spin (deg/min)" = "Calm spin" .. "Pressure spin" by night × the missing charge; "Coverage" = the clouds'
+  day cycle (`CloudParams::dayCoverage`; while it is off, the value at the match start) by day, "Shroud coverage" (1)
+  at night (`daylight()`). The beacon sets `coverageDrivenByGame`, so the renderer's day cycle does not write
+  "Coverage" over it; the restore clears it. **The night's deck is uniform:** "Coverage
   variation" and "Macro variation" go from their match-start values by day to 0 at night, so the shroud covers the
   whole sky. A panel edit of those rows does not hold while the beacon runs.
 * **The beam is TWO records:** the tall beam is the glow in the air alone (`Renderer::addBeamColumn`; its glow fades

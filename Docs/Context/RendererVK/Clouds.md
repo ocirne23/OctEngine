@@ -34,6 +34,14 @@ variant (`sky.fs.glsl`) draws NO clouds.
   (weather.r - 0.5) x "Coverage variation", the variation faded in over the first `CLOUD_VARIATION_RAMP` (0.25)
   of the base coverage. With a constant spread the weather map's peaks stayed clouds at coverage 0. The upper
   layer ramps on its own effective coverage (upper x main).
+* **THE DAY CYCLE** ("Sky/Clouds/Day cycle", all live): while "Enabled", `RendererState::advanceSunCycle` (main, before
+  the begin-frame job) WRITES the "Coverage" tweak every frame = `CloudParams::dayCoverage(sky)`, so the panel shows the
+  number in use: "Base coverage" + "Low sun coverage" (0.15) with the sun at the horizon, gone at "Low sun span (deg)"
+  (20) of elevation above or below it (smoothstep) - more clouds at sunrise and sunset - + "Daily variation" (0.05) x
+  a slow drift: three harmonics of the 24 h day (periods 8, 4.8 and 3.4 h), so it joins at midnight and is the same
+  each day. With the sun cycle off it is the base alone; base 0 stays clear. Off, "Coverage" is the user's again.
+  **The co-op game drives "Coverage" itself** (the night shroud, `GameMatch::tickBeacon`): it sets
+  `coverageDrivenByGame` (no tweak) so the renderer stands back, and takes `dayCoverage()` as its day value.
 * **MACRO COVERAGE** ("Macro size (km)" 100, "Macro variation" 1; `cloudColumnCoverage`): the weather map's
   coverage channel read over its OWN, much larger period (rotated, mip `CLOUD_MACRO_LOD` 2), added to the column
   coverage with the variation's ramp: whole regions clear or overcast. The weather period's features are the clouds'
@@ -189,7 +197,7 @@ variant (`sky.fs.glsl`) draws NO clouds.
   both - a hash of it as a fraction of the weather period (x / z; base and detail tile inside it) and of the detail
   period (the drift), `cloudSeedOffset` - so each seed is another cloud layout at the same settings, at no cost.
 * **BASE BREAKUP** ("Base breakup (km)", `u_clouds_baseBreakup`, peak to peak; `cloudLayerShape`): the base tile is
-  only weather / "Base repeats" wide (3.3 km at the defaults), so from altitude the same shapes stood in rows along X
+  only weather / "Base repeats" wide (2.5 km at the defaults), so from altitude the same shapes stood in rows along X
   and Z. The base lookup is warped by the weather map's type channel at mip `CLOUD_BREAKUP_LOD` (4), read twice at
   different rotations: smooth (a gentle stretch), and it tiles with the weather period, so the wrap stays continuous.
   Each base tile then shows a different part of the noise. The detail is not warped (too fine to read as rows). Two
@@ -239,7 +247,11 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     mean of their 4 side neighbours as the current value, last frame's march at the same pixel as history,
     and their own march limit from the scene depth (temporal binding 7).
   * **Lighting per dense sample:** a sun march, three Wrenninge multiple-scattering terms in closed form, a
-    powder term, and an ambient.
+    powder term ("Lighting/Powder": above 0 it bakes `CLOUD_POWDER` - the Renderer reloads the shaders; it darkens the
+    thin edges, `1 - exp(-6 density)`), and an ambient. **What makes the clouds read as SOLID is the lighting, not the
+    density:** a denser cloud only gets opaque sooner, while a sun march that cannot see the lumps next to a sample and a
+    sky ambient that lights every crevice like an open top shade it as a soft blob. Hence the sun march's short first
+    step and the sky ambient occlusion below.
     * Octave 0 uses the HG + Draine phase (Jendersie & d'Eon 2023: a fit to Mie scattering on water droplets;
       the CPU turns "Droplet size (um)" into `u_clouds_hgG` / `draineG` / `draineAlpha` / `draineWeight`).
       **The HG part's g is capped by "Forward peak limit"**: uncapped it is the droplets' diffraction peak
@@ -258,14 +270,27 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
       lights the undersides only. **At NIGHT** the sun term is 0 and the clear sky's ambient near 0, so the ground's
       light gets `u_clouds_groundNightLight` added: the night's Sky Radiance x "Lighting/Night ground light" x
       (1 - the day step of the sun cycle), 0 by day and with the sun cycle off.
+    * **SKY AMBIENT OCCLUSION** ("Lighting/Ambient occlusion" k, "Ambient occlusion height (m)" h; `u_clouds_aoRate` =
+      k x extinction x h x log2(e), `u_clouds_aoHeight`): ONE cheap density sample (detail 0: weather + base, at the
+      mip of h) straight above the sample dims its sky ambient by exp(-k x extinction x density x h), so the ambient
+      follows the cloud over the sample, not only its height in the layer. k = 0 skips the sample. The ground bounce is
+      not occluded.
     * The sun at the cloud uses the atmosphere transmittance along the LOCAL up of the entry point (the
       sunset on distant clouds).
-    * **The sun march** (`cloudLightOpticalDepth`, "Light steps", quadratic spacing) runs only where the shadow
-      map does not cover the sample (or "Shadows/Self-shadow from map" is off - the default, for quality). Its
+    * **The sun march** (`cloudLightOpticalDepth`, "Light steps") runs only where the shadow
+      map does not cover the sample, or with "Shadows/Self-shadow from map" off (on by default). **At a LOW SUN the
+      self-shadow hands over to the march** ("Shadows/Self-shadow map min sun (deg)", 20; `u_clouds_selfShadowMapWeight`
+      = smoothstep(half of it, it, sun elevation), live; x the map's coverage weight; 0 = the map is not read): along a
+      low sun a map texel's line runs kilometres through the layer, its one mean extinction smeared the shadow, and a
+      moving sun swept it fast across the clouds. The march costs more there. Its
       reach is PER SAMPLE: the way out of the sample's OWN layer toward the sun, `(layer top - altitude) / L.y`,
-      capped by "Light distance (m)". It reads each step's base noise at the mip of ITS OWN LENGTH (at least
-      the view sample's) and stops past `u_clouds_sunOdCut` = 7 / min(tail extinction, ms) (every
-      multiple-scattering octave under 0.1 %).
+      capped by "Light distance (m)". **Its steps grow GEOMETRICALLY** from "Quality/Light first step (m)"
+      (`u_clouds_lightFirstStep`, at most reach / steps) to the reach: at 25 m and 4 steps over 2 km the ends are 25,
+      108, 464, 2000 m, so the first step (the only one with the detail) sees the lumps right next to the sample and
+      a small bump shadows its neighbour. 0 = the quadratic spacing (reach x (i / n)^2: a first step of 125 m there,
+      which only saw the cloud's broad shape - soft, foggy shading). It reads each step's base noise at the mip of
+      ITS OWN LENGTH (at least the view sample's) and stops past `u_clouds_sunOdCut` = 7 / min(tail extinction, ms)
+      (every multiple-scattering octave under 0.1 %).
   * **The aerial perspective in front of the cloud** (`cloudAerialScatter`): an 8-step single-scatter segment
     from the camera altitude, x "Lighting/Aerial perspective strength" (`u_clouds_aerialStrength`, min 0.01:
     scales the ADDED air light only; the dimming has its own tweak below). Two lights, as the
@@ -395,7 +420,7 @@ the scene).
   `u_clouds_shadowLowSunAverage` = 1 - smoothstep over the sun's elevation (live; `cloudShadowLowSunMix`), and fully
   averaged the map is not read. A cloud's shadow lies height / tan(elevation) away (~17 km at 5 degrees for a 1.5 km
   cloud), so a slowly moving low sun (the sun cycle) swept the shadows across the world: fast flicker. The clouds' own
-  lighting (`cloud_raymarch`) still reads the map.
+  lighting (`cloud_raymarch`) has its own hand-over to the sun march ("Self-shadow map min sun (deg)", see the march).
 * **Consumers** multiply their sun term by the cloud transmittance (each includer sets
   `CLOUD_SHADOW_BINDING`): the lit core (lit, masked, transparent, terrain; forward set binding 22), the ocean
   (22; `sunTint`, so glint, body, foam and SSS), the terrain wet film, the fog scatter (13 — the shafts through
@@ -501,8 +526,7 @@ depth through the planet is float noise). The sky MAP and every indirect path ke
 * **The cloud toggles are BAKED defines**, injected into every shader compile by `buildLayoutPreamble`
   (Shader.cpp) from `RendererVKLayout::g_cloudShaders` (`Renderer::syncCloudDefines`): `CLOUDS`
   ("Sky/Clouds/Enabled"), `CLOUD_SHADOWS` (+ "Shadows/Enabled"), `CLOUD_SELF_SHADOW_MAP` (+ "Shadows/Self-shadow
-  from map", off by default), `CLOUD_POWDER` (`CloudParams::powder` above 0; its tweak is not registered, so it
-  stays at 0 and the define off), `CLOUD_CHECKERBOARD` ("Quality/Checkerboard"; also sizes the march dispatch,
+  from map", off by default), `CLOUD_POWDER` ("Lighting/Powder" above 0), `CLOUD_CHECKERBOARD` ("Quality/Checkerboard"; also sizes the march dispatch,
   which the reload re-records) and `CLOUD_DEBUG_MODE` ("Quality/Debug mode": the march / temporal debug views
   compile out at 0). A change of a DEFINE waits for the GPU and reloads every shader, like the GI grid tweaks;
   `syncCloudDefines` returns whether one changed.

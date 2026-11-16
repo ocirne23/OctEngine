@@ -119,6 +119,7 @@ void RendererState::attachSettingsListeners()
     Tweak::onChange(s.clouds.selfShadowFromMap, this, onCloudDefines);
     Tweak::onChange(s.clouds.checkerboard, this, onCloudDefines);
     Tweak::onChange(s.clouds.debugMode, this, onCloudDefines);
+    Tweak::onChange(s.clouds.powder, this, onCloudDefines);
     // The terrain relief's two BAKED switches: TERRAIN_POM (the terrain fragment shaders) and the tessellation (the
     // cull's TERRAIN_TESS_ROUTE + whether the tess pipeline exists and its draws are recorded).
     m_staticMeshGraphicsPipeline.setTerrainRelief(s.terrain.texParallaxEnabled, s.terrain.texTessEnabled);

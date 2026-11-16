@@ -188,17 +188,21 @@ float RendererState::grassGridRange() const
 // the returned frustum) are contractually valid once beginFrame's job is joined.
 // "Sky/Sun cycle": the time of day advances on the SIM clock (the pause holds the sun) x the speed, wraps at 24 h, and
 // sets the sun direction - every frame while on, so a dragged time or latitude shows at once even at speed 0.
+// "Sky/Clouds/Day cycle": then "Coverage" = dayCoverage(), unless the game drives it (coverageDrivenByGame).
 void RendererState::advanceSunCycle()
 {
     SkyParams& s = m_skyParams;
-    if (!s.sunCycle)
-        return;
-    if (!s.sunCyclePaused) // "Paused": the time holds, the direction below still follows it
+    if (s.sunCycle)
     {
-        const float hours = s.timeOfDay + (float)(glm::min(Globals::time.getSimDeltaSec(), 0.25) * s.sunCycleSpeed / 3600.0);
-        s.timeOfDay = hours - 24.0f * std::floor(hours / 24.0f);
+        if (!s.sunCyclePaused) // "Paused": the time holds, the direction below still follows it
+        {
+            const float hours = s.timeOfDay + (float)(glm::min(Globals::time.getSimDeltaSec(), 0.25) * s.sunCycleSpeed / 3600.0);
+            s.timeOfDay = hours - 24.0f * std::floor(hours / 24.0f);
+        }
+        s.sunDirection = s.cycleSunDirection();
     }
-    s.sunDirection = s.cycleSunDirection();
+    if (m_cloudParams.dayCycle && !m_cloudParams.coverageDrivenByGame)
+        m_cloudParams.coverage = m_cloudParams.dayCoverage(s);
 }
 
 void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
@@ -964,7 +968,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_upperInvHeight", [&] { return 1.0f / (cloudUpperTop(c) - cloudUpperBottom(c)); }, c.upperBottom, c.upperTop);
         // The upper layer's coverage is a multiplier on the main layer's (its density already is one: the shader adds
         // it x upperDensity to the main density before "Density (1/m)").
-        list.add("clouds_upperCoverage", [&] { return glm::clamp(glm::max(c.upperCoverage, 0.01f) * c.coverage, 0.0f, 1.0f); }, c.upperCoverage, c.coverage);
+        list.add("clouds_upperCoverage", [&] { return glm::clamp(glm::max(c.upperCoverage, 0.01f) * cloudCoverage(c), 0.0f, 1.0f); }, c.upperCoverage, c.coverage, UboLive);
         list.add("clouds_upperType", [&] { return glm::clamp(c.upperType, 0.0f, 1.0f); }, c.upperType);
         list.add("clouds_upperHeightVariation", [&] { return glm::clamp(c.upperHeightVariation, 0.0f, 0.8f); }, c.upperHeightVariation);
         list.add("clouds_shelfCount", [&] { return (float)glm::clamp(c.shelfCount, 1, 3); }, c.shelfCount); // the tweak range
@@ -1029,7 +1033,12 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_draineWeight", [&] { return std::exp(-0.599085f / (glm::clamp(c.dropletSize, 5.0f, 50.0f) - 0.641583f) - 0.665888f); }, c.dropletSize);
         list.add("clouds_ambient", c.ambient);
         list.add("clouds_groundAlbedo", c.groundAlbedo);
-        list.add("clouds_powder", [&] { return c.powder; }); // no tweak (its registration is commented out): a constant
+        list.add("clouds_powder", [&] { return c.powder; }, c.powder);
+        // Sky ambient occlusion (cloud_raymarch.inc.glsl): the sample above, and its exp2 rate per unit normalized density
+        // (strength x extinction x height x log2(e)); 0 = off.
+        list.add("clouds_aoHeight", [&] { return glm::max(c.ambientOcclusionHeight, 1.0f); }, c.ambientOcclusionHeight);
+        list.add("clouds_aoRate", [&] { return glm::max(c.ambientOcclusion, 0.0f) * c.densityScale * glm::max(c.ambientOcclusionHeight, 1.0f) * 1.44269504f; },
+            c.ambientOcclusion, c.densityScale, c.ambientOcclusionHeight);
         list.add("clouds_multiScatterAttenuation", [&] { return glm::clamp(c.multiScatter, 0.0f, 0.95f); }, c.multiScatter);
         // The sun march's early out (cloud_raymarch.inc.glsl): the slowest multi-scatter octave, exp(-od min(tailExt, ms)),
         // is under 0.1 % past od = 7 / that (normalized density x metres).
@@ -1046,6 +1055,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_stepsPerRay", [&] { return (float)glm::max(c.stepsPerRay, 16); }, c.stepsPerRay);   // the tweak's minimum
         list.add("clouds_lightSteps", [&] { return (float)glm::max(c.lightSteps, 1); }, c.lightSteps); // the tweak min
         list.add("clouds_invLightSteps", [&] { return 1.0f / (float)glm::max(c.lightSteps, 1); }, c.lightSteps);
+        list.add("clouds_lightFirstStep", [&] { return glm::max(c.lightFirstStep, 0.0f); }, c.lightFirstStep); // 0 = the quadratic spacing
         list.add("clouds_lightDistance", c.lightDistance);
         list.add("clouds_temporalBlend", [&] { return glm::clamp(c.temporalBlend, 0.0f, 0.98f); }, c.temporalBlend);
         list.add("clouds_invDetailDistance", [&] { return 1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f); }, c.detailDistanceKm);
@@ -1058,8 +1068,16 @@ void RendererState::registerUboValues(UboBlock& list)
             const float start = glm::max(c.shadowLowSunStartDeg, c.shadowLowSunEndDeg + 0.01f);
             return 1.0f - glm::smoothstep(c.shadowLowSunEndDeg, start, elev);
         }, UboLive);
+        // The clouds' SELF-shadow: the map's weight against the sun march (cloud_raymarch.inc.glsl) - 1 over "Self-shadow
+        // map min sun (deg)", 0 under half of it (0 = no map read at all).
+        list.add("clouds_selfShadowMapWeight", [&]
+        {
+            const float elev = glm::degrees(std::asin(glm::clamp(skySunDirection(Globals::settings.sky).y, -1.0f, 1.0f)));
+            const float minSun = glm::max(c.selfShadowMapMinSunDeg, 0.0f);
+            return minSun > 0.0f ? glm::smoothstep(0.5f * minSun, minSun, elev) : 1.0f;
+        }, UboLive);
         // Past the cascades: a rough mean transmittance of the layer from its coverage (not measured).
-        list.add("clouds_shadowMeanTransmittance", [&] { return glm::mix(1.0f, 0.3f, cloudCoverage(c)); }, c.coverage);
+        list.add("clouds_shadowMeanTransmittance", [&] { return glm::mix(1.0f, 0.3f, cloudCoverage(c)); }, c.coverage, UboLive);
         list.add("clouds_shadowNearSteps", [&] { return (float)glm::max(c.shadowNearSteps, 1); }, c.shadowNearSteps);
         list.add("clouds_shadowFarSteps", [&] { return (float)glm::max(c.shadowFarSteps, 1); }, c.shadowFarSteps);
         list.add("clouds_shadowFarSoftness", [&] { return glm::max(c.shadowFarSoftness, 0.0f); }, c.shadowFarSoftness);

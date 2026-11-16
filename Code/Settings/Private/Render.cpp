@@ -339,6 +339,11 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds", "Top (m)", &s.top, 100.0f, 10000.0f, 10.0f, [p]() { p->bottom = oc::min(p->bottom, p->top - 100.0f); }, ETweakFlags::Runtime);
     // Live under the "Sky/Clouds" lock: the values it feeds (upper coverage, the shadow's mean) are never baked.
     Tweak::floatVar("Sky/Clouds", "Coverage", &s.coverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::boolean("Sky/Clouds/Day cycle", "Enabled", &s.dayCycle, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day cycle", "Base coverage", &s.baseCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day cycle", "Low sun coverage", &s.lowSunCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day cycle", "Low sun span (deg)", &s.lowSunCoverageSpanDeg, 0.1f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day cycle", "Daily variation", &s.dayCoverageVariation, 0.0f, 0.5f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro size (km)", &s.macroSizeKm, 10.0f, 1000.0f, 1.0f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro variation", &s.macroVariation, 0.0f, 3.0f, 0.01f, {}, ETweakFlags::Runtime);
@@ -400,7 +405,9 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground light depth (m)", &s.groundLightDepth, 10.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &s.dropletSize, 5.0f, 50.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &s.forwardPeakLimit, 0.8f, 1.0f, 0.001f);
-    //Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &s.powder, 0.0f, 1.0f, 0.01f); // CLOUD_POWDER while > 0 (a define: needs a Renderer listener)
+    Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &s.powder, 0.0f, 1.0f, 0.01f); // CLOUD_POWDER while > 0 (the Renderer reloads)
+    Tweak::floatVar("Sky/Clouds/Lighting", "Ambient occlusion", &s.ambientOcclusion, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Ambient occlusion height (m)", &s.ambientOcclusionHeight, 10.0f, 1000.0f, 1.0f);
 
     Tweak::floatVar("Sky/Clouds/Shape", "Type", &s.cloudType, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Shape", "Type variation", &s.typeVariation, 0.0f, 2.0f);
@@ -438,6 +445,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::enumVar("Sky/Clouds/Shadows", "Near update split", &s.shadowNearSplit, s_cloudShadowSplitNames);
     Tweak::enumVar("Sky/Clouds/Shadows", "Far update split", &s.shadowFarSplit, s_cloudShadowSplitNames);
     Tweak::boolean("Sky/Clouds/Shadows", "Self-shadow from map", &s.selfShadowFromMap);
+    Tweak::floatVar("Sky/Clouds/Shadows", "Self-shadow map min sun (deg)", &s.selfShadowMapMinSunDeg, 0.0f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
 
     Tweak::intVar("Sky/Clouds/Quality", "Max steps", &s.maxSteps, 16, 1024);
     Tweak::floatVar("Sky/Clouds/Quality", "Max distance (km)", &s.maxDistanceKm, 1.0f, 400.0f, 0.5f);
@@ -445,6 +453,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Quality", "Min step (m)", &s.minStep, 0.25f, 50.0f, 0.25f);
     Tweak::intVar("Sky/Clouds/Quality", "Steps per ray", &s.stepsPerRay, 16, 1024);
     Tweak::intVar("Sky/Clouds/Quality", "Light steps", &s.lightSteps, 1, 16);
+    Tweak::floatVar("Sky/Clouds/Quality", "Light first step (m)", &s.lightFirstStep, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &s.lightDistance, 50.0f, 20000.0f, 10.0f); // the cap on the per-sample reach
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &s.temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &s.skyMapHistorySec, 0.0f, 30.0f);

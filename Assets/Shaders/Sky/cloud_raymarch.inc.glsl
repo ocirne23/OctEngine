@@ -17,7 +17,10 @@ float cloudJitter(ivec2 p)
     return fract(float(h) * (1.0 / 4294967296.0) + float(u_frameIndex & 1023u) * 0.61803398875);
 }
 
-// Optical depth toward the sun from a camera-relative point at altitude sampleAlt, in quadratically growing steps:
+// Optical depth toward the sun from a camera-relative point at altitude sampleAlt:
+//  - THE STEPS GROW GEOMETRICALLY from u_clouds_lightFirstStep (m) to the reach: a short first step reads the lumps right
+//    next to the sample, so a small bump shadows its neighbour (the clouds read as solid, not as soft fog). 0 = the
+//    quadratic spacing (first step reach / steps^2: 60 m and more, which only saw the cloud's broad shape).
 //  - THE REACH is the way out of the sample's OWN layer toward the sun, capped by u_clouds_lightDistance for a low
 //    sun. Not the shell's top: the gap between the layers would take steps.
 //  - Only the first (short) step reads the detail: the longer ones integrate over the detail scale anyway.
@@ -32,13 +35,17 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
     const float reach = clamp((layerTop - sampleAlt) * u_clouds_invSunUpLight, 1.0, u_clouds_lightDistance); // L is the sun
     const float invN = u_clouds_invLightSteps;
     const float stepLodBias = log2(u_clouds_baseFrequency * CLOUD_BASE_RES);
+    // The geometric spacing: t_i = first x ratio^i, the last one = the reach (ratio = (reach / first)^(1 / (n - 1))).
+    const float first = min(u_clouds_lightFirstStep, reach * invN);
+    const bool geometric = first > 0.0;
+    const float logRatio = geometric && n > 1 ? log2(reach / first) / float(n - 1) : 0.0;
 
     float od = 0.0;
     float tPrev = 0.0;
     for (int i = 0; i < n; ++i)
     {
         const float f = float(i + 1) * invN;
-        const float t1 = reach * f * f;
+        const float t1 = geometric ? (i == n - 1 ? reach : first * exp2(float(i) * logRatio)) : reach * f * f;
         const float tm = 0.5 * (tPrev + t1);
         const vec3 p = rel + L * tm;
         const float alt = cloudAltitude(p, camAlt);
@@ -232,9 +239,11 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     float sumFlash     = 0.0;
 
     // The self-shadow comes from the shadow map where it covers the sample (one fetch instead of a sun march); the map
-    // is relative to the CENTRE view's camera. u_clouds_shadowRendered = the map was rendered this frame.
+    // is relative to the CENTRE view's camera. u_clouds_shadowRendered = the map was rendered this frame. At a LOW SUN it
+    // hands over to the sun march (u_clouds_selfShadowMapWeight, x the map's coverage weight): the map's texel line runs
+    // kilometres through the layer there, and its one mean extinction smeared the shadow, swept fast by a moving sun.
 #ifdef CLOUD_SELF_SHADOW_MAP
-    const bool mapShadow = u_clouds_shadowRendered > 0.5;
+    const bool mapShadow = u_clouds_shadowRendered > 0.5 && u_clouds_selfShadowMapWeight > 0.0;
 #else
     const bool mapShadow = false;
 #endif
@@ -377,7 +386,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                     }
                 }
                 float od;
-                const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView, false) : vec2(0.0);
+                const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView, false) * vec2(1.0, u_clouds_selfShadowMapWeight) : vec2(0.0);
                 if (map.y >= 1.0)
                     od = map.x;
                 else
@@ -392,9 +401,15 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 #else
                 const float sunWeight = absorbed * sunTerm;
 #endif
+                // SKY AMBIENT OCCLUSION: the cloud u_clouds_aoHeight over the sample (one cheap density: weather + base, at
+                // the mip of that height) dims its sky ambient - a crevice under a lump is no longer lit like an open top.
+                float skyVis = 1.0;
+                if (u_clouds_aoRate > 0.0)
+                    skyVis = exp2(-u_clouds_aoRate * cloudDensity(nxz, alt + u_clouds_aoHeight, 1e30, 0.0,
+                        max(lodBase, log2(u_clouds_aoHeight * u_clouds_baseFrequency * CLOUD_BASE_RES)), lodDetail));
                 sumSun       += sunWeight;
                 sumSunHigh   += sunWeight * hf;
-                sumAmbHigh   += absorbed * hf;
+                sumAmbHigh   += absorbed * hf * skyVis;
                 sumAmbGround += absorbed * exp(-max(alt - u_clouds_mainBottom, 0.0) * u_clouds_invGroundLightDepth);
                 if (u_clouds_flash[0].w + u_clouds_flash[1].w > 0.0)
                 {
