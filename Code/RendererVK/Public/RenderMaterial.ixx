@@ -7,7 +7,7 @@ import :Layout;
 import :RenderMaterialState; // the state
 
 // RAII owner of a material slot (move-only, like RenderMesh), for meshes without an ObjectContainer (Renderer::createMesh / spawnMeshNode). Destroying it
-// frees the slot, and a textured material's own textures (retired once the GPU has drained). A DERIVED material shares its source's textures: destroy it
+// frees the slot, and a textured material's own textures (retired once no frame in flight can sample them). A DERIVED material shares its source's textures: destroy it
 // first (declare it after its source). Destroy every RenderNode drawing it before it. MAIN THREAD. The state is in RenderMaterialState.ixx; the multi-line
 // bodies are below the class.
 export class RenderMaterial final : public RenderMaterialState

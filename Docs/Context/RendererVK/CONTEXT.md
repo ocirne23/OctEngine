@@ -300,8 +300,11 @@ depth-tested grid in `entity_preview_grid.*`.
 effect immediately.**
 
 * **Indirect dispatches never re-record**: emitter, query and spawn changes for force and particles,
-  and the skinning dispatch (CPU-written dims per frame), so instances spawned later run without a
+  and the skinning dispatch (CPU-written dims and job count per frame), so instances spawned later run without a
   re-record.
+* **Texture frees never drain the GPU**: `present()` frees the queued slots (`BindlessTextures::processPendingFrees`;
+  each slot's sets point at the fallback from their next record) and keeps the images until `NUM_FRAMES_IN_FLIGHT`
+  frames later. A capacity growth's drain destroys them at once.
 * **Bindless descriptor writes** for streamed textures happen first, before anything records against
   them — safe because `present()` waited this slot's fence (`waitFrameSlot`) and the arrays are
   UPDATE_AFTER_BIND.

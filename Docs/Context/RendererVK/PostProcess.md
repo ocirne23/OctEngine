@@ -58,8 +58,8 @@ instead of only the camera.
   skin pass copies each position it is about to overwrite into the second half; `MeshInfo::prevVertexDelta`
   = vertexCount, copied into every LOD level's info (they index the same region), 0 = not skinned. The lit
   vertex shader reads the previous position from the vertex SSBO (binding 14, also in the vertex stage).
-  `SkinningJob::prevValid` = 0 on a job's first frame (fresh or re-acquired bundle: the region holds no last
-  frame), set by `SkinnedMeshRegistry::markJobsUploaded` after the upload.
+  `SkinningJob::prevValid` = 0 when the bundle was not skinned last frame (a fresh or re-acquired bundle, or a node
+  not pushed last frame: the region holds no last frame), set per frame by `SkinnedMeshRegistry::writeFrame`.
 * **Readers**: TAA (the motion of the NEAREST surface in the 3x3, so a moving silhouette's history follows
   the object), the AO temporal pass, the forward pass's AO read (its own `MOTION_WORLD_DELTA`, no
   target read), the motion blur, and DLSS's motion vector pass (`dlss_mvec`). Not: the cloud temporal

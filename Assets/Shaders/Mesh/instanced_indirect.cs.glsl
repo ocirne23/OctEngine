@@ -31,10 +31,6 @@ layout (binding = 13, std430) buffer LodLevelStateBuffer
 {
     uint lodLevelState[];
 };
-layout (binding = 14, std430) readonly buffer InNodeLodStateBiasBuffer
-{
-    int in_nodeLodStateBias[]; // stateSlot = instanceIdx + bias
-};
 layout (binding = 15, std430) buffer OutLodStatsBuffer
 {
     uint out_lodStats[];
@@ -61,9 +57,9 @@ layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
 {
     RenderNodeTransform in_prevRenderNodeTransforms[];
 };
-layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
+layout (binding = 19, std430) readonly buffer InPrevNodeStatesBuffer
 {
-    uint in_prevNodePassMasks[]; // PASS_* byte + push frame << 8
+    uvec2 in_prevNodeStates[]; // last frame's in_nodeStates: x = PASS_* byte + push frame << 8
 };
 
 #define TREE_CULL_PIECES_BINDING 20
@@ -87,7 +83,7 @@ void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out u
 {
     prevPosScale = vec4(0.0);
     prevQuat = uvec2(0u);
-    if ((in_prevNodePassMasks[instance.renderNodeIdx] >> 8) != ((u_frameIndex - 1u) & 0xFFFFFFu))
+    if ((in_prevNodeStates[instance.renderNodeIdx].x >> 8) != ((u_frameIndex - 1u) & 0xFFFFFFu))
         return;
     const RenderNodeTransform prev = in_prevRenderNodeTransforms[instance.renderNodeIdx];
     const RenderNodeTransform cur = in_renderNodeTransforms[instance.renderNodeIdx];
@@ -267,12 +263,13 @@ void main()
     else
     {
         instance = in_instances[instanceIdx];
-        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
+        const uvec2 nodeState = in_nodeStates[instance.renderNodeIdx];
+        if ((nodeState.x & PASS_MAIN) == 0u)
             return;
         pick.kBegin = 0u;
         pick.kEnd = 1u;
         instanceTransform(instance, pick.posScale, pick.quat);
-        pick.lodStateBase = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
+        pick.lodStateBase = uint(int(instanceIdx) + int(nodeState.y)); // stateSlot = instanceIdx + bias
     }
 
     for (uint k = pick.kBegin; k < pick.kEnd; ++k)

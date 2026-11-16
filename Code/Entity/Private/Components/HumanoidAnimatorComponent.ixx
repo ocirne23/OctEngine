@@ -83,7 +83,7 @@ export struct HumanoidAnimatorComponent
     void destroy(Entity& entity, const SpawnInfo& info);
     void update(Entity& entity, float deltaSeconds);
     // The placement tail of Entity::updateSelf: every visit, frozen or not. passMask 0 = culled.
-    void place(Renderer& renderer, const Transform& world, uint32 passMask);
+    void place(RenderBatch& renderBatch, const Transform& world, uint32 passMask);
     void addRestBounds(const Transform& toEntity, Sphere& bounds, bool& any) const;
 
     // Once per parent tick, also with 0 metres while the swing still has to fade out.

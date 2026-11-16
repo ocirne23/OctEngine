@@ -324,7 +324,7 @@ export namespace RendererVKLayout
     // The near grass cascade: its own one-layer depth map (u_grassNearShadow), +-"Near shadow range" over it.
     constexpr uint32 GRASS_NEAR_SHADOW_RESOLUTION = 2048;
 
-    // Per-render-node pass visibility bits (in_nodePassMasks, written at renderNode() push time):
+    // Per-render-node pass visibility bits (in_nodeStates.x, written at renderNode() push time):
     // the main indirect cull, shadow cull, and TLAS-instance writer each early-out on their bit, so
     // one pushed instance list feeds three independently culled passes. Bit order must match the
     // Spatial library's SpatialPass_* mask (Entity static_asserts it).
@@ -479,9 +479,10 @@ export namespace RendererVKLayout
         glm::vec4 boneWeights;
     };
 
-    // Per-skinned-instance job for the skinning compute, uploaded each frame into a std430 SSBO the
-    // shader indexes with gl_WorkGroupID.y (one indirect dispatch covers all jobs - data-driven, no
-    // re-record when instances spawn). Offsets are in element units (MeshVertex / SkinningVertex / mat4).
+    // Per-skinned-instance job for the skinning compute. present() uploads only the jobs of the bundles pushed this frame, packed,
+    // into a std430 SSBO after a 16-byte header (the job count); one indirect dispatch covers them all - data-driven, no re-record
+    // when instances spawn. A workgroup finds its job by a binary search on firstGroup, so each job launches only its own groups.
+    // Offsets are in element units (MeshVertex / SkinningVertex / mat4).
     struct SkinningJob
     {
         uint32 baseVertexOffset; // source geometry, MeshVertex units
@@ -490,10 +491,14 @@ export namespace RendererVKLayout
         uint32 vertexCount;
         uint32 paletteOffset;    // bone palette base, mat4 units
         // The output region is 2 x vertexCount: the deformed vertices, then last frame's positions (the motion
-        // vectors; MeshInfo::prevVertexDelta). 0 on the job's first frame: the region holds no last frame yet,
-        // so the skin writes this frame's positions there too.
+        // vectors; MeshInfo::prevVertexDelta). 0 when the job was not skinned last frame (its first frame, or a frame
+        // its node was not pushed): the region holds no last frame, so the skin writes this frame's positions there too.
         uint32 prevValid;
+        uint32 firstGroup;       // the job's first workgroup in the packed dispatch (present())
+        uint32 pad;
     };
+    static_assert(sizeof(SkinningJob) == 32);
+    constexpr uint32 SKINNING_JOB_HEADER_BYTES = 16; // the job buffer's header: [0] = the job count
     // Per-skinned-mesh source data captured when an ObjectContainer loads (bind-pose geometry + skinning
     // influences + material/pipeline). Owned by the renderer (like MeshInfo) and referenced by a base index
     // per container; spawnSkinnedNode() turns each into a unique per-instance output region + MeshInfo.

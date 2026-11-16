@@ -99,7 +99,7 @@ public:
         Buffer& blasAddresses;   // mesh idx -> uint64 BLAS device address
         Buffer& rtMeshAlias;     // mesh idx -> RT mesh idx (LOD chains share one BLAS; packed into sbtOffset)
         Buffer& materialInfos;   // MATERIAL_FLAG_NO_RAYTRACING -> instance mask 0
-        Buffer& nodePassMasks;   // nodes without PASS_GI|PASS_SHADOW -> instance mask 0
+        Buffer& nodeStates;      // InstanceStream::NodeState: nodes without PASS_GI|PASS_SHADOW -> instance mask 0
         Buffer& ubo;             // u_present_giTlasNumInstances (live count), u_rt_giTlasRange (range bound), u_sceneFocus (its center)
         Buffer& treePieces;      // the baked tree records (tree_cull.inc.glsl): a tree's instance is built from these
         Buffer& treeTypes;

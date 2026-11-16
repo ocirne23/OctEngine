@@ -52,15 +52,19 @@ public:
     void unregisterSets(uint32 firstMeshInfoIdx, uint32 count);
 
     // Called per instance from the renderNode paths (and per selected LOD level): keeps the owning set
-    // warm / requests a re-stream when it was evicted. Thread-safe (relaxed atomic store);
-    // unregistered/skinned mesh indices are ignored.
+    // warm / requests a re-stream when it was evicted. Thread-safe (relaxed atomics);
+    // unregistered/skinned mesh indices are ignored. Load before store: a crowd of one mesh notes the same set
+    // from every worker, and a store each time keeps its cache line moving between the cores.
     void noteUse(uint16 meshInfoIdx)
     {
         if (meshInfoIdx < m_setForMeshInfo.size())
         {
             const uint32 setIdx = m_setForMeshInfo[meshInfoIdx];
-            if (setIdx != UINT32_MAX)
-                oc::atomic_ref<uint32>(m_sets[setIdx].lastSeenFrame).store(m_frameCounter, oc::memory_order_relaxed);
+            if (setIdx == UINT32_MAX)
+                return;
+            const oc::atomic_ref<uint32> lastSeen(m_sets[setIdx].lastSeenFrame);
+            if (lastSeen.load(oc::memory_order_relaxed) != m_frameCounter)
+                lastSeen.store(m_frameCounter, oc::memory_order_relaxed);
         }
     }
 

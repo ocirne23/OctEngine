@@ -104,7 +104,8 @@ protected:
 
     // ---- The per-entity visit (World's pass) ----
 
-    void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren);
+    // The render pushes go into the batch job's RenderBatch; batch.renderer() serves the rest.
+    void updateSelf(RenderBatch& renderBatch, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren);
     // Teleport contract: re-places the spatial entry for an entity moved outside its visit (a root: pos is world).
     void placeSpatialEntry();
     // RootOnly: rebuilds the template's cached subtree bounds from the live tree (main thread, outside the pass).

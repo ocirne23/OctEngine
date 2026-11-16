@@ -10,7 +10,8 @@ import :SlotAlloc;
 // THE CPU side of skinning, owned by the Renderer: the per-instance skinning jobs and their parallel
 // skinned-BLAS builds, the bone palette store, the per-container source table, and the BUNDLES that
 // tie one spawned skinned node's allocations together. All of it is persistent (set up at spawn); only
-// the palette CONTENTS change per frame, and present() uploads jobs + palettes wholesale.
+// the palette CONTENTS change per frame. present() uploads only what the frame pushed (writeFrame): a
+// bundle whose node was not pushed (culled, hidden, dormant) is neither skinned nor rebuilt in RT.
 //
 // Three recycling rules shape the whole thing:
 //  * a bundle is PARKED, not freed, when its node dies - its job/BLAS entries keep their positions
@@ -88,13 +89,25 @@ public:
     void recycleBundle(uint32 bundleHandle);
 
     // ---- Per-frame consumers ----
-    oc::span<const glm::mat4> getPalettes() const { return m_palettes; }
-    oc::span<const RendererVKLayout::SkinningJob> getJobs() const { return m_jobs; }
-    oc::span<const AccelerationStructure::SkinnedBlasBuild> getBlasBuilds() const { return m_blasBuilds; }
+    // renderNode of a skinned node, LOCK-FREE (any job): the bundle is skinned this frame.
+    void notePush(uint32 bundleHandle, uint32 frame)
+    {
+        oc::atomic<uint32>& pushFrame = m_pushFrames[bundleHandle];
+        if (pushFrame.load(oc::memory_order_relaxed) != frame)
+            pushFrame.store(frame, oc::memory_order_relaxed);
+    }
+    struct FrameUpload
+    {
+        uint32 paletteEnd = 0; // mat4 entries up to the last palette written
+        uint32 numJobs = 0;
+        uint32 numGroups = 0;  // SKINNING_THREADS_PER_GROUP-vertex workgroups over all jobs
+    };
+    // present() (main, the pushes joined): the palette of every bundle pushed this `frame` into `palettes` (at its own offset), its live jobs
+    // packed into `jobs` (prevValid: the bundle was skinned last frame too), and this frame's BLAS build list (positional; the entries of the
+    // bundles not pushed are inert).
+    FrameUpload writeFrame(uint32 frame, oc::span<glm::mat4> palettes, oc::span<RendererVKLayout::SkinningJob> jobs);
+    oc::span<const AccelerationStructure::SkinnedBlasBuild> getBlasBuilds() const { return m_frameBlasBuilds; } // writeFrame's
     bool hasJobs() const { return !m_jobs.empty(); }
-    // After the jobs are uploaded: a job's first frame (SkinningJob::prevValid 0) is done, so from the next
-    // frame its region holds last frame's positions.
-    void markJobsUploaded();
     uint32 getMaxPaletteEntries() const { return m_maxPaletteEntries; }
     uint32 getMaxJobs() const { return m_maxJobs; }
 
@@ -107,8 +120,8 @@ private:
     oc::function<void(uint32)> m_onJobsGrown;
 
     oc::vector<PaletteRegion> m_paletteRegions;
-    oc::vector<glm::mat4> m_palettes;                                 // concatenated per region, uploaded each frame
-    oc::vector<RendererVKLayout::SkinningJob> m_jobs;                 // one per skinned mesh instance, uploaded each frame
+    oc::vector<glm::mat4> m_palettes;                                 // concatenated per region; a pushed bundle's region is uploaded each frame
+    oc::vector<RendererVKLayout::SkinningJob> m_jobs;                 // one per skinned mesh instance; a pushed bundle's are uploaded, packed
     oc::vector<AccelerationStructure::SkinnedBlasBuild> m_blasBuilds; // parallel to m_jobs
     oc::vector<RendererVKLayout::SkinnedMeshSource> m_sources;
 
@@ -117,11 +130,13 @@ private:
     oc::vector<uint32> m_freeBundleSlots;
     SlotStack m_pendingParks;                     // queuePark -> drainParks
     PagedArray<oc::atomic<uint32>> m_parkLinks;   // per bundle handle (ensured at registerBundle)
+    PagedArray<oc::atomic<uint32>> m_pushFrames;  // per bundle handle: the last frame its node was pushed (notePush; ensured at registerBundle)
+    oc::vector<uint32> m_skinnedFrames;           // per bundle handle: the last frame writeFrame skinned it (UINT32_MAX = never)
+    oc::vector<AccelerationStructure::SkinnedBlasBuild> m_frameBlasBuilds; // writeFrame: m_blasBuilds with the unpushed entries inert
     oc::vector<uint32> m_freePaletteHandles; // regions reused on exact boneCount match
     IndexRangeFreeList m_freeJobSlots;       // freed slots stay inert (vertexCount/indexCount 0)
     IndexRangeFreeList m_freeSourceSlots;
 
-    bool m_hasFreshJobs = false; // a job with prevValid 0 is waiting for its first upload
     uint32 m_maxPaletteEntries = RendererVKLayout::INITIAL_SKINNING_PALETTE;
     uint32 m_maxJobs = RendererVKLayout::INITIAL_SKINNING_JOBS;
 };

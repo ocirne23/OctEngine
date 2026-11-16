@@ -419,6 +419,7 @@ namespace Procedural
 		// The CPU path (GPU expansion off): per piece, its billboard crossfade (see PlacedPiece); without a far
 		// representation (Far mode None) the meshes alone.
 		constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
+		RenderBatch renderBatch(renderer);
 		for (PlacedPiece& piece : m_pieces)
 		{
 			if (piece.far.isValid())
@@ -432,25 +433,25 @@ namespace Procedural
 				const float bandEnd = bandStart + piece.fadeWidth;
 				const float distance = glm::distance(camera.position, piece.centre);
 				if (m_settings.forceFar)
-					renderer.renderNode(piece.far);
+					renderBatch.push(piece.far);
 				else if (switchDistance <= 0.0f || distance + piece.radius < bandStart)
 				{
-					renderer.renderNode(piece.bark, RendererVKLayout::PASS_MAIN);
-					renderer.renderNode(piece.leaves, RendererVKLayout::PASS_MAIN);
-					renderer.renderNode(piece.far, SHADOW_AND_GI);
+					renderBatch.push(piece.bark, RendererVKLayout::PASS_MAIN);
+					renderBatch.push(piece.leaves, RendererVKLayout::PASS_MAIN);
+					renderBatch.push(piece.far, SHADOW_AND_GI);
 				}
 				else if (distance - piece.radius > bandEnd)
-					renderer.renderNode(piece.far);
+					renderBatch.push(piece.far);
 				else
 				{
-					renderer.renderNode(piece.barkFade, RendererVKLayout::PASS_MAIN);
-					renderer.renderNode(piece.leavesFade, RendererVKLayout::PASS_MAIN);
-					renderer.renderNode(piece.far);
+					renderBatch.push(piece.barkFade, RendererVKLayout::PASS_MAIN);
+					renderBatch.push(piece.leavesFade, RendererVKLayout::PASS_MAIN);
+					renderBatch.push(piece.far);
 				}
 				continue;
 			}
-			renderer.renderNode(piece.bark);
-			renderer.renderNode(piece.leaves);
+			renderBatch.push(piece.bark);
+			renderBatch.push(piece.leaves);
 		}
 	}
 

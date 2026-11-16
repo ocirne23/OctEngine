@@ -208,6 +208,9 @@ private:
     uint64 m_committedBytes = 0;       // file-byte estimate of resident + in-flight promotions (ledger)
     uint32 m_numStreamable = 0;
     uint32 m_frameCounter = 0;         // incremented once per update()
+    // noteUse's per-frame part of the wanted mip: mipBias - log2(texelRatio). Set by update() (and the constructor), so the
+    // pushes of the next frame read one value instead of taking a log2 per call. Atomic: a late job may still note.
+    oc::atomic<float> m_wantMipBias = 0.0f;
 
     const TextureStreamingSettings& m_settings; // "Texture Streaming" (Globals::settings.textureStreaming)
 };

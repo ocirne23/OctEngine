@@ -43,47 +43,171 @@ import :LightingUtils;
 //
 // Nothing here records; see RendererRecord.cpp.
 
-void Renderer::renderNode(const RenderNode& node, uint32 passMask)
+// ---- The push ----
+// Renderer::renderNode pushes one node: its own claim and copy. RenderBatch gathers a job's pushes and flushes them as one claim, one copy and one
+// count add per distinct mesh. Both share the per-node half (writeNodePush).
+
+bool RendererState::canPushNode(const RenderNode& node, uint32 numInstances) const
 {
-    const uint32 numInstances = (uint32)node.m_meshInstances.size();
-    if (numInstances == 0 || passMask == 0)
-        return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
     if (node.m_transformIdx >= m_instances.getMaxRenderNodes())
-        return; // spawned past the node buffers this frame: skipped until the capacity grows at the next beginFrame
+        return false; // spawned past the node buffers this frame: skipped until the capacity grows at the next beginFrame
     if (node.m_lodStateBase != UINT32_MAX && node.m_lodStateBase + numInstances > m_meshLods.getStateCapacity())
-        return; // the same for its LOD state range (MeshLodRegistry::growStateToPendingDemand)
-    const uint32 startIdx = m_instances.claimInstances(numInstances);
-    if (startIdx == UINT32_MAX)
-        return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame
+        return false; // the same for its LOD state range (MeshLodRegistry::growStateToPendingDemand)
+    return true;
+}
 
-    noteInstanceUse(node, passMask);
+void RendererState::writeNodePush(const RenderNode& node, uint32 passMask, const Sphere* worldBounds, InstanceStream::FrameSlot& slot)
+{
+    noteInstanceUse(node, passMask, worldBounds);
+    if (node.m_skinnedBundleHandle != UINT32_MAX)
+        m_skinned.notePush(node.m_skinnedBundleHandle, m_frameCounter); // present() skins only the pushed bundles
 
-    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
-    InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     // Sparse transform upload: copy only when this slot has not seen the node's latest transform.
+    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     const uint8 generation = m_instances.getBufferGeneration();
     if ((node.m_transformUploadState >> RendererVKLayout::NUM_FRAMES_IN_FLIGHT) != generation)
         node.m_transformUploadState = uint8((generation << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) | RenderNode::ALL_FRAMES_DIRTY);
     const uint8 frameBit = uint8(1u << frameIdx);
     if (node.m_transformUploadState & frameBit)
     {
-        memcpy(&instances.mappedTransforms[node.m_transformIdx], &m_instances.getTransform(node.m_transformIdx), sizeof(Transform));
+        memcpy(&slot.mappedTransforms[node.m_transformIdx], &m_instances.getTransform(node.m_transformIdx), sizeof(Transform));
         node.m_transformUploadState &= uint8(~frameBit);
     }
-    instances.mappedPassMasks[node.m_transformIdx] = InstanceStream::stampedPassMask(passMask, m_uboFrameIndex); // the push frame: see InstanceStream
-    memcpy(instances.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
-    // Publish the cull's hysteresis-state addressing for this node: stateSlot = instanceIdx + bias.
-    if (node.m_lodStateBase != UINT32_MAX)
-        instances.mappedLodStateBias[node.m_transformIdx] = (int32)node.m_lodStateBase - (int32)startIdx;
+    if (node.m_lodStateBase == UINT32_MAX)
+        slot.mappedNodeStates[node.m_transformIdx].passMask = InstanceStream::stampedPassMask(passMask, m_uboFrameIndex); // the push frame: see InstanceStream
 }
 
-void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask)
+void Renderer::renderNode(const RenderNode& node, uint32 passMask)
+{
+    const uint32 numInstances = (uint32)node.m_meshInstances.size();
+    if (numInstances == 0 || passMask == 0)
+        return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
+    if (!canPushNode(node, numInstances))
+        return;
+    const uint32 startIdx = m_instances.claimInstances(numInstances);
+    if (startIdx == UINT32_MAX)
+        return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame
+
+    InstanceStream::FrameSlot& slot = m_instances.slot(m_swapChain.getCurrentFrameIndex());
+    writeNodePush(node, passMask, nullptr, slot);
+    memcpy(slot.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
+    // The cull's hysteresis-state addressing for this node (stateSlot = instanceIdx + bias), in one write with the mask.
+    if (node.m_lodStateBase != UINT32_MAX)
+        slot.mappedNodeStates[node.m_transformIdx] = { InstanceStream::stampedPassMask(passMask, m_uboFrameIndex), (int32)node.m_lodStateBase - (int32)startIdx };
+
+    // One count add per run of one mesh (a node's instances of one mesh are usually neighbours).
+    uint16 runMesh = node.m_meshInstances[0].meshIdx;
+    uint32 runLength = 0;
+    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
+    {
+        if (instance.meshIdx != runMesh)
+        {
+            m_instances.noteMeshInstances(runMesh, runLength);
+            runMesh = instance.meshIdx;
+            runLength = 0;
+        }
+        ++runLength;
+    }
+    m_instances.noteMeshInstances(runMesh, runLength);
+}
+
+void RendererState::batchPush(RenderBatch& batch, const RenderNode& node, uint32 passMask, const Sphere* worldBounds)
+{
+    const uint32 numInstances = (uint32)node.m_meshInstances.size();
+    if (numInstances == 0 || passMask == 0)
+        return; // see renderNode
+    if (numInstances > RenderBatch::MAX_INSTANCES)
+    {
+        self().renderNode(node, passMask);
+        return;
+    }
+    if (!canPushNode(node, numInstances))
+        return;
+    const bool hasLodChain = node.m_lodStateBase != UINT32_MAX;
+    if (batch.m_numInstances + numInstances > RenderBatch::MAX_INSTANCES || (hasLodChain && batch.m_numLodNodes == RenderBatch::MAX_LOD_NODES))
+        flushBatch(batch);
+
+    writeNodePush(node, passMask, worldBounds, m_instances.slot(m_swapChain.getCurrentFrameIndex()));
+    if (hasLodChain)
+        batch.m_lodNodes[batch.m_numLodNodes++] = { node.m_transformIdx, InstanceStream::stampedPassMask(passMask, m_uboFrameIndex), node.m_lodStateBase,
+            batch.m_numInstances };
+    memcpy(batch.m_instances.data() + batch.m_numInstances, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
+    batch.m_numInstances += numInstances;
+
+    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
+    {
+        const uint16 key = uint16(instance.meshIdx + 1); // meshIdx < USHRT_MAX (addMeshInfos)
+        uint32 entry = (uint32(instance.meshIdx) * 2654435761u) >> (32 - 6);
+        static_assert(RenderBatch::MESH_SLOTS == 1u << 6);
+        bool counted = false;
+        for (uint32 probe = 0; probe < RenderBatch::MESH_PROBES; ++probe, entry = (entry + 1) & (RenderBatch::MESH_SLOTS - 1))
+        {
+            if (batch.m_meshKeys[entry] == key)
+            {
+                ++batch.m_meshCounts[entry];
+                counted = true;
+                break;
+            }
+            if (batch.m_meshKeys[entry] == 0)
+            {
+                batch.m_meshKeys[entry] = key;
+                batch.m_meshCounts[entry] = 1;
+                counted = true;
+                break;
+            }
+        }
+        if (!counted)
+            m_instances.noteMeshInstances(instance.meshIdx, 1); // a crowded table: straight in (if the flush's claim fails, a bucket is one too big)
+    }
+}
+
+void RendererState::flushBatch(RenderBatch& batch)
+{
+    if (batch.m_numInstances == 0)
+        return;
+    const uint32 startIdx = m_instances.claimInstances(batch.m_numInstances);
+    if (startIdx != UINT32_MAX)
+    {
+        InstanceStream::FrameSlot& slot = m_instances.slot(m_swapChain.getCurrentFrameIndex());
+        memcpy(slot.mappedMeshInstances.data() + startIdx, batch.m_instances.data(), batch.m_numInstances * sizeof(batch.m_instances[0]));
+        for (uint32 i = 0; i < batch.m_numLodNodes; ++i)
+        {
+            const RenderBatch::LodNode& lodNode = batch.m_lodNodes[i];
+            slot.mappedNodeStates[lodNode.transformIdx] = { lodNode.stampedPassMask, (int32)lodNode.lodStateBase - (int32)(startIdx + lodNode.firstInstance) };
+        }
+        for (uint32 i = 0; i < RenderBatch::MESH_SLOTS; ++i)
+            if (batch.m_meshKeys[i] != 0)
+                m_instances.noteMeshInstances(uint16(batch.m_meshKeys[i] - 1), batch.m_meshCounts[i]);
+    }
+    // else: did not fit this frame - the nodes are dropped and the capacity grows at the next beginFrame. A dropped node without a LOD chain has its
+    // pass mask stamped already: harmless, it has no instances to cull.
+    batch.m_numInstances = 0;
+    batch.m_numLodNodes = 0;
+    batch.m_meshKeys.fill(0);
+}
+
+void RenderBatch::push(const RenderNode& node, uint32 passMask)
+{
+    static_cast<RendererState&>(m_renderer).batchPush(*this, node, passMask, nullptr);
+}
+
+void RenderBatch::push(const RenderNode& node, uint32 passMask, const Sphere& worldBounds)
+{
+    static_cast<RendererState&>(m_renderer).batchPush(*this, node, passMask, &worldBounds);
+}
+
+void RenderBatch::flush()
+{
+    static_cast<RendererState&>(m_renderer).flushBatch(*this);
+}
+
+void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask, const Sphere* worldBounds)
 {
     const bool streamTextures = Globals::textureStreamer.isStreamingEnabled();
     float log2P = 0.0f;
     if (streamTextures)
     {
-        const Sphere bounds = node.getWorldBounds();
+        const Sphere bounds = worldBounds ? *worldBounds : node.getWorldBounds();
         const float dist = oc::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
         const float projPixels = bounds.radius * m_mipPixelScale / dist;
         log2P = std::log2(oc::max(1.0f, projPixels));
@@ -94,9 +218,9 @@ void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask)
     const bool hasLodChain = node.m_lodStateBase != UINT32_MAX; // allocated at spawn only when the node has a LOD chain
     const oc::span<const RendererVKLayout::MaterialInfo> materials =
         m_materials.getBuffer().getBackingStoreAs<RendererVKLayout::MaterialInfo>();
+    uint32 lastMaterialIdx = UINT32_MAX;
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
     {
-        m_instances.noteMeshInstances(instance.meshIdx, 1);
         Globals::meshStreamer.noteUse(instance.meshIdx);
 
         // The GPU cull picks each instance's level, so every level of a referenced chain must stay warm in
@@ -116,8 +240,9 @@ void RendererState::noteInstanceUse(const RenderNode& node, uint32 passMask)
             }
         }
 
-        if (streamTextures)
+        if (streamTextures && instance.materialIdx != lastMaterialIdx) // the same material again notes the same textures at the same size
         {
+            lastMaterialIdx = instance.materialIdx;
             const RendererVKLayout::MaterialInfo& material = materials[instance.materialIdx];
             Globals::textureStreamer.noteUse(material.diffuseTexIdx, log2P);
             Globals::textureStreamer.noteUse(material.normalTexIdx, log2P);
@@ -285,7 +410,7 @@ void RendererState::releaseTexture(uint16 texIdx)
 
 void RendererState::destroyTextureMaterial(uint16 materialIdx)
 {
-    // Like removeObjectContainer: the image retires once the GPU has drained, the slot recycles.
+    // Like removeObjectContainer: the image retires once no frame in flight can sample it, the slot recycles.
     const RendererVKLayout::MaterialInfo& material = m_materials.items()[materialIdx];
     m_textures.queueFree(oc::span<const uint16>(&material.diffuseTexIdx, 1));
     if (material.normalTexIdx != RendererVKLayout::FALLBACK_NORMAL_TEX_IDX)
@@ -626,7 +751,7 @@ void RendererState::waitForGpuAndFlushStaging()
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle after staging flush");
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
-    m_textures.processPendingFrees();
+    m_textures.processPendingFrees(m_frameCounter, true);
 }
 
 void RendererState::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
@@ -741,8 +866,8 @@ void RendererState::removeObjectContainer(ObjectContainer* pObjectContainer)
     for (const uint32 groupIdx : container.m_ownedLodGroups)
         freeMeshLodGroup(groupIdx); // also detaches the member meshes from GPU LOD selection
 
-    // The images may still be sampled by in-flight frames: destroyed in present() once the GPU has
-    // drained, their bindless slots rewritten to the fallback at the next record.
+    // The images may still be sampled by in-flight frames: present() frees the slots (rewritten to the
+    // fallback at the next record) and destroys the images once no frame in flight can sample them.
     m_textures.queueFree(container.m_ownedTextures);
     // Freed mega-buffer/slot ranges may be recycled by an upload later this frame; the shared-table upload
     // drains the GPU itself before queuing, so no extra synchronization is needed here for that.
@@ -827,7 +952,6 @@ uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>&
     {
         if (!reused)
         {
-            m_instances.resizePerMeshCounts(base + count);
             m_meshLods.resizeMeshMapping(base + count);
             assert(base + count < USHRT_MAX);
         }

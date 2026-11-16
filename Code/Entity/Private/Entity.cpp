@@ -153,9 +153,10 @@ static uint32 spatialRenderPassMask(SpatialHandle handle)
     return 0;
 }
 
-void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
+void EntityState::updateSelf(RenderBatch& renderBatch, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
 {
     // ProfileScope profileScope("Entity::updateSelf", EProfileCategory::Entity);
+    Renderer& renderer = renderBatch.renderer();
     const ComponentOffsets offsets = getComponentOffsets(typeBits);
 
     SceneComponent* sc = getComponent<SceneComponent>(this, offsets);
@@ -211,6 +212,8 @@ void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Trans
     const EEntityCullMode cullMode = self().getCullMode();
     uint32 passMask = RendererVKLayout::PASS_ALL;
     uint32 childCullPassMask = cullPassMask;
+    Sphere renderBounds;
+    bool haveRenderBounds = false; // the spatial update's bounds, handed to the push (the texture streaming's screen size)
     if (spatialEntry.isValid())
     {
         const bool cullRoot = cullMode == EEntityCullMode::RootOnly;
@@ -221,9 +224,10 @@ void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Trans
         }
         else if (render)
         {
-            const Sphere bounds = render->node.getWorldBounds();
-            const float radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
-            Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
+            renderBounds = render->node.getWorldBounds();
+            haveRenderBounds = true;
+            const float radius = render->node.isSkinned() ? renderBounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : renderBounds.radius;
+            Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(renderBounds.pos), radius);
         }
         else
             Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
@@ -234,10 +238,15 @@ void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Trans
     else if (cullPassMask != EntityCullPass_Own && cullMode != EEntityCullMode::None)
         passMask = cullPassMask;
     if (render && passMask != 0 && render->node.getPassMask() != 0) // a node pass mask of 0 = its owner HID the mesh (RenderNode::setPassMask)
-        renderer.renderNode(render->node, passMask);
+    {
+        if (haveRenderBounds)
+            renderBatch.push(render->node, passMask, renderBounds);
+        else
+            renderBatch.push(render->node, passMask);
+    }
 
     if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets))
-        humanoid->place(renderer, world, passMask);
+        humanoid->place(renderBatch, world, passMask);
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
         audio->update(self(), world);

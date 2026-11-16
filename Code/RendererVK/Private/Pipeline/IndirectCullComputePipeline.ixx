@@ -27,15 +27,14 @@ public:
         Buffer& inMeshInstanceOffsetsBuffer;  // 3
         Buffer& inMeshInfoBuffer;             // 4
         Buffer& inFirstInstancesBuffer;       // 5
-        Buffer& inNodePassMasksBuffer;        // 10
+        Buffer& inNodeStatesBuffer;           // 10 - per node: InstanceStream::NodeState (stamped pass mask, LOD state bias)
         Buffer& inMeshLodGroupIdxBuffer;      // 11 - per mesh: LOD group index (GPU LOD selection)
         Buffer& inMeshLodGroupsBuffer;        // 12
         Buffer& lodLevelStateBuffer;          // 13 - per-instance hysteresis state (RW)
-        Buffer& inNodeLodStateBiasBuffer;     // 14 - per node: state slot bias
         Buffer& outLodStatsBuffer;            // 15 - per-level pick counts (stats readback)
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
         Buffer& inPrevRenderNodeTransformsBuffer; // 18 - last frame's node transforms (InstanceStream, motion vectors)
-        Buffer& inPrevNodePassMasksBuffer;        // 19 - ... and its stamped pass masks
+        Buffer& inPrevNodeStatesBuffer;           // 19 - ... and its node states (the stamped pass masks)
         Buffer& treePiecesBuffer;                 // 20 - the baked tree records' pieces (static; tree_cull.inc.glsl)
         Buffer& treeTypesBuffer;                  // 21 - ... and their types
         Buffer& treeListBuffer;                   // 22 - ... and this frame's visible trees (piece | pass bits << 28)

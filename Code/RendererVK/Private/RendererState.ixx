@@ -90,6 +90,7 @@ import :RendererTypes;
 import Core.fwd;
 
 export class Renderer;
+export class RenderBatch;      // Renderer.ixx
 export class MeshStreamer;     // declared before their friend lines
 export class RenderMaterial;
 export class RenderTexture;
@@ -408,7 +409,15 @@ protected:
     void freeMeshLodGroup(uint32 groupIdx) { const std::lock_guard lock(m_spawnMutex); m_meshLods.freeGroup(groupIdx); } // see freeMeshInfoRange
     uint32 allocateLodStateRange(uint32 count) { return m_meshLods.allocateStateRange(count); } // lock-free
 
-    void noteInstanceUse(const RenderNode& node, uint32 passMask);
+    // ---- The push (Renderer::renderNode, RenderBatch; lock-free from any job) ----
+    friend class RenderBatch;
+    bool canPushNode(const RenderNode& node, uint32 numInstances) const; // false = past a capacity: skipped until the next beginFrame
+    // The per-node half of every push: the streaming notes, the skinned bundle's push stamp, the sparse transform upload, and the pass mask of a
+    // node without a LOD chain (a chain node writes its whole NodeState with the bias once its instances are placed). worldBounds may be null.
+    void writeNodePush(const RenderNode& node, uint32 passMask, const Sphere* worldBounds, InstanceStream::FrameSlot& slot);
+    void noteInstanceUse(const RenderNode& node, uint32 passMask, const Sphere* worldBounds);
+    void batchPush(RenderBatch& batch, const RenderNode& node, uint32 passMask, const Sphere* worldBounds);
+    void flushBatch(RenderBatch& batch);
 
     void waitForGpuAndFlushStaging();
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes); // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.

@@ -22,10 +22,11 @@ public:
     uint16 uploadRgba8Mips(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, bool sRGB, const char* debugName);
     // The same with any format, e.g. BC blocks compressed at runtime (each level `format`'s bytes for its size).
     uint16 uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
-    // Destroys a texture (ObjectContainer teardown) and recycles its slot for a later upload. The caller
-    // guarantees the GPU is idle (Renderer::processPendingTextureFrees); unregisters from the
-    // TextureStreamer and queues a fallback rewrite of the slot's bindless descriptor entries.
-    void free(uint16 idx);
+    // Takes a texture out of its slot (ObjectContainer teardown) and recycles the slot for a later upload; unregisters
+    // from the TextureStreamer and queues a fallback rewrite of the slot's bindless descriptor entries. Returns the
+    // image: a frame in flight may still sample it, so the caller destroys it once those frames are done
+    // (BindlessTextures::processPendingFrees). Empty when the slot was already free.
+    [[nodiscard]] Texture free(uint16 idx);
     // View for descriptor-array slot idx: freed (not yet recycled) slots substitute the fallback diffuse
     // so the bindless arrays never reference a destroyed image.
     vk::ImageView getViewForDescriptor(uint16 idx) const

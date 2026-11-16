@@ -38,9 +38,9 @@ void InstanceStream::initialize(uint32 maxUniqueMeshes, oc::function<void()> onG
     createPrevNodeBuffers();
 }
 
-// The three per-render-node buffers. No contents to preserve on a re-create: the generation bump makes
-// every node re-upload its transform at the next push, and masks/biases are rewritten by every push.
-// TRANSFER_SRC on the transforms and masks: recordPrevCopy copies them into the device-local previous set.
+// The two per-render-node buffers. No contents to preserve on a re-create: the generation bump makes
+// every node re-upload its transform at the next push, and the node states are rewritten by every push.
+// TRANSFER_SRC on both: recordPrevCopy copies them into the device-local previous set.
 void InstanceStream::createNodeBuffers(FrameSlot& s)
 {
     s.transforms.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
@@ -48,15 +48,10 @@ void InstanceStream::createNodeBuffers(FrameSlot& s)
         vk::MemoryPropertyFlagBits::eHostVisible, false, "RenderNodeTransforms", BufferHostAccess::eSequentialWrite);
     s.mappedTransforms = s.transforms.mapMemory<RendererVKLayout::RenderNodeTransform>();
 
-    s.passMasks.initialize(m_maxRenderNodes * sizeof(uint32),
+    s.nodeStates.initialize(m_maxRenderNodes * sizeof(NodeState),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible, false, "NodePassMasks", BufferHostAccess::eSequentialWrite);
-    s.mappedPassMasks = s.passMasks.mapMemory<uint32>();
-
-    s.lodStateBias.initialize(m_maxRenderNodes * sizeof(int32),
-        vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
-    s.mappedLodStateBias = s.lodStateBias.mapMemory<int32>();
+        vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeStates", BufferHostAccess::eSequentialWrite);
+    s.mappedNodeStates = s.nodeStates.mapMemory<NodeState>();
 }
 
 // Contents are undefined after a re-create: the cull's push-stamp test then fails (or, 1 in 2^24, passes on
@@ -66,9 +61,9 @@ void InstanceStream::createPrevNodeBuffers()
     m_prevTransforms.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal, false, "PrevRenderNodeTransforms");
-    m_prevPassMasks.initialize(m_maxRenderNodes * sizeof(uint32),
+    m_prevNodeStates.initialize(m_maxRenderNodes * sizeof(NodeState),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "PrevNodePassMasks");
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "PrevNodeStates");
 }
 
 void InstanceStream::recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint32 numNodes)
@@ -85,7 +80,7 @@ void InstanceStream::recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint3
     cb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
     cb.copyBuffer(s.transforms.getBuffer(), m_prevTransforms.getBuffer(),
         vk::BufferCopy{ .size = numNodes * sizeof(RendererVKLayout::RenderNodeTransform) });
-    cb.copyBuffer(s.passMasks.getBuffer(), m_prevPassMasks.getBuffer(), vk::BufferCopy{ .size = numNodes * sizeof(uint32) });
+    cb.copyBuffer(s.nodeStates.getBuffer(), m_prevNodeStates.getBuffer(), vk::BufferCopy{ .size = numNodes * sizeof(NodeState) });
     // -> next frame's cull.
     const vk::MemoryBarrier2 after{
         .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
@@ -139,7 +134,9 @@ void InstanceStream::beginFrame()
 {
     m_instanceCounter = 0;
     m_instanceOverflowStart = UINT32_MAX;
-    memset(m_numInstancesPerMesh.data(), 0, m_numInstancesPerMesh.size() * sizeof(m_numInstancesPerMesh[0]));
+    for (const uint16 meshIdx : getTouchedMeshes())
+        m_numInstancesPerMesh[meshIdx] = 0;
+    m_numTouchedMeshes = 0;
 }
 
 void InstanceStream::growToPendingDemand(uint32 currentFrameIdx)
@@ -168,9 +165,9 @@ void InstanceStream::growInstances(uint32 needed, uint32 currentFrameIdx)
     m_maxInstances = growInstanceCapacity(m_maxInstances, needed);
     m_onGpuIdle();
 
-    // renderNode() grows inline mid-frame, so the instances already written to the current frame's
-    // mapped buffer this frame must survive the reallocation. (At the beginFrame call site the counter
-    // holds last frame's count and the copy is redundant but harmless.)
+    // present() grows when the LOD buckets expand past the capacity, after this frame's pushes: their instances in the
+    // current slot must survive the re-create. The copy reads the uncached mapping back - slow, and rare. From growToPendingDemand
+    // (beginFrame, before the counter reset) the copy keeps last frame's instances: not needed, but harmless.
     FrameSlot& current = m_slots[currentFrameIdx];
     oc::vector<RendererVKLayout::InMeshInstance> written(current.mappedMeshInstances.begin(),
         current.mappedMeshInstances.begin() + m_instanceCounter);

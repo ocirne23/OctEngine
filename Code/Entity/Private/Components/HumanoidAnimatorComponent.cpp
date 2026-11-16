@@ -162,7 +162,7 @@ void HumanoidAnimatorComponent::update(Entity& entity, float deltaSeconds)
     placeDirty = true;
 }
 
-void HumanoidAnimatorComponent::place(Renderer& renderer, const Transform& world, uint32 passMask)
+void HumanoidAnimatorComponent::place(RenderBatch& renderBatch, const Transform& world, uint32 passMask)
 {
     // Compose again only when a pose changed or the entity's world transform did.
     if (placeDirty || world.pos != placedWorld.pos || world.quat != placedWorld.quat || world.scale != placedWorld.scale)
@@ -172,7 +172,7 @@ void HumanoidAnimatorComponent::place(Renderer& renderer, const Transform& world
         placeFlatBones(bones, world); // configure() guarantees a flat rig
     }
     if (passMask != 0)
-        submitBones(renderer, bones, passMask);
+        submitBones(renderBatch, bones, passMask);
 }
 
 void HumanoidAnimatorComponent::addRestBounds(const Transform& toEntity, Sphere& bounds, bool& any) const

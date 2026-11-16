@@ -3,12 +3,13 @@
 // GPU vertex skinning. Reads a base mesh's vertices + per-vertex bone influences and a bone-matrix palette, writes the
 // deformed vertices (same MeshVertex format, model space) into a per-instance output region of the shared vertex
 // buffer, and moves the positions they replace into the region's second half. One indirect dispatch covers every
-// skinned instance: the job list lives in a per-frame SSBO and gl_WorkGroupID.y selects the job, so adding/removing
-// skinned instances never re-records the command buffer (dispatch dims come from a CPU-written indirect buffer).
+// skinned instance pushed this frame: the packed job list lives in a per-frame SSBO, each job owns a run of workgroups
+// from its firstGroup on, so adding/removing skinned instances never re-records the command buffer (dispatch dims come
+// from a CPU-written indirect buffer; the groups run x first, then y rows).
 
 #include "mesh_vertex.inc.glsl"
 
-layout(local_size_x = 64) in;
+layout(local_size_x = 64) in; // RendererVKLayout::SKINNING_THREADS_PER_GROUP
 
 layout(binding = 0, std430) buffer VertexBuffer { MeshVertex v_data[]; };
 
@@ -25,16 +26,33 @@ struct SkinningJob
     uint outVertexOffset;
     uint vertexCount;
     uint paletteOffset;
-    uint prevValid; // 0 on the job's first frame: no last frame in the region yet
+    uint prevValid;  // 0 when not skinned last frame: no last frame in the region
+    uint firstGroup; // the job's first workgroup
+    uint pad;
 };
-layout(binding = 3, std430) readonly buffer JobBuffer { SkinningJob u_jobs[]; };
+// RendererVKLayout::SKINNING_JOB_HEADER_BYTES: the job count, then the jobs in firstGroup order.
+layout(binding = 3, std430) readonly buffer JobBuffer { uint u_jobCount; uint u_jobPad0; uint u_jobPad1; uint u_jobPad2; SkinningJob u_jobs[]; };
 
 void main()
 {
-    const SkinningJob job = u_jobs[gl_WorkGroupID.y];
-    const uint i = gl_GlobalInvocationID.x;
-    if (i >= job.vertexCount)
+    const uint group = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (u_jobCount == 0u)
         return;
+    // The last job whose firstGroup <= group (the same for the whole workgroup).
+    uint lo = 0u;
+    uint hi = u_jobCount;
+    while (hi - lo > 1u)
+    {
+        const uint mid = (lo + hi) >> 1;
+        if (u_jobs[mid].firstGroup <= group)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const SkinningJob job = u_jobs[lo];
+    const uint i = (group - job.firstGroup) * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (i >= job.vertexCount)
+        return; // the job's last group, or a padding group of the last y row
 
     const MeshVertex v = v_data[job.baseVertexOffset + i];
 

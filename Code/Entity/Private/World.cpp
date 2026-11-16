@@ -656,6 +656,7 @@ void WorldState::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
     // stays exclusively ours for the job's whole body.
     EntityUpdateStaging& staging = m_updateStaging.local();
     const ThreadLocalScope tlsPin; // asserts should any update path ever park the fiber
+    RenderBatch renderBatch(*m_updateRenderer); // this job's render pushes: one instance claim per flush; flushed when the job returns
     // Loops over the CONTINUATION: after a batch, the first budget of the children it emitted is
     // run right here (submitEntityBatches hands it back) and only the rest become jobs - so a
     // subtree descends on this fiber until it fans out wider than one budget.
@@ -689,10 +690,10 @@ void WorldState::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
         if (entity->isProfiled())
         {
             ProfileScope entityScope(entity->spawnTemplate->displayName.c_str(), EProfileCategory::Entity);
-            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, node.cullPassMask, staging.children);
+            entity->updateSelf(renderBatch, delta, node.parentWorld, node.cullPassMask, staging.children);
         }
         else
-            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, node.cullPassMask, staging.children);
+            entity->updateSelf(renderBatch, delta, node.parentWorld, node.cullPassMask, staging.children);
         if (measure)
         {
             const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());

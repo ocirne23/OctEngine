@@ -286,7 +286,8 @@ components:
   queries are the known open hole**
 * animator plus `setSkinningPalette` (disjoint regions)
 * dynamic-body pose reads
-* `RenderNode::setTransform` / `renderNode`
+* `RenderNode::setTransform` / the render push (into the batch job's own `RenderBatch`, flushed when the job
+  returns; `updateSelf` takes the batch, `batch.renderer()` serves the rest)
 * `SpatialIndex::updateEntry`
 * audio follow, particle and force emitter slots
 

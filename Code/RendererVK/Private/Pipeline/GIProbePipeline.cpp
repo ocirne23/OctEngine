@@ -579,7 +579,7 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     m_tlasUpdates[3].bufferInfos[0] = bufInfo(params.blasAddresses);
     m_tlasUpdates[4].bufferInfos[0] = bufInfo(m_tlasInstanceBuffer[frameIdx]);
     m_tlasUpdates[5].bufferInfos[0] = bufInfo(params.materialInfos);
-    m_tlasUpdates[6].bufferInfos[0] = bufInfo(params.nodePassMasks);
+    m_tlasUpdates[6].bufferInfos[0] = bufInfo(params.nodeStates);
     m_tlasUpdates[7].bufferInfos[0] = bufInfo(params.rtMeshAlias);
     m_tlasUpdates[8].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     m_tlasUpdates[9].bufferInfos[0] = bufInfo(params.treePieces);

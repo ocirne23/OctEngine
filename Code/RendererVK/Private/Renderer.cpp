@@ -40,7 +40,8 @@ RendererState::~RendererState()
     {
         assert(false && "Failed to wait for device idle in RendererVK::~RendererVK");
     }
-    // The pending texture frees are NOT processed here: ~TextureManager (init_seg XCU4, destroyed before this XCU3 global) destroys every texture wholesale, pending ones included.
+    // The pending texture frees are NOT processed here: ~TextureManager (init_seg XCU4, destroyed before this XCU3 global) destroys every texture wholesale,
+    // pending ones included. The retired ones (BindlessTextures) die with this object's members, after the drain above, while the device still lives.
     Globals::textureStreamer.shutdown(); // stop the disk worker + retire swapped-out images while the device is idle
     Globals::meshStreamer.shutdown();
     m_vrEyes.destroy();
@@ -504,7 +505,7 @@ void Renderer::setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mat
             return format == vk::Format::eBc5UnormBlock || format == vk::Format::eBc5SnormBlock; },
     };
     // The retired set's images may still be sampled in flight: same deferred free path as
-    // ObjectContainer teardown (processed in present() after the GPU drain).
+    // ObjectContainer teardown (BindlessTextures::processPendingFrees).
     const oc::vector<uint16> retired = m_terrain.setSplatMaterials(mats, counts, io);
     m_textures.queueFree(retired);
 }
@@ -1003,26 +1004,38 @@ void Renderer::present()
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the
     // CHAIN's instance count (any split of the instances across levels fits). Non-chain meshes keep
-    // exact buckets. The expansion can exceed the pushed instance count; the instance-index buffers
-    // are sized to m_instances.getMaxInstances(), so grow when the expanded total outruns it.
+    // exact buckets. Only the meshes this frame pushed get one, in no order: a cull reads a mesh's first
+    // instance only for an instance it places there, so the other slots keep stale values. The expansion
+    // can exceed the pushed instance count; the instance-index buffers are sized to
+    // m_instances.getMaxInstances(), so grow when the expanded total outruns it.
     uint32 instanceCounter = 0;
-    const uint32 numMeshInfos = m_instances.getNumMeshCounters();
-    for (uint32 meshIdx = 0; meshIdx < numMeshInfos; ++meshIdx)
+    for (const uint16 meshIdx : m_instances.getTouchedMeshes())
     {
-        instances.mappedFirstInstances[meshIdx] = instanceCounter;
-        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh((uint16)meshIdx);
-        instanceCounter += m_instances.getNumInstancesForMesh(
-            groupIdx == UINT32_MAX ? meshIdx : m_meshLods.getGroup(groupIdx).meshIdx[0]);
+        const uint32 count = m_instances.getNumInstancesForMesh(meshIdx);
+        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh(meshIdx);
+        if (groupIdx == UINT32_MAX)
+        {
+            instances.mappedFirstInstances[meshIdx] = instanceCounter;
+            instanceCounter += count;
+            continue;
+        }
+        const auto& group = m_meshLods.getGroup(groupIdx);
+        if (group.meshIdx[0] != meshIdx)
+            continue; // not a chain's LOD0: pushed instances reference LOD0, so the chain's buckets come from there
+        for (uint8 k = 0; k < group.numLods; ++k)
+        {
+            instances.mappedFirstInstances[group.meshIdx[k]] = instanceCounter;
+            instanceCounter += count;
+        }
     }
     if (instanceCounter > m_instances.getMaxInstances())
         m_instances.growInstances(instanceCounter, frameIdx);
 
     const uint32 numNodes = oc::min(m_instances.getNumTransforms(), m_instances.getMaxRenderNodes()); // spawns past it grow next beginFrame
     instances.transforms.flushMappedMemory(numNodes * sizeof(RendererVKLayout::RenderNodeTransform));
-    instances.passMasks.flushMappedMemory(numNodes * sizeof(uint32));
-    instances.lodStateBias.flushMappedMemory(numNodes * sizeof(int32));
+    instances.nodeStates.flushMappedMemory(numNodes * sizeof(InstanceStream::NodeState));
     instances.meshInstances.flushMappedMemory(m_instances.getInstanceCount() * sizeof(RendererVKLayout::InMeshInstance));
-    instances.firstInstances.flushMappedMemory(numMeshInfos * sizeof(uint32));
+    instances.firstInstances.flushMappedMemory(m_meshInfos.count() * sizeof(uint32));
     m_submission.flushFrame(frameIdx);
 
     instances.mappedMeshCount[0] = m_meshInfos.count(); // the mesh slots the culls' draw-list compaction walks
@@ -1090,8 +1103,12 @@ void Renderer::present()
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
         m_indirectCullComputePipeline.update(frameIdx, treeCullThreads()); // the cull threads (u_present_treeThreads)
-        m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
-        m_skinned.markJobsUploaded();
+        // Only the skinned nodes pushed this frame: their palettes, their jobs packed, their BLAS rebuilds. The spawn mutex: the registry's tables
+        // grow under it, and a worker may spawn during present.
+        const std::lock_guard lock(m_spawnMutex);
+        const auto skinning = m_skinned.writeFrame(m_frameCounter,
+            m_skinningComputePipeline.getMappedPalettes(frameIdx), m_skinningComputePipeline.getMappedJobs(frameIdx));
+        m_skinningComputePipeline.finishUpload(frameIdx, skinning.paletteEnd, skinning.numJobs, skinning.numGroups);
     }
     uploadScope.stop();
 
@@ -1107,16 +1124,9 @@ void Renderer::present()
     // spawns): without this, this frame's record writes past the descriptor capacity beginFrame sized.
     m_textures.syncCapacity([this]() { waitForGpuAndFlushStaging(); });
 
-    if (m_textures.hasPendingFrees())
-    {
-        // A container was destroyed this frame; its textures may still be sampled by an in-flight frame,
-        // so drain before freeing them. Their bindless slots rewrite to the fallback in recordCommandBuffers
-        // below, before anything is submitted.
-        ProfileScope profileScope("Texture free drain", EProfileCategory::Wait);
-        auto waitResult = Globals::device.graphicsQueueWaitIdle();
-        assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before freeing textures");
-        m_textures.processPendingFrees();
-    }
+    // Textures freed this frame (a destroyed container, material, splat set): their bindless slots rewrite to the fallback in
+    // recordCommandBuffers below, before anything is submitted; the images live until no frame in flight can sample them.
+    m_textures.processPendingFrees(m_frameCounter);
 
     // The rain occlusion map exists only while this frame's UBO asks for it (a rain / snow volume with
     // `Occlude true`, the tweak on, RT on): switching allocates or frees its images (and builds its pipeline

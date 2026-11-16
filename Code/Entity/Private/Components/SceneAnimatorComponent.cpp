@@ -335,7 +335,7 @@ void SceneAnimatorComponent::update(Entity& entity, float deltaSeconds)
     placeDirty = true;
 }
 
-void SceneAnimatorComponent::place(Renderer& renderer, const Transform& world, uint32 passMask)
+void SceneAnimatorComponent::place(RenderBatch& renderBatch, const Transform& world, uint32 passMask)
 {
     // Compose again only when a pose changed or the entity's world transform did.
     if (placeDirty || world.pos != placedWorld.pos || world.quat != placedWorld.quat || world.scale != placedWorld.scale)
@@ -359,7 +359,7 @@ void SceneAnimatorComponent::place(Renderer& renderer, const Transform& world, u
         }
     }
     if (passMask != 0)
-        submitBones(renderer, bones, passMask);
+        submitBones(renderBatch, bones, passMask);
 }
 
 void SceneAnimatorComponent::addRestBounds(const Transform& toEntity, Sphere& bounds, bool& any) const

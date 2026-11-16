@@ -74,11 +74,11 @@ inline void placeFlatBones(Bones& bones, const Transform& world)
 }
 
 export template <typename Bones>
-inline void submitBones(Renderer& renderer, const Bones& bones, uint32 passMask)
+inline void submitBones(RenderBatch& renderBatch, const Bones& bones, uint32 passMask)
 {
     for (const auto& bone : bones)
         if (bone.node.isValid())
-            renderer.renderNode(bone.node, passMask); // lock-free (the parallel entity pass)
+            renderBatch.push(bone.node, passMask); // the entity pass job's batch: no instance claim per bone
 }
 
 // REST-pose render bounds of every bone, in the space `toEntity` maps the entity's local space into

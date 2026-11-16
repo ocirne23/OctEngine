@@ -11,6 +11,25 @@
 > CAS-min records it, `present()` clamps (`clampInstanceCountToOverflow`), and capacity regrows at the
 > next `beginFrame` (`checkFrameCapacities`). **NEVER roll a bump cursor back.**
 
+**A job that pushes many nodes uses a `RenderBatch`** (Renderer.ixx; the entity pass job, the terrain walk's fan-out
+chunks and sphere pass, the CPU tree pieces, the rock preview): `push` does the per-node work at once (`writeNodePush`:
+the streaming notes, the skinned bundle's push stamp, the sparse transform upload, the pass mask) and stages the
+instances (up to 128) locally; `flush` (and the destructor) makes ONE claim and ONE copy into the mapped instance buffer,
+writes the LOD nodes' `NodeState`s, and adds the per-mesh counts once per distinct mesh. A batch holds no node pointer and
+no thread-local, so a fiber wait inside its life is harmless; it must flush before `present`. A node with more instances
+than the batch holds goes through `renderNode`. Bone models push every bone through the entity job's batch.
+
+**The per-mesh instance counts** (the cull's bucket sizes, `InstanceStream::noteMeshInstances`) take one atomic add per
+mesh and push (per run of one mesh in a node; per mesh and flush in a batch), never one per instance - a crowd of one
+mesh adds to ONE counter from every worker. The count arrays cover every 16-bit mesh index and never resize (a mesh
+spawned on a worker during the pushes cannot reallocate them), and a mesh's first add in a frame lists it in
+`touchedMeshes`: `present()` gives buckets to the listed meshes only, and `beginFrame` zeroes only them.
+
+**`NodeState`** (`InstanceStream`, per render node, 8 bytes): the stamped pass mask and the LOD state slot bias
+(`stateBase - startIdx`; only a node with a LOD chain writes it, in ONE write with its mask once its instances are
+placed). One record, so a push writes one partial line of the write-combined mapping and the cull reads both in one load.
+`recordPrevCopy` copies the records whole into the previous set (the motion vectors read `.x`).
+
 `addLightInfo` (a `PointLight` / `SpotLight` / `AreaLight` / `BeamLight`) / `addFogVolume` / `addDecal` are lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
 `DebugLinePipeline::upload`, which copies each worker list straight into the slot's mapped vertex
 buffer (one memcpy per list, no merged CPU copy) and clears it.
@@ -77,8 +96,15 @@ is BEST-FIT so small requests do not shred the large holes.**
   * `spawnNodeForIdx`'s rebased-offset cache is double-checked: only the first spawn of a sub-node locks.
   * **skinned despawns** (`releaseSkinnedBundle` -> `SkinnedMeshRegistry::queuePark`): the bundle handle goes
     on a pending `SlotStack`; `beginFrame` (and `removeObjectContainer`, first) parks them all under ONE lock
-    (`drainParks`). Until then the dead bundle's skinning job and BLAS rebuild still run (≤ 1 frame, never
-    drawn), and a same-frame respawn builds a fresh bundle instead of reusing it.
+    (`drainParks`). Until then the dead bundle stays allocated (never pushed, so never skinned), and a same-frame
+    respawn builds a fresh bundle instead of reusing it.
+  * **skinning runs for PUSHED bundles only**: `renderNode` stamps the node's bundle (`SkinnedMeshRegistry::notePush`),
+    and `present()` (`writeFrame`, under `m_spawnMutex`) copies only the stamped bundles' palettes into the slot's mapped
+    buffer, packs their live jobs (each with its `firstGroup`, behind a job-count header) and makes this frame's BLAS
+    build list with the other bundles' entries inert. The dispatch is each job's own groups (`x` ≤ 32768, then `y`
+    rows; `skinning.cs.glsl` finds its job by a binary search on `firstGroup`). `prevValid` = the bundle was skinned
+    LAST frame too (`m_skinnedFrames`), so a node back on screen draws one frame without skinned motion, never with a
+    stale pose.
 
   So a static spawn takes NO lock after warm-up, and a despawn none at all. **Still under `m_spawnMutex`:**
   `spawnSkinnedNode` (the bundle acquire / build and the instance fill only), the shared tables, LOD groups.
@@ -249,7 +275,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
     (the procedural tree leaf cards and bark fades).
   * `RenderTexture::create(w, h, mips, name)` — a bare bindless texture (sRGB RGBA8).
   * `index()` is what `spawnMeshNode`, `RenderTreeSet::Rep` and the GPU structs take. Destroying a material frees its slot,
-    and a textured one also queues its textures' free (retired once the GPU has drained); a mesh or derived material frees
+    and a textured one also queues its textures' free (retired once no frame in flight can sample them); a mesh or derived material frees
     the slot only. So **a derived material dies before its source** (declare it after), and every node drawing a material
     before it. `getFlags` / `setFlags` rewrite the flags in place (no re-record). `RenderMaterial::getOrCreateSolidColor`
     is a plain index: cached, shared, never freed.
@@ -576,8 +602,10 @@ nearest resident level while the picked one is streamed out). The shadow cull's 
 normalized once per frame on the CPU (`buildUboSunShadow`).
 
 **Instances push LOD0 and the cull redirects the draw.** The CPU sizes every chain member's bucket to
-the chain's full count, **hysteresis lives in per-instance GPU slots (benign races)**, shadow cull
-selects stateless 4× / +2 coarser, and GI needs no selection at all (one chain BLAS).
+the chain's full count (`present()`, from the touched LOD0 mesh; a member pushed directly gets no bucket of its own),
+**hysteresis lives in per-instance GPU slots (benign races)**, shadow cull
+selects stateless 4× / +2 coarser, and GI needs no selection at all (one chain BLAS). A mesh with no instances this
+frame keeps a STALE first instance: the culls read it only for an instance they place in that bucket.
 
 **The metric is screen-space error**: the meshopt simplify error of each level, in mesh-local units,
 projected to pixels against `Max error (px)`. **Authored chains carry no error data**, so those fall

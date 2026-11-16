@@ -19,30 +19,41 @@ import :RenderNodeState; // Globals::renderNodeTransforms
 //    GENERATION: bumping it marks every node dirty again, which is how a re-created buffer refills.
 //  * the MOTION VECTORS need every node's transform LAST frame. The other slot cannot serve (the CPU may
 //    write it while this frame's GPU work reads it), so after the cull the GPU copies this slot's transforms
-//    and pass masks into ONE device-local previous set (recordPrevCopy), which next frame's cull reads. A
+//    and node states into ONE device-local previous set (recordPrevCopy), which next frame's cull reads. A
 //    pass mask carries its push frame above the PASS_* byte (renderNode), so the cull knows whether the
 //    previous transform is really last frame's: a node not pushed last frame (off screen, just spawned into
 //    a recycled slot) draws without motion instead of with a stale transform.
+//  * the per-mesh instance counts (the cull's bucket sizes) are fixed arrays over every possible mesh index
+//    (a meshIdx is 16 bits): a mesh spawned on a worker during the pushes never reallocates them under an
+//    add. The first add of a mesh in a frame also lists it (`touchedMeshes`), so present() and beginFrame
+//    walk only the meshes the frame used, not every registered one.
 //
 // Growth calls back out: onGpuIdle before the buffers are re-created, then onInvalidate (a re-record),
 // and for the instance buffers the cull pipelines' own resize.
 export class InstanceStream final
 {
 public:
+    // One render node's per-push word pair (instance_cull.inc.glsl in_nodeStates). ONE record, so a push writes one
+    // partial line of the write-combined mapping, not one in each of two buffers, and the cull reads both in one load.
+    struct NodeState
+    {
+        uint32 passMask;     // stampedPassMask: the PASS_* byte + the push frame
+        int32 lodStateBias;  // LOD hysteresis state slot = instanceIdx + bias (stateBase - startIdx); only for nodes with a LOD chain
+    };
+    static_assert(sizeof(NodeState) == 8);
+
     // One frame slot's mapped buffers. Everything here is written on the CPU and read by the GPU in
     // the same frame - nothing persists across slots.
     struct FrameSlot
     {
         Buffer transforms;
-        Buffer passMasks;    // uint per render node: PASS_* bits, written at push time
-        Buffer lodStateBias; // int per render node: LOD state slot bias (stateBase - startIdx), at push time
+        Buffer nodeStates;   // NodeState per render node, written at push time
         Buffer meshInstances;
         Buffer firstInstances;
         Buffer meshCount;    // [0] registered mesh count: the slots the culls' draw-list compaction walks
 
         oc::span<RendererVKLayout::RenderNodeTransform> mappedTransforms;
-        oc::span<uint32> mappedPassMasks;
-        oc::span<int32> mappedLodStateBias;
+        oc::span<NodeState> mappedNodeStates;
         oc::span<RendererVKLayout::InMeshInstance> mappedMeshInstances;
         oc::span<uint32> mappedFirstInstances;
         oc::span<uint32> mappedMeshCount;
@@ -56,8 +67,8 @@ public:
 
     // ---- Last frame's node transforms (the motion vectors; see the header) ----
     Buffer& getPrevTransforms() { return m_prevTransforms; }
-    Buffer& getPrevPassMasks() { return m_prevPassMasks; }
-    // In the primary, after the main cull: this slot's first numNodes transforms + masks -> the previous set.
+    Buffer& getPrevNodeStates() { return m_prevNodeStates; }
+    // In the primary, after the main cull: this slot's first numNodes transforms + node states -> the previous set.
     void recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint32 numNodes);
     // The pass-mask word renderNode writes: the PASS_* byte + the push frame (24 bits; the cull compares
     // against u_frameIndex - 1).
@@ -67,7 +78,15 @@ public:
     // Claims `count` contiguous instance slots, or UINT32_MAX when this frame is full (the caller drops
     // the node; the capacity grows at the next beginFrame).
     uint32 claimInstances(uint32 count);
-    void noteMeshInstances(uint16 meshIdx, uint32 count) { oc::atomic_ref<uint32>(m_numInstancesPerMesh[meshIdx]) += count; }
+    // One add per mesh and push (RenderBatch: per mesh and flush), never one per instance: a crowd of one mesh adds to ONE
+    // counter from every worker.
+    void noteMeshInstances(uint16 meshIdx, uint32 count)
+    {
+        if (count == 0)
+            return; // a zero add would list the mesh, and its first real add would list it again
+        if (oc::atomic_ref<uint32>(m_numInstancesPerMesh[meshIdx]).fetch_add(count, oc::memory_order_relaxed) == 0)
+            m_touchedMeshes[oc::atomic_ref<uint32>(m_numTouchedMeshes).fetch_add(1, oc::memory_order_relaxed)] = meshIdx;
+    }
 
     // ---- Render node transform slots (spawn path, lock-free: TransformSlots) ----
     // NEVER grows the node buffers: this runs mid-frame, and re-creating them would drop the transforms, pass masks and
@@ -90,8 +109,8 @@ public:
     // present(): claims past the capacity never wrote, so the valid prefix ends at the smallest one.
     void clampInstanceCountToOverflow() { m_instanceCounter = oc::min(m_instanceCounter, m_instanceOverflowStart); }
     uint32 getNumInstancesForMesh(uint32 meshIdx) const { return m_numInstancesPerMesh[meshIdx]; }
-    uint32 getNumMeshCounters() const { return (uint32)m_numInstancesPerMesh.size(); }
-    void resizePerMeshCounts(uint32 numMeshInfos) { m_numInstancesPerMesh.resize(numMeshInfos); }
+    // Every mesh with instances this frame, once each, in no order (present(), after the pushes have joined).
+    oc::span<const uint16> getTouchedMeshes() const { return { m_touchedMeshes.data(), m_numTouchedMeshes }; }
 
     uint32 getMaxRenderNodes() const { return m_maxRenderNodes; }
     uint32 getMaxInstances() const { return m_maxInstances; }
@@ -111,9 +130,12 @@ private:
 
     oc::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
     Buffer m_prevTransforms; // device-local, one set for every slot: last frame's transforms (recordPrevCopy)
-    Buffer m_prevPassMasks;  // ... and its stamped pass masks
+    Buffer m_prevNodeStates; // ... and its node states (the cull reads the stamped pass masks)
     TransformSlots& m_transforms = Globals::renderNodeTransforms;
-    oc::vector<uint32> m_numInstancesPerMesh;
+    static constexpr uint32 MESH_INDEX_RANGE = 1u << 16; // InMeshInstance::meshIdx is 16 bits
+    oc::vector<uint32> m_numInstancesPerMesh = oc::vector<uint32>(MESH_INDEX_RANGE, 0u); // never resized (see the header)
+    oc::vector<uint16> m_touchedMeshes = oc::vector<uint16>(MESH_INDEX_RANGE, uint16(0));
+    uint32 m_numTouchedMeshes = 0;
 
     oc::function<void()> m_onGpuIdle;
     oc::function<void()> m_onInvalidate;

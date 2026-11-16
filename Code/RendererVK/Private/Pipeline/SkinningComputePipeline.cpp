@@ -46,10 +46,15 @@ void SkinningComputePipeline::resizeJobBuffer(uint32 maxJobs)
     m_maxJobs = maxJobs;
     for (PerFrameData& perFrame : m_perFrameData)
     {
-        perFrame.jobBuffer.initialize(maxJobs * sizeof(RendererVKLayout::SkinningJob),
+        perFrame.jobBuffer.initialize(RendererVKLayout::SKINNING_JOB_HEADER_BYTES + maxJobs * sizeof(RendererVKLayout::SkinningJob),
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "SkinningJobs", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedJobs = perFrame.jobBuffer.mapMemory<RendererVKLayout::SkinningJob>();
+        const oc::span<uint8> bytes = perFrame.jobBuffer.mapMemory();
+        perFrame.mappedJobCount = reinterpret_cast<uint32*>(bytes.data());
+        perFrame.mappedJobs = oc::span<RendererVKLayout::SkinningJob>(
+            reinterpret_cast<RendererVKLayout::SkinningJob*>(bytes.data() + RendererVKLayout::SKINNING_JOB_HEADER_BYTES), maxJobs);
+        *perFrame.mappedJobCount = 0; // a frame recorded before its first upload skins nothing
+        perFrame.jobBuffer.flushMappedMemory(RendererVKLayout::SKINNING_JOB_HEADER_BYTES);
     }
 }
 
@@ -76,26 +81,20 @@ void SkinningComputePipeline::buildComputeLayout(ComputePipelineLayout& computeP
         .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
-void SkinningComputePipeline::update(uint32 frameIdx, oc::span<const glm::mat4> palettes, oc::span<const RendererVKLayout::SkinningJob> jobs)
+void SkinningComputePipeline::finishUpload(uint32 frameIdx, uint32 paletteEnd, uint32 numJobs, uint32 numGroups)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    if (!palettes.empty())
-    {
-        assert(palettes.size() <= frameData.mappedPalettes.size());
-        memcpy(frameData.mappedPalettes.data(), palettes.data(), palettes.size() * sizeof(glm::mat4));
-        frameData.paletteBuffer.flushMappedMemory(palettes.size() * sizeof(glm::mat4));
-    }
+    assert(paletteEnd <= frameData.mappedPalettes.size() && numJobs <= frameData.mappedJobs.size());
+    if (paletteEnd > 0)
+        frameData.paletteBuffer.flushMappedMemory(paletteEnd * sizeof(glm::mat4));
+    *frameData.mappedJobCount = numJobs;
+    frameData.jobBuffer.flushMappedMemory(RendererVKLayout::SKINNING_JOB_HEADER_BYTES + numJobs * sizeof(RendererVKLayout::SkinningJob));
 
-    uint32 maxGroups = 0;
-    if (!jobs.empty())
-    {
-        assert(jobs.size() <= frameData.mappedJobs.size());
-        memcpy(frameData.mappedJobs.data(), jobs.data(), jobs.size() * sizeof(RendererVKLayout::SkinningJob));
-        frameData.jobBuffer.flushMappedMemory(jobs.size() * sizeof(RendererVKLayout::SkinningJob));
-        for (const RendererVKLayout::SkinningJob& job : jobs)
-            maxGroups = oc::max(maxGroups, (job.vertexCount + RendererVKLayout::SKINNING_THREADS_PER_GROUP - 1) / RendererVKLayout::SKINNING_THREADS_PER_GROUP);
-    }
-    frameData.mappedDispatchArgs[0] = vk::DispatchIndirectCommand{ .x = maxGroups, .y = (uint32)jobs.size(), .z = 1 };
+    // Every job's own groups, packed: x first, then rows of y (an x past the device's guaranteed 65535 is not allowed).
+    constexpr uint32 MAX_GROUPS_X = 32768;
+    const uint32 x = oc::min(numGroups, MAX_GROUPS_X);
+    const uint32 y = x == 0 ? 0 : (numGroups + x - 1) / x;
+    frameData.mappedDispatchArgs[0] = vk::DispatchIndirectCommand{ .x = x, .y = y, .z = 1 };
     frameData.dispatchArgsBuffer.flushMappedMemory(sizeof(vk::DispatchIndirectCommand));
 }
 

@@ -1201,13 +1201,15 @@ namespace Procedural
 			if (chunks)
 				Globals::jobSystem.submit([this, &renderer]
 				{
+					RenderBatch renderBatch(renderer);
 					for (const auto& entry : m_residents)
 					{
 						if (!entry.second->spatialEntry.isValid())
 							continue; // held: too coarse for the draw camera (edge stitching), not drawn yet
-						renderer.renderNode(entry.second->node);
+						renderBatch.push(entry.second->node);
 						noteVegetation(*entry.second, RendererVKLayout::PASS_ALL);
 					}
+					renderBatch.flush();
 					flushVegetation();
 				}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
 			return;
@@ -1226,13 +1228,14 @@ namespace Procedural
 			{
 				Globals::jobSystem.submit([this, &renderer, reach, focus]
 				{
+					RenderBatch renderBatch(renderer); // flushes when the job returns
 					Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
 					{
 						if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not a 0 userData, not sectors)
 						{
 							constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
 							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
-							renderer.renderNode(resident.node, SHADOW_AND_GI);
+							renderBatch.push(resident.node, SHADOW_AND_GI);
 							noteVegetation(resident, SHADOW_AND_GI);
 						}
 					}, SpatialPassBit_Main); // main-stamped: pushed by the fan-out
@@ -1250,15 +1253,16 @@ namespace Procedural
 			Globals::jobSystem.parallelFor(0, (uint32)visible.size(), m_renderPushCost, { "terrainRenderPushChunk", EProfileCategory::Procedural },
 				[&](uint32 begin, uint32 end)
 				{
+					RenderBatch renderBatch(renderer); // one per chunk of the fan-out: flushes at the chunk's end
 					for (uint32 i = begin; i < end; ++i)
 					{
 						const uint64 userData = visible[i];
 						if (userData & SpatialTerrainTag_Ocean)
-							renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
+							renderBatch.push(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
 						else
 						{
 							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
-							renderer.renderNode(resident.node);
+							renderBatch.push(resident.node);
 							noteVegetation(resident, RendererVKLayout::PASS_ALL);
 							if (rivers && resident.node.getPassMask() != 0 && resident.spatialEntry.isValid())
 								m_riverChunks[m_riverChunkCount.fetch_add(1, oc::memory_order_relaxed)] = { resident.firstBase(), 1u << resident.lod };

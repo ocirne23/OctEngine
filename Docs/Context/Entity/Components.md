@@ -50,13 +50,11 @@ pointer and no base-class dispatch**, so each animator compiles its own copy.
 ### The rules both follow
 
 * **MINIMUM MUTATION.** A tick that does not change the pose writes no bone.
-* **`place(renderer, world, passMask)`** is the placement tail of `Entity::updateSelf` (every visit, frozen or
+* **`place(renderBatch, world, passMask)`** is the placement tail of `Entity::updateSelf` (every visit, frozen or
   not, right after the entity's own render submit): when NEITHER a bone changed (`placeDirty`) NOR the entity's
-  world transform (`placedWorld`), it composes nothing and only submits the nodes (`renderNode`, lock-free); else,
-  on a FLAT rig, ONE compose per bone (`world` × `nodeLocal`) + `setTransform`. `passMask` 0 = culled: nothing
-  is submitted.
-* **Open cost, in RendererVK:** the submit is one `Renderer::renderNode` per bone. A batched submit for one model
-  (one instance claim, one texture note) is the next step.
+  world transform (`placedWorld`), it composes nothing and only submits the nodes (`submitBones` into the entity
+  pass job's `RenderBatch`: no instance claim per bone); else, on a FLAT rig, ONE compose per bone (`world` ×
+  `nodeLocal`) + `setTransform`. `passMask` 0 = culled: nothing is submitted.
 * **The walk drives itself**: a SELF-driven animator measures the planar (XZ) distance its OWN entity moved since
   the last tick, so no script or gameplay code sets a speed. It runs AFTER `PhysicsComponent::update` in
   `updateSelf`, so the distance has this frame's pose. The distance is in the parent's space — **an animator on a

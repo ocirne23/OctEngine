@@ -94,9 +94,8 @@ void SkinnedMeshRegistry::setInstance(uint32 jobIdx, uint32 baseVertexOffset, ui
         .outVertexOffset = outVertexOffset,
         .vertexCount = vertexCount,
         .paletteOffset = m_paletteRegions[paletteHandle].offset,
-        .prevValid = 0, // no last frame in the region yet (markJobsUploaded)
+        .prevValid = 0, // set per frame by writeFrame
     };
-    m_hasFreshJobs = true;
     m_blasBuilds[jobIdx] = AccelerationStructure::SkinnedBlasBuild{
         .meshIdx = meshIdx, .vertexOffset = outVertexOffset, .vertexCount = vertexCount, .firstIndex = firstIndex, .indexCount = indexCount };
     // No re-record needed: the jobs are uploaded per frame and dispatched indirectly; the skinned BLAS
@@ -105,16 +104,23 @@ void SkinnedMeshRegistry::setInstance(uint32 jobIdx, uint32 baseVertexOffset, ui
 
 uint32 SkinnedMeshRegistry::registerBundle(const Bundle& bundle)
 {
+    uint32 handle;
     if (!m_freeBundleSlots.empty())
     {
-        const uint32 handle = m_freeBundleSlots.back();
+        handle = m_freeBundleSlots.back();
         m_freeBundleSlots.pop_back();
         m_bundles[handle] = bundle;
-        return handle;
     }
-    const uint32 handle = (uint32)m_bundles.size();
-    m_bundles.push_back(bundle);
-    m_parkLinks.ensure(handle); // queuePark (lock-free) must never create a page
+    else
+    {
+        handle = (uint32)m_bundles.size();
+        m_bundles.push_back(bundle);
+        m_skinnedFrames.push_back(UINT32_MAX);
+        m_parkLinks.ensure(handle); // queuePark (lock-free) must never create a page
+        m_pushFrames.ensure(handle); // nor notePush
+    }
+    m_pushFrames[handle].store(0, oc::memory_order_relaxed);
+    m_skinnedFrames[handle] = UINT32_MAX; // no last frame in its regions yet
     return handle;
 }
 
@@ -157,22 +163,49 @@ uint32 SkinnedMeshRegistry::acquireBundle(uint32 sourceKey)
     {
         const RendererVKLayout::SkinnedMeshSource& src = m_sources[bundle.sourceKey + k];
         m_jobs[bundle.firstJob + k].vertexCount = src.vertexCount;
-        m_jobs[bundle.firstJob + k].prevValid = 0; // the region holds the dead node's last pose
         // The bundle's recorded count, NOT src.indexCount: the skinned BLAS was created (and its buffer
         // sized) for the chain's RT level, which may be coarser than level 0.
         m_blasBuilds[bundle.firstJob + k].indexCount = bundle.blasIndexCounts[k];
     }
-    m_hasFreshJobs = true;
+    m_pushFrames[bundleHandle].store(0, oc::memory_order_relaxed);
+    m_skinnedFrames[bundleHandle] = UINT32_MAX; // the regions hold the dead node's last pose
     return bundleHandle;
 }
 
-void SkinnedMeshRegistry::markJobsUploaded()
+SkinnedMeshRegistry::FrameUpload SkinnedMeshRegistry::writeFrame(uint32 frame, oc::span<glm::mat4> palettes, oc::span<RendererVKLayout::SkinningJob> jobs)
 {
-    if (!m_hasFreshJobs)
-        return;
-    m_hasFreshJobs = false;
-    for (RendererVKLayout::SkinningJob& job : m_jobs)
-        job.prevValid = 1;
+    FrameUpload upload;
+    m_frameBlasBuilds.assign(m_blasBuilds.begin(), m_blasBuilds.end());
+    for (uint32 handle = 0; handle < (uint32)m_bundles.size(); ++handle)
+    {
+        const Bundle& bundle = m_bundles[handle];
+        if (bundle.numMeshes == 0)
+            continue; // a free bundle slot
+        if (m_pushFrames[handle].load(oc::memory_order_relaxed) != frame)
+        {
+            // Not drawn anywhere this frame (no TLAS instance either): no skin, no BLAS rebuild. Its regions keep an older pose.
+            for (uint32 k = 0; k < bundle.numMeshes; ++k)
+                m_frameBlasBuilds[bundle.firstJob + k].indexCount = 0;
+            continue;
+        }
+        const uint32 prevValid = m_skinnedFrames[handle] + 1 == frame ? 1u : 0u; // else the regions hold no LAST frame
+        m_skinnedFrames[handle] = frame;
+
+        const PaletteRegion& region = m_paletteRegions[bundle.paletteHandle];
+        memcpy(palettes.data() + region.offset, m_palettes.data() + region.offset, region.boneCount * sizeof(glm::mat4));
+        upload.paletteEnd = oc::max(upload.paletteEnd, region.offset + region.boneCount);
+        for (uint32 k = 0; k < bundle.numMeshes; ++k)
+        {
+            RendererVKLayout::SkinningJob job = m_jobs[bundle.firstJob + k];
+            if (job.vertexCount == 0)
+                continue;
+            job.prevValid = prevValid;
+            job.firstGroup = upload.numGroups;
+            jobs[upload.numJobs++] = job;
+            upload.numGroups += (job.vertexCount + RendererVKLayout::SKINNING_THREADS_PER_GROUP - 1) / RendererVKLayout::SKINNING_THREADS_PER_GROUP;
+        }
+    }
+    return upload;
 }
 
 oc::span<const uint32> SkinnedMeshRegistry::getParkedBundles(uint32 sourceKey) const

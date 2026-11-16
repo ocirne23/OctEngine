@@ -96,8 +96,8 @@ See [Entity](Context/Entity/CONTEXT.md).
 * RootOnly cull bounds use the rest pose; a limb swing can go outside them.
 * No "children changed" hook in SceneComponent (`addChild` / `removeChild` / ... are the place).
 * A bad `HumanoidAnimator` limb setup is only a warning; the model is silently absent.
-* SceneAnimatorComponent is PARKED. To revive: the checklist in `SceneAnimatorComponent.ixx`, a
-  batched bone submit instead of one `renderNode` per bone, a DSL surface, an editor section.
+* SceneAnimatorComponent is PARKED. To revive: the checklist in `SceneAnimatorComponent.ixx`, a DSL surface, an
+  editor section.
 
 ## Rendering
 

@@ -172,7 +172,7 @@ export struct SceneAnimatorComponent
     void destroy(Entity& entity, const SpawnInfo& info);
     void update(Entity& entity, float deltaSeconds);
     // The placement tail of Entity::updateSelf: every visit, frozen or not. passMask 0 = culled.
-    void place(Renderer& renderer, const Transform& world, uint32 passMask);
+    void place(RenderBatch& renderBatch, const Transform& world, uint32 passMask);
     void addRestBounds(const Transform& toEntity, Sphere& bounds, bool& any) const;
 
     // Gameplay override of a layer's weight (an attack swing, a forced idle); < 0 hands it back.

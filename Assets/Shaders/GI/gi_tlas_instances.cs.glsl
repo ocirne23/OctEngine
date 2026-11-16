@@ -41,7 +41,7 @@ layout (binding = 2, std430) readonly buffer InMeshInstanceOffsetsBuffer  { InMe
 layout (binding = 3, std430) readonly buffer InBlasAddressesBuffer        { uvec2 in_blasAddresses[]; }; // uint64 split lo/hi per mesh
 layout (binding = 4, std430) writeonly buffer OutTlasInstancesBuffer      { TlasInstance out_instances[]; };
 layout (binding = 5, std430) readonly buffer InMaterialInfosBuffer        { MaterialInfo in_materialInfos[]; };
-layout (binding = 6, std430) readonly buffer InNodePassMasksBuffer        { uint in_nodePassMasks[]; };
+layout (binding = 6, std430) readonly buffer InNodeStatesBuffer           { uvec2 in_nodeStates[]; }; // x = the stamped pass mask
 // mesh idx -> the mesh whose BLAS this one shares (identity when it owns its own): a LOD chain keeps a single BLAS at its
 // RT level, so instances of every level reference that BLAS and carry its meshIdx (packed into sbtOffset below) for the
 // hit shaders' attribute fetches.
@@ -112,7 +112,7 @@ void main()
         scale             = rnPS.w * ioPS.w;
         // GI or shadow relevance keeps the instance hittable: probes / RTAO trace the GI set, the RT sun shadow needs
         // the shadow casters.
-        inRtSet = (in_nodePassMasks[inst.renderNodeIdx] & (PASS_GI | PASS_SHADOW)) != 0u;
+        inRtSet = (in_nodeStates[inst.renderNodeIdx].x & (PASS_GI | PASS_SHADOW)) != 0u;
     }
     const uint meshIdx = inst.meshIdxMaterialIdx & 0x0000FFFFu;
 

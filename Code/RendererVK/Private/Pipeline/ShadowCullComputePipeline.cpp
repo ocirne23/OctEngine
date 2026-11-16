@@ -73,7 +73,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inMaterialInfoBuffer.getBuffer(), .range = params.inMaterialInfoBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inNodePassMasksBuffer.getBuffer(), .range = params.inNodePassMasksBuffer.getSize() } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inNodeStatesBuffer.getBuffer(), .range = params.inNodeStatesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inMeshLodGroupIdxBuffer.getBuffer(), .range = params.inMeshLodGroupIdxBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eStorageBuffer,

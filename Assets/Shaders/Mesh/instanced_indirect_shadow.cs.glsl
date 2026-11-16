@@ -184,7 +184,7 @@ void main()
     else
     {
         instance = in_instances[instanceIdx];
-        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
+        if ((in_nodeStates[instance.renderNodeIdx].x & PASS_SHADOW) == 0u)
             return;
         pick.kBegin = 0u;
         pick.kEnd = 1u;

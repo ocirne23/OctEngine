@@ -72,9 +72,10 @@ layout (binding = 8, std430) writeonly buffer OutIndirectCommandBuffer
 {
     OutIndirectCommand out_indirectCommands[]; // the opaque list (the shadow cull's only one)
 };
-layout (binding = 10, std430) readonly buffer InNodePassMasksBuffer
+// Per render node (InstanceStream::NodeState): x = PASS_* bits + push frame << 8, y = the LOD state slot bias (int; instanced_indirect.cs.glsl).
+layout (binding = 10, std430) readonly buffer InNodeStatesBuffer
 {
-    uint in_nodePassMasks[];
+    uvec2 in_nodeStates[];
 };
 layout (binding = 11, std430) readonly buffer InMeshLodGroupIdxBuffer
 {

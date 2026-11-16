@@ -23,6 +23,7 @@ static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
 TextureStreamer::TextureStreamer()
     : m_settings(Globals::settings.textureStreaming)
 {
+    m_wantMipBias.store(m_settings.mipBias - std::log2(m_settings.texelRatio), oc::memory_order_relaxed);
 }
 
 bool TextureStreamer::isStreamingEnabled() const { return m_settings.enabled; }
@@ -168,7 +169,7 @@ void TextureStreamer::noteUse(uint16 texIdx, float log2TexelsAvailable)
     StreamState& state = m_states[texIdx];
     if (state.numMips == 0)
         return;
-    const int32 want = (int32)std::ceil(state.log2FullDim - log2TexelsAvailable - std::log2(m_settings.texelRatio) + m_settings.mipBias);
+    const int32 want = (int32)std::ceil(state.log2FullDim - log2TexelsAvailable + m_wantMipBias.load(oc::memory_order_relaxed));
     const uint8 wantTop = (uint8)oc::clamp(want, 0, (int32)state.tailTop);
 
     oc::atomic_ref<uint8> accum(state.wantTopThisFrame);
@@ -514,6 +515,7 @@ void TextureStreamer::update()
         return true;
     });
 
+    m_wantMipBias.store(m_settings.mipBias - std::log2(m_settings.texelRatio), oc::memory_order_relaxed); // for next frame's noteUse
     m_frameCounter++;
 }
 

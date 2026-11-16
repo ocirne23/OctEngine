@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Rect;
 import Core.Transform;
 import Core.Camera;
+import Core.Sphere;
 import Core.VrSession;
 import Threading;
 
@@ -44,6 +45,7 @@ public:
 
     // ---- Per-frame submission [Concurrency: LOCK-FREE]: from any job, between beginFrame and present. ----
 
+    // One node on its own. A job that pushes many nodes uses a RenderBatch (below): one claim and one copy for all of them.
     void renderNode(const RenderNode& node, uint32 passMask);
     void renderNode(const RenderNode& node) { renderNode(node, node.getPassMask()); }
     // A PointLight / SpotLight / AreaLight / BeamLight (Light.ixx). airColumn false = a beam with no glow in the air.
@@ -253,6 +255,49 @@ public:
     void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
     GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
     static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }
+};
+
+// ---- Batched submission [Concurrency: LOCK-FREE, one batch per job] ----
+// The renderNode pushes of ONE job, handed over together: one instance claim and one instance copy per flush instead of one per node, and one per-mesh
+// count add per distinct mesh instead of one per node. The per-node work (the streaming notes, the transform upload, the pass mask) still runs at the push.
+// Holds no pointer to a node (a node may die after its push) and no thread-local state, so a fiber wait inside its life is harmless. It MUST flush
+// before present(): the destructor does. A node with more instances than the batch holds is pushed on its own.
+export class RenderBatch final
+{
+public:
+    explicit RenderBatch(Renderer& renderer) : m_renderer(renderer) {}
+    ~RenderBatch() { flush(); }
+    RenderBatch(const RenderBatch&) = delete;
+    RenderBatch& operator=(const RenderBatch&) = delete;
+
+    Renderer& renderer() const { return m_renderer; }
+    void push(const RenderNode& node, uint32 passMask);
+    void push(const RenderNode& node) { push(node, node.getPassMask()); }
+    // The same, with the node's world bounds the caller already computed (the texture streaming's screen size reads them).
+    void push(const RenderNode& node, uint32 passMask, const Sphere& worldBounds);
+    void flush();
+
+private:
+    friend class RendererState;
+    static constexpr uint32 MAX_INSTANCES = 128;
+    static constexpr uint32 MAX_LOD_NODES = 32;
+    static constexpr uint32 MESH_SLOTS = 64; // the per-mesh count table: power of two, open addressing
+    static constexpr uint32 MESH_PROBES = 8; // past it, the mesh counts straight into the stream
+    struct LodNode // a node with a LOD chain: its NodeState bias needs the claimed start
+    {
+        uint32 transformIdx;
+        uint32 stampedPassMask;
+        uint32 lodStateBase;
+        uint32 firstInstance; // in m_instances
+    };
+
+    Renderer& m_renderer;
+    uint32 m_numInstances = 0;
+    uint32 m_numLodNodes = 0;
+    oc::array<uint16, MESH_SLOTS> m_meshKeys{}; // meshIdx + 1 (0 = empty)
+    oc::array<uint32, MESH_SLOTS> m_meshCounts;
+    oc::array<LodNode, MAX_LOD_NODES> m_lodNodes;
+    oc::array<RendererVKLayout::InMeshInstance, MAX_INSTANCES> m_instances;
 };
 
 export namespace Globals

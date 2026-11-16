@@ -3,6 +3,7 @@
 import Core;
 import :VK;
 import :Layout;
+import :Texture;
 import :TextureManager;
 import :TextureStreamer;
 
@@ -18,7 +19,9 @@ import :TextureStreamer;
 //  * onSlotWrite(frameIdx, texIdx, view): point one slot of every consuming set at one view.
 //
 // It also holds the DEFERRED FREE queue: a destroyed container's images may still be sampled by an
-// in-flight frame, so they are retired here and freed once the caller has drained the GPU.
+// in-flight frame. present() frees the queued slots (they point at the fallback from that frame's record
+// on) and keeps their images here until NUM_FRAMES_IN_FLIGHT frames later, when no frame can sample them -
+// no GPU drain.
 export class BindlessTextures final
 {
 public:
@@ -46,12 +49,18 @@ public:
 
     // ---- Deferred frees (container teardown, splat set replacement) ----
     void queueFree(oc::span<const uint16> texIndices) { m_pendingFrees.insert(m_pendingFrees.end(), texIndices.begin(), texIndices.end()); }
-    bool hasPendingFrees() const { return !m_pendingFrees.empty(); }
-    // The caller guarantees the GPU is idle; the freed slots' bindless entries rewrite to the fallback
-    // when each frame slot next records.
-    void processPendingFrees();
+    // Once per present(), before the record: frees the queued slots (each slot's bindless entries rewrite to the
+    // fallback when its frame slot next records) and destroys the retired images whose frames are done. `gpuIdle`
+    // (a capacity growth's drain) destroys every retired image at once.
+    void processPendingFrees(uint32 frameCounter, bool gpuIdle = false);
 
 private:
+    struct RetiredTexture
+    {
+        Texture texture;
+        uint32 destroyFrame; // the renderer frame from which no frame in flight can sample it
+    };
+
     oc::function<void(uint32)> m_onCapacityChanged;
     oc::function<void(uint32, uint16, vk::ImageView)> m_onSlotWrite;
 
@@ -59,4 +68,5 @@ private:
     uint32 m_descriptorCount = RendererVKLayout::INITIAL_TEXTURES;
     uint32 m_generation = 0; // last seen TextureManager::getGeneration()
     oc::vector<uint16> m_pendingFrees;
+    oc::vector<RetiredTexture> m_retired; // destroyed by ~RendererState's members after its device drain at the latest
 };

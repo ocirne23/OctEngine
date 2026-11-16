@@ -32,7 +32,7 @@ public:
         Buffer& outMeshInstanceIndexesBuffer; // 7
         Buffer& outIndirectCommandBuffer;     // 8 - its opaque list
         Buffer& inMaterialInfoBuffer;         // 9 - resolves the alpha-mask texture per caster
-        Buffer& inNodePassMasksBuffer;        // 10
+        Buffer& inNodeStatesBuffer;           // 10 - per node: InstanceStream::NodeState (the pass mask)
         Buffer& inMeshLodGroupIdxBuffer;      // 11 - per mesh: LOD group index (GPU LOD selection)
         Buffer& inMeshLodGroupsBuffer;        // 12
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks

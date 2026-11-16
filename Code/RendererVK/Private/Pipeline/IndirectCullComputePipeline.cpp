@@ -146,18 +146,20 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InNodePassMasksBuffer
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InNodeStatesBuffer
         .binding = 10,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
-    // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
-    // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors);
-    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl);
-    // 23 the trees' voxel-tier sequences.
+    // 11..13, 15 LOD selection: group idx / groups / state / stats (14 is free: the node bias is in the node states);
+    // 16 the tessellated terrain's ground sequences, 17 the terrain film's; 18, 19 last frame's node transforms + node
+    // states (the motion vectors); 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree
+    // list (tree_cull.inc.glsl); 23 the trees' voxel-tier sequences.
     for (uint32 binding = 11; binding <= 23; ++binding)
     {
+        if (binding == 14)
+            continue;
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
             .descriptorType = vk::DescriptorType::eStorageBuffer,
@@ -182,7 +184,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 24> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 23> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -285,13 +287,13 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 }
             }
         },
-        DescriptorSetUpdateInfo { // InNodePassMasksBuffer
+        DescriptorSetUpdateInfo { // InNodeStatesBuffer
             .binding = 10,
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = {
                 vk::DescriptorBufferInfo {
-                    .buffer = recordParams.inNodePassMasksBuffer.getBuffer(),
-                    .range = recordParams.inNodePassMasksBuffer.getSize(),
+                    .buffer = recordParams.inNodeStatesBuffer.getBuffer(),
+                    .range = recordParams.inNodeStatesBuffer.getSize(),
                 }
             }
         },
@@ -322,16 +324,6 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 vk::DescriptorBufferInfo {
                     .buffer = recordParams.lodLevelStateBuffer.getBuffer(),
                     .range = recordParams.lodLevelStateBuffer.getSize(),
-                }
-            }
-        },
-        DescriptorSetUpdateInfo { // InNodeLodStateBiasBuffer
-            .binding = 14,
-            .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = {
-                vk::DescriptorBufferInfo {
-                    .buffer = recordParams.inNodeLodStateBiasBuffer.getBuffer(),
-                    .range = recordParams.inNodeLodStateBiasBuffer.getSize(),
                 }
             }
         },
@@ -375,13 +367,13 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 }
             }
         },
-        DescriptorSetUpdateInfo { // InPrevNodePassMasksBuffer
+        DescriptorSetUpdateInfo { // InPrevNodeStatesBuffer
             .binding = 19,
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = {
                 vk::DescriptorBufferInfo {
-                    .buffer = recordParams.inPrevNodePassMasksBuffer.getBuffer(),
-                    .range = recordParams.inPrevNodePassMasksBuffer.getSize(),
+                    .buffer = recordParams.inPrevNodeStatesBuffer.getBuffer(),
+                    .range = recordParams.inPrevNodeStatesBuffer.getSize(),
                 }
             }
         },

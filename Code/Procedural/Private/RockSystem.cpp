@@ -236,8 +236,9 @@ namespace Procedural
 				spawnPreview(renderer, camera, maps.get());
 			m_spawned = true;
 		}
+		RenderBatch renderBatch(renderer);
 		for (const RenderNode& node : m_nodes)
-			renderer.renderNode(node);
+			renderBatch.push(node);
 	}
 
 	void RockSystem::reload()
