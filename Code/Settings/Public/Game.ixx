@@ -272,7 +272,7 @@ export struct GameStructureSettings
     // under harvestMinYield. BY SIZE: each tree counts (its size / the world's average tree) ^ harvestSizeExponent, each
     // rock (its longest axis / harvestRockRef) ^ harvestSizeExponent - so a big boulder or a big tree counts for many.
     float harvestRadius = 32.0f;
-    float harvestTreesFull = 5.0f;    // average trees
+    float harvestTreesFull = 3.0f;    // average trees
     float harvestStoneFull = 4.0f;    // reference rocks (a 6 m boulder alone is 4 with the defaults, a 20 m monolith 44)
     float harvestSizeExponent = 2.0f; // 1 = by length, 2 = by area, 3 = by volume
     float harvestRockRef = 3.0f;      // m: the rock that counts 1

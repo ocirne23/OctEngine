@@ -13,7 +13,7 @@ staffing. Neither needs energy: only workers (below).
 
 | | The yield |
 |---|---|
-| Lumberyard | the TREES in the radius, each by its SIZE / "Trees for full lumberyard yield" (5). A tree counts (its size / the world's average tree) ^ "Harvest size exponent" (2): its size is its trunk at the ground (the species' trunk x the record's own scale, `TreeWorld::surveyHarvest`, the expansion's scale from the same seed) over the average trunk of the world's tree species, so an average tree is 1, a small one ~0.4, a big one 2 and more. Dead wood (a log, a stump) is size 0.7 at its type's mean length (half a tree), by its length; a bush counts nothing. |
+| Lumberyard | the TREES in the radius, each by its SIZE / "Trees for full lumberyard yield" (3). A tree counts (its size / the world's average tree) ^ "Harvest size exponent" (2): its size is its trunk at the ground (the species' trunk x the record's own scale, `TreeWorld::surveyHarvest`, the expansion's scale from the same seed) over the average trunk of the world's tree species, so an average tree is 1, a small one ~0.4, a big one 2 and more. Dead wood (a log, a stump) is size 0.7 at its type's mean length (half a tree), by its length; a bush counts nothing. |
 | Quarry | the ROCKS in the radius, each (its longest axis / "Harvest reference rock (m)" (3)) ^ "Harvest size exponent" (2), / "Rocks for full quarry yield" (4): a 3 m rock is 1, a 6 m boulder alone is a full yield (4), a 20 m monolith 44 (it feeds many quarries: they share it). A cactus counts nothing. |
 | The flat maps | no trees or rocks: a RESOURCE NODE of the yard's kind (fuel / mineral) in the radius is a full yield. Several yards can share one node. |
 | Always | at least "Harvest minimum yield" (0.1), at most 1. |
