@@ -34,7 +34,7 @@ export struct SceneCookOptions
 	int  lodMinIndices = 32;      // don't generate for meshes below this index count
 	float decimationFactor = 1.0f; // < 1 simplifies every mesh's base geometry to this index-count factor
 	                               // at cook time (unused vertices dropped; LOD chains build on the result).
-	                               // Skinned scenes bypass the cache, so they never decimate.
+	                               // Never a skinned mesh (its bone data stays per vertex).
 };
 
 // Byte ranges a mesh's data occupies in its cooked cache file (see CookedSceneData), so a consumer can
@@ -73,8 +73,8 @@ public:
 
 	// Cache-aware load: serves a cooked binary snapshot from Assets/Local/Cooked when it matches the
 	// source file (mtime + size) and options, otherwise imports via Assimp, cooks, and writes it for
-	// next time. Skinned/animated scenes always import directly (never cooked). Returns an initialized
-	// scene, or null on import failure.
+	// next time - skinned / animated scenes too (the skeleton, the skin weights and the clips cook). Returns an
+	// initialized scene, or null on import failure.
 	static oc::unique_ptr<ISceneData> loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options);
 
 	// Loads animation clips from a separate file (rig in one file, animations in others) and appends them
@@ -89,6 +89,7 @@ public:
 	// THE ANIMATION IMPORTER: every kept track of a file (FBX, glTF, ...) as a ClipAsset keyed by node name, with no skeleton. The .clip import of the
 	// Animation Editor and the .anm path (through loadAnimations above) both run on it. skipName / trackName filter like loadAnimations. The frame rate
 	// is the file's when it gives a plausible one, else read from the key spacing. Returns false (and a reason) when nothing was kept.
+	// CACHED like loadCached: every track of the file cooks once into a clip-only cache (Local/Cooked/<stem>_clips_<hash>.vsc), the filters run on it.
 	static bool importClipAssets(const char* filePath, oc::vector<ImportedClip>& out, const char* skipName = nullptr, const char* trackName = nullptr, oc::string* error = nullptr);
 
 	virtual ~ISceneData() = default;
@@ -116,4 +117,7 @@ public:
 	virtual const AnimationSet* getAnimations() const { return nullptr; }
 	virtual uint32 getNumAnimations() const { return 0; }
 	virtual const AnimationClip* getAnimation(uint32 idx) const { return nullptr; }
+	// The scene's animations as skeleton-independent clip assets (tracks by bone name, named by their track in the file):
+	// what getAnimations is built from, and what the scene cache stores. Default: none.
+	virtual oc::span<const ImportedClip> getClipAssets() const { return {}; }
 };

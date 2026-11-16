@@ -4,9 +4,11 @@ import Core;
 import Core.glm;
 import Core.AABB;
 import Core.Log;
+import Animation;
 
 import :FileSystem;
 import :CookedSceneData;
+import :SceneData; // addClipToSet: the one naming rule of a clip set
 
 using namespace SceneCache;
 
@@ -151,6 +153,13 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
         || !sectionValid(header.nodesOffset, header.numNodes, sizeof(CookedNode))
         || !sectionValid(header.meshRefsOffset, header.numMeshRefs, sizeof(uint32))
         || !sectionValid(header.texStampsOffset, header.numTexStamps, sizeof(CookedTexStamp))
+        || !sectionValid(header.bonesOffset, header.numBones, sizeof(CookedBone))
+        || !sectionValid(header.clipsOffset, header.numClips, sizeof(CookedClip))
+        || !sectionValid(header.tracksOffset, header.numTracks, sizeof(CookedTrack))
+        || !sectionValid(header.positionKeysOffset, header.numPositionKeys, sizeof(CookedVec3Key))
+        || !sectionValid(header.rotationKeysOffset, header.numRotationKeys, sizeof(CookedQuatKey))
+        || !sectionValid(header.scaleKeysOffset, header.numScaleKeys, sizeof(CookedVec3Key))
+        || !sectionValid(header.eventsOffset, header.numEvents, sizeof(CookedEvent))
         || !sectionValid(header.stringsOffset, header.stringsSize, 1)
         || header.numNodes == 0
         || header.stringsSize == 0 || m_blob[header.stringsOffset + header.stringsSize - 1] != 0)
@@ -199,6 +208,18 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
         mesh.m_texCoords = reinterpret_cast<const glm::vec3*>(m_blob.data() + meshes[i].texCoordsOffset);
         mesh.m_indices = reinterpret_cast<const uint32*>(m_blob.data() + meshes[i].indicesOffset);
         mesh.m_lodIndices = reinterpret_cast<const uint32*>(m_blob.data() + meshes[i].lodIndicesOffset);
+        if (meshes[i].boneIndicesOffset != 0) // a skinned mesh
+        {
+            if (!sectionValid(meshes[i].boneIndicesOffset, meshes[i].numVertices, sizeof(glm::uvec4))
+                || !sectionValid(meshes[i].boneWeightsOffset, meshes[i].numVertices, sizeof(glm::vec4)))
+            {
+                m_blob.clear();
+                m_meshes.clear();
+                return false;
+            }
+            mesh.m_boneIndices = reinterpret_cast<const glm::uvec4*>(m_blob.data() + meshes[i].boneIndicesOffset);
+            mesh.m_boneWeights = reinterpret_cast<const glm::vec4*>(m_blob.data() + meshes[i].boneWeightsOffset);
+        }
     }
 
     const CookedMaterial* materials = reinterpret_cast<const CookedMaterial*>(m_blob.data() + header.materialsOffset);
@@ -214,5 +235,98 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
     for (uint32 i = 0; i < header.numTextures; ++i)
         m_textures[i].m_pPath = string(textures[i].pathOffset);
 
+    if (!loadAnimationData())
+    {
+        m_blob.clear();
+        m_meshes.clear();
+        m_materials.clear();
+        m_textures.clear();
+        return false;
+    }
+    return true;
+}
+
+// The skeleton and the clip assets, copied out of the blob; then the animation set on the skeleton exactly as the importer
+// builds it (SceneData::buildAnimations: each clip asset through buildAnimationClip, named by its track, addClipToSet).
+bool CookedSceneData::loadAnimationData()
+{
+    const CookedHeader& header = *reinterpret_cast<const CookedHeader*>(m_blob.data());
+    const uint8* base = m_blob.data();
+
+    const CookedBone* bones = reinterpret_cast<const CookedBone*>(base + header.bonesOffset);
+    m_skeleton = Skeleton{};
+    m_skeleton.boneNames.reserve(header.numBones);
+    for (uint32 i = 0; i < header.numBones; ++i)
+    {
+        if (bones[i].parent >= (int32)i) // parent-before-child, or a root
+            return false;
+        glm::mat4 localBind, inverseBind;
+        memcpy(&localBind[0][0], bones[i].localBind, sizeof(bones[i].localBind));
+        memcpy(&inverseBind[0][0], bones[i].inverseBind, sizeof(bones[i].inverseBind));
+        m_skeleton.boneNames.emplace_back(string(bones[i].nameOffset));
+        m_skeleton.parentIndices.push_back(bones[i].parent);
+        m_skeleton.localBind.push_back(localBind);
+        m_skeleton.inverseBind.push_back(inverseBind);
+        m_skeleton.nameToIndex[m_skeleton.boneNames.back()] = i;
+    }
+
+    const CookedClip* clips = reinterpret_cast<const CookedClip*>(base + header.clipsOffset);
+    const CookedTrack* tracks = reinterpret_cast<const CookedTrack*>(base + header.tracksOffset);
+    const CookedVec3Key* positionKeys = reinterpret_cast<const CookedVec3Key*>(base + header.positionKeysOffset);
+    const CookedQuatKey* rotationKeys = reinterpret_cast<const CookedQuatKey*>(base + header.rotationKeysOffset);
+    const CookedVec3Key* scaleKeys = reinterpret_cast<const CookedVec3Key*>(base + header.scaleKeysOffset);
+    const CookedEvent* events = reinterpret_cast<const CookedEvent*>(base + header.eventsOffset);
+    const auto inRange = [](uint64 first, uint64 count, uint64 total) { return first <= total && count <= total - first; };
+    m_clipAssets.clear();
+    m_clipAssets.reserve(header.numClips);
+    for (uint32 c = 0; c < header.numClips; ++c)
+    {
+        const CookedClip& cc = clips[c];
+        if (!inRange(cc.firstTrack, cc.numTracks, header.numTracks) || !inRange(cc.firstEvent, cc.numEvents, header.numEvents))
+            return false;
+        ImportedClip& imported = m_clipAssets.emplace_back();
+        imported.trackName = string(cc.nameOffset);
+        ClipAsset& asset = imported.clip;
+        asset.duration = cc.duration;
+        asset.steps = cc.steps;
+        asset.loop = cc.loop != 0;
+        asset.tracks.resize(cc.numTracks);
+        for (uint32 t = 0; t < cc.numTracks; ++t)
+        {
+            const CookedTrack& ct = tracks[cc.firstTrack + t];
+            if (!inRange(ct.firstPositionKey, ct.numPositionKeys, header.numPositionKeys)
+                || !inRange(ct.firstRotationKey, ct.numRotationKeys, header.numRotationKeys)
+                || !inRange(ct.firstScaleKey, ct.numScaleKeys, header.numScaleKeys))
+                return false;
+            ClipTrack& track = asset.tracks[t];
+            track.bone = string(ct.boneOffset);
+            track.positionKeys.reserve(ct.numPositionKeys);
+            for (uint32 k = 0; k < ct.numPositionKeys; ++k)
+            {
+                const CookedVec3Key& key = positionKeys[ct.firstPositionKey + k];
+                track.positionKeys.push_back({ key.time, glm::vec3(key.value[0], key.value[1], key.value[2]), (KeyInterp)key.interp });
+            }
+            track.rotationKeys.reserve(ct.numRotationKeys);
+            for (uint32 k = 0; k < ct.numRotationKeys; ++k)
+            {
+                const CookedQuatKey& key = rotationKeys[ct.firstRotationKey + k];
+                track.rotationKeys.push_back({ key.time, glm::quat(key.value[0], key.value[1], key.value[2], key.value[3]), (KeyInterp)key.interp });
+            }
+            track.scaleKeys.reserve(ct.numScaleKeys);
+            for (uint32 k = 0; k < ct.numScaleKeys; ++k)
+            {
+                const CookedVec3Key& key = scaleKeys[ct.firstScaleKey + k];
+                track.scaleKeys.push_back({ key.time, glm::vec3(key.value[0], key.value[1], key.value[2]), (KeyInterp)key.interp });
+            }
+        }
+        asset.events.reserve(cc.numEvents);
+        for (uint32 e = 0; e < cc.numEvents; ++e)
+            asset.events.push_back({ string(events[cc.firstEvent + e].nameOffset), events[cc.firstEvent + e].normalizedTime });
+    }
+
+    m_animationSet = AnimationSet{};
+    if (m_skeleton.isValid())
+        for (const ImportedClip& imported : m_clipAssets)
+            addClipToSet(m_animationSet, buildAnimationClip(imported.clip, m_skeleton, imported.trackName), "");
     return true;
 }

@@ -36,6 +36,7 @@ import Core;
 import Core.glm;
 import Core.AABB;
 import Core.Log;
+import Animation;
 
 import :ISceneData;
 import :IMeshData;
@@ -43,6 +44,7 @@ import :IMaterialData;
 import :ITextureData;
 import :INodeData;
 import :CookedSceneData;
+import :SceneData; // the Assimp import of a file's clips (importAllClipAssets)
 import :TextureConvert;
 
 using namespace SceneCache;
@@ -561,6 +563,12 @@ namespace
         oc::vector<CookedNode> nodes;
         oc::vector<uint32> meshRefs;
         oc::vector<CookedTexStamp> texStamps;
+        oc::vector<CookedBone> bones;
+        oc::vector<CookedClip> clips;
+        oc::vector<CookedTrack> tracks;
+        oc::vector<CookedVec3Key> positionKeys, scaleKeys;
+        oc::vector<CookedQuatKey> rotationKeys;
+        oc::vector<CookedEvent> events;
     };
 
     void cookMeshes(const ISceneData& scene, const SceneCookOptions& options, CookContext& ctx)
@@ -659,6 +667,12 @@ namespace
             cooked.bitangentsOffset = writeAttribute(attributes[3]);
             cooked.texCoordsOffset = writeAttribute(attributes[4]);
             cooked.indicesOffset = ctx.blob.writeAligned(pIndices, (size_t)numIndices * sizeof(uint32));
+            // A SKINNED mesh's bone influences, per vertex (never decimated, so the counts match).
+            if (meshData.isSkinned() && meshData.getBoneIndices() && meshData.getBoneWeights())
+            {
+                cooked.boneIndicesOffset = ctx.blob.writeAligned(meshData.getBoneIndices(), (size_t)numVertices * sizeof(glm::uvec4));
+                cooked.boneWeightsOffset = ctx.blob.writeAligned(meshData.getBoneWeights(), (size_t)numVertices * sizeof(glm::vec4));
+            }
 
             if (!options.generateLods || meshData.isSkinned() || isColMesh || inAuthoredChain[meshIdx]
                 || numIndices < (uint32)options.lodMinIndices)
@@ -931,6 +945,65 @@ namespace
         }
     }
 
+    // The skeleton (a skinned scene), in its own parent-before-child order.
+    void cookSkeleton(const ISceneData& scene, CookContext& ctx)
+    {
+        const Skeleton* skeleton = scene.getSkeleton();
+        if (!skeleton)
+            return;
+        ctx.bones.resize(skeleton->numBones());
+        for (uint32 i = 0; i < skeleton->numBones(); ++i)
+        {
+            CookedBone& bone = ctx.bones[i];
+            bone.nameOffset = ctx.strings.add(skeleton->boneNames[i]);
+            bone.parent = skeleton->parentIndices[i];
+            memcpy(bone.localBind, &skeleton->localBind[i][0][0], sizeof(bone.localBind));
+            memcpy(bone.inverseBind, &skeleton->inverseBind[i][0][0], sizeof(bone.inverseBind));
+        }
+    }
+
+    // Clip assets (by bone name): each clip's tracks, keys and events as contiguous ranges.
+    void cookClips(oc::span<const ImportedClip> clips, CookContext& ctx)
+    {
+        for (const ImportedClip& imported : clips)
+        {
+            const ClipAsset& asset = imported.clip;
+            CookedClip cooked{};
+            cooked.nameOffset = ctx.strings.add(imported.trackName);
+            cooked.duration = asset.duration;
+            cooked.steps = asset.steps;
+            cooked.loop = asset.loop ? 1u : 0u;
+            cooked.firstTrack = (uint32)ctx.tracks.size();
+            cooked.numTracks = (uint32)asset.tracks.size();
+            cooked.firstEvent = (uint32)ctx.events.size();
+            cooked.numEvents = (uint32)asset.events.size();
+            for (const ClipTrack& track : asset.tracks)
+            {
+                CookedTrack& t = ctx.tracks.emplace_back();
+                t.boneOffset = ctx.strings.add(track.bone);
+                t.firstPositionKey = (uint32)ctx.positionKeys.size();
+                t.numPositionKeys = (uint32)track.positionKeys.size();
+                for (const PositionKey& key : track.positionKeys)
+                    ctx.positionKeys.push_back({ key.time, { key.value.x, key.value.y, key.value.z }, (uint32)key.interp });
+                t.firstRotationKey = (uint32)ctx.rotationKeys.size();
+                t.numRotationKeys = (uint32)track.rotationKeys.size();
+                for (const RotationKey& key : track.rotationKeys)
+                    ctx.rotationKeys.push_back({ key.time, { key.value.w, key.value.x, key.value.y, key.value.z }, (uint32)key.interp });
+                t.firstScaleKey = (uint32)ctx.scaleKeys.size();
+                t.numScaleKeys = (uint32)track.scaleKeys.size();
+                for (const ScaleKey& key : track.scaleKeys)
+                    ctx.scaleKeys.push_back({ key.time, { key.value.x, key.value.y, key.value.z }, (uint32)key.interp });
+            }
+            for (const AnimationEventKey& event : asset.events)
+                ctx.events.push_back({ ctx.strings.add(event.name), event.normalizedTime });
+            ctx.clips.push_back(cooked);
+        }
+    }
+
+    // The header and every section of a filled context, written to cachePath.
+    bool writeCookedFile(CookContext& ctx, const oc::string& sourcePath, const oc::string& cachePath,
+        uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash);
+
     bool cookScene(const ISceneData& scene, const oc::string& sourcePath, const oc::string& cachePath,
         const oc::string& texFolder, const SceneCookOptions& options,
         uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
@@ -942,7 +1015,70 @@ namespace
         cookTextures(scene, options, sourcePath, texFolder, ctx);
         cookMaterials(scene, ctx);
         cookNodes(scene, ctx);
+        cookSkeleton(scene, ctx);
+        cookClips(scene.getClipAssets(), ctx);
+        return writeCookedFile(ctx, sourcePath, cachePath, sourceMTime, sourceSize, optionsHash);
+    }
 
+    // A CLIP-ONLY cache: every track of an animation file, one empty root node (the reader wants one), no meshes.
+    bool cookClipCache(oc::span<const ImportedClip> clips, const oc::string& sourcePath, const oc::string& cachePath,
+        uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
+    {
+        CookContext ctx;
+        ctx.blob.data.resize(sizeof(CookedHeader));
+        CookedNode& root = ctx.nodes.emplace_back();
+        root = CookedNode{};
+        root.nameOffset = ctx.strings.add("clips");
+        root.scale[0] = root.scale[1] = root.scale[2] = 1.0f;
+        root.rot[0] = 1.0f;
+        cookClips(clips, ctx);
+        return writeCookedFile(ctx, sourcePath, cachePath, sourceMTime, sourceSize, optionsHash);
+    }
+
+    // A cache file name's stem: the source's file stem, every character but [A-Za-z0-9_-] as '_'.
+    oc::string cacheStem(const char* filePath)
+    {
+        oc::string stem = oc::fromStd(toPath(filePath).stem().string());
+        for (char& c : stem)
+            if (!isalnum((uint8)c) && c != '_' && c != '-')
+                c = '_';
+        return stem;
+    }
+
+    // The source is gone (a shipped build, a moved asset): any cooked file named prefix + 8 hex digits serves, unvalidated.
+    oc::unique_ptr<CookedSceneData> loadAnyCooked(const oc::string& prefix, const char* filePath)
+    {
+        const auto isHash = [](const oc::string& s, size_t from)
+        {
+            if (s.size() != from + 8)
+                return false;
+            for (size_t i = from; i < s.size(); ++i)
+                if (!isxdigit((uint8)s[i]))
+                    return false;
+            return true;
+        };
+        oc::vector<FileSystem::DirEntry> cookedFiles;
+        FileSystem::listDirectory("Local/Cooked", cookedFiles, true);
+        for (const FileSystem::DirEntry& entry : cookedFiles)
+        {
+            if (entry.isDirectory || entry.extension != ".vsc")
+                continue;
+            const oc::string name = FileSystem::stem(entry.name);
+            if (!oc::startsWith(name, prefix) || !isHash(name, prefix.size()))
+                continue;
+            auto cooked = oc::make_unique<CookedSceneData>();
+            if (cooked->load(entry.path, filePath, 0, 0, 0))
+            {
+                Log::info(oc::format("SceneCache: source '{}' missing, served from '{}'", filePath, entry.path));
+                return cooked;
+            }
+        }
+        return nullptr;
+    }
+
+    bool writeCookedFile(CookContext& ctx, const oc::string& sourcePath, const oc::string& cachePath,
+        uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
+    {
         CookedHeader header{};
         header.magic = SCENE_CACHE_MAGIC;
         header.version = SCENE_CACHE_VERSION;
@@ -962,6 +1098,20 @@ namespace
         header.nodesOffset = ctx.blob.writeAligned(ctx.nodes.data(), ctx.nodes.size() * sizeof(CookedNode));
         header.meshRefsOffset = ctx.blob.writeAligned(ctx.meshRefs.data(), ctx.meshRefs.size() * sizeof(uint32));
         header.texStampsOffset = ctx.blob.writeAligned(ctx.texStamps.data(), ctx.texStamps.size() * sizeof(CookedTexStamp));
+        header.numBones = (uint32)ctx.bones.size();
+        header.numClips = (uint32)ctx.clips.size();
+        header.numTracks = (uint32)ctx.tracks.size();
+        header.numPositionKeys = (uint32)ctx.positionKeys.size();
+        header.numRotationKeys = (uint32)ctx.rotationKeys.size();
+        header.numScaleKeys = (uint32)ctx.scaleKeys.size();
+        header.numEvents = (uint32)ctx.events.size();
+        header.bonesOffset = ctx.blob.writeAligned(ctx.bones.data(), ctx.bones.size() * sizeof(CookedBone));
+        header.clipsOffset = ctx.blob.writeAligned(ctx.clips.data(), ctx.clips.size() * sizeof(CookedClip));
+        header.tracksOffset = ctx.blob.writeAligned(ctx.tracks.data(), ctx.tracks.size() * sizeof(CookedTrack));
+        header.positionKeysOffset = ctx.blob.writeAligned(ctx.positionKeys.data(), ctx.positionKeys.size() * sizeof(CookedVec3Key));
+        header.rotationKeysOffset = ctx.blob.writeAligned(ctx.rotationKeys.data(), ctx.rotationKeys.size() * sizeof(CookedQuatKey));
+        header.scaleKeysOffset = ctx.blob.writeAligned(ctx.scaleKeys.data(), ctx.scaleKeys.size() * sizeof(CookedVec3Key));
+        header.eventsOffset = ctx.blob.writeAligned(ctx.events.data(), ctx.events.size() * sizeof(CookedEvent));
         header.stringsOffset = ctx.blob.writeAligned(ctx.strings.data.data(), ctx.strings.data.size());
         header.stringsSize = (uint32)ctx.strings.data.size();
         memcpy(ctx.blob.data.data(), &header, sizeof(header));
@@ -1006,10 +1156,7 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
     const uint64 sourceMTime = sourceMissing ? 0 : (uint64)sourceStat.mtimeTicks;
     const bool cacheUsable = options.enableCache && !sourceMissing;
 
-    oc::string stem = oc::fromStd(toPath(filePath).stem().string());
-    for (char& c : stem)
-        if (!isalnum((uint8)c) && c != '_' && c != '-')
-            c = '_';
+    const oc::string stem = cacheStem(filePath);
     const oc::string cacheTag = oc::format("{}_{:08x}", stem, (uint32)(nameHash ^ (nameHash >> 32)));
     const oc::string cachePath = "Local/Cooked/" + cacheTag + ".vsc";
     const oc::string texFolder = "Local/Cooked/" + cacheTag + "_tex/";
@@ -1027,42 +1174,16 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
     // Source gone (shipped build, moved asset): serve any cooked scene of this model, whatever its hash
     // suffix. Size/mtime 0 tells the reader there is nothing to validate against.
     if (sourceMissing && options.enableCache)
-    {
-        const auto isHash = [](const oc::string& s, size_t from)
-        {
-            if (s.size() != from + 8)
-                return false;
-            for (size_t i = from; i < s.size(); ++i)
-                if (!isxdigit((uint8)s[i]))
-                    return false;
-            return true;
-        };
-        const oc::string prefix = stem + "_";
-        oc::vector<FileSystem::DirEntry> cookedFiles;
-        FileSystem::listDirectory("Local/Cooked", cookedFiles, true);
-        for (const FileSystem::DirEntry& entry : cookedFiles)
-        {
-            if (entry.isDirectory || entry.extension != ".vsc")
-                continue;
-            const oc::string name = FileSystem::stem(entry.name);
-            if (!oc::startsWith(name, prefix) || !isHash(name, prefix.size()))
-                continue;
-            auto cooked = oc::make_unique<CookedSceneData>();
-            if (cooked->load(entry.path, filePath, 0, 0, 0))
-            {
-                Log::info(oc::format("SceneCache: source '{}' missing, served from '{}'", filePath, entry.path));
-                return cooked;
-            }
-        }
-    }
+        if (oc::unique_ptr<CookedSceneData> cooked = loadAnyCooked(stem + "_", filePath))
+            return cooked;
 
     oc::unique_ptr<ISceneData> imported = createAssimpLoader();
     if (!imported->initialize(filePath, mergeNodes, preTransformVertices) || !imported->isValid())
         return nullptr;
 
-    // Skinned/animated scenes are served straight from the importer (the cache holds neither skeletons
-    // nor clips); everything else cooks once and is re-read to validate the writer immediately.
-    if (cacheUsable && !imported->getSkeleton() && imported->getNumAnimations() == 0)
+    // Every scene cooks once (skinned / animated ones with their skeleton, skin weights and clips) and is re-read to
+    // validate the writer immediately.
+    if (cacheUsable)
     {
         gcStaleCaches(); // a cook happening means content changed: good moment to sweep dead caches
         const auto cookStart = std::chrono::steady_clock::now();
@@ -1079,6 +1200,59 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
         }
     }
     return imported;
+}
+
+// THE ANIMATION IMPORTER, CACHED like loadCached: every track of the file cooks once into a CLIP-ONLY cache
+// (Local/Cooked/<stem>_clips_<hash>.vsc, validated by the source's mtime + size), and the filters run on what it holds - so
+// one cache serves every .anm entry of a file. Assimp runs only to cook. Source gone: any clip cache of that stem serves.
+bool ISceneData::importClipAssets(const char* filePath, oc::vector<ImportedClip>& out, const char* skipName, const char* trackName, oc::string* error)
+{
+    FileSystem::assertIoThread(/*allowMainThread*/ true); // like loadCached: at spawn, and the Animation Editor's import
+    uint64 pathHash = fnv1a((const void*)"clips", 5); // (cast: a literal is an array, which the value template would take)
+    pathHash = fnv1a((const void*)filePath, strlen(filePath), pathHash);
+
+    FileSystem::FileStat sourceStat;
+    const bool sourceMissing = !FileSystem::stat(filePath, sourceStat, true) || sourceStat.isDirectory;
+    const uint64 sourceSize = sourceMissing ? 0 : sourceStat.size;
+    const uint64 sourceMTime = sourceMissing ? 0 : (uint64)sourceStat.mtimeTicks;
+    const oc::string prefix = cacheStem(filePath) + "_clips_";
+    const oc::string cachePath = oc::format("Local/Cooked/{}{:08x}.vsc", prefix, (uint32)(pathHash ^ (pathHash >> 32)));
+
+    oc::unique_ptr<CookedSceneData> cooked = oc::make_unique<CookedSceneData>();
+    if (sourceMissing ? !(cooked = loadAnyCooked(prefix, filePath)) : !cooked->load(cachePath, filePath, sourceMTime, sourceSize, pathHash))
+        cooked = nullptr;
+
+    oc::vector<ImportedClip> all;
+    if (cooked)
+        all.assign(cooked->getClipAssets().begin(), cooked->getClipAssets().end());
+    else
+    {
+        if (!importAllClipAssets(filePath, all, error))
+            return false;
+        if (!sourceMissing)
+        {
+            gcStaleCaches();
+            if (cookClipCache(all, filePath, cachePath, sourceMTime, sourceSize, pathHash))
+                Log::info(oc::format("SceneCache: cooked the clips of '{}' -> '{}'", filePath, cachePath));
+        }
+    }
+
+    // A track is kept if it isn't skipped (name contains skipName, e.g. a "TPose") and, when trackName is
+    // given, its name contains trackName (selecting one track from a multi-track file).
+    const bool hasSkip = skipName && *skipName;
+    const bool hasTrack = trackName && *trackName;
+    const size_t before = out.size();
+    for (ImportedClip& clip : all)
+    {
+        if (hasSkip && clip.trackName.find(skipName) != oc::string::npos)
+            continue;
+        if (hasTrack && clip.trackName.find(trackName) == oc::string::npos)
+            continue;
+        out.push_back(oc::move(clip));
+    }
+    if (out.size() == before && error)
+        *error = oc::string("'") + filePath + (all.empty() ? "' has no animations" : "' has no animation that passes the filters");
+    return out.size() > before;
 }
 
 uint32 TextureConvert::blockBytes(EBlockFormat format)

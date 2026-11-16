@@ -459,8 +459,8 @@ All text formats are parsed through `AssetParser` and registered by `AssetRegist
 `ObjectContainer <name>` plus `Path`. Optional:
 
 * `Loader Procedural`, `MergeNodes`, `PreTransformVertices`
-* `DecimationFactor` — below 1 it meshopt-simplifies at cook. Cache-only, so skinned and procedural
-  containers never decimate.
+* `DecimationFactor` — below 1 it meshopt-simplifies at cook. Cache-only, so procedural containers never decimate;
+  skinned meshes never do either (they cook, but keep their bone data per vertex).
 * `MaterialOverrides` — per material: `PipelineIdx <pipelineName>`, `ExcludeFromRayTracing`,
   `UseSceneTextures`, `DiffuseTexIdx` / `NormalTexIdx` / `MetalRoughnessTexIdx`.
 

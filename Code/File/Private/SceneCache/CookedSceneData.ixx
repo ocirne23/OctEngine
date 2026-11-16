@@ -5,6 +5,7 @@ import File.fwd;
 import Core;
 import Core.glm;
 import Core.AABB;
+import Animation;
 
 import :ISceneData;
 import :IMeshData;
@@ -16,12 +17,17 @@ import :INodeData;
 // from an imported model, written to Assets/Local/Cooked on first import and re-read with a single
 // fread afterwards (see SceneCooker.cpp). Raw little-endian structs, no versioning/compat: any layout
 // change bumps SCENE_CACHE_VERSION and stale files silently re-cook. All offsets are absolute file
-// offsets; strings are null-terminated in one blob. Skinned/animated scenes are never cooked.
+// offsets; strings are null-terminated in one blob.
+// SKINNED / ANIMATED scenes cook too: the skeleton (CookedBone), each skinned mesh's bone indices + weights, and the
+// scene's animations as skeleton-independent CLIP ASSETS (CookedClip / CookedTrack / keys by bone name) - the reader
+// resolves them against the skeleton like the importer does (buildAnimationClip). A CLIP-ONLY cache (an animation file
+// the .anm entries name: ISceneData::importClipAssets) is the same format with one empty root node and no meshes.
 export namespace SceneCache
 {
     constexpr uint32 SCENE_CACHE_MAGIC   = 'V' | ('R' << 8) | ('S' << 16) | ('C' << 24);
-    constexpr uint32 SCENE_CACHE_VERSION = 7; // v7: the roughness floor in every roughness-slot texture (cooked
-                                              // BC1 and copied authored BC1/BC2/BC3); v6: deterministic cache names
+    constexpr uint32 SCENE_CACHE_VERSION = 8; // v8: skeletons, skin weights and clips (skinned / animated scenes cook);
+                                              // v7: the roughness floor in every roughness-slot texture (cooked BC1
+                                              // and copied authored BC1/BC2/BC3); v6: deterministic cache names
     constexpr uint32 MAX_COOKED_LOD_LEVELS = 7; // generated levels beyond LOD0 the format can hold
 
     struct CookedHeader
@@ -36,14 +42,20 @@ export namespace SceneCache
         uint32 stringsSize;
         uint32 sourcePathOffset; // the source model path (into strings) - lets the cook-time GC pass
                                  // identify caches whose source vanished or changed without a lookup table
+        // Skeleton + clips (all 0 for a static scene).
+        uint64 bonesOffset, clipsOffset, tracksOffset, positionKeysOffset, rotationKeysOffset, scaleKeysOffset, eventsOffset;
+        uint32 numBones, numClips, numTracks, numPositionKeys, numRotationKeys, numScaleKeys, numEvents;
+        uint32 pad;
     };
-    static_assert(sizeof(CookedHeader) == 120);
+    static_assert(sizeof(CookedHeader) == 208);
 
     struct CookedMesh
     {
         uint64 positionsOffset, normalsOffset, tangentsOffset, bitangentsOffset, texCoordsOffset; // glm::vec3 arrays
         uint64 indicesOffset;     // uint32 array
         uint64 lodIndicesOffset;  // baked LOD chains: concatenated uint32 arrays in level order
+        uint64 boneIndicesOffset; // a SKINNED mesh: glm::uvec4 array (Skeleton bone indices), else 0
+        uint64 boneWeightsOffset; // ... glm::vec4 array
         uint32 nameOffset;
         uint32 materialIdx;
         uint32 numVertices;
@@ -55,7 +67,46 @@ export namespace SceneCache
         float lodErrors[MAX_COOKED_LOD_LEVELS]; // per level: geometric deviation from LOD0 (mesh-local units)
         uint32 pad;
     };
-    static_assert(sizeof(CookedMesh) == 160);
+    static_assert(sizeof(CookedMesh) == 176);
+
+    // One Skeleton bone, parent-before-child (Skeleton's order). Matrices column-major, as glm::mat4.
+    struct CookedBone
+    {
+        uint32 nameOffset;
+        int32 parent;          // -1 = a root
+        float localBind[16];
+        float inverseBind[16];
+    };
+    static_assert(sizeof(CookedBone) == 136);
+
+    // One clip asset (ImportedClip): its tracks and events are contiguous ranges.
+    struct CookedClip
+    {
+        uint32 nameOffset;     // the track's name in the source file
+        float duration;
+        uint32 steps;
+        uint32 loop;
+        uint32 firstTrack, numTracks;
+        uint32 firstEvent, numEvents;
+    };
+    static_assert(sizeof(CookedClip) == 32);
+
+    struct CookedTrack
+    {
+        uint32 boneOffset;
+        uint32 firstPositionKey, numPositionKeys;
+        uint32 firstRotationKey, numRotationKeys;
+        uint32 firstScaleKey, numScaleKeys;
+    };
+    static_assert(sizeof(CookedTrack) == 28);
+
+    // Explicit key layouts (KeyInterp's size and the key structs' padding stay out of the file).
+    struct CookedVec3Key { float time; float value[3]; uint32 interp; };
+    static_assert(sizeof(CookedVec3Key) == 20);
+    struct CookedQuatKey { float time; float value[4]; uint32 interp; }; // w, x, y, z
+    static_assert(sizeof(CookedQuatKey) == 24);
+    struct CookedEvent { uint32 nameOffset; float normalizedTime; };
+    static_assert(sizeof(CookedEvent) == 8);
 
     struct CookedMaterial
     {
@@ -116,8 +167,14 @@ public:
     const uint32* getLodIndices(uint32 level, uint32& outNumIndices) const override;
     float getLodError(uint32 level) const override { return level < m_pMesh->numLodLevels ? m_pMesh->lodErrors[level] : 0.0f; }
 
+    bool isSkinned() const override { return m_boneIndices != nullptr; }
+    const glm::uvec4* getBoneIndices() const override { return m_boneIndices; }
+    const glm::vec4* getBoneWeights() const override { return m_boneWeights; }
+
 private:
     friend class CookedSceneData;
+    const glm::uvec4* m_boneIndices = nullptr; // a skinned mesh's (CookedMesh::boneIndicesOffset != 0)
+    const glm::vec4* m_boneWeights = nullptr;
     const SceneCache::CookedMesh* m_pMesh = nullptr;
     const char* m_pName = nullptr;
     const glm::vec3* m_positions = nullptr;
@@ -230,10 +287,17 @@ public:
     const IMaterialData* getMaterial(uint32 idx) const override { assert(idx < m_materials.size()); return &m_materials[idx]; }
     const ITextureData* getTexture(uint32 idx) const override { assert(idx < m_textures.size()); return &m_textures[idx]; }
 
+    const Skeleton* getSkeleton() const override { return m_skeleton.isValid() ? &m_skeleton : nullptr; }
+    const AnimationSet* getAnimations() const override { return m_animationSet.numClips() > 0 ? &m_animationSet : nullptr; }
+    uint32 getNumAnimations() const override { return m_animationSet.numClips(); }
+    const AnimationClip* getAnimation(uint32 idx) const override { return m_animationSet.get(idx); }
+    oc::span<const ImportedClip> getClipAssets() const override { return m_clipAssets; }
+
 private:
     friend class CookedNodeData;
 
     const char* string(uint32 offset) const;
+    bool loadAnimationData(); // the skeleton and the clip assets (load's tail; false = a malformed section)
 
     oc::string m_filePath;  // the ORIGINAL source model path (consumers resolve loose files against it)
     oc::string m_cachePath; // the .vsc this data came from (handed out as the mesh re-stream source)
@@ -245,4 +309,7 @@ private:
     oc::vector<CookedMaterialData> m_materials;
     oc::vector<CookedTextureData> m_textures;
     CookedNodeData m_rootNode;
+    Skeleton m_skeleton;                   // a skinned scene's (empty = none)
+    oc::vector<ImportedClip> m_clipAssets; // its animations / a clip-only cache's tracks, by bone name
+    AnimationSet m_animationSet;           // the clip assets on m_skeleton (a skinned scene only), as the importer builds it
 };

@@ -12,7 +12,7 @@ uploads it.
 | Step | Owner | Code |
 |---|---|---|
 | Import a rig into a `Skeleton` | **File** (Assimp) | `SceneData::buildSkeleton` |
-| Import an FBX's tracks as `ClipAsset`s (by node name) | **File** (Assimp) | `ISceneData::importClipAssets` — [ISceneData.ixx](../../../Code/File/Private/ISceneData.ixx) |
+| Import an FBX's tracks as `ClipAsset`s (by node name) | **File** (Assimp once, then its clip-only scene cache) | `ISceneData::importClipAssets` — [ISceneData.ixx](../../../Code/File/Private/ISceneData.ixx) |
 | Author / save `.clip` files | **UI** | The Animation Editor (see the [UI CONTEXT](../UI/CONTEXT.md)) |
 | Keep the rig's own skeleton copy | **RendererVK** | `ObjectContainer::m_skeleton` — [ObjectContainer.ixx:149](../../../Code/RendererVK/Private/ObjectContainer.ixx#L149) |
 | Cache clip assets by name, build clip libraries per skeleton + animator | **Entity** | `WorldState::getOrLoadClipAsset` / `getOrBuildClipSet` — [WorldState.ixx](../../../Code/Entity/Private/WorldState.ixx) |

@@ -13,6 +13,12 @@ import :NodeData;
 
 export oc::unique_ptr<ISceneData> createAssimpLoader();
 
+// Module-internal (the scene cache uses them too):
+// Adds a clip to a set under a unique name (suffixes _N on collision) - the one naming rule for every clip set.
+void addClipToSet(AnimationSet& set, AnimationClip&& clip, const oc::string& desiredName);
+// EVERY animation track of a file through Assimp, unfiltered (ISceneData::importClipAssets caches and filters it). False = unreadable.
+bool importAllClipAssets(const char* filePath, oc::vector<ImportedClip>& out, oc::string* error);
+
 export class SceneData final : public ISceneData
 {
 public:
@@ -41,6 +47,7 @@ public:
 	const AnimationSet* getAnimations() const override { return m_animationSet.numClips() > 0 ? &m_animationSet : nullptr; }
 	uint32 getNumAnimations() const override { return m_animationSet.numClips(); }
 	const AnimationClip* getAnimation(uint32 idx) const override { return m_animationSet.get(idx); }
+	oc::span<const ImportedClip> getClipAssets() const override { return m_clipAssets; }
 
 private:
 
@@ -56,5 +63,6 @@ private:
 	oc::vector<MaterialData> m_materials;
 	NodeData m_rootNode;
 	Skeleton m_skeleton;
-	AnimationSet m_animationSet;
+	oc::vector<ImportedClip> m_clipAssets; // the file's animations by bone name (what the scene cache stores)
+	AnimationSet m_animationSet;           // ... resolved against m_skeleton
 };

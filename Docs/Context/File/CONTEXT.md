@@ -19,8 +19,9 @@ Paths are plain UTF-8 `oc::string`; **no `std::filesystem::path` leaks into any 
 thread, at startup — exempt by nature.
 
 **The process's working directory never changes, and nothing depends on it after `initialize()`.** A relative path means
-relative to the root: every `FileSystem` call and `NativeFile` resolves it. An API outside `FileSystem` (Assimp, stb, ONNX
-Runtime, `fopen`) gets `FileSystem::resolve(path)`; a child process gets absolute paths built from `rootPath()`. Listings
+relative to the root: every `FileSystem` call and `NativeFile` resolves it. An API outside `FileSystem` (stb, ONNX
+Runtime, `fopen`) gets `FileSystem::resolve(path)`; a child process gets absolute paths built from `rootPath()`. Assimp
+is not one: it reads through `FileSystem` (its IO handler, below). Listings
 report paths under the folder as the caller spelled it. `currentPath()` is only for a path typed in a shell.
 
 | Group | API |
@@ -161,9 +162,13 @@ mount. So:
 * Reads hold a shared lock on the mount table for the lookup and the pack read; mount / unmount take it exclusively.
 * `mounts()` and `sourceOf(path)` say what is mounted and who serves a path.
 
-**Not covered — these read by path themselves and need the loose file:** the Assimp import (and so cooking, and
-skinned scenes), the onnxruntime model loads, the script DLLs (`LoadLibrary`), and the scene
-cooker's writes and `gcStaleCaches` (disk only). The cooked cache READ (`CookedSceneData::load`, `loadCached`'s
+**THE ASSIMP IMPORT READS THROUGH `FileSystem`** (`FileSystemIOSystem` in `Assimp/SceneData.cpp`, set on every importer:
+`SceneData::initialize` and `importAllClipAssets`): Assimp opens the model and every file the format names (an OBJ's
+`.mtl`, a glTF's `.bin`) through it, each read whole into memory, so a cook from packed sources works too. With the caches
+in `Local/Cooked/` (Generated.dat) nothing reaches Assimp at all - skinned scenes and animation files cook like the rest
+(The cooked scene cache, below). **Not covered — these read by path themselves and need the loose
+file:** the onnxruntime model loads, the script DLLs (`LoadLibrary`), and the scene cooker's writes and `gcStaleCaches`
+(disk only). The cooked cache READ (`CookedSceneData::load`, `loadCached`'s
 source stamp and its "source missing" scan) goes through `FileSystem`, so a pack holding `Local/Cooked/` serves cooked
 scenes without their source models.
 
@@ -269,15 +274,26 @@ every non-procedural container.
 
 **Serves a binary snapshot** at `Assets/Local/Cooked/<tag>.vsc` — reader `File:CookedSceneData`,
 writer SceneCooker.cpp — **re-read with a single `fread`**. Raw little-endian structs, no versioning
-compatibility: any layout change bumps `SCENE_CACHE_VERSION` (currently **7**) and stale files
-silently re-cook. So does a change in what the cooked textures guarantee (v7: the roughness floor).
+compatibility: any layout change bumps `SCENE_CACHE_VERSION` (currently **8**: skeletons, skin weights and clips) and
+stale files silently re-cook. So does a change in what the cooked textures guarantee (v7: the roughness floor).
 
 ### Validity
 
 A cache is served only when magic, version, the source's **mtime + size**, the **options hash** and
 the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks in place.
 
-**Skinned or animated scenes ALWAYS import directly and are never cooked.**
+**SKINNED / ANIMATED scenes cook too.** On top of the static data the cache holds the skeleton (`CookedBone`: name,
+parent, local bind, inverse bind - Skeleton's parent-before-child order), each skinned mesh's per-vertex bone indices +
+weights (`CookedMesh::boneIndicesOffset` / `boneWeightsOffset`, 0 = not skinned), and the scene's animations as
+skeleton-independent CLIP ASSETS (`CookedClip` / `CookedTrack` / explicit `CookedVec3Key` / `CookedQuatKey` / `CookedEvent`,
+tracks by bone name; `ISceneData::getClipAssets`). The reader rebuilds the animation set exactly like the importer:
+`buildAnimationClip` on its skeleton, named by the track, `addClipToSet`.
+
+**ANIMATION FILES cook into CLIP-ONLY caches.** `ISceneData::importClipAssets` (every `.anm` entry and the Animation
+Editor's import) cooks EVERY track of the file once into `Local/Cooked/<stem>_clips_<hash>.vsc` (the same format: one
+empty root node, no meshes; validated by the source's mtime + size, the hash of the path), and runs its Skip / Track filters
+on what it holds - so one cache serves every entry of a file, and Assimp (`importAllClipAssets`) runs only to cook. Source
+gone: any `<stem>_clips_<8 hex>.vsc` serves, like a scene.
 
 ### What cooking bakes
 
@@ -286,8 +302,8 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
   index count AND its **geometric deviation from LOD0**, which is what the GPU LOD selector's
   screen-space error metric needs.
 * **`decimationFactor` < 1** simplifies every mesh's BASE geometry at cook time, dropping unused
-  vertices; the LOD chains then build on the result. Skinned scenes bypass the cache, so they never
-  decimate.
+  vertices; the LOD chains then build on the result. Never a skinned mesh (its bone data stays per vertex), and a
+  skinned mesh gets no generated LOD chain either.
 * **Texture conversion** — non-DDS textures, loose AND embedded, into `Assets/Local/Cooked/<tag>_tex/`:
 
   | Usage | Format |
@@ -314,7 +330,7 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
   `*_Specular.dds`), which a roughness slot COPIES into `_tex/` with the fix (other slots reference authored
   `.dds` in place). **NOT covered — each logs a warning at cook:** an authored BC7 / `_SRGB` / other-format
   `.dds`, and a texture shared by a roughness slot and a diffuse / normal slot (it cooks for the other slot).
-  Also not covered: the uncooked import (skinned scenes, `convertTextures` false, a failed conversion) and
+  Also not covered by the roughness floor: the uncooked import (the cache off, `convertTextures` false, a failed conversion) and
   `.oc` `MaterialOverrides MetalRoughnessTexIdx`.
 
 ### Garbage collection

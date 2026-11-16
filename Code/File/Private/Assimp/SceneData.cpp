@@ -26,6 +26,68 @@ using namespace Assimp;
 
 namespace
 {
+    // ---- Assimp's IO through FileSystem ----
+    // Assimp opens files ITSELF (the model, and the files a format names: an OBJ's .mtl, a glTF's .bin). With this
+    // handler it reads them through FileSystem, so an import works from the .dat packs as well as from loose files -
+    // a skinned or animated scene is never cooked, so the packs alone held no player model without it. Each file is
+    // read whole into memory (models are small; Assimp seeks around in them). The raw new / delete are Assimp's
+    // ownership contract: SetIOHandler takes the system, Close deletes a stream.
+    class FileSystemIOStream final : public Assimp::IOStream
+    {
+    public:
+        explicit FileSystemIOStream(oc::vector<uint8>&& bytes) : m_bytes(oc::move(bytes)) {}
+
+        size_t Read(void* buffer, size_t size, size_t count) override
+        {
+            if (size == 0 || count == 0)
+                return 0;
+            const size_t n = glm::min(count, (m_bytes.size() - m_pos) / size); // whole items only, like fread
+            memcpy(buffer, m_bytes.data() + m_pos, n * size);
+            m_pos += n * size;
+            return n;
+        }
+        size_t Write(const void*, size_t, size_t) override { return 0; } // read-only
+        aiReturn Seek(size_t offset, aiOrigin origin) override // (Assimp's MemoryIOStream rules: END counts back)
+        {
+            const size_t length = m_bytes.size();
+            if (origin == aiOrigin_SET && offset <= length)
+                m_pos = offset;
+            else if (origin == aiOrigin_END && offset <= length)
+                m_pos = length - offset;
+            else if (origin == aiOrigin_CUR && offset <= length - m_pos)
+                m_pos += offset;
+            else
+                return aiReturn_FAILURE;
+            return aiReturn_SUCCESS;
+        }
+        size_t Tell() const override { return m_pos; }
+        size_t FileSize() const override { return m_bytes.size(); }
+        void Flush() override {}
+
+    private:
+        oc::vector<uint8> m_bytes;
+        size_t m_pos = 0;
+    };
+
+    // The import entry points keep the main-thread policy (they ran raw disk reads before this handler): the reads here
+    // allow the main thread.
+    class FileSystemIOSystem final : public Assimp::IOSystem
+    {
+    public:
+        bool Exists(const char* path) const override { return FileSystem::exists(path, /*allowMainThread*/ true); }
+        char getOsSeparator() const override { return '/'; }
+        Assimp::IOStream* Open(const char* path, const char* mode) override
+        {
+            if (mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+')))
+                return nullptr; // imports only read
+            oc::vector<uint8> bytes;
+            if (!FileSystem::readFileBytes(path, bytes, /*allowMainThread*/ true))
+                return nullptr;
+            return new FileSystemIOStream(oc::move(bytes));
+        }
+        void Close(Assimp::IOStream* stream) override { delete stream; }
+    };
+
     // aiMatrix4x4 is row-major; glm::mat4 is column-major. Transpose the element layout on conversion.
     glm::mat4 toGlm(const aiMatrix4x4& m)
     {
@@ -111,21 +173,21 @@ namespace
             bakeFirstFrameRecursive(pNode->mChildren[c], channels);
     }
 
-    // Adds a clip to a set under a unique name (suffixes _N on collision).
-    void addClipToSet(AnimationSet& set, AnimationClip&& clip, const oc::string& desiredName)
+}
+
+void addClipToSet(AnimationSet& set, AnimationClip&& clip, const oc::string& desiredName)
+{
+    oc::string name = !desiredName.empty() ? desiredName : (clip.name.empty() ? "anim" : clip.name);
+    if (set.nameToIndex.count(name))
     {
-        oc::string name = !desiredName.empty() ? desiredName : (clip.name.empty() ? "anim" : clip.name);
-        if (set.nameToIndex.count(name))
-        {
-            uint32 n = 1;
-            oc::string unique;
-            do { unique = name + "_" + oc::to_string(n++); } while (set.nameToIndex.count(unique));
-            name = unique;
-        }
-        clip.name = name;
-        set.nameToIndex[name] = (uint32)set.clips.size();
-        set.clips.push_back(oc::move(clip));
+        uint32 n = 1;
+        oc::string unique;
+        do { unique = name + "_" + oc::to_string(n++); } while (set.nameToIndex.count(unique));
+        name = unique;
     }
+    clip.name = name;
+    set.nameToIndex[name] = (uint32)set.clips.size();
+    set.clips.push_back(oc::move(clip));
 }
 
 SceneData::SceneData()
@@ -157,7 +219,8 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
     // (every triangle carries 3 unique vertices - Bistro is ~3.5x duplicated). Welding restores real
     // connectivity, without which meshopt_simplify treats every vertex as complex and LOD generation
     // stalls at level 0 - and it cuts vertex memory by the same factor.
-    m_pScene = m_importer.ReadFile(FileSystem::resolve(filePath).c_str(), aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_CalcTangentSpace | optimizationFlags);
+    m_importer.SetIOHandler(new FileSystemIOSystem()); // the packs too (the importer owns it)
+    m_pScene = m_importer.ReadFile(filePath, aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_CalcTangentSpace | optimizationFlags);
     if (!m_pScene)
     {
         assert(false && "Failed to load scene");
@@ -311,40 +374,26 @@ void SceneData::buildAnimations()
     for (uint32 a = 0; a < m_pScene->mNumAnimations; ++a)
     {
         const aiAnimation* pAnim = m_pScene->mAnimations[a];
-        addClipToSet(m_animationSet, buildAnimationClip(clipAssetFromAi(pAnim), m_skeleton, pAnim->mName.C_Str()), "");
+        ImportedClip& imported = m_clipAssets.emplace_back(ImportedClip{ pAnim->mName.C_Str(), clipAssetFromAi(pAnim) });
+        addClipToSet(m_animationSet, buildAnimationClip(imported.clip, m_skeleton, imported.trackName), "");
     }
 }
 
-bool ISceneData::importClipAssets(const char* filePath, oc::vector<ImportedClip>& out, const char* skipName, const char* trackName, oc::string* error)
+bool importAllClipAssets(const char* filePath, oc::vector<ImportedClip>& out, oc::string* error)
 {
     // No graph optimization: node names must survive so the tracks resolve against a rig by name.
     Assimp::Importer importer;
-    const aiScene* pScene = importer.ReadFile(FileSystem::resolve(filePath).c_str(), 0);
+    importer.SetIOHandler(new FileSystemIOSystem()); // the packs too (the importer owns it)
+    const aiScene* pScene = importer.ReadFile(filePath, 0);
     if (!pScene)
     {
         if (error)
             *error = oc::string("could not read '") + filePath + "': " + importer.GetErrorString();
         return false;
     }
-
-    // A track is kept if it isn't skipped (name contains skipName, e.g. a "TPose") and, when trackName is
-    // given, its name contains trackName (selecting one track from a multi-track file).
-    const bool hasSkip = skipName && *skipName;
-    const bool hasTrack = trackName && *trackName;
-    const size_t before = out.size();
     for (uint32 a = 0; a < pScene->mNumAnimations; ++a)
-    {
-        const aiAnimation* pAnim = pScene->mAnimations[a];
-        const oc::string name = pAnim->mName.C_Str();
-        if (hasSkip && name.find(skipName) != oc::string::npos)
-            continue;
-        if (hasTrack && name.find(trackName) == oc::string::npos)
-            continue;
-        out.push_back(ImportedClip{ name, clipAssetFromAi(pAnim) });
-    }
-    if (out.size() == before && error)
-        *error = oc::string("'") + filePath + (pScene->mNumAnimations == 0 ? "' has no animations" : "' has no animation that passes the filters");
-    return out.size() > before;
+        out.push_back(ImportedClip{ pScene->mAnimations[a]->mName.C_Str(), clipAssetFromAi(pScene->mAnimations[a]) });
+    return true;
 }
 
 bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkeleton, AnimationSet& outSet, const char* skipName, const char* clipNameOverride, const char* trackName)
