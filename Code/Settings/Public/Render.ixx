@@ -186,7 +186,10 @@ export struct CloudParams
     glm::vec4 flashes[MaxFlashes] = {};
     glm::vec3 flashColor = glm::vec3(0.75f, 0.85f, 1.0f);
     float flashRadius = 600.0f;        // m: the light is at 1/4 at this distance
-    float vortexLightReachKm = 0.4f; // how far past the eye's edge the light goes into the clouds (km, to 1/e)
+    float vortexLightReachKm = 0.4f; // how far from the eye's axis the light goes into the clouds (km, to 1/e)
+    float vortexLightCurve = 2.5f;    // the reach's curve exp(-(d / reach)^curve): > 1 = it holds near the axis and falls steeply, < 1 = a sharp peak and a long tail
+    int   vortexLightSteps = 4;       // the eye light's shadow march toward the axis, steps per dense sample (0 = unshadowed)
+    float vortexLightForward = 0.5f;  // the eye light's droplet phase, x the clouds' own forward peak (0 = isotropic)
     float cloudType = 1.0f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
@@ -233,7 +236,7 @@ export struct CloudParams
                                        // the sunlit side seen with the sun behind the viewer lives on it alone
     float ambient = 1.0f;              // sky ambient strength
     float groundAlbedo = 0.15f;      // ground bounce onto the cloud bottoms
-    float groundNightLight = 1.5f;  // at night the ground under the clouds is lit by the night's Sky Radiance x this (the sun cycle)
+    float groundNightLight = 1.0f;  // at night the ground under the clouds is lit by the night's Sky Radiance x this (the sun cycle)
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
     float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays); >= 0.01

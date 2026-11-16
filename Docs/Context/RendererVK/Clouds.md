@@ -114,14 +114,28 @@ variant (`sky.fs.glsl`) draws NO clouds.
     always trail.
   * **Keep the spin slow:** the temporal pass reprojects by the wind only, and the far shadow cascade renders each
     texel once in 64 frames, so a fast band motion ghosts in the clouds and lags in the shadows.
-  * **THE EYE LIGHT** ("Vortex/Eye light" colour x intensity, "Eye light reach (km)"; all Runtime rows, live:
-    `u_clouds_vortexLight`, `u_clouds_vortexLightFalloff`): a vertical LINE LIGHT on the eye's axis that lights the
-    clouds around the eye. In `cloudRaymarch` it is a fifth per-ray colour (`sumEyeLight`, applied after the loop): with
-    d = the sample's horizontal distance from the centre, the weight is 1 inside the eye radius, then
-    (eye / d) x exp(-(d - eye) / reach). The intensity is the radiance on the clouds at the eye's edge. No shadow march
-    and no phase: the reach stands for the clouds taking the light away. It takes the plain eye radius and the centre
-    (no eye shape, no wobble), and it does not end with height. The sky clouds share the march, so the reflections and
-    the GI sky see it too. Intensity 0 (the default) skips the term per sample.
+  * **THE EYE LIGHT** ("Vortex/Eye light" colour x intensity, "Eye light reach (km)", "Eye light falloff curve", "Eye
+    light forward scatter"; Runtime rows, live: `u_clouds_vortexLight`, `u_clouds_vortexLightInvReach`,
+    `u_clouds_vortexLightCurve`, `u_clouds_vortexLightForward`; "Eye light shadow steps" is baked): a vertical LINE LIGHT
+    on the eye's axis that lights the clouds around the eye. In `cloudRaymarch` it is a fifth per-ray colour
+    (`sumEyeLight`, applied after the loop). Per dense sample, with d = the horizontal distance from the eye's axis
+    (metres):
+    * **the reach** exp(-(d / reach)^curve): curve 1 = exponential, > 1 = it holds near the axis and falls steeply, < 1 =
+      a sharp peak with a long tail; always 1/e at the reach. **Absolute distance:** the eye radius and the eye shape do
+      not move the light (measured from the eye's edge, a bigger eye took the light further out). Under 1/256 the sample
+      skips the rest.
+    * **the sun's scattering model toward the axis:** the droplet phase (`cloudPhase`, its g x "Eye light forward
+      scatter": 0 = isotropic, 1 = the clouds' own silver lining) x exp(-od), plus the closed-form multi-scatter octaves
+      of od. od is a SHADOW MARCH from the sample HORIZONTALLY to the axis (`cloudEyeOpticalDepth`: "Eye light shadow
+      steps" quadratic steps over d, the first one with the detail, the sun march's early out; 0 steps = od 0). So the
+      eyewall's face is bright, the clouds behind it are in its shadow, and gaps in the arms let the light through.
+    * `eyeNorm` scales it so an unshadowed sample with an isotropic phase gets 1: the intensity is the radiance on the
+      axis.
+    **d and the direction are from the WOBBLED axis, as the density placed it:** `cloudMainDensity` writes
+    `g_cloudVortexEyeOffset` (XZ), and the march reads it right after its density call, before the sun march's and the
+    shadow march's density calls overwrite it. It does not end with height. The sky clouds share the march, so the
+    reflections and the GI sky see it too (and pay for the shadow march). Intensity 0 (the default) skips the term per
+    sample.
   * `u_clouds_vortexEnabled` is a lockable UBO value: locked and off (the default), the branches compile out.
 * **THE FLASHES** (lightning inside the clouds; `CloudParams::flashes` / `flashColor` / `flashRadius`, no tweak rows -
   the co-op game pushes them per frame, see Lightning in [`Docs/Context/Game/Modes.md`](../Game/Modes.md)): up to

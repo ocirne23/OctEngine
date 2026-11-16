@@ -285,10 +285,11 @@ void GameMatch::tickBeacon(float deltaSec)
     // move each tick re-bakes nothing.
     clouds.vortexCentreXKm = basePos.x * 0.001f;
     clouds.vortexCentreZKm = basePos.z * 0.001f;
-    // Power = the Base field's output (it latches dark when starved) x its charge: a low store shows as a weak hole.
+    // Power = the Base field's output (it latches dark when starved). The charge shows only in the spin: the Base's
+    // generation only pays its standing draw, so a store a siege drained stays low until the field goes dark.
     const float charge = base->capacity[0] > 0.0f ? glm::clamp(base->store[0] / base->capacity[0], 0.0f, 1.0f) : 0.0f;
     const bool alive = !base->blueprint && base->health > 0.0f;
-    const float target = alive ? glm::clamp(base->emitter.outputFrac, 0.0f, 1.0f) * glm::mix(0.4f, 1.0f, charge) : 0.0f;
+    const float target = alive ? glm::clamp(base->emitter.outputFrac, 0.0f, 1.0f) : 0.0f;
     m_beaconPower += (target - m_beaconPower) * (1.0f - std::exp(-glm::max(deltaSec, 0.0f) / 2.0f));
     // The SHROUD's night: the clouds close at dusk and open at dawn by it (the night's first wave is due at the horizon:
     // it waits for the ignition below).

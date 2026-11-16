@@ -378,6 +378,9 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::boolean("Sky/Clouds/Vortex", "Reverse spin", &s.vortexReverse);
     Tweak::color3("Sky/Clouds/Vortex", "Eye light", &s.vortexLightColor, &s.vortexLightIntensity, 0.0f, 100.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Vortex", "Eye light reach (km)", &s.vortexLightReachKm, 0.05f, 50.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye light falloff curve", &s.vortexLightCurve, 0.25f, 8.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::intVar("Sky/Clouds/Vortex", "Eye light shadow steps", &s.vortexLightSteps, 0, 12);
+    Tweak::floatVar("Sky/Clouds/Vortex", "Eye light forward scatter", &s.vortexLightForward, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &s.densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds", "Base breakup (km)", &s.baseBreakupKm, 0.0f, 20.0f, 0.01f, {}, ETweakFlags::Runtime);

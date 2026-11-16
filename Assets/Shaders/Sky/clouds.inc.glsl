@@ -167,6 +167,10 @@ vec2 cloudVortexBandOffset(float r) { return vec2(u_clouds_vortexBottomOffset, u
 
 float cloudVortexEyeAt(float hf) { return u_clouds_vortexEyeRadius * max(1.0 + u_clouds_vortexEyeShape * (2.0 * hf - 1.0), 0.0); }
 
+// THE LAST SAMPLE'S OFFSET FROM THE WOBBLED EYE AXIS (XZ, m; written by cloudMainDensity when the vortex is on, read by
+// the march's eye light right after its density call). A pass that never reads it drops the store.
+vec2 g_cloudVortexEyeOffset = vec2(0.0);
+
 // The tornado's lift of the bottom (a share of the layer) over r. eye = the eye radius at this height (the eye shape, so
 // the wall column leans with the eye): 0 at the eye's edge, the DROP (smoothstep) up to the peak over
 // u_clouds_vortexTornadoDrop. The LIFT ramp starts from the MIDDLE eye radius + the drop (the deck does not lean): 1
@@ -396,8 +400,12 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
         const vec2 q = nxz - cloudNoiseOffset() - u_clouds_vortexCentre;
         vortexR = length(q);
         rEye = vortexR;
+        g_cloudVortexEyeOffset = q; // before the band test: an upper-layer sample still gets the eye light
         if (u_clouds_vortexWobble > 0.0) // the wobble rides on the unmoved height (the band cannot set its own)
-            rEye = length(q - cloudVortexWobble((alt - u_clouds_mainBottom) * invH));
+        {
+            g_cloudVortexEyeOffset = q - cloudVortexWobble((alt - u_clouds_mainBottom) * invH);
+            rEye = length(g_cloudVortexEyeOffset);
+        }
         vec2 off = cloudVortexBandOffset(vortexR); // x bottom, y top (m)
         const float h = 1.0 / invH;
         // The tornado's drop leans with the eye shape, at the height within the band WITHOUT the tornado (the tornado's

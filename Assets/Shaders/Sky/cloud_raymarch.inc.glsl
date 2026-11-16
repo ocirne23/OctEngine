@@ -54,6 +54,34 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
     return od * u_clouds_extinction;
 }
 
+// Optical depth from a camera-relative point toward the vortex's eye axis: the eye light is a vertical line, so the way to
+// it is HORIZONTAL (Le, XZ), len = the distance to the axis. Quadratically growing steps (u_clouds_vortexLightSteps) as the
+// sun march: short ones at the sample (the first reads the detail), long ones in the clear eye.
+float cloudEyeOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec2 Le, float len, float lodBase, float lodDetail, float detailWeight, float cut)
+{
+    const int n = int(u_clouds_vortexLightSteps);
+    const float invN = u_clouds_invVortexLightSteps;
+    const float stepLodBias = log2(u_clouds_baseFrequency * CLOUD_BASE_RES);
+    const vec3 L = vec3(Le.x, 0.0, Le.y);
+
+    float od = 0.0;
+    float tPrev = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const float f = float(i + 1) * invN;
+        const float t1 = len * f * f;
+        const float tm = 0.5 * (tPrev + t1);
+        const float alt = cloudAltitude(rel + L * tm, camAlt);
+        const float stepLen = t1 - tPrev;
+        const float lodStep = max(lodBase, log2(stepLen) + stepLodBias);
+        od += cloudDensity(nxz + Le * tm, alt, 1e30, i == 0 ? detailWeight : 0.0, lodStep, lodDetail) * stepLen;
+        if (od > cut)
+            break;
+        tPrev = t1;
+    }
+    return od * u_clouds_extinction;
+}
+
 // The clouds' sun visibility of the AIR at a camera-relative point (this view's camera), for the aerial perspective.
 // Inside the shadow map: the map. PAST it, cloudSunTransmittance gives one sky-wide mean (the air toward far cloud
 // bases lay half-lit under a dense deck: a blue sheen), so it reads the WEATHER MAP: the coverage of the column where
@@ -192,9 +220,13 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     float sumAmbHigh   = 0.0; // sum(absorbed * hf)
     float sumAmbGround = 0.0; // sum(absorbed * exp(-h * k))
     // THE VORTEX'S EYE LIGHT (u_clouds_vortexLight: the game's beacon beam): a vertical line light on the eye's axis, the
-    // fifth per-ray colour. With d = the sample's horizontal distance from the axis: 1 inside the eye, then the line's
-    // 1 / d x exp(-(d - eye) / reach) - the clouds past the eye's edge take the light away. Not shadowed.
+    // fifth per-ray colour. With d = the sample's horizontal distance from the WOBBLED axis (g_cloudVortexEyeOffset, as the
+    // density placed the eye): exp(-(d / reach)^curve) - absolute metres, so the eye radius and shape do not move the light - x the
+    // sun's scattering model toward the axis: the droplet phase (its forward peak x "Eye light forward scatter") over the
+    // horizontal SHADOW march to the axis (cloudEyeOpticalDepth), plus the multi-scatter octaves. eyeNorm makes an
+    // unshadowed sample with an isotropic phase 1, so the intensity stays the radiance at the eye.
     float sumEyeLight  = 0.0;
+    const float eyeNorm = 1.0 / (1.0 + msStrength * (ms + msTailScale));
     // THE FLASHES (u_clouds_flash[]: lightning inside the clouds, pushed by the game): point lights in the cloud volume,
     // the sixth per-ray colour (one colour for all). Per flash 1 / (1 + d^2 / r^2)^2 of its radiance. Not shadowed.
     float sumFlash     = 0.0;
@@ -325,6 +357,25 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             if (!densityOnly)
             {
                 const float hf = cloudLayerHeightFraction(alt);
+                // Before the sun march: its density calls overwrite g_cloudVortexEyeOffset.
+                if (u_clouds_vortexEnabled > 0.5 && u_clouds_vortexLight.r + u_clouds_vortexLight.g + u_clouds_vortexLight.b > 0.0)
+                {
+                    const vec2 off = g_cloudVortexEyeOffset;
+                    const float d = length(off);
+                    const float reach = exp2(-pow(d * u_clouds_vortexLightInvReach, u_clouds_vortexLightCurve) * CLOUD_LOG2E);
+                    if (reach > 1.0 / 256.0) // past it the light is gone: no phase, no shadow march
+                    {
+                        const vec2 Le = d > 1.0 ? -off / d : vec2(0.0); // toward the axis
+                        const float muE = dot(dir.xz, Le);
+                        float odE2 = 0.0;
+                        if (u_clouds_vortexLightSteps > 0.5 && d > 1.0)
+                            odE2 = cloudEyeOpticalDepth(rel, nxz, camAlt, Le, d, lodBase, lodDetail,
+                                detailWeight > CLOUD_DETAIL_FETCH_MIN ? detailWeight : 0.0, odCut) * CLOUD_LOG2E;
+                        const float msE = ms * exp2(-odE2 * ms) + msTailScale * exp2(-odE2 * msTailExt);
+                        const float eyeTerm = (4.0 * PI) * cloudPhase(muE, u_clouds_vortexLightForward) * exp2(-odE2) + msStrength * msE;
+                        sumEyeLight += absorbed * reach * eyeTerm * eyeNorm;
+                    }
+                }
                 float od;
                 const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView, false) : vec2(0.0);
                 if (map.y >= 1.0)
@@ -345,14 +396,6 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 sumSunHigh   += sunWeight * hf;
                 sumAmbHigh   += absorbed * hf;
                 sumAmbGround += absorbed * exp(-max(alt - u_clouds_mainBottom, 0.0) * u_clouds_invGroundLightDepth);
-                if (u_clouds_vortexEnabled > 0.5 && u_clouds_vortexLight.r + u_clouds_vortexLight.g + u_clouds_vortexLight.b > 0.0)
-                {
-                    // One inversesqrt for both 1 / d and d (no sqrt, no divide).
-                    const vec2 toAxis = rel.xz - u_clouds_vortexCentre;
-                    const float d2 = max(dot(toAxis, toAxis), u_clouds_vortexEyeRadius * u_clouds_vortexEyeRadius);
-                    const float invD = inversesqrt(d2);
-                    sumEyeLight += absorbed * (u_clouds_vortexEyeRadius * invD) * exp2((u_clouds_vortexEyeRadius - d2 * invD) * u_clouds_vortexLightFalloff);
-                }
                 if (u_clouds_flash[0].w + u_clouds_flash[1].w > 0.0)
                 {
                     const vec3 d0 = vec3(rel.xz - u_clouds_flash[0].xy, alt - u_clouds_flash[0].z);

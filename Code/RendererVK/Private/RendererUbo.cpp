@@ -839,8 +839,8 @@ void RendererState::registerUboValues(UboBlock& list)
         // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity) x the cloud "Ground albedo".
         list.add("clouds_groundBounceAlbedo", [this, &c] { return m_skyParams.groundColor * c.groundAlbedo; }, UboLive);
         list.add("clouds_giSkyHistory", [&c, skyHistory] { return skyHistory(c.giSkyHistorySec); }, UboLive);
-        // The vortex's EYE LIGHT (cloud_raymarch.inc.glsl): its radiance at the eye's edge, and the falloff past the edge
-        // as an exp2 rate (1/m, x log2(e)).
+        // The vortex's EYE LIGHT (cloud_raymarch.inc.glsl): its radiance on the axis; 1 / reach (1/m) and the reach's curve
+        // power below.
         list.add("clouds_vortexLight", [&c] { return c.vortexEnabled ? c.vortexLightColor * glm::max(c.vortexLightIntensity, 0.0f) : glm::vec3(0.0f); }, UboLive);
         // The ground bounce's light at NIGHT: the sun term is 0 then and the clear sky's ambient near 0, so the ground gets
         // the night's Sky Radiance x "Night ground light", faded out by day (the day's bounce stays as it was).
@@ -850,7 +850,12 @@ void RendererState::registerUboValues(UboBlock& list)
                 const float night = s.sunCycle ? 1.0f - glm::smoothstep(-0.1f, 0.25f, skySunDirection(s).y) : 0.0f;
                 return skyRadianceNow(s) * (night * glm::max(c.groundNightLight, 0.0f));
             }, UboLive);
-        list.add("clouds_vortexLightFalloff",[&c] { return 1.44269504f / (glm::max(c.vortexLightReachKm, 0.05f) * 1000.0f); }, UboLive);
+        list.add("clouds_vortexLightInvReach", [&c] { return 1.0f / (glm::max(c.vortexLightReachKm, 0.05f) * 1000.0f); }, UboLive);
+        list.add("clouds_vortexLightCurve", [&c] { return glm::clamp(c.vortexLightCurve, 0.25f, 8.0f); }, UboLive);
+        // The eye light's shadow march (baked: a loop count) and its phase's forward peak (x the clouds' g, live).
+        list.add("clouds_vortexLightSteps", [&c] { return (float)glm::max(c.vortexLightSteps, 0); }, c.vortexLightSteps);
+        list.add("clouds_invVortexLightSteps", [&c] { return 1.0f / (float)glm::max(c.vortexLightSteps, 1); }, c.vortexLightSteps);
+        list.add("clouds_vortexLightForward", [&c] { return glm::clamp(c.vortexLightForward, 0.0f, 1.0f); }, UboLive);
         // THE FLASHES (cloud_raymarch.inc.glsl, lightning in the clouds): one colour and 1 / radius^2 for all; per flash
         // the camera-relative x / z, the altitude and the radiance (0 = off).
         list.add("clouds_flashColor", [&c] { return c.flashColor; }, UboLive);

@@ -202,8 +202,9 @@ structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX**
   off) writes them back.
 * **Every tick the vortex's centre follows the Beacon**, so the hole moves with the ship's Beacon while the ship flies
   (`clouds_vortexCentre` is a live UBO value: no re-bake).
-* **Power** (`m_beaconPower`, eased over ~2 s) = the Base field's `outputFrac` × (0.4 .. 1 by its energy charge); 0
-  for a dead Base.
+* **Power** (`m_beaconPower`, eased over ~2 s) = the Base field's `outputFrac`; 0 for a dead Base. The energy charge
+  is NOT in it (only in the spin): the Base generates only its standing draw, so a store a siege drained stays low
+  until the field goes dark, and the hole would stay weak all night.
 * **THE IGNITION** (each dusk): the clouds close first, with no hole. "Ignite delay (s)" after the night is full
   (`m_beaconNightSec`) three steps run. THE GLOW ("Beam glow time (s)", `m_beaconGlow`): a short beam (8 m) on the
   Base brightens. THE CLIMB ("Beam climb time (s)", `m_beaconClimb`): its tip goes up to the cloud base, the height
