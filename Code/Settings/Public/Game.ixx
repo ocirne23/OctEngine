@@ -372,6 +372,7 @@ export struct GameStructureSettings
     float barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
     float barracksUnitHealthMult = 5.0f;  // x the prefab's HealthMax for a unit a barracks makes (the demons keep theirs)
     float barracksUnitDamageMult = 2.0f;  // x its AttackDamage and StructureDamage
+    float barracksUnitShieldDrain = 6.0f; // battery energy/s a barracks unit takes from the enemy unit bubble it stands in
     // THE LIGHT BALANCE (the default sun cycle: a day gives a Mirror ~780 s of full daylight, a night keeps a field
     // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 0.75 light/s awake (480 a night), a
     // Great lantern 2 (1280 a night).

@@ -549,8 +549,15 @@ void GameUnitComponent::tickCombat(Tick& t)
     GameStructureComponent* bite = nullptr;
     GameStructureComponent* strain = nullptr;
     float biteDist = FLT_MAX, strainDist = c_strainRange;
+    // A BARRACKS unit (the players' own army) drains the battery of the nearest enemy unit whose live bubble covers it
+    // (planar, its equilibrium radius) - the demons' emitter strain, turned around.
+    constexpr float c_bubbleSearch = 16.0f; // m: past the largest demon bubble (the Titan's ~13 m)
+    const float shieldDrain = sourceId != 0 ? glm::max(Globals::settings.game.structures.barracksUnitShieldDrain, 0.0f) : 0.0f;
+    GameUnitComponent* shieldVictim = nullptr;
+    float shieldVictimDistSq = FLT_MAX;
     Globals::spatialIndex.forEachInSphere(glm::dvec3(t.pos),
-        glm::max(glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), breakRadius),
+        glm::max(glm::max(glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), breakRadius),
+            shieldDrain > 0.0f ? c_bubbleSearch : 0.0f),
         SpatialLayer_Render, [&](uint64 user)
     {
         Entity* other = reinterpret_cast<Entity*>(user);
@@ -573,10 +580,22 @@ void GameUnitComponent::tickCombat(Tick& t)
             return;
         }
         GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
-        if (!pu || pu == this || pu->team == team || !pu->alive()
-            || glm::abs(other->pos.y - t.pos.y) >= 3.0f)
+        if (!pu || pu == this || pu->team == team || !pu->alive())
             return;
         const glm::vec2 to(other->pos.x - t.pos.x, other->pos.z - t.pos.z);
+        if (shieldDrain > 0.0f && !pu->puppet && pu->energy > 0.0f) // (another worker's float: one tick stale at worst)
+            if (const ForceComponent* force = getComponent<ForceComponent>(other); force && force->emitter.isValid())
+            {
+                const float distSq = glm::dot(to, to);
+                const float radius = force->emitter.getEquilibriumRadius();
+                if (distSq <= radius * radius && distSq < shieldVictimDistSq)
+                {
+                    shieldVictimDistSq = distSq;
+                    shieldVictim = pu;
+                }
+            }
+        if (glm::abs(other->pos.y - t.pos.y) >= 3.0f)
+            return;
         if (t.routing && glm::dot(to, to) < engageDistSq)
         {
             engageDistSq = glm::dot(to, to);
@@ -651,6 +670,8 @@ void GameUnitComponent::tickCombat(Tick& t)
         t.stopRange = attackRange + bite->meleeRadius;
     if (strain)
         strain->addLoad(emitterDrain * params.emitterDrainMult);
+    if (shieldVictim)
+        shieldVictim->drainShield(shieldDrain * t.deltaSec);
 }
 
 void GameUnitComponent::tickSteering(Tick& t)

@@ -352,6 +352,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::intVar("Game/Friendlies", "Barracks population", &s.barracksPopulation, 0, 200, 1);
     Tweak::floatVar("Game/Friendlies", "Barracks unit health (x)", &s.barracksUnitHealthMult, 0.1f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Barracks unit damage (x)", &s.barracksUnitDamageMult, 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Barracks unit shield drain/s", &s.barracksUnitShieldDrain, 0.0f, 200.0f, 0.5f);
     Tweak::intVar("Game/Friendlies", "House population", &s.housePopulation, 0, 100, 1);
     Tweak::floatVar("Game/Friendlies", "House link radius", &s.houseLinkRadius, 2.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Medic heal radius", &sp.medicRange, 2.0f, 60.0f, 0.5f);

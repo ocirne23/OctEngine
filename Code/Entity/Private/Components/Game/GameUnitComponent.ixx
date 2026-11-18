@@ -121,7 +121,7 @@ export struct GameUnitComponent
     float pendingDamage = 0.0f; // damage inbox: units drain it in their own tick (shield-first),
                                 // puppets' is routed to the owning GamePlayer by the game
     float pendingShadowDamage = 0.0f; // ... the part that hurts a SHADOW too (damage's throughShadow: a cannon shell)
-    float pendingShieldDrain = 0.0f;  // battery energy a shot this bubble DEFLECTS takes (drainShield; tickField applies it)
+    float pendingShieldDrain = 0.0f;  // battery energy taken by deflected shots and barracks units in the bubble (drainShield; tickField applies it)
     float materialsFrac = 0.0f; // players: carried construction stock (server-authoritative)
     bool collapsed = false;     // latched at empty battery; only a heal lifts it
     bool deathReported = false;
@@ -172,7 +172,9 @@ export struct GameUnitComponent
     // runs the collapse, so it says false there). Its emitter is then switched off - World's bubble gate reads this.
     bool shieldGone() const { return energy <= 0.0f && m_shieldFade <= 0.0f; }
     void heal(float amount); // atomic inbox; applied in the unit's own tick (keeps `energy` single-writer)
-    void drainShield(float amount); // the same: a deflected shot's cost to the battery (GameProjectileComponent's FieldDeflect)
+    // The same: a deflected shot's cost to the battery (GameProjectileComponent's FieldDeflect), and a barracks unit standing
+    // in the bubble (tickCombat).
+    void drainShield(float amount);
     float pendingHeal = 0.0f;
     static void applyTeamTint(Entity& entity); // main thread; idempotent (spawn + replicated team)
     uint8 tintState = 0; // 0 authored, 1 friendly green, 2 authored (restored after a re-team)
