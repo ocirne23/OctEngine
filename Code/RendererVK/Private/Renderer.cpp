@@ -211,6 +211,7 @@ void RendererState::initPipelines()
     m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     m_giProbePipeline.initializeDebug(opaqueRenderPass);
     m_debugLinePipeline.initialize(sceneRenderPass);
+    m_beamCardPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_treeCullDummy.initialize(sizeof(glm::vec4) * 16, vk::BufferUsageFlagBits2::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal,
         false, "TreeCullDummy");
@@ -269,6 +270,7 @@ void RendererState::initPerFrameResources()
         perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giPrep");
         perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.volumetricFog");
         perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.fogApply");
+        perFrame.beamCardCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.beamCards");
         perFrame.cloudCommandBuffers[0].initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudMarch");
         perFrame.cloudCommandBuffers[1].initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudTemporal");
         perFrame.cloudApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudApply");
@@ -448,6 +450,7 @@ void Renderer::reloadShaders()
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_beamCardPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_entityPreviewPipeline.reloadShaders(m_textures.getLayoutCap());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -685,6 +688,7 @@ void RendererState::beginFrame()
 
     m_submission.beginFrame();
     m_beamLightCount = 0;
+    m_beamCardCount = 0;
     // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
     // (Grid jobs left in flight by a present() that returned early must finish first - normally done.)
     Globals::jobSystem.wait(m_gridJobCounter);
@@ -1049,6 +1053,8 @@ void Renderer::present()
     if (m_debugLinePipeline.upload(frameIdx, m_debugLineVerts)) // drains + clears the per-worker lists
         setHaveToRecordCommandBuffers();
     debugLineScope.stop();
+    // The beam cards added since beginFrame (the claims past MAX_CARDS were dropped); the count gates their scene stage.
+    m_beamCardPipeline.upload(frameIdx, oc::span<const RendererVKLayout::LightInfo>(m_beamCards, oc::min(m_beamCardCount, BeamCardPipeline::MAX_CARDS)));
 
     // Only spend the pool reset on a frame that will actually execute the sim (see
     // ParticleState); the flag is cleared after this frame's successful submit below.

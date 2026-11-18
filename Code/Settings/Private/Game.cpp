@@ -256,11 +256,13 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Light", "Hub link range (m)", &s.lightHubLinkRange, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Lens range (m)", &s.lensRange, 4.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Light", "Lens buffer", &s.lensBuffer, 1.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Light", "Lens rate (light/s)", &s.lensRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Beam rate (light/s)", &s.lightBeamRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Feed rate (light/s)", &s.lightFeedRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Share rate (light/s)", &s.lightShareRate, 0.5f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Mirror glitter (sparks/s)", &s.mirrorGlitterRate, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Light", "Beam glow", &s.lightBeamGlow, 0.0f, 100.0f, 0.1f);
+    Tweak::intVar("Game/Light", "Lit beams", &s.lightBeamLitCount, 0, 64, 1);
     Tweak::floatVar("Game/Light", "Beam full flow (light/s)", &s.lightBeamFullFlow, 0.1f, 500.0f, 0.1f);
     Tweak::floatVar("Game/Light", "Beam radius (m)", &s.lightBeamRadius, 0.02f, 5.0f, 0.01f);
     Tweak::floatVar("Game/Light", "Beam glow range (m)", &s.lightBeamGlowRange, 0.5f, 100.0f, 0.5f);
@@ -285,6 +287,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Structures", "Constructor range", &s.constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &s.constructorBuildRate, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Structures", "Constructor repair health/s", &s.constructorRepairRate, 1.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Structures", "Constructor turn speed (deg/s)", &s.constructorTurnRate, 5.0f, 720.0f, 5.0f);
+    Tweak::floatVar("Game/Structures", "Constructor stones/s", &s.constructorStreamRate, 0.0f, 100.0f, 1.0f);
     Tweak::floatVar("Game/Structures", "Waypoint radius", &s.waypointRadius, 0.5f, 15.0f, 0.25f);
     Tweak::intVar("Game/Structures", "Wall breach cost", &s.wallBreachCost, 1, 254, 1);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &s.mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);

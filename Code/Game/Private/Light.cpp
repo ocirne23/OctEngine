@@ -17,8 +17,10 @@ namespace
     constexpr float c_linkPeriod = 1.0f;   // seconds between two derivations (they cast the line-of-sight rays)
     constexpr float c_beamLift = 1.0f;     // a beam ends this far over a building's top
     constexpr float c_baseReserve = 0.25f; // the share of its store the Beacon keeps for its own field
-    constexpr float c_searchlightLamp = 3.4f; // the Searchlight's lamp over its origin (the `Lamp` child of searchlight.pre)
-    constexpr float c_searchlightLampClear = 1.0f; // m along the cone's axis from the lamp's centre to the light: clear of the gem
+    constexpr float c_searchlightLamp = 3.4f; // the Searchlight's lamp over its origin (the `Head` child of searchlight.pre)
+    // m along the cone's axis from the head's centre to the light: the lens face (searchlight.pre's `Lens`, front at 0.375).
+    // The lens and the lamp crystal cast no shadow; the housing behind the lens does, so the light starts in front of it.
+    constexpr float c_searchlightLampClear = 0.4f;
 
     bool isLightHub(EStructureType t) { return t == EStructureType::Battery || t == EStructureType::Base || t == EStructureType::Lens; }
 
@@ -308,14 +310,14 @@ void StructureSystem::levelLightNet(size_t begin, size_t end, float deltaSec)
         fraction[rank] = capacity[rank] > 0.0f ? glm::clamp(pool / capacity[rank], 0.0f, 1.0f) : 0.0f;
         pool = glm::max(pool - fraction[rank] * capacity[rank], 0.0f);
     }
-    // THE MOVE: each hub toward its share at its own rate (a Lens at the beam rate: a relay keeps up with the producers
-    // behind it). What the takers can take and what the givers can give is scaled to the same total, so no light is
-    // made or lost.
+    // THE MOVE: each hub toward its share at its own rate (a Lens at "Lens rate": a relay keeps up with the producers
+    // and the consumers on it - its store is all they get, so its rate is their total). What the takers can take and
+    // what the givers can give is scaled to the same total, so no light is made or lost.
     float take = 0.0f, give = 0.0f;
     for (Node& node : nodes)
     {
         const Ref& ref = m_frame[node.index];
-        const float rate = (ref.type == EStructureType::Lens ? m_settings.lightBeamRate : m_settings.lightShareRate) * deltaSec;
+        const float rate = (ref.type == EStructureType::Lens ? m_settings.lensRate : m_settings.lightShareRate) * deltaSec;
         node.want = glm::clamp(node.locked + fraction[node.rank] * node.free - ref.state->store[0], -rate, rate);
         (node.want > 0.0f ? take : give) += glm::abs(node.want);
     }
@@ -372,8 +374,8 @@ void StructureSystem::publishSearchlights() const
         const float lean = (spawnHeightOf(ref.type) + c_searchlightLamp) / glm::max(params.searchlightRange, 1.0f);
         const glm::vec3 axis = glm::normalize(glm::vec3(dir.x, -lean, dir.y));
         const glm::vec3 color(1.0f, 0.93f, 0.75f);
-        // The light starts IN FRONT of the lamp gem, not at its centre: from inside the mesh every shadow ray hits the
-        // gem itself and the cone is dark.
+        // The light starts AT THE LENS, not at the head's centre: from inside the housing every shadow ray hits it and the
+        // cone is dark.
         const glm::vec3 source = lamp + axis * c_searchlightLampClear;
         // "Searchlight brightness" is for a 26 m range; the light falls off with the square of the distance, so a longer
         // reach gets that much more (its far end stays as bright).
@@ -415,22 +417,27 @@ void StructureSystem::publishSearchlights() const
 }
 
 // The beams: a link shows ONLY WHILE IT MOVES LIGHT (a producer with light in its buffer, a consumer that is not
-// full, two hubs that are not level), as a BeamLight between the two crystals - the Beacon's beam in small: a glowing
-// column in the air that lights what stands under it. No line is drawn. The renderer draws a column for
-// RendererState::MAX_BEAM_COLUMNS BeamLights a frame (the Beacon's own takes one at night), so the c_linkBeams
-// moving links NEAREST the camera get one. The fog apply draws the columns: with the fog off no beam shows.
-void StructureSystem::drawLightLinks() const
+// full, two hubs that are not level), as a beam between the two crystals - the Beacon's beam in small: a glowing
+// column in the air that lights what stands under it. No line is drawn.
+// EVERY moving link's glow is a BEAM CARD (Renderer::addBeamCard): the fog apply's column glow on a quad around the
+// beam, which costs only the pixels it covers (up to c_maxBeamCards a frame). THE LIGHT ON SURFACES costs more, so
+// only the "Lit beams" best links cast it (a BeamLight with no air column): by the flow, the length and the
+// distance to the camera, with a bonus for the lit ones so a link at the edge of the list does not flicker. Each link
+// fades its light in and out (Ref::beamLit, ~0.5 s); the glow in the air never changes, so no switch shows.
+void StructureSystem::drawLightLinks(float deltaSec) const
 {
     if (!m_settings.lightBeams)
         return;
-    constexpr int c_linkBeams = 14;
-    struct Beam { glm::vec3 a, b; float distSq, power; };
-    Beam nearest[c_linkBeams];
-    int count = 0;
+    constexpr int c_maxBeamCards = 256; // RendererVK's BeamCardPipeline::MAX_CARDS
+    constexpr float c_litFade = 2.0f;   // 1/s: the light on surfaces fades in / out over 0.5 s
+    constexpr float c_litBonus = 1.3f;  // x the score of a link that is lit now
+    m_beamScratch.clear();
     const glm::vec3 eye = Globals::rendererVK.cameraPos();
     const glm::vec3 gold(1.0f, 0.85f, 0.4f);
     for (const Ref& ref : m_frame)
     {
+        const float wasLit = ref.beamLit;
+        ref.beamLit = 0.0f; // set again below if the link still moves light
         if (ref.lightId == 0)
             continue;
         const int hubIndex = structureIndexById(ref.lightId);
@@ -443,15 +450,12 @@ void StructureSystem::drawLightLinks() const
         // stores themselves cannot say whether light moves. Brighter with more light, from a floor.
         if (ref.lightFlow < 0.02f)
             continue;
-        // Keep the c_linkBeams nearest (by the link's middle): replace the farthest kept one.
         const glm::vec3 mid = (a + b) * 0.5f - eye;
         // The beam follows the AMOUNT of light: its glow is the flow over "Beam full flow (light/s)", up to 1.
         const float power = glm::clamp(ref.lightFlow / glm::max(m_settings.lightBeamFullFlow, 0.1f), 0.0f, 1.0f);
-        // A MIRROR's beam is LIGHT GLITTER, not a beam column: golden sparks that fly from the mirror to the crystal
+        // A MIRROR's beam is LIGHT GLITTER, not a beam: golden sparks that fly from the mirror to the crystal
         // (Effects/light_glitter.pfx through ParticleSystem::emitStream), more of them with more light. A field of
-        // mirrors is dozens of beams, and the renderer draws the glow of only RendererState::MAX_BEAM_COLUMNS beams
-        // a frame (every pixel walks them all) - the mirrors took every one of them. A stream has no such count: it
-        // moves a few emitter slots from beam to beam.
+        // mirrors is dozens of small beams; a stream moves a few emitter slots from beam to beam.
         if (ref.type == EStructureType::Solar)
         {
             constexpr float c_mirrorGlitterRange = 400.0f; // m from the camera
@@ -460,27 +464,38 @@ void StructureSystem::drawLightLinks() const
                     m_settings.mirrorGlitterRate * glm::clamp(ref.lightFlow / glm::max(m_settings.solarEnergyPerSec, 0.01f), 0.0f, 1.0f));
             continue;
         }
-        const Beam beam{ a, b, glm::dot(mid, mid), power };
-        if (count < c_linkBeams)
-            nearest[count++] = beam;
-        else
-        {
-            int farthest = 0;
-            for (int k = 1; k < c_linkBeams; ++k)
-                if (nearest[k].distSq > nearest[farthest].distSq)
-                    farthest = k;
-            if (beam.distSq < nearest[farthest].distSq)
-                nearest[farthest] = beam;
-        }
-    }
-    for (int k = 0; k < count; ++k)
-    {
-        const glm::vec3 axis = nearest[k].b - nearest[k].a;
+        const glm::vec3 axis = b - a;
         const float length = glm::length(axis);
         if (length < 0.5f)
             continue;
-        Globals::rendererVK.addLightInfo(BeamLight((nearest[k].a + nearest[k].b) * 0.5f, glm::max(m_settings.lightBeamGlowRange, 0.5f), gold,
-            m_settings.lightBeamGlow * nearest[k].power, axis,
-            glm::max(m_settings.lightBeamRadius * (0.5f + 0.5f * nearest[k].power), 0.02f), length)); // a weak flow is thinner too
+        // THE SCORE: brighter, longer and nearer links first (the nearest point of the beam, not its middle).
+        const float along = glm::clamp(glm::dot(eye - a, axis) / (length * length), 0.0f, 1.0f);
+        const float dist = glm::max(glm::length(a + axis * along - eye), 5.0f);
+        float score = (0.25f + power) * (1.0f + length / 20.0f) / dist;
+        if (wasLit > 0.5f)
+            score *= c_litBonus;
+        m_beamScratch.push_back(BeamCandidate{ &ref, a, b, power, score, wasLit });
+    }
+    oc::sort(m_beamScratch.begin(), m_beamScratch.end(), [](const BeamCandidate& x, const BeamCandidate& y) { return x.score > y.score; });
+    const int litCount = glm::max(m_settings.lightBeamLitCount, 0);
+    const float step = c_litFade * glm::max(deltaSec, 0.0f);
+    const int cards = glm::min((int)m_beamScratch.size(), c_maxBeamCards);
+    for (int k = 0; k < (int)m_beamScratch.size(); ++k)
+    {
+        const BeamCandidate& c = m_beamScratch[k];
+        const float lit = glm::clamp(c.wasLit + (k < litCount ? step : -step), 0.0f, 1.0f);
+        c.ref->beamLit = lit;
+        if (k >= cards)
+            continue; // past the card budget: no glow, no light (the farthest, dimmest links)
+        const glm::vec3 axis = c.b - c.a;
+        const BeamLight beam((c.a + c.b) * 0.5f, glm::max(m_settings.lightBeamGlowRange, 0.5f), gold, m_settings.lightBeamGlow * c.power, axis,
+            glm::max(m_settings.lightBeamRadius * (0.5f + 0.5f * c.power), 0.02f), glm::length(axis)); // a weak flow is thinner too
+        Globals::rendererVK.addBeamCard(beam);
+        if (lit > 0.01f)
+        {
+            BeamLight light = beam;
+            light.color *= lit;
+            Globals::rendererVK.addLightInfo(light, /*airColumn*/ false); // the card draws its glow
+        }
     }
 }

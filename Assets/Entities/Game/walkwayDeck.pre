@@ -1,6 +1,8 @@
-# The DECK of a built Walkway piece: the scaffold (legs, rails, ledgers) and the planks. The game puts it on the
-# Walkway's own origin (StructureSystem::updateWalkway), which is 0.1 over the deck top. The collider is the deck
-# alone (0.5 m thick, its top at -0.1): players and units stand on it, and nothing fits under it.
+# The DECK of a built Walkway piece: the planks, the ledgers and the rails (the legs are walkwayLegs.pre: they stay
+# upright). The game puts it on the Walkway's own origin (StructureSystem::updateWalkway), which is 0.1 over the deck
+# top, lifted and TILTED to meet the neighbour decks. The collider (tilted with it) is ONE SOLID BOX
+# from the deck top (-0.1) down to 0.5 m under the ground (the deck is 2 m over it; the extra 0.5 m covers a sloped
+# cell): players and units stand on it, and nothing gets under it (a body that walked into the scaffold got stuck).
 Prefab gameWalkwayDeck
 	Component Render
 		ObjectContainer walkway
@@ -10,5 +12,5 @@ Prefab gameWalkwayDeck
 	Component Physics
 		Body Static
 		Shape Box
-		HalfExtents 1 0.25 1
-		Offset 0 -0.35 0
+		HalfExtents 1 1.25 1
+		Offset 0 -1.35 0

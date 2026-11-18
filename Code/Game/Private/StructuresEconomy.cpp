@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Log;
 import Entity;
 import Force;
+import Particle; // the Builder's huts' stone streams (ParticleSystem::emitStream)
 import Physics;
 import RendererVK;
 import Spatial;
@@ -101,15 +102,26 @@ void StructureSystem::applyStructureTint(const Ref& s)
     rc->node.setMaterialOverride(material);
     // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along -
     // this is also what turns them blueprint-gray and back. A BUILDING's child pieces (its crystal, roof, posts)
-    // are gray as a blueprint and take their OWN authored colour once built.
-    if (const SceneComponent* sc = getComponent<SceneComponent>(s.entity))
+    // are gray as a blueprint and take their OWN authored colour once built. The whole tree: an aim head's pieces are
+    // grandchildren (Ref::head).
+    const bool ownColors = !isCableOrCrossing(s.type) && !s.state->blueprint;
+    const auto tintChildren = [&](const auto& self, Entity* parent) -> void
+    {
+        const SceneComponent* sc = getComponent<SceneComponent>(parent);
+        if (!sc)
+            return;
         for (const EntityPtr& child : sc->children)
+        {
             if (RenderComponent* crc = getComponent<RenderComponent>(child.get()); crc && crc->node.isValid())
             {
                 const RenderComponent::SpawnInfo* info = getRenderSpawnInfo(child.get());
-                const bool own = !isCableOrCrossing(s.type) && !s.state->blueprint && info && info->color.x >= 0.0f;
+                const bool own = ownColors && info && info->color.x >= 0.0f;
                 crc->node.setMaterialOverride(own ? RenderMaterial::getOrCreateSolidColor(info->color, info->emissive) : material);
             }
+            self(self, child.get());
+        }
+    };
+    tintChildren(tintChildren, s.entity);
 }
 
 // RUBBLE IS NOT BUILT UP UNDER ATTACK: a living enemy unit within "Rubble safe radius (m)" of it (flat, on the map)
@@ -222,8 +234,14 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
 {
     if (amount <= 0.0f)
         return 0.0f;
+    const int target = findBuildTarget(pos, radius, team, includeRepairs, byPlayer);
+    return target >= 0 ? investMaterials(m_frame[target], amount, repairHealCap, byPlayer) : 0.0f;
+}
+
+int StructureSystem::findBuildTarget(const glm::vec3& pos, float radius, uint8 team, bool includeRepairs, bool byPlayer) const
+{
     // The candidates in reach, nearest first; the rubble test (a query for a body on the pile) runs only down that
-    // list until one takes the stone - rubble with an enemy near or a body on it takes nothing: the next one gets it.
+    // list until one passes - rubble with an enemy near or a body on it takes nothing: the next one gets the stone.
     oc::small_vector<oc::pair<float, int>, 16> candidates;
     const float radiusSq = radius * radius;
     for (int i = 0; i < (int)m_frame.size(); ++i)
@@ -244,8 +262,8 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
     oc::sort(candidates.begin(), candidates.end());
     for (const auto& [distSq, i] : candidates)
         if (!rubbleBlocked(m_frame[i], byPlayer))
-            return investMaterials(m_frame[i], amount, repairHealCap, byPlayer);
-    return 0.0f;
+            return i;
+    return -1;
 }
 
 // ---------------------------------------------------------------- production + sweeps
@@ -683,7 +701,7 @@ bool StructureSystem::cannonStandY(const glm::vec3& snappedGround, float& outY) 
     const Ref& r = m_frame[index];
     if (r.type == EStructureType::Walkway && r.walkDir < 0) // the deck (or a walkway blueprint: its deck to come)
     {
-        outY = r.entity->pos.y - spawnHeightOf(r.type) + WalkwayDeckHeight;
+        outY = r.entity->pos.y + r.walkLift - spawnHeightOf(r.type) + WalkwayDeckHeight; // the tilted deck's centre (the cannon stands level on it)
         return true;
     }
     if (r.type == EStructureType::CableConveyor || r.type == EStructureType::Bridge)
@@ -779,17 +797,108 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
 void StructureSystem::tickConstructors(float deltaSec)
 {
     ProfileScope scope("Structures constructors", EProfileCategory::Game);
-    // A powered Constructor invests its conveyor-fed mineral stock into the nearest own-team
-    // blueprint OR damaged structure in range; with nothing to build or repair it idles.
-    for (const Ref& ref : m_frame)
+    // A powered Constructor invests its conveyor-fed mineral stock into the nearest own-team blueprint OR damaged
+    // structure in range - once its focus crystal has turned to it (turnBuilderHead). With nothing to build or repair
+    // it idles, its crystal where it last pointed.
+    for (Ref& ref : m_frame)
     {
+        if (ref.type != EStructureType::Constructor)
+            continue;
         GameStructureComponent& s = *ref.state;
-        if (s.blueprint || ref.type != EStructureType::Constructor || !s.powered || s.store[2] <= 0.0f)
+        ref.buildWorking = false;
+        ref.buildTarget = 0;
+        if (s.blueprint || !s.powered || s.store[2] <= 0.0f)
+            continue;
+        const int target = findBuildTarget(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, true, false);
+        if (target < 0)
+            continue;
+        const Ref& work = m_frame[target];
+        ref.buildTarget = work.state->structureId;
+        if (!turnBuilderHead(ref, work.entity->pos, deltaSec))
             continue;
         const float staff = staffing((uint8)s.team);
         const float budget = glm::min(m_settings.constructorBuildRate * staff * deltaSec, s.store[2]);
-        s.store[2] -= fundNearbyBlueprint(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, budget, true,
-            m_settings.constructorRepairRate * staff * deltaSec);
+        const float spent = investMaterials(work, budget, m_settings.constructorRepairRate * staff * deltaSec);
+        s.store[2] -= spent;
+        ref.buildWorking = spent > 0.0f;
+    }
+}
+
+void StructureSystem::mirrorConstructors(float deltaSec)
+{
+    // The same pick and the same turn as tickConstructors, from the mirrored roster (health, the hut's stone, powered):
+    // nothing of it is on the wire. The mirror's pick can differ from the authority's for a moment (the stores and the
+    // health arrive at ~5 Hz) - it is only the crystal and the stream.
+    refreshRubbleSafety(deltaSec);
+    for (Ref& ref : m_frame)
+    {
+        if (ref.type != EStructureType::Constructor)
+            continue;
+        const GameStructureComponent& s = *ref.state;
+        ref.buildWorking = false;
+        ref.buildTarget = 0;
+        if (s.blueprint || !s.powered || s.store[2] <= 0.01f)
+            continue;
+        const int target = findBuildTarget(ref.entity->pos, m_settings.constructorRange, (uint8)s.team, true, false);
+        if (target < 0)
+            continue;
+        ref.buildTarget = m_frame[target].state->structureId;
+        ref.buildWorking = turnBuilderHead(ref, m_frame[target].entity->pos, deltaSec);
+    }
+}
+
+bool StructureSystem::turnBuilderHead(Ref& hut, const glm::vec3& target, float deltaSec) const
+{
+    constexpr float c_aimTolerance = 0.2f; // radians: ~12 degrees
+    const glm::vec2 d(target.x - hut.entity->pos.x, target.z - hut.entity->pos.z);
+    if (glm::dot(d, d) < 0.25f)
+        return true; // the hut itself: nothing to turn to
+    float diff = std::atan2(d.y, d.x) - hut.headYaw;
+    diff -= glm::two_pi<float>() * glm::round(diff / glm::two_pi<float>()); // the short way round
+    const float step = glm::radians(glm::max(m_settings.constructorTurnRate, 1.0f)) * deltaSec;
+    hut.headYaw += glm::clamp(diff, -step, step);
+    hut.headYaw -= glm::two_pi<float>() * glm::round(hut.headYaw / glm::two_pi<float>());
+    return glm::abs(diff) <= step + c_aimTolerance;
+}
+
+void StructureSystem::poseAimHeads()
+{
+    // The head's local +X is its forward, so a turn of -yaw about +Y points it at (cos yaw, 0, sin yaw) on the map. The
+    // root's own rotation (the ship's yaw on the deck) is taken out: the yaw is on the map.
+    for (const Ref& ref : m_frame)
+    {
+        if (!ref.head)
+            continue;
+        const float yaw = ref.type == EStructureType::Searchlight ? ref.state->searchlight.yaw : ref.headYaw;
+        ref.head->rot = glm::inverse(ref.entity->rot) * glm::angleAxis(-yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+}
+
+void StructureSystem::drawBuilderStreams() const
+{
+    // THE STONE STREAM: while a Builder's hut puts stone in, grey stones and violet sparks fly from its focus crystal to
+    // the work (Effects/builder_stones.pfx + builder_sparks.pfx through ParticleSystem::emitStream).
+    constexpr float c_streamRange = 300.0f; // m from the camera
+    constexpr float c_crystalHeight = 1.5f; // the `Head` of constructor.pre over the hut's origin
+    constexpr float c_crystalTip = 0.38f;   // m from the head's centre along its forward: just past the crystal's point
+    if (m_settings.constructorStreamRate <= 0.0f)
+        return;
+    const glm::vec3 eye = Globals::rendererVK.cameraPos();
+    for (const Ref& ref : m_frame)
+    {
+        if (ref.type != EStructureType::Constructor || !ref.buildWorking || ref.buildTarget == 0)
+            continue;
+        const int target = structureIndexById(ref.buildTarget);
+        if (target < 0 || m_frame[target].entity == ref.entity)
+            continue;
+        const glm::vec3 head = ref.entity->pos + glm::vec3(0.0f, c_crystalHeight, 0.0f);
+        const glm::vec3 to = eye - head;
+        if (glm::dot(to, to) > c_streamRange * c_streamRange)
+            continue;
+        const glm::vec3 from = head + glm::vec3(std::cos(ref.headYaw), 0.0f, std::sin(ref.headYaw)) * c_crystalTip;
+        const glm::vec3 work = m_frame[target].entity->pos;
+        Globals::particleSystem.emitStream("Effects/builder_stones.pfx", from, work, m_settings.constructorStreamRate);
+        Globals::particleSystem.emitStream("Effects/builder_sparks.pfx", from, work, m_settings.constructorStreamRate * 1.5f);
     }
 }
 

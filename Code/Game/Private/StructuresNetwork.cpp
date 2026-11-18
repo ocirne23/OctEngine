@@ -403,6 +403,11 @@ void StructureSystem::rebuildNetworks()
     m_net.bfsQueue.assign(m_net.nodes.size(), 0);
     m_settings.statTransportNodes = (int)m_net.nodes.size();
 
+    // The walkways' picks first: a deck's tilt reads whether its neighbour is a deck or stairs.
+    for (const Ref& s : m_frame)
+        if (s.type == EStructureType::Walkway)
+            s.walkWant = walkwayModeOf(s);
+    solveWalkwayDecks();
     for (const Ref& s : m_frame)
         updateArms(s);
 }
@@ -412,43 +417,171 @@ void StructureSystem::rebuildNetworks()
 // side) or the piece stands alone. So a walkway's END at a road is stairs, and a walkway that runs ALONG a road keeps
 // its deck. The piece is a root entity of its own: the stairs are a box turned about the horizontal, which a
 // structure's own collider cannot be.
-void StructureSystem::updateWalkway(const Ref& s)
+static constexpr glm::ivec2 c_walkDirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ: a ^ 1 = opposite
+
+int8 StructureSystem::walkwayModeOf(const Ref& s) const
 {
-    static constexpr glm::ivec2 dirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ: a ^ 1 = opposite
-    int want = -2;
-    if (!s.state->blueprint)
+    if (s.state->blueprint)
+        return -2;
+    int8 want = -1;
+    const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
+    const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
+    bool road[4] = {}, walk[4] = {};
+    bool anyWalk = false;
+    for (int a = 0; a < 4; ++a)
+        if (const int seg = cableSegmentAt(cx + c_walkDirs[a].x, cz + c_walkDirs[a].y, /*builtOnly*/ false); seg >= 0)
+        {
+            walk[a] = m_frame[seg].type == EStructureType::Walkway;
+            road[a] = !walk[a] && cableMediumOf(m_frame[seg].type) == 2;
+            anyWalk |= walk[a];
+        }
+    for (int a = 0; a < 4 && want < 0; ++a)
+        if (road[a] && (walk[a ^ 1] || !anyWalk))
+            want = (int8)a;
+    return want;
+}
+
+// THE DECK'S TILT: on uneven ground each Walkway's deck is at its own height (2 m over its cell's centre), so the decks of
+// a run made steps a body caught on. Every deck is a PLANE (centre height + a slope along X and Z), solved for all decks
+// at once by relaxation (c_walkIterations Jacobi steps, so every instance gets the same result whatever the roster
+// order): each step, an edge shared with a neighbour DECK aims at the middle of the two planes' heights there, an edge
+// at a neighbour STAIRS' top or a built WARD's top at that height (they do not move: a HARD edge), every other edge at the deck's own
+// height. Then each deck fits its plane: the centre is the mean of its axes' middles (an axis with a hard edge weighs
+// 4x, an axis with no neighbour nothing), and each axis' slope comes from its hard edge when it has one (so that edge is
+// exact, whatever the centre), else from its two edges. A neighbour more than c_walkMaxStep higher or lower is a real
+// step: not met. Straight runs and runs onto stairs come out seamless; at a corner or a T a plane cannot meet all four
+// edges, and the relaxation shares what is left between the decks.
+void StructureSystem::solveWalkwayDecks()
+{
+    constexpr float c_walkMaxStep = 1.2f;
+    constexpr int c_walkIterations = 8;
+    constexpr float half = GridCellSize * 0.5f;
+    static constexpr glm::vec2 c_dir2[4] = { { 1.0f, 0.0f }, { -1.0f, 0.0f }, { 0.0f, 1.0f }, { 0.0f, -1.0f } };
+    struct Deck { int ref; float h; int nb[4]; float hard[4]; bool isHard[4]; float c; glm::vec2 s; };
+    oc::vector<int> slotOf(m_frame.size(), -1);
+    oc::vector<Deck> decks;
+    for (int i = 0; i < (int)m_frame.size(); ++i)
     {
-        want = -1;
+        const Ref& s = m_frame[i];
+        s.walkLiftWant = 0.0f;
+        s.walkSlopeWant = glm::vec2(0.0f);
+        if (s.type != EStructureType::Walkway || s.walkWant != -1)
+            continue;
+        slotOf[i] = (int)decks.size();
+        decks.push_back(Deck{ i, s.entity->pos.y, { -1, -1, -1, -1 }, {}, {}, s.entity->pos.y, glm::vec2(0.0f) });
+    }
+    if (decks.empty())
+        return;
+    for (Deck& d : decks)
+    {
+        const Ref& s = m_frame[d.ref];
         const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
         const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
-        bool road[4] = {}, walk[4] = {};
-        bool anyWalk = false;
         for (int a = 0; a < 4; ++a)
-            if (const int seg = cableSegmentAt(cx + dirs[a].x, cz + dirs[a].y, /*builtOnly*/ false); seg >= 0)
+        {
+            // A built WARD's top is at a deck's height (the ward tower, wardResist.pre): a hard edge, like a stairs' top.
+            if (const auto it = m_cells.find(cellKey(cx + c_walkDirs[a].x, cz + c_walkDirs[a].y)); it != m_cells.end())
+                if (const int ward = structureIndexById(it->second.id); ward >= 0 && isWardType(m_frame[ward].type) && !m_frame[ward].state->blueprint)
+                {
+                    const float top = wardTopY(m_frame[ward]); // its ground + a deck origin's height
+                    if (glm::abs(top - d.h) <= c_walkMaxStep)
+                    {
+                        d.isHard[a] = true;
+                        d.hard[a] = top; // in deck-origin units (0.1 over the walk surface)
+                    }
+                    continue;
+                }
+            const int seg = cableSegmentAt(cx + c_walkDirs[a].x, cz + c_walkDirs[a].y, /*builtOnly*/ true);
+            if (seg < 0 || m_frame[seg].type != EStructureType::Walkway)
+                continue;
+            const Ref& n = m_frame[seg];
+            if (glm::abs(n.entity->pos.y - d.h) > c_walkMaxStep)
+                continue;
+            if (n.walkWant == -1)
+                d.nb[a] = slotOf[seg];
+            else if (n.walkWant == a) // its stairs go down away from us: its top is our shared edge, at its height
             {
-                walk[a] = m_frame[seg].type == EStructureType::Walkway;
-                road[a] = !walk[a] && cableMediumOf(m_frame[seg].type) == 2;
-                anyWalk |= walk[a];
-            }
-        for (int a = 0; a < 4 && want < 0; ++a)
-            if (road[a] && (walk[a ^ 1] || !anyWalk))
-                want = a;
+                d.isHard[a] = true;
+                d.hard[a] = n.entity->pos.y;
+            } // (a stairs' side: nothing to meet)
+        }
     }
-    if (want == s.walkDir)
+    const auto edgeOf = [&](const Deck& d, int a) { return d.c + glm::dot(d.s, c_dir2[a]) * half; };
+    oc::vector<Deck> next = decks;
+    for (int iter = 0; iter < c_walkIterations; ++iter)
+    {
+        for (size_t k = 0; k < decks.size(); ++k)
+        {
+            const Deck& d = decks[k];
+            float e[4];
+            bool met[4];
+            for (int a = 0; a < 4; ++a)
+            {
+                met[a] = d.isHard[a] || d.nb[a] >= 0;
+                e[a] = d.isHard[a] ? d.hard[a] : d.nb[a] >= 0 ? 0.5f * (edgeOf(d, a) + edgeOf(decks[(size_t)d.nb[a]], a ^ 1)) : d.h;
+            }
+            const float wX = met[0] || met[1] ? (d.isHard[0] || d.isHard[1] ? 4.0f : 1.0f) : 0.0f;
+            const float wZ = met[2] || met[3] ? (d.isHard[2] || d.isHard[3] ? 4.0f : 1.0f) : 0.0f;
+            const float centre = wX + wZ > 0.0f ? (wX * 0.5f * (e[0] + e[1]) + wZ * 0.5f * (e[2] + e[3])) / (wX + wZ) : d.h;
+            const auto slopeOf = [&](int p, int n)
+            {
+                return d.isHard[p] ? (e[p] - centre) / half : d.isHard[n] ? (centre - e[n]) / half : (e[p] - e[n]) / GridCellSize;
+            };
+            next[k].c = centre;
+            next[k].s = glm::vec2(slopeOf(0, 1), slopeOf(2, 3));
+        }
+        oc::swap(decks, next);
+    }
+    for (const Deck& d : decks)
+    {
+        m_frame[d.ref].walkLiftWant = d.c - d.h;
+        m_frame[d.ref].walkSlopeWant = d.s;
+    }
+}
+
+void StructureSystem::updateWalkway(const Ref& s)
+{
+    const int8 want = s.walkWant;
+    const float lift = s.walkLiftWant;
+    const glm::vec2 slope = s.walkSlopeWant;
+    const bool samePose = want != -1 || (glm::abs(lift - s.walkLift) < 1e-3f && glm::all(glm::lessThan(glm::abs(slope - s.walkSlope), glm::vec2(1e-4f))));
+    if (want == s.walkDir && samePose)
         return;
     if (s.walkPiece)
         Globals::world.removeRootEntity(s.walkPiece.get());
+    if (s.walkLegs)
+        Globals::world.removeRootEntity(s.walkLegs.get());
     s.walkPiece = EntityPtr();
-    s.walkDir = (int8)want;
+    s.walkLegs = EntityPtr();
+    s.walkDir = want;
+    s.walkLift = lift;
+    s.walkSlope = slope;
     if (want == -2)
         return;
     if (want == -1)
-        s.walkPiece = Globals::world.spawnAssetFile("Entities/Game/walkwayDeck.pre", Transform(s.entity->pos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), true);
+    {
+        // The deck turned so its up is the plane's normal (a static body does not follow a moved entity: a new tilt
+        // spawns the piece again, which happens only when a neighbour comes, goes or is built).
+        const glm::vec3 normal = glm::normalize(glm::vec3(-slope.x, 1.0f, -slope.y));
+        const glm::vec3 axis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal);
+        const float sinAngle = glm::length(axis);
+        const glm::quat tilt = sinAngle > 1e-5f ? glm::angleAxis(std::asin(glm::min(sinAngle, 1.0f)), axis / sinAngle) : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        s.walkPiece = Globals::world.spawnAssetFile("Entities/Game/walkwayDeck.pre", Transform(s.entity->pos + glm::vec3(0.0f, lift, 0.0f), 1.0f, tilt), true);
+        // THE LEGS stay upright: each moves up or down to the tilted ledger over it (its authored y is the flat deck's).
+        s.walkLegs = Globals::world.spawnAssetFile("Entities/Game/walkwayLegs.pre", Transform(s.entity->pos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), true);
+        if (s.walkLegs)
+        {
+            if (const SceneComponent* scene = getComponent<SceneComponent>(s.walkLegs.get()))
+                for (const EntityPtr& leg : scene->children)
+                    leg->pos.y += lift + glm::dot(slope, glm::vec2(leg->pos.x, leg->pos.z));
+            Globals::world.addRootEntity(s.walkLegs);
+        }
+    }
     else
     {
         // The stairs: a board from the deck's height at the far edge of the cell to the ground at the road's edge. Its
         // origin is the middle of the slope, its +Z points down the slope.
-        const glm::vec2 d(dirs[want]);
+        const glm::vec2 d(c_walkDirs[want]);
         const glm::quat yaw = glm::angleAxis(std::atan2(d.x, d.y), glm::vec3(0.0f, 1.0f, 0.0f));
         const glm::quat pitch = glm::angleAxis(std::atan2(WalkwayDeckHeight, GridCellSize), glm::vec3(1.0f, 0.0f, 0.0f));
         const glm::vec3 mid = s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type) - WalkwayDeckHeight * 0.5f, 0.0f);

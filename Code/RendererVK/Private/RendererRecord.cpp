@@ -800,6 +800,31 @@ void RendererState::recordFogApply(uint32 frameIdx)
     cb.end();
 }
 
+// The beam cards (BeamCardPipeline) for one eye, inside the eye's scene-colour render pass.
+void RendererState::recordBeamCardsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    setFullViewport(cb.getCommandBuffer());
+    const BeamCardPipeline::RecordParams params{
+        .ubo = frameData.ubo,
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .cloudColorView = m_cloudPipeline.getAccumColorView(frameIdx, eyeIndex),
+        .cloudDepthView = m_cloudPipeline.getAccumDepthView(frameIdx, eyeIndex),
+        .cloudSampler = m_cloudPipeline.getLinearSampler(),
+    };
+    m_beamCardPipeline.record(cb, frameIdx, eyeIndex, params);
+}
+
+void RendererState::recordBeamCards(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].beamCardCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
+    recordBeamCardsInto(cb, frameIdx, 0);
+    cb.end();
+}
+
 void RendererState::recordTaa(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -1386,6 +1411,9 @@ oc::array<RendererState::SceneStage, RendererState::NUM_SCENE_STAGES> RendererSt
         // With the fog on, the fog apply composites the clouds itself (inside the fog); this stage is the fog-off path.
         SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &RendererState::recordCloudApply,   &RendererState::recordCloudApplyInto },
         SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &RendererState::recordFogApply,     &RendererState::recordFogApplyInto },
+        // The beam cards: the glow of the beams added with addBeamCard, over the fog like the fog apply's own columns.
+        // Gated on this frame's count (uploaded in present, before the record).
+        SceneStage{ "Beam cards",        false, m_beamCardPipeline.count(frameIdx) > 0, false, &f.beamCardCommandBuffer, &RendererState::recordBeamCards, &RendererState::recordBeamCardsInto },
         // The force fields LAST, over the composited clouds, far trees and fog: those volumes write no depth, so a
         // bubble drawn before them was covered by every cloud and far tree that lies in front of the terrain behind it.
         // The bubbles are near the player, so they always stand in front of both. The opaque depth test still hides

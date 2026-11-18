@@ -100,6 +100,14 @@ bool StructureSystem::roadAt(int cx, int cz, float& outY, bool throughGates) con
             outY = m_frame[index].entity->pos.y;
             if (m_frame[index].walkDir >= 0) // a Walkway's stairs: the middle of the slope
                 outY -= WalkwayDeckHeight * 0.5f;
+            else if (type == EStructureType::Walkway) // a deck: its tilted centre (walkLift; 0 for any other piece)
+                outY += m_frame[index].walkLift;
+            return true;
+        }
+        // A WARD is road like a Walkway deck: its top is at a deck's height (the ward tower). Not a cable: only walked.
+        if (isWardType(type))
+        {
+            outY = wardTopY(m_frame[index]);
             return true;
         }
         // A GATE with ROAD ON TWO OPPOSITE SIDES (+X and -X, or +Z and -Z): the walkers go through it, at the middle
@@ -278,7 +286,7 @@ bool StructureSystem::walkwayDeckTop(const glm::vec3& pos, float& outY) const
     if (!walkwayDeckAt(cell.x, cell.y))
         return false;
     const auto it = m_cells.find(cellKey(cell.x, cell.y));
-    outY = m_frame[structureIndexById(it->second.id)].entity->pos.y;
+    outY = walkwayDeckY(m_frame[structureIndexById(it->second.id)], pos); // the tilted deck at pos
     return true;
 }
 
@@ -309,12 +317,20 @@ bool StructureSystem::railEdgeBetween(int ax, int az, int bx, int bz) const
     return (sidesAt(ax, az) & bit(dx, dz)) != 0 || (sidesAt(bx, bz) & bit(-dx, -dz)) != 0;
 }
 
-// A GUARD'S HIGH PLACE: a Walkway deck, or a built RAIL tile of the LANDED SHIP (on the ship's wall; the rest of the
-// deck is plain road). A guard or a mage there needs no clear line (it shoots over the walls), and its post search
-// takes such a cell first.
+// A built WARD in the cell (its top is road at a Walkway deck's height: roadAt).
+bool StructureSystem::wardAt(int cx, int cz) const
+{
+    const auto it = m_cells.find(cellKey(cx, cz));
+    const int index = it != m_cells.end() ? structureIndexById(it->second.id) : -1;
+    return index >= 0 && isWardType(m_frame[index].type) && !m_frame[index].state->blueprint;
+}
+
+// A GUARD'S HIGH PLACE: a Walkway deck, a built WARD's top, or a built RAIL tile of the LANDED SHIP (on the ship's wall;
+// the rest of the deck is plain road). A guard or a mage there needs no clear line (it shoots over the walls), and its
+// post search takes such a cell first.
 bool StructureSystem::guardDeckAt(int cx, int cz) const
 {
-    if (walkwayDeckAt(cx, cz))
+    if (walkwayDeckAt(cx, cz) || wardAt(cx, cz))
         return true;
     if (!m_shipJoined || !nearDeck(cx, cz))
         return false;
@@ -352,9 +368,10 @@ int StructureSystem::crewAmmoSource(glm::ivec2 fromCell, uint8 team, oc::vector<
     }, outPath);
 }
 
-// A guard's POST, by road from fromCell: a road cell within the Armory's "Post range (m)" that no other guard has. A Walkway DECK
-// cell first (the place behind a wall), then any road cell; among those, the one nearest to the Armory's threat. One
-// breadth-first search over the road (like roadSearch); outPath = the walk there (one point: it stands on the post).
+// A guard's POST, by road from fromCell: a road cell within the Armory's "Post range (m)" that no other guard has. A HIGH
+// place first (a Walkway deck, a ward's top: behind a wall), then any road cell; among those, the one nearest to the
+// Armory's threat. One breadth-first search over the road (like roadSearch); outPath = the walk there (one point: it
+// stands on the post).
 bool StructureSystem::guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const
 {
     const Ref& armory = m_frame[armoryIdx];

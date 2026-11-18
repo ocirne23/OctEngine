@@ -43,6 +43,7 @@ import :CloudPipeline;
 import :BakedWorldMap;
 import :SceneColor;
 import :DebugLinePipeline;
+import :BeamCardPipeline;
 import :EntityPreviewPipeline;
 import :EntityPreviewTypes;
 import :ParticlePipeline;
@@ -166,6 +167,8 @@ protected:
     void recordAO(uint32 frameIdx);
     void recordVolumetricFog(uint32 frameIdx);
     void recordFogApply(uint32 frameIdx);
+    void recordBeamCards(uint32 frameIdx);
+    void recordBeamCardsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordClouds(uint32 frameIdx);
     void recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordCloudApply(uint32 frameIdx);
@@ -344,7 +347,7 @@ protected:
         void (RendererState::*recordCached)(uint32);                         // fills cb
         void (RendererState::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
     };
-    static constexpr uint32 NUM_SCENE_STAGES = 10;
+    static constexpr uint32 NUM_SCENE_STAGES = 11;
     oc::array<SceneStage, NUM_SCENE_STAGES> buildSceneStages(uint32 frameIdx);
 
     void recreateVrEyeTargets();
@@ -483,6 +486,7 @@ protected:
     RayTracingScene m_rt;
     GIProbePipeline m_giProbePipeline;
     DebugLinePipeline m_debugLinePipeline;
+    BeamCardPipeline m_beamCardPipeline;
     EntityPreviewPipeline m_entityPreviewPipeline;
     ParticlePipeline m_particlePipeline;
     // BAKED TREE RECORDS (RendererTrees.cpp, tree_cull.inc.glsl): the live sets (dead ones recycled by id). The culls
@@ -692,6 +696,10 @@ protected:
     static constexpr uint32 MAX_BEAM_COLUMNS = 32;
     RendererVKLayout::LightInfo m_beamLights[MAX_BEAM_COLUMNS]{};
     uint32 m_beamLightCount = 0;
+    // THE FRAME'S BEAM CARDS (addBeamCard: lock-free claims, the first BeamCardPipeline::MAX_CARDS; reset in beginFrame):
+    // the same glow, drawn per beam by the "Beam cards" scene stage (uploaded in present).
+    RendererVKLayout::LightInfo m_beamCards[BeamCardPipeline::MAX_CARDS]{};
+    uint32 m_beamCardCount = 0;
     // The cloud shadow map cascades (buildUboClouds): world-space centres + extents of what each layer holds.
     oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
     oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};
@@ -834,6 +842,7 @@ protected:
         CommandBuffer giPrepCommandBuffer;
         CommandBuffer volumetricFogCommandBuffer;
         CommandBuffer fogApplyCommandBuffer;
+        CommandBuffer beamCardCommandBuffer;
         oc::array<CommandBuffer, 2> cloudCommandBuffers;
         CommandBuffer cloudApplyCommandBuffer;
         CommandBuffer farTreesApplyCommandBuffer;

@@ -12,7 +12,7 @@ import Core;
 // scenario file then loads wrong.
 export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, WardResist, WardAbsorb, WardRetaliate, Count };
 
-// THE WARDS: a 1x1 pylon with a light store that stands against a wall and strengthens the walls connected to it (a
+// THE WARDS: a 1x1 tower with a light store that stands against a wall and strengthens the walls connected to it (a
 // breadth-first search over the touching wall and gate segments, "Walls per ward" at most). One kind each: RESIST takes
 // a share off every hit, ABSORB gives each segment a shield that takes hits first, RETALIATE sends a share of every
 // bite back to the biter. Each pays for its work from its own light store (StructureSystem::tickWards, Wards.cpp).

@@ -1,42 +1,46 @@
-# Retaliate ward: the Resist ward's pylon (see wardResist.pre) with a red crystal. Placed against a wall, it puts spikes of
-# light on the connected wall and gate segments: a share of every bite goes back to the demon that bites, paid from its
-# light store (Wards.cpp). Spawned origin 1.75 above ground; the crystal at 2.65 over it (Light.cpp's beamHeightOf).
+# Retaliate ward: the Resist ward's tower (see wardResist.pre) in red. Placed against a wall, it puts spikes of light on
+# the connected wall and gate segments: a share of every bite goes back to the demon that bites, paid from its light
+# store (Wards.cpp). Spawned origin 1.75 above ground; the crystal at 2.65 over it (Light.cpp's beamHeightOf).
 Prefab gameWardRetaliate
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node CubeHalf
+		Node Cube
 		Type StaticMesh
 		Color 0.5 0.42 0.4
-		Position 0 -1.35 0
-		Scale 0.8
+		Position 0 -0.75 0
+		Scale 1
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 0.8 1.75 0.8
+		HalfExtents 1 1 1
+		Offset 0 -0.75 0
 	Component GameStructure
 		MeleeRadius 1
 		AlwaysShowResources true
 	Component Scene
 		Entity
-			Name Post
-			Position 0 0.31 0
+			Name Band
+			Position 0 -0.25 0
 			Component Render
-				ObjectContainer baseshapes
-				Node Pillar3
-				Type StaticMesh
-				Color 0.5 0.42 0.4
-				Scale 0.42
-		Entity
-			Name Cap
-			Position 0 1.7 0
-			Component Render
-				ObjectContainer baseshapes
+				ObjectContainer eyes
 				Node CubeQuarter
 				Type StaticMesh
-				Color 0.55 0.25 0.2
-				Scale 0.6
+				Color 1 0.4 0.25
+				Emissive 1.5
+				Scale 1.005
+		Entity
+			Name Rune
+			Position 0 0.165 0
+			Component Render
+				ObjectContainer eyes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 1 0.4 0.25
+				Emissive 2
+				Rotation 0 45 0
+				Scale 0.35
 		Entity
 			Name Crystal
 			Position 0 2.65 0
@@ -46,4 +50,4 @@ Prefab gameWardRetaliate
 				Type StaticMesh
 				Color 1 0.4 0.25
 				Emissive 2.5
-				Scale 0.5
+				Scale 0.45

@@ -53,6 +53,10 @@ public:
     // A beam's glow in the air ALONE: no light on surfaces, not in the light grid (a column kilometres tall: the light
     // grid holds every 32 m grid in a light's range, so a long beam with a wide range costs it gigabytes).
     void addBeamColumn(const RendererVKLayout::LightInfo& beam);
+    // A beam's glow in the air as a CARD (a BeamLight; no light on surfaces): the same glow as a column, drawn on a
+    // camera-facing quad around the beam, so it costs the pixels it covers, not the whole screen (BeamCardPipeline).
+    // Any thread, after beginFrame; the first BeamCardPipeline::MAX_CARDS (256) of a frame, the rest are dropped.
+    void addBeamCard(const RendererVKLayout::LightInfo& beam);
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);
     void addDecal(const RendererVKLayout::DecalInfo& decal);
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color); // per-worker staging, merged in present

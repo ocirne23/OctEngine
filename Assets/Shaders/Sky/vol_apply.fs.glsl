@@ -21,6 +21,7 @@
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
 #include "cloud_upsample.inc.glsl"
+#include "beam_glow.inc.glsl"
 
 layout (location = 0) in vec2 v_uv;
 layout (binding = 1) uniform sampler2D u_depth;
@@ -311,13 +312,10 @@ vec4 withAerial(vec4 fog, vec3 worldPos)
     return vec4(fog.rgb + fog.a * air.rgb, fog.a * air.a);
 }
 
-// THE BEAM LIGHTS' GLOW IN THE AIR (u_present_beam*: the frame's BeamLights, RendererState::MAX_BEAM_COLUMNS), in
-// closed form - no march, no shadow ray, so no noise. Along the view ray the squared distance to a beam's line is a
-// quadratic in t, and the two glow profiles integrate exactly over it: a tight CORE r^3 / (d^2 + r^2)^2 and a weak,
-// wide HALO r / (d^2 + r^2) that ends at the light's range. The core is cut to the beam's length (the planes across its
-// two ends), the halo to the range past them, both to the scene (tMax). Returns the in-scatter and tBeam, the distance where the ray passes the beam.
+// THE BEAM LIGHTS' GLOW IN THE AIR (u_present_beam*: the frame's BeamLights, RendererState::MAX_BEAM_COLUMNS), each in
+// closed form (beamGlow, beam_glow.inc.glsl - the beam cards draw the same glow on their own pixels). Returns the
+// in-scatter and tBeam, the distance where the ray passes the beams (glow-weighted).
 #define BEAM_COLUMNS 32
-#define BEAM_HALO 0.06
 vec3 beamColumns(vec3 dir, float tMax, out float tBeam)
 {
     vec3 sum = vec3(0.0);
@@ -325,68 +323,9 @@ vec3 beamColumns(vec3 dir, float tMax, out float tBeam)
     tBeam = 0.0;
     for (uint i = 0u; i < min(u_present_beamCount, uint(BEAM_COLUMNS)); ++i)
     {
-        const vec3 axis = u_present_beamAxis[i].xyz;
-        const float len = u_present_beamAxis[i].w;
-        const float r = u_present_beamFoot[i].w;
-        const float range = u_present_beamColor[i].w;
-        const vec3 w = u_viewPos - u_present_beamFoot[i].xyz;
-
-        // The part of the ray beside the beam: u(t) = dot(w, axis) + t * dot(dir, axis) within [0, len] for the CORE
-        // (ta .. tb), and within the range past each end for the HALO (ha .. hb): its ends are ROUND (below).
-        const float wa = dot(w, axis);
-        const float da = dot(dir, axis);
-        float ta = 0.0, tb = tMax;
-        float ha = 0.0, hb = tMax;
-        if (abs(da) > 1e-5)
-        {
-            const float t0 = -wa / da, t1 = (len - wa) / da;
-            const float tr = range / abs(da);
-            ta = max(ta, min(t0, t1));
-            tb = min(tb, max(t0, t1));
-            ha = max(ha, min(t0, t1) - tr);
-            hb = min(hb, max(t0, t1) + tr);
-        }
-        else if (wa < -range || wa > len + range)
-            continue;
-        else if (wa < 0.0 || wa > len)
-            tb = ta; // beside an end: the halo only
-        if (hb <= ha)
-            continue;
-
-        // d^2(t) = s2 (t - tc)^2 + h2, across the axis.
-        const vec3 wp = w - axis * wa;
-        const vec3 dp = dir - axis * da;
-        const float s2 = max(dot(dp, dp), 1e-8);
-        const float tc = -dot(wp, dp) / s2;
-        const float h2 = max(dot(wp, wp) - tc * tc * s2, 0.0);
-        if (h2 >= range * range)
-            continue;
-
-        const float q2 = h2 + r * r;
-        const float q = sqrt(q2);
-        const float s = sqrt(s2);
-        // Core: the integral of r^3 / (q2 + x^2)^2 dx / s.
-        float core = 0.0;
-        if (tb > ta)
-        {
-            const float xa = s * (ta - tc), xb = s * (tb - tc);
-            core = r * r * r * (xb / (q2 + xb * xb) - xa / (q2 + xa * xa) + (atan(xb / q) - atan(xa / q)) / q) / (2.0 * q2 * s);
-        }
-        // Halo: the integral of r / (q2 + x^2), faded out to the range by the distance to the beam as a CAPSULE - from the
-        // point where the ray passes the beam to the SEGMENT, not the line - so the glow ends ROUND at the foot and the
-        // tip. Cut on the end planes it showed a flat bottom and top.
-        // PAST an end the profile's own distance is the capsule's too (qh: + past^2). With the line's distance alone, a
-        // ray that passed the line beyond the tip still got the profile's peak: a thin dim beam going on past the tip.
-        const float tp = clamp(tc, ha, hb);
-        const float along = wa + tp * da;
-        const float past = max(max(-along, along - len), 0.0);
-        const float fade = max(1.0 - (h2 + s2 * (tp - tc) * (tp - tc) + past * past) / (range * range), 0.0);
-        const float qh = sqrt(q2 + past * past);
-        const float halo = BEAM_HALO * fade * fade * r * (atan(s * (hb - tc) / qh) - atan(s * (ha - tc) / qh)) / (qh * s);
-        // THE TIP FADE (u_present_beamFade.x, m; 0 = none): the glow fades out over that length toward the beam's far
-        // end, by where the ray passes the beam - a short beam then ends soft, not as a cut.
-        const float tipFade = u_present_beamFade[i].x;
-        const float glow = (core + halo) * (tipFade > 0.0 ? smoothstep(0.0, tipFade, len - along) : 1.0);
+        float tp;
+        const float glow = beamGlow(u_viewPos, dir, tMax, u_present_beamFoot[i].xyz, u_present_beamAxis[i].xyz, u_present_beamAxis[i].w,
+            u_present_beamFoot[i].w, u_present_beamColor[i].w, u_present_beamFade[i].x, tp);
         sum += u_present_beamColor[i].rgb * glow;
         weight += glow;
         tBeam += glow * tp;

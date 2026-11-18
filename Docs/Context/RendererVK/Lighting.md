@@ -366,7 +366,8 @@ is the former tube light's (`radius < 0`, `width` = the core radius, `direction`
   axis by the distance to the line (the ray leaves at 45 degrees, over what stands at the beam's foot), clamped to the
   line. A point BELOW the beam's start measures from the start (`max(along, 0)`), so ground lower than a beacon still
   aims well up the beam and not into the building under it. No jitter, so no noise: a jittered point over a line this long never converges under TAA.
-* **The glow in the air is closed form, in the fog apply** (`beamColumns`, vol_apply.fs.glsl): along the view ray the
+* **The glow in the air is closed form** (`beamGlow`, Sky/beam_glow.inc.glsl - the fog apply's `beamColumns` and the
+  beam cards below both call it): along the view ray the
   squared distance to the line is a quadratic, and two profiles integrate exactly over it - a tight core
   `r^3 / (d^2 + r^2)^2` and a weak halo `r / (d^2 + r^2)` (`BEAM_HALO`) that ends at the light's range. **The halo's ends are ROUND:** its
   fade takes the distance to the beam as a capsule (from the point where the ray passes the beam to the SEGMENT), and
@@ -388,6 +389,18 @@ is the former tube light's (`radius < 0`, `width` = the core radius, `direction`
   with range^3 (a 300 m range = ~1000 grids). `Renderer::addBeamColumn` adds the glow in the air ALONE (a column
   slot, no light record), and `addLightInfo(light, false)` a beam with no column: the co-op beacon is a tall column
   plus a short surface beam at its foot. The fog froxels, GI and particles see a beam as a point at its centre.
+* **A column costs EVERY pixel of the screen** (the fog apply walks all the frame's columns per pixel), so the count
+  is small. **`Renderer::addBeamCard` draws the same glow as a BEAM CARD** (`BeamCardPipeline`, Sky/beam_card.*.glsl; no
+  light record, no column slot): one camera-facing quad per beam around the capsule its glow reaches (the segment +
+  the range on every side; each end offset in the plane that faces the camera there, so a beam seen end-on is a
+  square around each end), whose fragment shader runs `beamGlow` for that one beam - cut at the scene depth and
+  dimmed by a cloud in front as the columns are. **The cost is the card's pixels.** With the camera within 1.5 x the
+  range of the segment the card is the whole render rect (one column's cost). Additive (ONE, ONE), alpha masked, no
+  depth test. The scene stage "Beam cards" right after "Fog apply" (VR: per eye inline), gated on the frame's count;
+  the cards are claimed lock-free like the columns (`m_beamCards`, reset in the begin-frame job, the first
+  `BeamCardPipeline::MAX_CARDS` = 256), copied into a mapped per-slot buffer in `present` and drawn with one indirect
+  call (6 vertices per card, the count in a mapped indirect buffer: the cached secondary never re-records for it).
+  **Unlike the columns they draw with the fog off.** The game's light links use them (Game's Economy.md, "Drawn").
 
 ## Long-range sun shadows
 

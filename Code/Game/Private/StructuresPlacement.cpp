@@ -292,6 +292,11 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
                     if (oc::string_view(child->getName()) == armNames[a])
                         ref.arms[a] = child.get();
     }
+    if (type == EStructureType::Searchlight || type == EStructureType::Constructor) // the turning `Head` (poseAimHeads)
+        if (const SceneComponent* sc = getComponent<SceneComponent>(entity.get()))
+            for (const EntityPtr& child : sc->children)
+                if (oc::string_view(child->getName()) == "Head")
+                    ref.head = child.get();
     stampTuning(ref);
     applyStructureTint(ref); // blueprint gray until built
     m_nextStructureId = glm::max(m_nextStructureId, id + 1);
@@ -320,6 +325,8 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
         Globals::world.removeRootEntity(s.rubbleVisual.get());
     if (s.walkPiece) // a Walkway's deck or stairs
         Globals::world.removeRootEntity(s.walkPiece.get());
+    if (s.walkLegs) // ... and a deck's legs
+        Globals::world.removeRootEntity(s.walkLegs.get());
     clearWardPieces(s); // the wards' pieces on a wall segment
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)

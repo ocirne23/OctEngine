@@ -107,10 +107,15 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
   > **Who does what.** `GameStructureComponent::update` (`EMachineKind::Searchlight`) AIMS: nearest enemy by flat
   > distance, the yaw turns at "Searchlight turn speed (deg/s)", `lit` = a target and a paying store. It runs on a
   > client too (aim only, from the mirrored units and the mirrored store), so nothing of it is on the wire.
+  > **The lamp head shows the aim, lit or not:** searchlight.pre's `Head` (a dark lamp housing, a glowing lens face on
+  > its +X front and the lamp crystal seated in the lens, its point out) is turned to the yaw every frame by `StructureSystem::poseAimHeads` (every instance;
+  > the Builder's hut's crystal too). `Ref::head` caches the `Head` child at spawn; the turn takes the root's rotation
+  > out, so on the ship the yaw stays on the map. `applyStructureTint` walks the whole child tree, so the head's pieces
+  > (grandchildren) go blueprint gray too.
   > `StructureSystem::publishSearchlights` (every instance, each frame, next to `drawLightLinks`) writes the lit ones
   > into `GameUnitParams::lightCones` (max 32: lamp x z, range, direction, cos of the half angle, team) and adds one
-  > `SpotLight` each ("Searchlight brightness"), which starts 1 m in front of the lamp gem (from inside the mesh it
-  > shadows itself). Tried a beam column for a shaft in the air, dropped because a column is a cylinder and did not
+  > `SpotLight` each ("Searchlight brightness"), which starts at the lens face, 0.4 m in front of the head's centre
+  > (`c_searchlightLampClear`; from inside the housing it shadows itself - the lens and the crystals cast no shadow). Tried a beam column for a shaft in the air, dropped because a column is a cylinder and did not
   > read as the cone. **The units do the rest:** `GameUnitComponent::setSolid` tests the cones as FLAT wedges on the
   > map (the ground's height does not count) - in one, the unit is solid and burns. A unit on the far tick is not
   > tested.

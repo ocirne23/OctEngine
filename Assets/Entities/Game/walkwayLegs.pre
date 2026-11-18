@@ -1,0 +1,38 @@
+# The LEGS of a built Walkway deck: four upright legs at the corners (Models/walkway.obj `WalkwayLeg`: the top at the
+# entity's y, 2.6 m long). The game puts the root on the Walkway's own origin, UNTILTED, and moves each leg up or down
+# so its top meets the tilted deck's ledger over it (StructureSystem::updateWalkway); the long foot goes into the ground.
+# Render-only: the deck (walkwayDeck.pre) carries the collider. The Position y here is the untilted deck's ledger.
+Prefab gameWalkwayLegs
+	Component Scene
+		Entity
+			Name Leg
+			Position -0.8 -0.34 -0.8
+			Component Render
+				ObjectContainer walkway
+				Node WalkwayLeg
+				Type StaticMesh
+				Color 0.5 0.36 0.2
+		Entity
+			Name Leg
+			Position 0.8 -0.34 -0.8
+			Component Render
+				ObjectContainer walkway
+				Node WalkwayLeg
+				Type StaticMesh
+				Color 0.5 0.36 0.2
+		Entity
+			Name Leg
+			Position -0.8 -0.34 0.8
+			Component Render
+				ObjectContainer walkway
+				Node WalkwayLeg
+				Type StaticMesh
+				Color 0.5 0.36 0.2
+		Entity
+			Name Leg
+			Position 0.8 -0.34 0.8
+			Component Render
+				ObjectContainer walkway
+				Node WalkwayLeg
+				Type StaticMesh
+				Color 0.5 0.36 0.2

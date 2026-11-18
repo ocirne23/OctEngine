@@ -28,7 +28,7 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Ship rail", "Cannon", "Ammo works", "Ammo store", "Resist ward", "Absorb ward", "Retaliate ward" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
-    2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+    2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.75f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, // (the Builder's hut: a 3.5 m pylon)
     0.25f, 1.5f, 1.0f, 2.0f, 0.25f, 1.5f, 1.5f, 2.0f, // (the Wall and the Gate: 3 m tall)
     StructureSystem::WalkwayDeckHeight + 0.1f,          // the Walkway: its origin is 0.1 over the deck, like the Bridge's
     2.0f,                                               // the Armory
@@ -37,7 +37,7 @@ static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f,
     1.1f,                                               // the Cannon (on the ground, a road piece, a walkway deck or a ship rail)
     1.5f,                                               // the Ammo works
     0.75f,                                              // the Ammo store
-    1.75f, 1.75f, 1.75f };                              // the three wards (3.5 m: a little over a wall)
+    1.75f, 1.75f, 1.75f };                              // the three wards (the tower block's top at 2 m: a deck's height)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -497,6 +497,8 @@ void StructureSystem::clear()
             Globals::world.removeRootEntity(s.rubbleVisual.get());
         if (s.walkPiece)
             Globals::world.removeRootEntity(s.walkPiece.get());
+        if (s.walkLegs)
+            Globals::world.removeRootEntity(s.walkLegs.get());
         clearWardPieces(s);
     }
     for (const Walker& walker : m_walkers)
@@ -929,8 +931,10 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     tickLight(deltaSec);    // light: the beams between the buildings and their hubs
     tickWardLinks(deltaSec, true);
     tickWards(deltaSec);    // the wards pay for what their walls did, and the Absorb shields grow back
-    drawLightLinks();       // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
+    drawLightLinks(deltaSec); // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
     publishSearchlights();  // the same rule: its spot lights are light records
+    poseAimHeads();         // the searchlights' lamps and the Builder's huts' crystals turn
+    drawBuilderStreams();
     // The transport: inject the due runs' supply/demand and kick the job - it overlaps present
     // and the next frame's front, joined at the top of the next tick.
     m_transportTime += deltaSec;
@@ -970,9 +974,12 @@ void StructureSystem::tickMirror(float deltaSec)
             }
             ref.lightFlow = flow;
         }
-        drawLightLinks();
+        drawLightLinks(deltaSec);
     }
     publishSearchlights(); // the cones: aimed by the mirrored components themselves (see GameStructureComponent::update)
+    mirrorConstructors(deltaSec);
+    poseAimHeads();
+    drawBuilderStreams();
     tickWardLinks(deltaSec, false); // the wards' pieces on the walls (the work and the pay are the authority's)
     for (Ref& ref : m_frame) // the cannons' guns turn toward the synced aim
         if (ref.type == EStructureType::Cannon)

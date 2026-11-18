@@ -6,7 +6,7 @@ import Core.Transform;
 import Entity;
 import :Structures;
 
-// THE WARDS (see Structures.ixx and "The wards" in Docs/Context/Game/Economy.md). A ward is a 1x1 pylon with a light
+// THE WARDS (see Structures.ixx and "The wards" in Docs/Context/Game/Economy.md). A ward is a 1x1 tower with a light
 // store. It covers the wall and gate segments connected to it, and each covered segment's GameStructureComponent does
 // the work in damage() (the union's `wall` variant): Resist takes a share off every hit, the Absorb shield takes what is
 // left first, Retaliate sends a share of every bite back to the biter. This file derives the links, pays the wards and

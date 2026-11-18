@@ -1030,6 +1030,14 @@ void Renderer::addBeamColumn(const RendererVKLayout::LightInfo& beam)
         m_beamLights[slot] = beam;
 }
 
+void Renderer::addBeamCard(const RendererVKLayout::LightInfo& beam)
+{
+    if (!(beam.width > 0.0f && beam.radius < -1e-5f && glm::length(beam.direction) >= 1e-4f))
+        return;
+    if (const uint32 slot = oc::atomic_ref<uint32>(m_beamCardCount).fetch_add(1); slot < BeamCardPipeline::MAX_CARDS)
+        m_beamCards[slot] = beam;
+}
+
 // vol_scatter.cs.glsl divides by halfExtents x edgeSoftness unguarded: that product is >= 1 mm per axis here.
 void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolumeIn)
 {

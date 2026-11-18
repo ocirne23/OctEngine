@@ -54,11 +54,30 @@ public:
         // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
+        // THE AIM HEAD (poseAimHeads, every instance, every frame): the render-only `Head` child that turns on the map - the
+        // Searchlight's lamp (to GameStructureComponent::searchlight.yaw) and the Builder's hut's focus crystal (to headYaw).
+        // Cached at spawn; the head's local +X is its forward.
+        Entity* head = nullptr;
+        // THE BUILDER'S HUT: its crystal's heading on the map (rad; direction = cos, 0, sin), turned at "Constructor turn
+        // speed (deg/s)" toward buildTarget (the structure it builds or repairs: the authority's pick in tickConstructors, a
+        // mirror's own from the mirrored roster; 0 = none). buildWorking: stone goes in now (the stream shows).
+        float headYaw = 0.0f;
+        uint32 buildTarget = 0;
+        bool buildWorking = false;
         // WALKWAY (updateWalkway): the piece a body stands on - walkwayDeck.pre, or walkwayStairs.pre toward a plain
         // road piece. A root entity of its own with the collider, owned by the roster entry; a blueprint has none.
         // walkDir: -2 no piece, -1 the deck, 0..3 stairs down toward +X, -X, +Z, -Z.
         mutable EntityPtr walkPiece;
         mutable int8 walkDir = -2;
+        mutable int8 walkWant = -2; // rebuildNetworks: this pass's pick (walkwayModeOf), read by the neighbours' poses
+        // THE DECK'S TILT (solveWalkwayDecks -> updateWalkway): walkLift = the deck's origin over the Walkway's own,
+        // walkSlope = its rise per m along X and Z; 0 for stairs or no piece. walkwayDeckY reads it. The *Want pair is
+        // the solve's result; a change spawns the deck and its legs (walkLegs: upright, walkwayLegs.pre) again.
+        mutable float walkLift = 0.0f;
+        mutable glm::vec2 walkSlope{ 0.0f };
+        mutable float walkLiftWant = 0.0f;
+        mutable glm::vec2 walkSlopeWant{ 0.0f };
+        mutable EntityPtr walkLegs;
         // PROBLEM BADGE (the world label's bubble): what GameMatch::structureWarning last found,
         // re-checked on a jittered ~1 s timer instead of every frame - it scans the links, and the
         // states it reports change on the timescale of a player's actions. Lives HERE, so it dies
@@ -102,6 +121,7 @@ public:
         uint32 lightId = 0;
         bool lightBlocked = false;
         float lightFlow = 0.0f; // light/s on the link, smoothed (tickLight; an estimate on a mirror): the beam shows while > 0
+        mutable float beamLit = 0.0f; // 0..1: how much of its light the beam casts on surfaces (drawLightLinks fades it)
         // ON THE SHIP (see "The ship's structures" below): its ground point on the deck in SHIP space (y 0 = the deck
         // top; x, z snapped to the deck's tiles like snapToGrid). Its pose follows the ship. authoredInvulnerable: the
         // prefab's flag, restored when the ship lands (aloft every ship structure is invulnerable).
@@ -602,12 +622,16 @@ public:
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
     float fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
         bool includeRepairs = false, float repairHealCap = FLT_MAX, bool byPlayer = false);
+    // The structure fundNearbyBlueprint would pay: the nearest own blueprint (or damaged one, includeRepairs) in reach that
+    // rubbleBlocked lets through. -1 = none.
+    int findBuildTarget(const glm::vec3& pos, float radius, uint8 team, bool includeRepairs, bool byPlayer) const;
     // repairHealCap: the most health this call gives a BUILT structure (a repair); a blueprint has no cap.
     // byPlayer: a player pays - rubble takes it with enemies near too (rubbleBlocked).
     float investMaterials(const Ref& s, float amount, float repairHealCap = FLT_MAX, bool byPlayer = false);
     float constructorRange() const { return m_settings.constructorRange; }
 
-    // A built Walkway DECK (not its stairs) in the grid cell under pos: outY = its origin (0.1 over the deck top).
+    // A built Walkway DECK (not its stairs) in the grid cell under pos: outY = its walk height at pos (0.1 over the deck
+    // top, with its tilt: walkwayDeckY).
     bool walkwayDeckTop(const glm::vec3& pos, float& outY) const;
     // The guards' shots of this tick (tickCarriers): the match draws one line each and clears the list.
     struct GuardShot { glm::vec3 from, to; };
@@ -779,6 +803,13 @@ private:
     void tickProduction(float deltaSec); // income, fuel burn, consumer drain, emitter ramps
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
+    // The Builder's huts on a mirror: the same pick and turn from the mirrored roster (the stone is the authority's).
+    void mirrorConstructors(float deltaSec);
+    // Turns the hut's crystal toward its target at "Constructor turn speed (deg/s)"; true = it points at it.
+    bool turnBuilderHead(Ref& hut, const glm::vec3& target, float deltaSec) const;
+    // Every instance, every frame: the aim heads (Ref::head) and the Builder's huts' stone streams.
+    void poseAimHeads();
+    void drawBuilderStreams() const;
     // Every c_rubbleCheckPeriod: Ref::rubbleUnsafe of each rubble pile, ONE sphere query each (the searches for build
     // work ran one per pile per searcher per frame, which a late game with much rubble and a large wave made very slow).
     void refreshRubbleSafety(float deltaSec);
@@ -801,7 +832,10 @@ private:
     struct LightNetNode { uint32 id; int parent; }; // parent: an index into m_lightNet, -1 = a network's root
     oc::vector<LightNetNode> m_lightNet; // every network's hubs, each network a tree in breadth-first order from its root
     oc::vector<float> m_lightPoolMoved;  // per roster index, this tick: the light on the hub's link to its parent
-    void drawLightLinks() const;
+    // drawLightLinks: every moving link's glow as a beam card, the light on surfaces for the "Lit beams" best (see Light.cpp).
+    void drawLightLinks(float deltaSec) const;
+    struct BeamCandidate { const Ref* ref; glm::vec3 a, b; float power, score, wasLit; };
+    mutable oc::vector<BeamCandidate> m_beamScratch; // drawLightLinks' per-frame list (kept for its capacity)
     // THE SEARCHLIGHTS (every instance, each frame): the shining ones' cones into GameUnitParams::lightCones (the
     // units' reveal + burn) and one SpotLight each. The aim and the draw are the component's (EMachineKind::Searchlight).
     void publishSearchlights() const;
@@ -864,7 +898,10 @@ private:
     GameUnitComponent* nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
         const glm::vec3* sightFrom = nullptr) const;
     bool walkwayDeckAt(int cx, int cz) const;
-    bool guardDeckAt(int cx, int cz) const; // a Walkway deck, or a built rail tile of the landed ship: no clear line needed
+    bool guardDeckAt(int cx, int cz) const; // a Walkway deck, a built ward's top, or a built rail tile of the landed ship: no clear line needed
+    bool wardAt(int cx, int cz) const; // a built ward: its top is road (roadAt), a high place for guards
+    // A ward's top in roadAt's terms (a deck origin's height: 0.1 over the top, which is at a deck's height).
+    float wardTopY(const Ref& w) const { return w.entity->pos.y - spawnHeightOf(w.type) + spawnHeightOf(EStructureType::Walkway); }
     bool railEdgeBetween(int ax, int az, int bx, int bz) const; // a landed ship's rail piece between two neighbour cells
     bool guardWanted(int index, uint8 team) const;
     // THE CANNON'S CREW: walkers too. While an enemy unit is within "Crew call range" of a Cannon (Ref::alarm), free
@@ -949,7 +986,14 @@ private:
     // segments' arm visuals. Cable fills survive a rebuild by structure id.
     void rebuildNetworks();
     void updateArms(const Ref& s); // enable the arm children pointing at connected neighbours
-    void updateWalkway(const Ref& s); // a Walkway's deck or stairs piece, by its neighbours
+    void updateWalkway(const Ref& s); // a Walkway's deck or stairs piece, by its neighbours (and the deck's tilt)
+    int8 walkwayModeOf(const Ref& s) const; // -2 no piece (a blueprint), -1 the deck, 0..3 stairs toward +X, -X, +Z, -Z
+    void solveWalkwayDecks(); // every deck's tilt (Ref::walkLiftWant / walkSlopeWant), after the walkWant pass
+    // A Walkway deck's walk height at a point of its cell: its origin's (0.1 over the deck top) with the tilt.
+    static float walkwayDeckY(const Ref& r, const glm::vec3& at)
+    {
+        return r.entity->pos.y + r.walkLift + glm::dot(r.walkSlope, glm::vec2(at.x - r.entity->pos.x, at.z - r.entity->pos.z));
+    }
 
     // ---- THE CABLE TRANSPORT (Transport.cpp) ----
     // Resources move over the cables as WHOLE CELLS. Every built cable segment and conducting

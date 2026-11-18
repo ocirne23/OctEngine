@@ -1,45 +1,53 @@
-# Resist ward: a 1x1 pylon a little over a wall's height (3.5 m, a wall is 3 m) with a light crystal on top. Placed against
-# a wall, it covers the connected wall and gate segments (StructureSystem::rebuildWardLinks): a barrier of light around
-# them takes a share off every hit, paid from its light store (Wards.cpp). It takes light like any consumer, at "Refill
-# (light/s)" at most. Spawned origin 1.75 above ground; the crystal's centre is Light.cpp's beamHeightOf (2.65 over the
-# origin): keep them in step. wardAbsorb.pre and wardRetaliate.pre are the same pylon with another colour.
-# SHAPE (a placeholder): a stone footing, a post, a cap, and the crystal over it.
+# Resist ward: a 1x1 WARD TOWER with a light crystal floating over it. Placed against a wall, it covers the connected
+# wall and gate segments (StructureSystem::rebuildWardLinks): a barrier of light around them takes a share off every hit,
+# paid from its light store (Wards.cpp). It takes light like any consumer, at "Refill (light/s)" at most. Spawned origin
+# 1.75 above ground; the crystal's centre is Light.cpp's beamHeightOf (2.65 over the origin): keep them in step.
+# wardAbsorb.pre and wardRetaliate.pre are the same tower with another colour.
+# SHAPE (a placeholder): a full 2 x 2 x 2 m stone block whose flat top is at a Walkway deck's height (2 m), so a ward
+# between walkways carries the walk on (the deck solve takes its top as a fixed edge: solveWalkwayDecks). The magic
+# stays OFF the walk: a glowing band around the block under the decks' planks (1 cm proud of the faces), a glowing
+# rune set flush into the top, and the crystal floating high over it (its lowest point 3.95 m up: a player on the
+# top walks under it). The collider is the block alone.
 Prefab gameWardResist
 	Global true
 	Component Render
 		ObjectContainer baseshapes
-		Node CubeHalf
+		Node Cube
 		Type StaticMesh
 		Color 0.5 0.47 0.42
-		Position 0 -1.35 0
-		Scale 0.8
+		Position 0 -0.75 0
+		Scale 1
 	Component Physics
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 0.8 1.75 0.8
+		HalfExtents 1 1 1
+		Offset 0 -0.75 0
 	Component GameStructure
 		MeleeRadius 1
 		AlwaysShowResources true
 	Component Scene
 		Entity
-			Name Post
-			Position 0 0.31 0
+			Name Band
+			Position 0 -0.25 0
 			Component Render
-				ObjectContainer baseshapes
-				Node Pillar3
-				Type StaticMesh
-				Color 0.5 0.47 0.42
-				Scale 0.42
-		Entity
-			Name Cap
-			Position 0 1.7 0
-			Component Render
-				ObjectContainer baseshapes
+				ObjectContainer eyes
 				Node CubeQuarter
 				Type StaticMesh
-				Color 0.62 0.5 0.28
-				Scale 0.6
+				Color 1 0.8 0.4
+				Emissive 1.5
+				Scale 1.005
+		Entity
+			Name Rune
+			Position 0 0.165 0
+			Component Render
+				ObjectContainer eyes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 1 0.8 0.4
+				Emissive 2
+				Rotation 0 45 0
+				Scale 0.35
 		Entity
 			Name Crystal
 			Position 0 2.65 0
@@ -49,4 +57,4 @@ Prefab gameWardResist
 				Type StaticMesh
 				Color 1 0.8 0.4
 				Emissive 2.5
-				Scale 0.5
+				Scale 0.45

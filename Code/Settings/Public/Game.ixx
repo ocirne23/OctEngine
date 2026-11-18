@@ -324,12 +324,14 @@ export struct GameStructureSettings
     float lightHubLinkRange = 60.0f;  // m: two hubs this near share their light
     float lensRange = 32.0f;        // m: a Lens sends its beam to a hub (or another Lens) this far away
     float lensBuffer = 40.0f;         // the light a Lens holds: what is on its way through it
+    float lensRate = 60.0f;           // light/s a Lens's store moves in its hub network (what it passes to its own producers' and consumers' side)
     float lightBeamRate = 20.0f;      // light/s a producer sends
     float lightFeedRate = 10.0f;      // light/s a consumer takes (the barracks and the turret keep their own intake)
     float lightShareRate = 10.0f;     // light/s between two hubs
     // The look of a link's beam (the nearest few are BeamLights): its glow, its core, how far it lights surfaces.
     float mirrorGlitterRate = 14.0f;  // sparks/s on a mirror's beam in full daylight (Effects/light_glitter.pfx; 0 = none)
     float lightBeamGlow = 1.5f;       // at the full flow
+    int lightBeamLitCount = 10;       // the moving links that also light surfaces (the best by flow, length and distance; every one glows)
     float lightBeamFullFlow = 20.0f;  // light/s at which a beam has its full glow and radius (less light = less beam):
                                       // the "Beam rate" (a hub-to-hub link at "Share rate" 10 is a half beam)
     float lightBeamRadius = 0.35f;    // m, at the full flow (half of it at no flow)
@@ -407,6 +409,8 @@ export struct GameStructureSettings
     float constructorRange = 27.0f;
     float constructorBuildRate = 4.0f;
     float constructorRepairRate = 20.0f; // the most health/s one Builder's hut gives a BUILT structure (a blueprint: the stone rate alone)
+    float constructorTurnRate = 90.0f;   // deg/s its focus crystal turns to the work (it builds only while the crystal points at it)
+    float constructorStreamRate = 14.0f; // stones/s in the stream from the crystal to the work (the sparks: 1.5 x as many; 0 = no stream)
     float waypointRadius = 3.0f;
     int wallBreachCost = 10;          // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
     bool cheatInstantBuild = false;

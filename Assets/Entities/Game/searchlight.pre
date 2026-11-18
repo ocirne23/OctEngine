@@ -2,11 +2,16 @@
 # lantern field) and burns. It draws light only while it shines ("Searchlight light/s").
 # Spawned origin 2.0 above ground.
 # SHAPE (a placeholder; uniform scales of the baseshapes variants): a dark IRON MAST on a foot (the root) - a thin post
-# of two pieces (1.8 m each, overlapping by 0.1 m), a lamp deck turned 45 degrees, a warm yellow lamp 5.4 m over the
-# ground and a roof over it. It reads against the Light tower's pale stone obelisk with its blue crystal. The child
-# pieces are render-only; the collider is the 4x4x4 m box. The cone itself is a spot light the game adds each frame
-# from the lamp (keep the `Lamp` height in step with c_searchlightLamp in Game/Private/Light.cpp). The deck and the
-# roof are narrow on purpose: the light starts 1 m in front of the lamp and must clear them.
+# of two pieces (1.8 m each, overlapping by 0.1 m), a lamp deck turned 45 degrees, the LAMP HEAD 5.4 m over the ground
+# and a roof over it. It reads against the Light tower's pale stone obelisk with its blue crystal. The child pieces are
+# render-only; the collider is the 4x4x4 m box.
+# THE HEAD turns with the cone (StructureSystem::poseAimHeads, from the component's yaw): its local +X is the aim. A dark
+# iron LAMP HOUSING (a box and a smaller back cap), a glowing warm LENS face on its front (the `eyes` container: unlit, so
+# it glows), and the main crystal seated in the lens, its point out along +X. A small crystal sits on the roof. The cone
+# itself is a spot light the game adds each frame from the lamp (keep the `Head` height in step with c_searchlightLamp in
+# Game/Private/Light.cpp; the light starts at the lens face, c_searchlightLampClear there). The deck and the roof are
+# narrow on purpose: the cone must clear them (the lens and the crystals are unlit pieces with no ray tracing: they cast
+# no shadow).
 Prefab gameSearchlight
 	Global true
 	Component Render
@@ -54,15 +59,49 @@ Prefab gameSearchlight
 				Rotation 0 45 0
 				Scale 0.5
 		Entity
-			Name Lamp
+			Name Head
 			Position 0 3.4 0
-			Component Render
-				ObjectContainer gemsGlow
-				Node Diamond
-				Type StaticMesh
-				Color 1 0.93 0.75
-				Emissive 4
-				Scale 0.55
+			Component Scene
+				Entity
+					Name Housing
+					Position -0.12 0 0
+					Component Render
+						ObjectContainer baseshapes
+						Node Cube
+						Type StaticMesh
+						Color 0.16 0.17 0.2
+						Scale 0.36
+				Entity
+					Name BackCap
+					Position -0.6 0 0
+					Component Render
+						ObjectContainer baseshapes
+						Node Cube
+						Type StaticMesh
+						Color 0.2 0.21 0.25
+						Scale 0.24
+				Entity
+					Name Lens
+					Position 0.3 0 0
+					Component Render
+						ObjectContainer eyes
+						Node CubeQuarter
+						Type StaticMesh
+						Color 1 0.85 0.55
+						Emissive 2.5
+						Rotation 0 0 90
+						Scale 0.3
+				Entity
+					Name Lamp
+					Position 0.32 0 0
+					Component Render
+						ObjectContainer gemsGlow
+						Node Diamond
+						Type StaticMesh
+						Color 1 0.95 0.82
+						Emissive 5
+						Rotation 0 0 90
+						Scale 0.32
 		Entity
 			Name Roof
 			Position 0 4.0 0
@@ -73,3 +112,13 @@ Prefab gameSearchlight
 				Color 0.22 0.23 0.27
 				Rotation 0 45 0
 				Scale 0.5
+		Entity
+			Name TopCrystal
+			Position 0 4.32 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.9 0.65
+				Emissive 3
+				Scale 0.2
