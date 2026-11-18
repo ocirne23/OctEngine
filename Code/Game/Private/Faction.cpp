@@ -155,3 +155,28 @@ bool FactionLayer::tick(float deltaSec, glm::ivec4& outDirty)
     m_dirty = glm::ivec4(Size, Size, -1, -1);
     return changed;
 }
+
+// THE END STATE, computed: every cell a source touches goes fully to that source's side in time (the pull only stops at
+// 0 or 65535; diffusion only softens the edge), so the settled land is the sign of the source field. One pass over the
+// stamped rectangles, no simulation.
+void FactionLayer::settle()
+{
+    if (!m_valid)
+        return;
+    stampSources();
+    for (const glm::ivec4& rect : m_stamped)
+        for (int z = rect.y; z <= rect.w; ++z)
+        {
+            const size_t row = (size_t)z * Size;
+            for (int x = rect.x; x <= rect.z; ++x)
+                if (const int8 source = m_source[row + x]; source != 0)
+                {
+                    m_value[row + x] = source > 0 ? 65535 : 0;
+                    m_bytes[row + x] = source > 0 ? 255 : 0;
+                }
+        }
+    // The next tick starts a fresh sweep; the caller sends the whole map, so nothing is dirty.
+    m_stampDue = true;
+    m_rowCarry = 0.0f;
+    m_dirty = glm::ivec4(Size, Size, -1, -1);
+}

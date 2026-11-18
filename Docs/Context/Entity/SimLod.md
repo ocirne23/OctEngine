@@ -35,7 +35,9 @@ dormant; main.cpp publishes the camera in the plain testbed.
 **Zones.** `World::setSimLodZones(spheres, count)` — at most `MaxSimLodZones` 64, xyz center plus w radius — are
 spheres that stamp **tier 1 out to radius + `zoneMargin` and tier 2 over a further `zoneTier2Band`, never tier 0.**
 `GameMatch::update` publishes the shield structures' bubble spheres (`collectShieldBubbles`; the merge group's
-sphere where merged), so a unit that walks into a far base's field ticks and is pushed with no player near. They
+sphere where merged), so a unit that walks into a far base's field ticks and is pushed with no player near, plus
+ONE BASE AREA (`m_simLodZones`: the Base's place, out to its team's farthest built structure + 20 m), so a demon
+anywhere around the base ticks at tier 1 and keeps its bubble on (`forceMaxTier`) with no player near. They
 stay set until set again (the Game refreshes them every 0.25 s).
 
 Both are consumed by the selection job (`buildSelectSpheres` at kick): one sphere list with a query radius and a
@@ -142,6 +144,7 @@ long as it stays far (it is never visited):
 
 * **Outside the LOD** — inactive, or `alwaysVisited` (Global — every building — or no entry) — the visit switches
   it ON.
+* **A unit whose bubble is GONE** (`GameUnitComponent::shieldGone`: its battery collapsed) stays OFF, outside the LOD and selected alike.
 * **Selected**: `setActive(dist <= forceMaxTier)` by DISTANCE TIER on EVERY visited entity with a ForceComponent,
   throttled or not. Refreshed every visit, so a tweak change applies at once. A fresh entity's tier comes from the
   direct distance (see Tiers), so a shot next to the player has its field from its first visit.

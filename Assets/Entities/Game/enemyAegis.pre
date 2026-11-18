@@ -1,0 +1,38 @@
+# Enemy Aegis: the SHIELD CARRIER of the middle nights (from night 4, the Hive's nights; MatchCoop's sprinkle). A
+# brute-sized body, not tough itself (150 health), with a wide bubble of darkness (about 10 m) and a very large shield battery: the bubble squishes the
+# players' fields back and covers the demons around it, a hit takes the battery first, and it bites structures hard.
+# An empty battery collapses the bubble for good. Slow. Dark indigo.
+Prefab gameEnemyAegis
+	CullMode RootOnly
+	Component Scene
+		Prefab CubeGuy        # the model - see enemyGrunt.pre
+			Position 0 1.355 0
+			Scale 0.55
+	Component Physics
+		Body Dynamic
+		Shape Sphere
+		Radius 0.98
+		Density 260
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.9
+		Reach 22
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName AEGIS
+		Color 0.3 0.12 0.55
+		HealthMax 150
+		EnergyMax 700
+		ShieldOutput 1.9
+		MoveSpeed 2.4
+		AttackRange 1.9
+		AttackInterval 1.5
+		AttackDamage 24
+		PlayerDamage 30
+		StructureDamage 80
+		EmitterDrain 10
+		AlwaysDisplayHealth true

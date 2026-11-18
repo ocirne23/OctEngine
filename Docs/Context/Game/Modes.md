@@ -92,12 +92,12 @@ the moment the time is written) is the one input; a day's length is "Sky/Sun cyc
 | The start | The authority sets the time to "Start time of day (h)" (7; < 0 = keep it) in `spawnWorld` and switches the sun cycle on. |
 | Night waves | `tickWaves`: the dusk edge (`m_night`) counts a night (`m_nightIndex`) and launches the first wave at once; then one wave every `nightWaveInterval()` until dawn - the night's length (from the sun cycle's latitude, day of year and speed) over "Waves per night" (14), held to 5 .. 300 s, so the COUNT of a night's waves is a setting and the sun cycle only says when they come - each from its own random direction. **A night builds up** (`m_nightWave`, `m_waveScale`): see Wave size. "Wave variation" (0.4) is also a random +- on the pause to the next wave. The scale is rolled AHEAD (at dawn for the night's first wave, at each launch for the one after) and is in `nextWaveBudget`, so the HUD's "Next wave power" is the wave that will come. The dawn edge drops the points still queued and sets `m_nightWave` back to 0. |
 | Wave size | **Two separate growths** (`nextWaveBudget`): wave k (0-based) of night n (0-based) = "Wave budget" (200) x "Night growth (x)" (1.75)^n x (1 + "Wave growth per wave" (0.25) x k) x random(1 +- "Wave variation" (0.4)). INSIDE a night the waves grow (the last of 14 is 4.25x the first), and that build-up starts again at every dusk; ACROSS nights the whole night grows by "Night growth". **It does not depend on the sun cycle**: a faster cycle, another latitude or day of the year moves the waves closer together or farther apart, never their count, so the wave power is the same at any time speed. `waveLevel()`: the NIGHT number (0-based; by day the coming night) sizes every wave of a night; the recipes unlock by the 1-based night (`minWave` = the first night). **The first night has variety of its own**: a recipe with `WaveArchetype::firstNight` = N also rolls from that night's wave N on (0-based, `m_nightWave`), under its `minWave` - the first wave is the plain swarm, then swarm + runners and the grunt push (1), the skirmish (2), the runner rush (3), the warrior scouts (4). No spitter comes on the first night. `m_waveIndex` still counts waves (GWv, the log). |
-| Daylight burn | `stampLightRules` (authority, per frame) writes `GameUnitParams::sunBurnTeam` (the AI team) and `sunDps` = "Sunlight damage/s" (20) × a smooth step over the sun height 0.02 .. 0.2: only with the sun OVER the horizon (the `daylight()` of the fields and the mirrors starts a little under it, and a wave that comes out right after sunset must not burn in the dark). The unit's tick and the far tick both apply it, so a demon nobody is near burns too. |
-| Fields | `GameUnitParams::fieldPush` is false: a field does not push a demon. It walks through the shell, takes the graded exposure damage ("Field damage/s", 0 by default: a field does not hurt a demon, it only makes it solid) and drains the emitter (`addLoad`). "Fields block demons" brings the push back for all; `FieldBlocked true` in a `Component GameUnit` brings it back for one type. |
+| Daylight burn | `stampLightRules` (authority, per frame) writes `GameUnitParams::sunBurnTeam` (the AI team) and `sunDps` = "Sunlight damage/s" (20) plus `sunShare` = "Sunlight damage (share of health/s)" (0.04: of the unit's MAX health, so a big demon burns as fast as a small one - a Titan's 3200 took minutes at the flat rate), both × a smooth step over the sun height 0.02 .. 0.2 (`GameUnitParams::sunBurn(healthMax)` = the health/s now): only with the sun OVER the horizon (the `daylight()` of the fields and the mirrors starts a little under it, and a wave that comes out right after sunset must not burn in the dark). The unit's tick and the far tick both apply it, so a demon nobody is near burns too. |
+| Fields | `GameUnitParams::fieldPush` is false: a field does not push a demon. It walks through the shell, takes the graded exposure damage ("Field damage/s", 2: by the depth in the field; a demon sheltered by its own team's bubble takes none) and turns solid and drains the emitter (`addLoad`). "Fields block demons" brings the push back for all; `FieldBlocked true` in a `Component GameUnit` brings it back for one type. |
 | Shadow form | `GameUnitParams::shadowTeam` (the AI team; "Demon shadow form" off = none): a demon is SOLID only where the opposing field is at least half the iso value (a little outside the drawn shell), in daylight, or within "Staff light radius (m)" of a PLAYER (default 0 = OFF: a player does not reveal a demon, and carries no field of its own; above 0, `GameUnitParams::lightPoints` is stamped per frame from our player and the client twins) (`GameUnitComponent::solid`, set in its `tickField`). Not solid: its damage inbox is dropped (turret, melee, shells, the player aura), turrets do not pick it, and its model is near-black. Field exposure and the daylight burn write health directly, so they always land. The tint is not replicated: a client sees every demon solid. |
 | The field test on terrain | The force bake is ONE horizontal slice of the fields at one world height, made for the y = 0 maps. Two rules make it hold on the terrain: `tickBeacon` moves the slice to 1 m over the Base's ground ("Force/Bake" "Sample height", restored in `~GameMatch`), and a unit inside a field building's bubble by a PLANAR test, any height - the combat probe's `inEnemyBubble` (an emitter within the probe's ~20 m), or one of `GameUnitParams::fieldZones` (the merged bubble spheres of `collectShieldBubbles`, stamped with the SIM LOD zones every 0.25 s: they cover a large bubble's outer part, which the probe does not reach) - is in the field whatever the slice says: full exposure, and solid (`GameUnitComponent::tickField`, only with `flatGround` off). Without them a demon on ground higher or lower than the slice stood in a bubble and read no field. |
 | Demon speed | `GameUnitParams::slowTeam` (the AI team) with `slowMult` = "Demon speed (x)" (0.7) and `fieldSlowMult` = "Demon speed in a field (x)" (0.5): `GameUnitComponent::speedScale()` scales the walk speed in the steering and in the far tick - every demon is slower, and slower again while it stands in a player field (`inField`, the field test of the shadow form, without the staff light and the daylight). A field does not push a demon; it holds it back. |
-| Demon bubbles | Only `enemyTitan.pre` authors a `Component Force` (reach 30, output 2.2: a bubble of about 13 m that squishes the players' fields at the equilibrium and drains the structures it covers). Every other enemy prefab is health-only. |
+| Demon bubbles | Three enemy prefabs author a `Component Force` and a shield battery: `enemyBulwark.pre` (reach 10, output 1: about 4.5 m), `enemyAegis.pre` (reach 22, output 1.9: about 10 m) and `enemyTitan.pre` (reach 30, output 2.2: about 13 m). A bubble squishes the players' fields at the equilibrium and drains the structures it covers; the bubble is on while the demon is near a player OR anywhere in the BASE AREA (a SIM LOD zone from the Base out to the farthest built structure + 20 m, see Zones in [SimLod.md](../Entity/SimLod.md)); an empty battery collapses it for good: the bubble SHRINKS to nothing over 0.8 s (`m_shieldFade`; the output eases down to 0, which a client follows through the synced output), then the bubble is GONE (`GameUnitComponent::shieldGone`): its emitter is switched OFF (`tickField`, and World's bubble gate keeps it off - no field, no GPU slot), and the demon takes the SHIELD-LESS path of `tickField` (the baked field reveals and exposes it like any body). A heal that refills the battery brings the bubble back. **No floor field** (the player's shield keeps its 0.01): a floor field per collapsed demon added up over a crowd to a real, invisible field that bent the cannon shells and drained buildings. **The battery drains while the bubble pushes into a player field** (`tickField`'s emitter path): "Unit energy drain/s @ pressure 1" (25) x the pressure x the tension - tiny alone, since a pressure is a field value near the iso value (0.01) - plus "Shield drain (battery share/s at iso)" (0.03) x the battery x pressure / iso (up to 4x): about 33 s of pushing at the iso pressure empties any battery, faster when pushed deeper. **While its battery holds, a shielded demon stands its ground:** where the fields push demons (`fieldPush` or `FieldBlocked`), it takes only "Game/Enemies" "Push on shielded units (x)" (0.2) of the push (`tickField`'s emitter path). **A bubble SHELTERS its own team** (`GameUnitComponent::isSheltered`: the baked field where it stands is owned by its team - its team's field is the strongest there and over the iso value; with no bake, its own bubble while its battery holds; one sample a tick, only when asked): a sheltered demon is not revealed by a player field (`setSolid`'s `inField`, and the planar field-zone / probe override in `tickField`, which ignored whose field was stronger), takes no field exposure, and is neither revealed nor burned by a Searchlight or a mage cone. A player field that reaches into a demon bubble but is the weaker one there does not own the point. The staff lights and the daylight still reveal it. Every other enemy prefab is health-only. |
 | Solar | `GameStructureSettings::solarDaylight` (the same daylight) scales the solar yield: nothing at night. |
 | Palette | The ctor writes "Force/Teams" team 0 (warm gold) and team 1 (violet); `~GameMatch` restores them. |
 | HUD | "Sun": `Day N  hh:mm` / `Night N  hh:mm`. "Next wave (s)" shows at night only. |
@@ -142,6 +142,12 @@ instance off its own structure mirror, after the lightning. "Game/Faction" tweak
   step is in the shader, by a live value.
 * **Not in the save and not on the wire:** each instance grows its own copy from its sources. The only game rule that
   reads the layer is the wave's spawn distance (`queueWave`).
+* **A LOAD** (`loadGame`, co-op) clears the layer, so `tickFaction` makes it again around the loaded Base, and 0.5 s
+  later (`m_factionSettleIn`: the field zones refresh first) puts the land under the sources at its END STATE at once
+  (`FactionLayer::settle`, computed, not simulated: the pull only stops at 0 or 255, so every cell a source touches goes
+  fully to that source's side; diffusion only softens the edge) and sends the whole map. **Until then no wave comes out**
+  (`tickWaves`): a fresh layer is enemy land everywhere, so a wave would spawn at the min "Wave distance", which can be
+  inside the base. Land that only the old history held (a field that is gone) is not restored.
 
 #### The enemy outposts (sandbox world only)
 
@@ -344,7 +350,7 @@ shows "Next wave (s)".
 
 #### Unit types and costs
 
-`ENpcType`: Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior.
+`ENpcType`: Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior, Bulwark, Aegis.
 Costs are the "Game/Coop" "Cost \<type\>" defaults.
 
 | Type | Cost | Notes |
@@ -352,6 +358,7 @@ Costs are the "Game/Coop" "Cost \<type\>" defaults.
 | Grunt / Brute / Runner / Spitter / Swarm | 3 / 25 / 2 / 10 / 1 | The barracks tier. Spitter is enemy-only. Grunt, Runner and Swarm are HEALTH-ONLY bodies (no Component Force). |
 | Warrior | 5 | `enemyWarrior.pre`: the tough grunt (80 hp, harder hits, a bit bigger and yellow) — a BARRACKS option too (12 energy, 3 pop); "warrior line" from wave 4, "shield wall" from 6. |
 | Elite / Giant / Titan / Lobber / Spawner | 15 / 100 / 500 / 30 / 40 | **Enemy-only elite tier**, `enemyElite/Giant/Titan/Lobber/Spawner.pre`. |
+| Bulwark / Aegis | 8 / 50 | **Enemy-only SHIELDED demons** (a bubble + a shield battery, see Demon bubbles): `enemyBulwark.pre` (35 hp, 150 battery, a 4.5 m bubble, violet; the sprinkle from night 1 like the Warrior) and `enemyAegis.pre` (150 hp, 700 battery, a 10 m bubble, slow, siege bite 80, dark indigo; the sprinkle from night 4 like the Spawner). |
 
 * **The Lobber** is `Ranged` with `ShotKind 1` = the slow SPLASH shell `enemyLob.pre`
   (`SplashRadius 3`, 12 unit / 18 structure damage); "Lobber shot speed" 14.
@@ -377,14 +384,32 @@ exists.
 
 **THE SPRINKLE** (`queueWave`): each wave adds ONE strong type on top of its
 recipe, with a weight that gives it 15 % of the wave's points (`c_sprinkleShare`; the mix weights are per body, so
-the weight is `share * sum(w * cost) / ((1 - share) * cost)`). Candidates by the night (1-based): Warrior 1, Brute 2, Elite 3, Spawner 4, Giant 5, Titan 6, and RARE before that -
-the Giant from night 3 and the Titan from night 4 are candidates in only 15 % of the waves (`c_rareChance`, rolled per
-wave) — only a type the recipe does not have, and only
-when the share pays for half a body or more, so the budget decides when a Giant or a Titan can come. The roll is
-between the two most expensive candidates. The entry is part of `m_waveMix` (capacity 6: a recipe's 5 + this), so
-the save holds it.
+the weight is `share * sum(w * cost) / ((1 - share) * cost)`, the `addShare` lambda). Candidates by the night (1-based):
+Warrior 1, Bulwark 1, Brute 2, Elite 3, Spawner 4, Aegis 4 (`c_rareChance` 15 % of the waves from a type's rareLevel,
+every wave from its minLevel; all six have the two equal now; the table is by rising cost) — only a type the recipe
+does not have, and only when the share pays for half a body or more. The roll is between the two most expensive
+candidates, so from night 4 it is the Spawner or the Aegis.
 
-`sampleMix` samples the wave's stored jittered copy per spawn. The wave log names the recipe.
+**THE HEAVIES** (`queueWave`, after the sprinkle; `c_heavies`): Giants and Titans, on top of the recipe and the sprinkle
+(not when the recipe has them already). From its MAIN night a heavy is in EVERY wave with its share of the points, one
+body at least: **the Giant from night 5 (20 %), the Titan from night 6 (15 %)**. The night before, a SCATTERING: in
+30 % of the waves (`c_scatterChance`) a few bodies' worth of points - 2 Giants on night 4, 1 Titan on night 5. A share
+over 50 % (a wave too small for the body) is skipped.
+
+**THE BODY CAP** (`queueWave`, last): the points grow x "Night growth" a night, so late nights would field hundreds of
+thousands of small bodies. The bodies a wave may buy = "Target enemies alive" (20000) less the demons alive now, held
+to 1/8 .. 1 x "Wave max bodies" (2500). When the queued points (`m_wavePendingBudget`, a tail included) would buy more
+with the mix, **the mix shifts to the costly types**: every weight x cost^a, a (0 .. 4) found by bisection as the
+smallest that brings the mean cost per body to points / bodies - the recipe keeps its character, the elites take its
+points. First the ELITE POOL the night has unlocked joins at weight 0.01 where missing (Brute 2, Elite 3, Aegis 4,
+Giant 5, Titan 6, Lobber 7), so a swarm recipe has something costly to shift to. At a 4 the shift is at its most; the
+"Max enemy units" cap (40000) stays the last guard. The Hive's births are loose units outside every budget.
+
+The sprinkle, the heavies and the pool are entries of `m_waveMix` (capacity 14: a recipe's 5 + the sprinkle + 2
+heavies + the pool's 6), so the save holds them.
+
+`sampleMix` samples the wave's stored jittered copy per spawn (its own SplitMix64 roll: `glm::linearRand` never reaches
+the top ~0.4 % of its range, so the mix's last, rarest entry was never rolled). The wave log names the recipe.
 
 ### Targeting range gates
 
@@ -463,8 +488,12 @@ since prefabs author team 0); demolish validates same-team; minerals and fuel ar
 * **Shots:** `GameProjectileComponent::onContact` (authority) lands the shot prefab's
   `StructureDamage` on an enemy-team structure it hits (a splash shell: on everything in
   `SplashRadius`). Every placeable prefab authors `ContactEvents true`.
-* **Territory:** `GameStructureComponent::update` drains "Damage/s in enemy field" (6) health while
-  ANY other team's bubble owns the structure's position (`sampleBakedField`). *Push your field over
-  their buildings to siege.* `StructureSystem::tickDamage` is only the death sweep.
+* **Territory:** `GameStructureComponent::update` drains "Damage/s in enemy field" (3) health while
+  ANY other team's bubble owns the structure's position (`sampleBakedField`), **x the depth in that bubble**: 0 at the
+  shell, 1 where its field is twice the iso value (`field / iso - 1`). So the edge of a small demon bubble (the
+  Bulwark's) barely touches a building, and the core of a Titan's drains at the full rate. The drain goes through
+  `damage(amount, retaliate = false)` (`fieldDrain`): the wards take it, but a Retaliate ward sends back (and pays for)
+  nothing, since a field has no biter. *Push your field over their buildings to siege.* `StructureSystem::tickDamage`
+  is only the death sweep.
 
 **Known gaps:** player turrets target only units, not players; GSt caps at 79 structures.

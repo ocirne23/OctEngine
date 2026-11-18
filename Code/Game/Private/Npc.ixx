@@ -16,8 +16,11 @@ import :Structures;
 // ELITE tier (enemy-only: not barracks options - see isBarracksUnitType); the Lobber is the ranged
 // one, firing SPLASH shots (enemyLob.pre, ShotKind 1).
 // The Spawner is a "ranged" unit whose ShotKind 2 "shot" is a SWARM body spawned next to it.
-// The Warrior is the SHIELDED grunt (the Grunt/Runner/Swarm are health-only bodies).
-export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior, Count };
+// The Warrior is the tough grunt (the Grunt/Runner/Swarm are health-only bodies). The demons with a BUBBLE (a Force
+// emitter and a shield battery): the Bulwark (a small one, the Warrior's nights), the Aegis (a medium one, the Hive's
+// nights) and the Titan.
+export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior,
+    Bulwark, Aegis, Count };
 // The barracks' unit-type selection + its per-type price tables index by THIS order.
 static_assert((int)ENpcType::Count == GameNumUnitTypes);
 static_assert((int)ENpcType::Count == GameUnitTypeCount); // the Settings.Game per-type tables

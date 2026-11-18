@@ -352,14 +352,14 @@ int StructureSystem::crewAmmoSource(glm::ivec2 fromCell, uint8 team, oc::vector<
     }, outPath);
 }
 
-// A guard's POST, by road from fromCell: a road cell within the Armory's range that no other guard has. A Walkway DECK
+// A guard's POST, by road from fromCell: a road cell within the Armory's "Post range (m)" that no other guard has. A Walkway DECK
 // cell first (the place behind a wall), then any road cell; among those, the one nearest to the Armory's threat. One
 // breadth-first search over the road (like roadSearch); outPath = the walk there (one point: it stands on the post).
 bool StructureSystem::guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const
 {
     const Ref& armory = m_frame[armoryIdx];
     const glm::vec2 centre(armory.entity->pos.x, armory.entity->pos.z), threat(armory.threat.x, armory.threat.z);
-    const float rangeSq = m_settings.armoryRange * m_settings.armoryRange;
+    const float rangeSq = m_settings.armoryPostRange * m_settings.armoryPostRange;
     oc::small_vector<uint64, 32> taken;
     for (size_t k = 0; k < m_walkers.size(); ++k)
         if (const Walker& w = m_walkers[k]; k != self && (w.state == Walker_GuardToPost || w.state == Walker_Guarding) && !w.path.empty())

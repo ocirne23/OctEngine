@@ -40,6 +40,8 @@ export struct GameStructureComponent
     // RUBBLE (game-stamped, with `blueprint`): what is left of a building the enemy destroyed. It takes no damage and
     // no unit bites it; materials build it up again like any blueprint (the game clears the flag when it is built).
     uint8 rubble : 1 = 0;
+    // WARDED (game-stamped on a wall or gate segment that a ward covers): damage() reads the union's `wall` variant.
+    uint8 warded : 1 = 0;
     float health = 100.0f, healthMax = 100.0f;
     float meleeRadius = 1.0f;
     float bubbleRadius = 0.0f; // active emitters, game-stamped (main-write, worker-read): shield-less
@@ -95,19 +97,36 @@ export struct GameStructureComponent
         float unitLoad;         // energy/s deposited by enemy units/shots (addLoad); the game's
                                 // production tick consumes and clears it
     };
+    // A WARDED wall or gate segment (the game's wards): the shares are game-stamped every tick (0 while that kind of
+    // ward is missing or its store is empty); the rest is written by damage() from the workers, atomically. The game
+    // takes resisted / retaliated each tick (and pays the ward for them) and grows the shield back.
+    struct WallData
+    {
+        float resist;     // the share of every hit taken off (Resist)
+        float retaliate;  // the share of every hit sent back to the biter (Retaliate; before the resist)
+        float shield;     // health the shield takes before the wall (Absorb; after the resist)
+        float resisted;   // health taken off since the game's last tick
+        float retaliated; // damage sent back since then
+        uint32 struck;    // 1 = hit since then (the shield waits before it grows back)
+        float regenWait;  // game-only: s until the shield grows back again
+    };
     union
     {
         BarracksData barracks{};
         TurretData turret;
         SearchlightData searchlight;
         EmitterData emitter;
+        WallData wall;
     };
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}
     void update(Entity& entity, float deltaSec);
-    void damage(float amount); // atomic; no-op while invulnerable
-    void fieldDrain(float amount) { damage(amount); }
+    // Atomic; no-op while invulnerable. Returns the damage to send BACK to the attacker (a warded segment's Retaliate
+    // share; 0 elsewhere) - the caller that knows the attacker hands it on. retaliate false: no attacker to send it to,
+    // so none is counted (and the ward pays nothing for it).
+    float damage(float amount, bool retaliate = true);
+    void fieldDrain(float amount) { damage(amount, /*retaliate*/ false); } // a field has no biter: a Retaliate ward pays nothing for it
     void addLoad(float energyPerSec); // atomic unitLoad deposit (workers)
     bool alive() const { return health > 0.0f; }
 };

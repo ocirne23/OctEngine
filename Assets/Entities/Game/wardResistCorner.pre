@@ -1,0 +1,8 @@
+# A RESIST WARD's barrier at the outer corner of two open sides of a wall segment: the post that joins the two panes
+# (Models/wards.obj `ResistCorner`, modelled at the +X +Z corner). Render-only, like wardResistPane.pre.
+Prefab gameWardResistCorner
+	Component Render
+		ObjectContainer wards
+		Node ResistCorner
+		Type StaticMesh
+		Color 1 0.8 0.4

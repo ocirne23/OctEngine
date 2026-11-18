@@ -232,6 +232,7 @@ GameMatch::~GameMatch()
     if (m_sandboxWorld)
         Globals::settings.forceSystem.bakeSampleHeight = m_savedBakeHeight;
     Globals::settings.game.unitParams.sunDps = 0.0f;
+    Globals::settings.game.unitParams.sunShare = 0.0f;
     Globals::settings.game.structures.solarDaylight = 1.0f;
     Globals::settings.game.structures.fieldNight = 1.0f;
     Globals::gameHud.setCrosshair(false);
@@ -653,8 +654,27 @@ void GameMatch::update(float deltaSec)
             // fields always projected), but a unit in their field beyond every focus point was
             // unselected - teleported by the far tick straight through the barrier.
             m_fieldZones.clear();
-            m_structures.collectShieldBubbles(m_fieldZones, World::MaxSimLodZones);
-            Globals::world.setSimLodZones(m_fieldZones.data(), (uint32)m_fieldZones.size());
+            m_structures.collectShieldBubbles(m_fieldZones, World::MaxSimLodZones - 1); // (one slot for the base area)
+            // THE BASE AREA as one more zone: the Base's place, out to its team's farthest built structure + a margin.
+            // A demon anywhere around the base is then tier 1 - it ticks, and its bubble stays on (World's gate:
+            // "Force bubbles max tier") - not only near a player or a field.
+            constexpr float c_baseZoneMargin = 20.0f; // m past the farthest structure (+ the LOD's own zone margin)
+            m_simLodZones.assign(m_fieldZones.begin(), m_fieldZones.end());
+            for (const StructureSystem::Ref& base : m_structures.structures())
+            {
+                if (base.type != EStructureType::Base || !base.state || base.state->blueprint || base.onShip)
+                    continue;
+                float reach = 0.0f;
+                for (const StructureSystem::Ref& s : m_structures.structures())
+                    if (s.state && s.state->team == base.state->team && !s.state->blueprint && !s.onShip)
+                    {
+                        const glm::vec2 d(s.entity->pos.x - base.entity->pos.x, s.entity->pos.z - base.entity->pos.z);
+                        reach = glm::max(reach, glm::dot(d, d));
+                    }
+                m_simLodZones.push_back(glm::vec4(base.entity->pos, std::sqrt(reach) + c_baseZoneMargin));
+                break; // one base area (the co-op Base)
+            }
+            Globals::world.setSimLodZones(m_simLodZones.data(), (uint32)m_simLodZones.size());
             // The same spheres for the units' flat field test on the terrain (GameUnitParams::fieldZones).
             GameUnitParams& unit = Globals::settings.game.unitParams;
             const int zones = m_sandboxWorld ? (int)glm::min(m_fieldZones.size(), (size_t)64) : 0;

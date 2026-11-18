@@ -52,6 +52,8 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     hitsShadows = info.hitsShadows;
     impactPuff = info.impactPuff;
     muzzleFlash = info.muzzleFlash;
+    fieldDeflect = glm::max(info.fieldDeflect, 0.0f);
+    deflectDrain = glm::max(info.deflectDrain, 0.0f);
     origin = entity.pos;
     if (muzzleFlash) // the launch, as big as an impact: a few puffs of shards, the impact's flash and smoke where it starts (the light: update)
     {
@@ -112,6 +114,51 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
         if (glm::dot(force, force) > 1e-8f)
             Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::ApplyImpulse,
                 force * deltaSec * params.pushGain * pressure);
+    }
+    // FIELD DEFLECTION (a shot with no field of its own): an enemy bubble bends its flight out of it, sideways only - down
+    // its planar field gradient, by the depth in the field (0 at the shell's outer fringe, full at the iso value). The
+    // bake is one slice at one height, so a shell high over a small bubble reads it too: "slightly" is the authored rate.
+    if (fieldDeflect > 0.0f && pc && pc->body.isValid())
+    {
+        const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(pos, team);
+        const glm::vec2 grad(fs.opposingGradient.x, fs.opposingGradient.z);
+        const float gradLen = glm::length(grad);
+        if (fs.valid && fs.opposing > 0.0f && gradLen > 1e-6f)
+        {
+            const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
+            const glm::vec2 away = -grad / gradLen;
+            const float depth = glm::smoothstep(0.0f, iso, fs.opposing);
+            const float dv = fieldDeflect * depth * deltaSec;
+            Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::ApplyImpulse,
+                glm::vec3(away.x, 0.0f, away.y) * (dv * pc->body.getMass()));
+            // THE COST of bending it: "DeflectDrain" energy/s x the depth, from the battery of the NEAREST enemy unit whose
+            // live bubble covers the shell (planar, its equilibrium radius; up to c_bubbleSearch away), through its
+            // atomic inbox (drainShield: the entity pass runs this on workers).
+            if (deflectDrain > 0.0f)
+            {
+                constexpr float c_bubbleSearch = 16.0f; // m: past the largest demon bubble (the Titan's ~13 m)
+                GameUnitComponent* owner = nullptr;
+                float bestSq = FLT_MAX;
+                Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), c_bubbleSearch, SpatialLayer_Render, [&](uint64 user)
+                {
+                    Entity* other = reinterpret_cast<Entity*>(user);
+                    GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+                    const ForceComponent* force = getComponent<ForceComponent>(other);
+                    if (!unit || !force || !force->emitter.isValid() || unit->team == team || unit->energy <= 0.0f)
+                        return;
+                    const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+                    const float distSq = glm::dot(d, d);
+                    const float radius = force->emitter.getEquilibriumRadius();
+                    if (distSq <= radius * radius && distSq < bestSq)
+                    {
+                        bestSq = distSq;
+                        owner = unit;
+                    }
+                });
+                if (owner)
+                    owner->drainShield(deflectDrain * depth * deltaSec);
+            }
+        }
     }
     if (emitterDrain > 0.0f)
     {
@@ -187,4 +234,6 @@ void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info
     if (info.hitsShadows)                            out.set("HitsShadows", true);
     if (info.impactPuff)                             out.set("ImpactPuff", true);
     if (info.muzzleFlash)                            out.set("MuzzleFlash", true);
+    if (info.fieldDeflect != d.fieldDeflect)         out.set("FieldDeflect", info.fieldDeflect);
+    if (info.deflectDrain != d.deflectDrain)         out.set("DeflectDrain", info.deflectDrain);
 }

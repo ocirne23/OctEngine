@@ -69,7 +69,7 @@ pointer and no base-class dispatch**, so each animator compiles its own copy.
   Animators", like `AnimatorComponent`.
 * **`Stride` / `FullSpeed` are in the animator entity's LOCAL units** (the distance is divided by `entity.scale`),
   so one model prefab keeps its gait at every reference-site `Scale` — CubeGuy at 0.25 walks `Stride 6` = 1.5 m per
-  cycle, the Titan's at 1.12 walks 6.7 m.
+  cycle, the Titan's at 1.4 walks 8.4 m.
 * **CULLING is the entity's.** The bones ride the entity's pass mask. `CullMode RootOnly` measures them into the
   template's tree bounds (`addRestBounds` from `gatherTreeCullBounds`; the REST pose, a swing is not added) and
   gives the entry the Render layer. **A bone model on a `PerEntity` entity with no RenderComponent of its own has a

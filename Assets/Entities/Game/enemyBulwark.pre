@@ -1,0 +1,35 @@
+# Enemy Bulwark: the SHIELDED line demon of the early nights (from night 1, the Warrior's nights; MatchCoop's sprinkle).
+# A grunt-sized body, frail itself (35 health), with a bubble of darkness (about 4.5 m) and a large shield battery: the bubble squishes the players'
+# fields back where they meet, and a hit takes the battery first (Game/Enemies "Damage absorb"). An empty battery
+# collapses the bubble for good. A little bigger than the Warrior, violet.
+Prefab gameEnemyBulwark
+	CullMode RootOnly
+	Component Scene
+		Prefab CubeGuy        # the model - see enemyGrunt.pre
+			Position 0 0.887 0
+			Scale 0.36
+	Component Physics
+		Body Dynamic
+		Shape Sphere
+		Radius 0.64
+		Density 120
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.0
+		Reach 10
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName BULWK
+		Color 0.5 0.2 0.8
+		HealthMax 35
+		EnergyMax 150
+		ShieldOutput 1.0
+		MoveSpeed 3.6
+		AttackInterval 1.0
+		AttackDamage 7
+		PlayerDamage 11
+		EmitterDrain 4

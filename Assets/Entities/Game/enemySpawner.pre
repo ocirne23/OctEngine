@@ -7,12 +7,12 @@ Prefab gameEnemySpawner
 	CullMode RootOnly
 	Component Scene
 		Prefab CubeGuy        # the model - see enemyGrunt.pre
-			Position 0 1.656 0
-			Scale 0.672
+			Position 0 1.478 0
+			Scale 0.6
 	Component Physics
 		Body Dynamic
 		Shape Sphere
-		Radius 1.2
+		Radius 1.07
 		Density 300
 		Friction 0
 		LockRotation true
@@ -21,7 +21,7 @@ Prefab gameEnemySpawner
 	Component GameUnit
 		ShortName HIVE
 		Color 0.1 0.85 0.95
-		HealthMax 320
+		HealthMax 240
 		EnergyMax 0
 		ShieldOutput 0
 		MoveSpeed 2.2

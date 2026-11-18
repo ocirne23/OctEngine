@@ -150,6 +150,10 @@ void GameMatch::loadGame(oc::string_view path)
             m_nightWave = glm::max(n->asInt(), 0);
         if (const AssetNode* n = root.find("WaveScale"))
             m_waveScale = glm::max(n->asFloat(), 0.0f);
+        // The save holds no faction land: the layer is made again around the loaded Base, and its sources' end state is
+        // put down before the next wave (tickFaction's settle; tickWaves waits for it).
+        m_faction.clear();
+        m_factionSettleIn = 0.5f;
     }
     if (const AssetNode* n = root.find("MatchTime"))
         m_matchTime = glm::max(n->asFloat(), 0.0f);

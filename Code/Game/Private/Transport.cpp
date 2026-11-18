@@ -54,6 +54,8 @@ void StructureSystem::addTransportSlot(int buildingIdx, int medium, uint32 node)
     else if (medium == 0 && ref.type == EStructureType::Turret)
         slot.intakePerSec = Globals::settings.game.structureParams.turretShotEnergy
             / glm::max(Globals::settings.game.structureParams.turretFireInterval, 1e-3f);
+    else if (medium == 0 && isWardType(ref.type))
+        slot.intakePerSec = glm::max(m_settings.wardIntake, 1e-3f); // the ward's refill limit (0 = unmetered here)
     m_net.slots.push_back(slot);
 }
 

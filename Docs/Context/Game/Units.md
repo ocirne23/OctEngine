@@ -17,7 +17,9 @@ authored colours (restored per node if a unit ever leaves the local team).
 ### The split
 
 * **The SIM is `GameUnitComponent`** in the entity pass: steering by the Nav flow fields (see Nav),
-  shield battery on player rules minus regen with permanent collapse, exposure damage, field push,
+  shield battery on player rules minus regen with permanent collapse (an empty battery shrinks the bubble over 0.8 s
+  to output 0, then switches its emitter OFF - `shieldGone`, which World's bubble gate also reads - and the unit runs
+  the shield-less baked-field path; on a client the shell hides by the synced output), exposure damage, field push,
   melee, the ranged stance, and death / void self-despawn.
 * **`NpcSystem` is PRODUCTION + SERVICING.** It holds no entity lists at all — units and shots are
   World roots, walked when needed (see The architecture rule ([CONTEXT.md](CONTEXT.md))).

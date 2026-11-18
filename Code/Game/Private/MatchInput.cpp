@@ -50,9 +50,9 @@ static_assert(c_numCategories == c_buildBarTabs && c_numCategories <= c_rootDele
 static constexpr const char* c_buildCategories[c_numCategories] = { "EMPL", "UNIT", "STRC", "PROD", "RSRC" }; // slot captions
 static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Emplacement", "Unit", "Structure", "Production", "Resource" };
 static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the slots' and the tabs' hover cards
-    "Emplacement\nThe lantern fields, the light towers and the cannon: what holds the demons off.",
+    "Emplacement\nThe lantern fields, the light towers, the cannon and the builder's hut: what holds the demons off.",
     "Unit\nThe barracks, the armory, the mage tower and the healer's hut.",
-    "Structure\nRoads for the carriers (hold and drag to paint; over water a road becomes a bridge), walkways, walls, gates and the builder's hut.",
+    "Structure\nRoads for the carriers (hold and drag to paint; over water a road becomes a bridge), walkways, walls, gates and the wards that make walls stronger.",
     "Production\nMaking stone, wood, light and munitions.",
     "Resource\nHouses for the workers, the storehouse for goods, the crystal store and the lens for light, the ammo store for munitions." };
 static constexpr EStructureType c_emplacementItems[] = {
@@ -61,6 +61,7 @@ static constexpr EStructureType c_emplacementItems[] = {
     EStructureType::Turret,      // TOWR
     EStructureType::Searchlight, // SRCH
     EStructureType::Cannon,      // CANN: R turns it
+    EStructureType::Constructor, // BUIL
 };
 static constexpr EStructureType c_unitItems[] = {
     EStructureType::Barracks,     // BRK
@@ -76,7 +77,9 @@ static constexpr EStructureType c_structureItems[] = {
     EStructureType::Walkway,       // WALK: a road piece on a scaffold, to stand behind a wall and see over it
     EStructureType::Wall,          // WALL
     EStructureType::Gate,          // GATE
-    EStructureType::Constructor,   // BUIL
+    EStructureType::WardResist,    // WRES: against a wall, a barrier that takes a share off every hit
+    EStructureType::WardAbsorb,    // WABS: against a wall, a shield on each segment
+    EStructureType::WardRetaliate, // WRET: against a wall, spikes that send a share of each bite back
 };
 static constexpr EStructureType c_productionItems[] = {
     EStructureType::Quarry,     // QRRY
@@ -1069,6 +1072,8 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
     if (aim.type == EStructureType::MedicStation) // show the heal reach
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.medicHealRadius(), color, 48);
+    if (aim.type == EStructureType::Armory || aim.type == EStructureType::MageTower) // where its guards / mages stand
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.armoryPostRange(), color, 48);
     if (isHarvestType(aim.type))
     {
         // The range it works, hued by the yield it would have here (red = little, green = full; grey = no answer

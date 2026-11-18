@@ -76,9 +76,9 @@ dropped because the number keys and their labels then fell on the tabs.
 
 | Page | Items, in slot order |
 |---|---|
-| Emplacement (`c_emplacementItems`) | Lantern (Emitter) · Great lantern (Bastion) · Tower (Turret) · Searchlight · Cannon |
+| Emplacement (`c_emplacementItems`) | Lantern (Emitter) · Great lantern (Bastion) · Tower (Turret) · Searchlight · Cannon · Builder's hut (Constructor) |
 | Unit (`c_unitItems`) | Barracks · Armory · Mage tower · Healer's hut (MedicStation) |
-| Structure (`c_structureItems`) | Road (CableConveyor; over water its stroke places the Bridge by itself, so the Bridge has no slot) · Walkway · Wall · Gate · Builder's hut (Constructor) |
+| Structure (`c_structureItems`) | Road (CableConveyor; over water its stroke places the Bridge by itself, so the Bridge has no slot) · Walkway · Wall · Gate · Resist ward · Absorb ward · Retaliate ward (The wards in [Economy.md](Economy.md)) |
 | Production (`c_productionItems`) | Quarry · Lumberyard · Stone works (Fabricator) · Hearth (Generator) · Mirror (Solar) · Ammo works |
 | Resource (`c_resourceItems`) | House · Storehouse (Mineral silo: it banks stone AND wood - `fuelCapacityOf`, a Storage port in both media; the Fuel tank is off the hotbar) · Crystal store (Battery) · Lens · Ammo store |
 
@@ -102,7 +102,7 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
 * **Searchlight** (SRCH) — a CONE OF LIGHT that turns to the nearest enemy unit in "Searchlight range" (40 m), a
   shadow too. Its spot light reaches 1.15 x the range, and "Searchlight brightness" is for a 26 m range: `publishSearchlights`
   scales it by (range / 26)^2 (the lights fall off with the square of the distance), so the far end is as bright at any range. **Every enemy in the cone is SOLID, as in a field, and loses "Searchlight damage/s" (3.2)**; two crossed
-  cones burn twice as fast. It shines only while an enemy is in range, and only then draws "Searchlight light/s" (1)
+  cones burn twice as fast. It shines only while an enemy is in range, and only then draws "Searchlight light/s" (0.33)
   from its store (the internal buffer, fed over its light link like any consumer).
   > **Who does what.** `GameStructureComponent::update` (`EMachineKind::Searchlight`) AIMS: nearest enemy by flat
   > distance, the yaw turns at "Searchlight turn speed (deg/s)", `lit` = a target and a paying store. It runs on a

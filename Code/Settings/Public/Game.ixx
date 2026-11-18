@@ -5,8 +5,8 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 34;
-export constexpr int GameUnitTypeCount = 11;
+export constexpr int GameStructureTypeCount = 37;
+export constexpr int GameUnitTypeCount = 13;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
 export struct GameMatchSettings
@@ -21,8 +21,10 @@ export struct GameMatchSettings
     float waveVariation = 0.4f;       // random +- on a wave's size and on the time to the next one
     float waveCost[GameUnitTypeCount] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                           15.0f, 100.0f, 500.0f, 30.0f, 40.0f, // Elite, Giant, Titan, Lobber, Spawner
-                                          5.0f };                              // Warrior
-    int waveMaxAlive = 100000;        // total AI units cap
+                                          5.0f, 8.0f, 50.0f };                 // Warrior, Bulwark, Aegis
+    int waveMaxAlive = 40000;         // total AI units cap
+    int waveMaxBodies = 2500;         // a wave's queued points buy at most about this many bodies: past it the mix shifts to the costly types
+    int waveTargetAlive = 20000;      // ... and at most this many demons alive with it (a wave's cap = this - the alive, 1/8 .. 1 x the above)
     float waveSpawnAreaPerUnit = 6.0f; // m² of blob per body (~2.8 m mean spacing at 6)
     float labelMaxDistance = 120.0f;  // world labels beyond this are not built
     float labelBarDistance = 45.0f;   // m from the CAMERA: a building farther than this shows no bars (health / build, stores); its badge stays
@@ -38,7 +40,8 @@ export struct GameMatchSettings
     // THE LIGHT RULES (co-op): the waves come at NIGHT only, daylight burns the demons, and a field does not push them -
     // they walk in and burn.
     float startTimeOfDay = 7.0f;      // h: the authority sets the sun cycle's time at the match start (< 0 = keep it)
-    float sunlightDps = 20.0f;        // health/s a demon loses in full daylight
+    float sunlightDps = 20.0f;        // health/s a demon loses in full daylight ...
+    float sunlightShare = 0.04f;      // ... + this share of its MAX health per second: a big demon burns as fast as a small one
     bool fieldsBlockDemons = false;   // on = the fields push every demon, as on the flat maps
     bool demonShadowForm = true;      // a demon outside a player field (and outside daylight) takes no direct damage
     float staffLightRadius = 0.0f;  // m around a player in which a demon is solid (0 = the fields alone)
@@ -195,6 +198,9 @@ export struct GameStructureSettings
         40.0f,  // Cannon
         60.0f,  // AmmoWorks
         15.0f,  // AmmoStore
+        50.0f,  // WardResist
+        50.0f,  // WardAbsorb
+        50.0f,  // WardRetaliate
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -236,7 +242,26 @@ export struct GameStructureSettings
         300.0f,  // Cannon
         300.0f,  // AmmoWorks
         120.0f,  // AmmoStore: it blows up with its munitions
+        200.0f,  // WardResist
+        200.0f,  // WardAbsorb
+        200.0f,  // WardRetaliate
     };
+    // THE WARDS (Wards.cpp): a pylon with a light store against a wall; it strengthens the wall and gate segments
+    // connected to it (a breadth-first search, wardWalls at most) and pays for it from its store. A ward whose store
+    // runs empty switches off (its pieces too) until the store is back at wardRestart of its capacity. Its store
+    // refills from its hub at wardIntake at most.
+    float wardCapacity = 200.0f;      // light a ward holds
+    float wardIntake = 2.0f;          // light/s a ward takes at most (its refill limit)
+    float wardRestart = 0.25f;        // the share of the store an empty ward refills to before it switches on again
+    int   wardWalls = 16;            // wall and gate segments one ward reaches (the search stops there)
+    float wardResist = 0.35f;         // RESIST: the share of every hit it takes off
+    float wardResistCost = 0.1f;      // light per health it took off
+    float wardAbsorbShield = 200.0f;  // ABSORB: each segment's shield (health it takes before the wall; after the resist)
+    float wardAbsorbRegen = 3.0f;     // health/s each segment's shield grows back
+    float wardAbsorbDelay = 4.0f;     // s after the segment's last hit before its shield grows back
+    float wardAbsorbCost = 0.1f;      // light per health of shield grown back
+    float wardRetaliate = 0.5f;       // RETALIATE: the share of every bite sent back to the biter (before the resist)
+    float wardRetaliateCost = 0.05f;  // light per damage sent back
     // THE CANNON and MUNITIONS (the fourth good: made by the Ammo works from stone and light, banked by the Ammo store,
     // carried by workers). The cannon fires an arcing splash shell (cannonShell.pre: its damage and splash) in an arc
     // around its facing.
@@ -254,7 +279,7 @@ export struct GameStructureSettings
     float cannonStandDown = 15.0f;    // s
     float ammoRate = 0.5f;            // munitions/s an Ammo works makes with full staff
     float ammoStonePer = 1.0f;        // stone per munition
-    float ammoLightPer = 2.0f;        // light per munition
+    float ammoLightPer = 1.0f;       // light per munition
     int   workersAmmo = 2;            // workers an Ammo works needs
     float ammoWorksBuffer = 50.0f;    // munitions (and stone) it holds
     float ammoStoreCapacity = 30.0f;  // munitions an Ammo store banks
@@ -315,7 +340,8 @@ export struct GameStructureSettings
     float carrierCartLoad = 100.0f;   // goods in a CART: a transport trip between two storages (it evens out their fill)
     float carrierSpeed = 3.5f;        // m/s
     // THE ARMORY'S GUARDS (Carriers.cpp): free workers with a bow, while an enemy unit is in the Armory's range.
-    float armoryRange = 60.0f;        // m: an enemy unit this near calls the guards out, and the posts lie in this range
+    float armoryRange = 40.0f;       // m: an enemy unit this near calls the guards out
+    float armoryPostRange = 25.0f;   // m: the posts lie this near the Armory (so each one guards its own part of the base)
     int   armoryGuards = 6;           // guards one Armory arms at most (the Beacon arms as many: it is an armory too)
     float armoryStandDown = 10.0f;    // s with no enemy in range before the guards go back to work
     float guardRange = 20.0f;         // m: a guard shoots the nearest enemy unit within this
@@ -347,10 +373,10 @@ export struct GameStructureSettings
     // THE LIGHT BALANCE (the default sun cycle: a day gives a Mirror ~780 s of full daylight, a night keeps a field
     // awake ~640 s; all with enough Crystal stores between them). A Lantern draws 0.75 light/s awake (480 a night), a
     // Great lantern 2 (1280 a night).
-    //   3 Mirrors carry 1 Lantern through the night:  3 x 0.21 x 780 = 491 >= 480.  8 Mirrors: 1 Great lantern.
-    //   1 Hearth, burning day and night (1440 s), carries 1 Lantern:  0.45 x 1440 = 648 >= 480.  2 Hearths: 1 Great.
-    float genEnergyPerSec = 0.45f;    // the Hearth: an early, inefficient source (1 wood/s for this much light)
-    float solarEnergyPerSec = 0.21f;
+    //   2 Mirrors carry 1 Lantern through the night:  2 x 0.33 x 780 = 515 >= 480.  5 Mirrors: 1 Great lantern.
+    //   1 Hearth, burning day and night (1440 s), carries 3 Lanterns or 1 Great:  1 x 1440 = 1440 >= 3 x 480.
+    float genEnergyPerSec = 1.0f;     // the Hearth (fuelBurnRate wood/s for this much light)
+    float solarEnergyPerSec = 0.33f;
     float solarDaylight = 1.0f;       // runtime (GameMatch): x the solar yield - the daylight in the sandbox world, else 1
     float fuelBurnRate = 0.5f;
     float fabricatorMineralsPerSec = 2.0f;
@@ -388,8 +414,8 @@ export struct GameStructureSettings
     // 0 = no slope limit.
     float maxGroundStep = 0.0f;
     // Per UNIT TYPE (ENpcType order): the ENERGY a barracks pays per spawned unit and the POPULATION the unit holds.
-    float spawnEnergy[GameUnitTypeCount] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f };
-    int unitPopulation[GameUnitTypeCount] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3 };
+    float spawnEnergy[GameUnitTypeCount] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f, 15.0f, 45.0f };
+    int unitPopulation[GameUnitTypeCount] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3, 3, 8 };
     // WORKERS: production runs on population, not on light. A team has baseWorkers + houseWorkers for each House; every
     // production building asks for its workers; short of workers, all production of the team slows by workers / jobs.
     int baseWorkers = 6;
@@ -426,17 +452,20 @@ export struct GameNpcSettings
 export struct GameUnitParams
 {
     float energyDrainRate = 25.0f; // energy/s per unit of pressure (player shield rule, no regen)
+    float shieldDrainShare = 0.03f; // + this share of the battery per second at the iso pressure (x pressure / iso, up to 4x)
     float tension = 1.5f;          // drain + push scale by (1 + tension*pressure)
-    float fieldDps = 0.0f;        // health/s while squished below damageRadius under pressure (0: a field does not hurt a unit)
+    float fieldDps = 2.0f;        // health/s in an enemy field: a shield-less unit by its exposure (the depth), a shielded one
+                                  // once collapsed and squished below damageRadius (0: a field does not hurt a unit)
     float fieldDpsMult = 1.0f;
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
                                    // units reach the damage band instead of parking in the fringe
-    float emitterDrainMult = 0.175f;
+    float emitterDrainMult = 0.08f;   // x each unit's EmitterDrain: the energy/s a unit inside an emitter's bubble drains from it
     float structureBiteMult = 0.5f; // a unit's bite on a STRUCTURE: x its StructureDamage (a hit on a unit or a player is not scaled)
     float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
     float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
     float pushGain = 20000.0f;     // shared by the emitter readback path AND the shield-less path
+    float shieldedPushMult = 0.2f; // x the push on a unit with its own bubble while its battery holds (the Bulwark, the Aegis, the Titan)
     float retargetInterval = 5.0f;
     float wanderSpeedMult = 0.25f;
     float wanderSpeedMax = 0.75f;  // m/s
@@ -490,7 +519,9 @@ export struct GameUnitParams
     float slowMult = 1.0f;         // x fieldSlowMult more while a unit stands in an opposing field
     float fieldSlowMult = 1.0f;
     int sunBurnTeam = -1;          // the team daylight burns (-1 = none)
-    float sunDps = 0.0f;           // health/s that team loses now: "Sunlight damage/s" x the daylight
+    float sunDps = 0.0f;           // health/s that team loses now: "Sunlight damage/s" x the daylight ...
+    float sunShare = 0.0f;         // ... + this share of its max health per second: "Sunlight damage (share of health/s)" x the daylight
+    float sunBurn(float healthMax) const { return sunDps + sunShare * healthMax; } // health/s a unit of sunBurnTeam loses now
     bool navEnabled = true;
     float hurtLightIntensity = 8.0f;
     float hurtLightDecay = 0.25f;  // seconds from full to dark
@@ -523,7 +554,7 @@ export struct GameUnitParams
 // The structures' machine baseline (GameStructureComponent::params refers to Globals::settings.game.structureParams).
 export struct GameStructureParams
 {
-    float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
+    float fieldDamageRate = 3.0f; // health/s while an enemy team's bubble owns the query point (x the depth in it)
     float turretRange = 18.0f;
     float turretFireInterval = 0.6f;
     float turretShotEnergy = 0.5f; // light on beams fills the store in fractions. WITH "Light beams" OFF (the cell flow on
@@ -535,7 +566,7 @@ export struct GameStructureParams
     float searchlightRange = 40.0f;
     float searchlightHalfAngleDeg = 11.0f; // (about as wide at the far end of 40 m as 16 degrees were at 26 m)
     float searchlightDps = 3.2f;           // health/s to EACH unit in the cone
-    float searchlightEnergyPerSec = 1.0f;   // while it shines
+    float searchlightEnergyPerSec = 0.33f;  // while it shines
     float searchlightTurnDegPerSec = 30.0f;
     // The spot light on the ground and the demons, for a 26 m range: the Searchlight's own spot scales by (range / 26)^2
     // (the lights fall off with the square of the distance), so its far end is as bright at any range.

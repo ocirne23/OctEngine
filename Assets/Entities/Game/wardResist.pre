@@ -1,0 +1,52 @@
+# Resist ward: a 1x1 pylon a little over a wall's height (3.5 m, a wall is 3 m) with a light crystal on top. Placed against
+# a wall, it covers the connected wall and gate segments (StructureSystem::rebuildWardLinks): a barrier of light around
+# them takes a share off every hit, paid from its light store (Wards.cpp). It takes light like any consumer, at "Refill
+# (light/s)" at most. Spawned origin 1.75 above ground; the crystal's centre is Light.cpp's beamHeightOf (2.65 over the
+# origin): keep them in step. wardAbsorb.pre and wardRetaliate.pre are the same pylon with another colour.
+# SHAPE (a placeholder): a stone footing, a post, a cap, and the crystal over it.
+Prefab gameWardResist
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeHalf
+		Type StaticMesh
+		Color 0.5 0.47 0.42
+		Position 0 -1.35 0
+		Scale 0.8
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 0.8 1.75 0.8
+	Component GameStructure
+		MeleeRadius 1
+		AlwaysShowResources true
+	Component Scene
+		Entity
+			Name Post
+			Position 0 0.31 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.5 0.47 0.42
+				Scale 0.42
+		Entity
+			Name Cap
+			Position 0 1.7 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.62 0.5 0.28
+				Scale 0.6
+		Entity
+			Name Crystal
+			Position 0 2.65 0
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 1 0.8 0.4
+				Emissive 2.5
+				Scale 0.5

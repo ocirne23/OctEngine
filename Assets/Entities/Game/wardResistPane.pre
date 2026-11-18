@@ -1,0 +1,9 @@
+# A RESIST WARD's barrier on one open side of a wall segment: a pane of light (Models/wards.obj `ResistPane`, modelled
+# for the +X side). Render-only; the game spawns it at the segment's origin, turned to the side
+# (StructureSystem::updateWardLooks). wardResistCorner.pre closes the outer corners.
+Prefab gameWardResistPane
+	Component Render
+		ObjectContainer wards
+		Node ResistPane
+		Type StaticMesh
+		Color 1 0.8 0.4

@@ -37,6 +37,9 @@ export struct GameProjectileComponent
         bool hitsShadows = false;      // its damage hurts a SHADOW too (a unit that is not solid: GameUnitComponent::damage)
         bool impactPuff = false;       // its impact bursts (params.impactPuff), on every role
         bool muzzleFlash = false;      // its launch flashes where it starts: a burst, smoke and a short light, on every role
+        float fieldDeflect = 0.0f;     // m/s^2 at full depth: an ENEMY bubble bends its flight out of it (the baked field;
+                                       // for a shot with no Force emitter of its own - the cannon shell)
+        float deflectDrain = 0.0f;     // battery energy/s it takes, while it is bent, from the enemy unit whose bubble bends it
     };
 
     uint32 team = 0;
@@ -45,6 +48,7 @@ export struct GameProjectileComponent
     float emitterDrain = 0.0f, emitterDrainRadius = 5.0f;
     float splashRadius = 0.0f, splashEdge = 1.0f;
     bool hitsShadows = false, impactPuff = false, muzzleFlash = false;
+    float fieldDeflect = 0.0f, deflectDrain = 0.0f;
     glm::vec3 origin{ 0.0f }; // where it started (the muzzle flash's light)
     float age = 0.0f;
     bool spent = false; // hit something - despawn queued, never damage twice

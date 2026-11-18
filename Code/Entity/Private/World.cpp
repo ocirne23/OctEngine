@@ -293,10 +293,17 @@ float WorldState::simLodDelta(Entity& entity)
     PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity);
     if (physics && physics->bodyType != EPhysicsBodyType::Dynamic)
         physics = nullptr; // only a dynamic body floats: a static structure must not pay the tier lookup
+    // A unit whose bubble is GONE (its battery collapsed, GameUnitComponent::shieldGone) keeps its emitter off whatever
+    // the tier: no field, no GPU slot.
+    const auto bubbleGone = [&]
+    {
+        const GameUnitComponent* unit = getComponent<GameUnitComponent>(&entity);
+        return unit && unit->shieldGone();
+    };
     if (!m_simLodActive || alwaysVisited(entity))
     {
         if (force)
-            force->setActive(true);
+            force->setActive(!bubbleGone());
         if (physics)
             physics->buoyant = true;
         return m_updateDelta;
@@ -311,7 +318,7 @@ float WorldState::simLodDelta(Entity& entity)
     // applies without a tier change; an entity leaving the selection keeps its last state - the
     // query-margin visit (distance tier 3) switches both off on the way out.
     if (force)
-        force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier);
+        force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier && !bubbleGone());
     if (physics)
         physics->buoyant = int(tiers.dist) <= m_simLod.buoyancyMaxTier;
     if (!throttled)
@@ -1667,6 +1674,8 @@ void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = projNode->find("HitsShadows"))     info->hitsShadows = n->asBool();
         if (const AssetNode* n = projNode->find("ImpactPuff"))      info->impactPuff = n->asBool();
         if (const AssetNode* n = projNode->find("MuzzleFlash"))     info->muzzleFlash = n->asBool();
+        if (const AssetNode* n = projNode->find("FieldDeflect"))    info->fieldDeflect = n->asFloat(0, info->fieldDeflect);
+        if (const AssetNode* n = projNode->find("DeflectDrain"))    info->deflectDrain = n->asFloat(0, info->deflectDrain);
         typeBits |= uint16(1 << EComponentID_GameProjectile);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }

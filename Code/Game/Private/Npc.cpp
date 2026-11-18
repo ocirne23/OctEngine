@@ -25,9 +25,10 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
     "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre",
     "Entities/Game/enemySwarm.pre", "Entities/Game/enemyElite.pre",
     "Entities/Game/enemyGiant.pre", "Entities/Game/enemyTitan.pre",
-    "Entities/Game/enemyLobber.pre", "Entities/Game/enemySpawner.pre", "Entities/Game/enemyWarrior.pre" };
+    "Entities/Game/enemyLobber.pre", "Entities/Game/enemySpawner.pre", "Entities/Game/enemyWarrior.pre",
+    "Entities/Game/enemyBulwark.pre", "Entities/Game/enemyAegis.pre" };
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
-    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
+    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior", "Bulwark", "Aegis" };
 
 // Units inside the view frustum and within maxDist, for the overhead labels - anything off screen
 // or too far to read would be projected and thrown away, so it is never fetched. The hits are

@@ -57,7 +57,7 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     const bool energy = hasShieldEmitter(type) || isBarracksType(type) // (production runs on workers: no light)
         || type == EStructureType::MedicStation || type == EStructureType::AmmoWorks // (its munitions are light charges)
         || type == EStructureType::Turret || type == EStructureType::Searchlight || type == EStructureType::Generator
-        || type == EStructureType::Solar || type == EStructureType::Battery || type == EStructureType::Lens;
+        || type == EStructureType::Solar || type == EStructureType::Battery || type == EStructureType::Lens || isWardType(type);
     // FUEL: burnt by generators and fabricators, banked by tanks, made by the lumberyards.
     const bool fuel = type == EStructureType::Generator || type == EStructureType::Fabricator
         || type == EStructureType::FuelTank || type == EStructureType::MineralSilo
@@ -109,6 +109,18 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
             color = c_amber;
             return "No stone track";
         }
+    }
+    // 1a) A WARD WITH NO WALL: it covers nothing until a wall or gate segment touches its side.
+    if (isWardType(type) && m_structures.structureWardWalls(index) == 0)
+    {
+        color = c_amber;
+        return "No wall";
+    }
+    // 1a') A WARD LATCHED OFF: its store ran empty; it protects nothing until it is back at "Restart at".
+    if (isWardType(type) && m_structures.structureWardDrained(index) && !m_structures.structureBlueprint(index))
+    {
+        color = c_amber;
+        return "Charging";
     }
     // 1b) TOO FEW WORKERS: every production building of the team runs slow (build houses).
     if (m_structures.workersNeeded(type) > 0 && m_structures.staffing((uint8)m_team) < 0.999f)

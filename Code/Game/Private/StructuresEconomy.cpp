@@ -122,24 +122,43 @@ bool StructureSystem::rubbleBlocked(const Ref& s, bool byPlayer) const
         return false;
     // A BODY ON THE PILE blocks it too (a player or a unit of any team): rubble is walked over, and the building
     // that comes back would close around whoever stands there - nothing moves a body out of a building.
-    if (actorInFootprint(s.type, s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f)))
+    if (!byPlayer && m_settings.rubbleSafeRadius > 0.0f && s.rubbleUnsafe) // (the cheap test first)
         return true;
-    if (byPlayer || m_settings.rubbleSafeRadius <= 0.0f)
-        return false;
+    return actorInFootprint(s.type, s.entity->pos - glm::vec3(0.0f, spawnHeightOf(s.type), 0.0f));
+}
+
+void StructureSystem::refreshRubbleSafety(float deltaSec)
+{
+    constexpr float c_rubbleCheckPeriod = 0.25f; // s
+    m_rubbleCheckTimer -= deltaSec;
+    if (m_rubbleCheckTimer > 0.0f)
+        return;
+    m_rubbleCheckTimer = c_rubbleCheckPeriod;
+    ProfileScope scope("Structures rubble safety", EProfileCategory::Game);
     const float radius = m_settings.rubbleSafeRadius;
-    const glm::vec3 pos = s.entity->pos;
-    const uint32 team = s.state->team;
-    bool enemy = false;
-    Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), radius, SpatialLayer_Render, [&](uint64 user)
+    for (const Ref& s : m_frame)
     {
-        Entity* other = reinterpret_cast<Entity*>(user);
-        const GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
-        if (enemy || !unit || unit->puppet || unit->team == team || !unit->alive())
-            return;
-        const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
-        enemy = glm::dot(d, d) <= radius * radius;
-    });
-    return enemy;
+        if (!s.state->rubble || radius <= 0.0f)
+        {
+            s.rubbleUnsafe = false;
+            continue;
+        }
+        const glm::vec3 pos = s.entity->pos;
+        const uint32 team = s.state->team;
+        bool enemy = false;
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), radius, SpatialLayer_Render, [&](uint64 user)
+        {
+            if (enemy)
+                return;
+            Entity* other = reinterpret_cast<Entity*>(user);
+            const GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+            if (!unit || unit->puppet || unit->team == team || !unit->alive())
+                return;
+            const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+            enemy = glm::dot(d, d) <= radius * radius;
+        });
+        s.rubbleUnsafe = enemy;
+    }
 }
 
 float StructureSystem::investMaterials(const Ref& s, float amount, float repairHealCap, bool byPlayer)
@@ -203,8 +222,10 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
 {
     if (amount <= 0.0f)
         return 0.0f;
-    int best = -1;
-    float bestDist = radius;
+    // The candidates in reach, nearest first; the rubble test (a query for a body on the pile) runs only down that
+    // list until one takes the stone - rubble with an enemy near or a body on it takes nothing: the next one gets it.
+    oc::small_vector<oc::pair<float, int>, 16> candidates;
+    const float radiusSq = radius * radius;
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         const Ref& s = m_frame[i];
@@ -214,16 +235,17 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
         // The Base is never a blueprint, but it IS repairable now that it takes damage.
         const bool wantsMaterials = s.state->blueprint
             || (includeRepairs && s.state->health < s.state->healthMax - 1e-3f);
-        if (!wantsMaterials || rubbleBlocked(s, byPlayer)) // (rubble with an enemy near takes nothing: the next one gets the stone)
+        if (!wantsMaterials)
             continue;
-        const float dist = glm::distance(glm::vec2(s.entity->pos.x, s.entity->pos.z), glm::vec2(pos.x, pos.z));
-        if (dist < bestDist)
-        {
-            bestDist = dist;
-            best = i;
-        }
+        const glm::vec2 d(s.entity->pos.x - pos.x, s.entity->pos.z - pos.z);
+        if (const float distSq = glm::dot(d, d); distSq < radiusSq)
+            candidates.push_back({ distSq, i });
     }
-    return best >= 0 ? investMaterials(m_frame[best], amount, repairHealCap, byPlayer) : 0.0f;
+    oc::sort(candidates.begin(), candidates.end());
+    for (const auto& [distSq, i] : candidates)
+        if (!rubbleBlocked(m_frame[i], byPlayer))
+            return investMaterials(m_frame[i], amount, repairHealCap, byPlayer);
+    return 0.0f;
 }
 
 // ---------------------------------------------------------------- production + sweeps
@@ -498,10 +520,10 @@ void StructureSystem::tickDamage(float)
 // THE CANNONS (authority). A built Cannon is MANNED while a worker of its crew stands at the gun (Ref::crewAtGun,
 // Carriers.cpp): only then it reloads (at "Crew" at the gun the full rate, with fewer the reload is that much slower),
 // looks for a target and turns. Every 0.2 s it looks for the nearest enemy unit (a SHADOW too) in its arc - within "Arc (deg)" /
-// 2 of its placed facing, between "Min range" and "Range" (planar) - and its gun turns toward it at "Turn rate (deg/s)".
-// It fires when the gun points at the target (within 3 degrees), its reload is done and it holds a munition: a LOB with
-// a flight time of the distance / "Shot speed" (at least 1 s, so even a near target gets a high arc over the wall in
-// front), the vertical speed solved for the gravity so the shell comes down on the target's spot. The match spawns it
+// 2 of its placed facing, between "Min range" and "Range" (planar) - that a LOB CAN REACH (of the 4 nearest, the first
+// whose highest lob has a clear arc: planLob), and its gun turns toward it at "Turn rate (deg/s)". It fires when the gun
+// points at the target (within 3 degrees), its reload is done and it holds a munition: the LOWEST lob whose whole arc is
+// clear, the vertical speed solved for the gravity so the shell comes down on the target's spot. The match spawns it
 // (cannonShots). With the carriers off ("Game/Carriers" "Enabled") there are no crews: every cannon is manned.
 void StructureSystem::tickCannons(float deltaSec)
 {
@@ -514,6 +536,55 @@ void StructureSystem::tickCannons(float deltaSec)
     const int crewFull = glm::max(m_settings.cannonCrew, 1);
     constexpr float c_muzzleHeight = 0.55f, c_muzzleOut = 1.65f; // the barrel's mouth over / ahead of the origin (cannon.pre's Mouth)
     constexpr float c_seekSeconds = 0.2f, c_aimTolerance = 0.05f; // (radians: ~3 degrees)
+    // THE LOB to `aim` from `muzzle`. The flight time: the distance / "Shot speed", at least 1 s, and long enough for a
+    // launch at least 45 degrees up (vertical >= horizontal: dy + g t^2 / 2 >= dist), so the shell climbs steeply out of
+    // the muzzle (a cannon on a walkway deck has its muzzle only ~0.65 m over the wall in front). Each ATTEMPT flies 1.3x
+    // longer than the one before: a higher lob that comes down steeper.
+    // THE CLEARANCE: the WHOLE arc (c_clearSteps rays along the shell's lowest point: its radius under the path) against
+    // the static world - walls, gates, buildings, the terrain - from its start to c_landClear metres of path before it
+    // lands. The wall in front of the barrel AND the wall in front of a demon that presses against it: a steep enough lob
+    // falls over it. Attempts firstAttempt .. c_attempts - 1, the lowest clear one; false = every one is blocked.
+    // THE START: the shell begins c_launchAhead metres ALONG ITS OWN ARC from the mouth (the place and the speed it
+    // would have there), so the wall or the ship's rail right in front of the barrel is behind it already. The arc is
+    // the same: it still comes down on the target. The muzzle flash shows there (cannonShell.pre MuzzleFlash).
+    constexpr int c_attempts = 5, c_clearSteps = 12;
+    constexpr float c_shellRadius = 0.35f, c_launchAhead = 1.0f, c_landClear = 1.5f;
+    const uint64 clearMask = PhysicsLayers::bit("Default") | PhysicsLayers::bit("Gate") | PhysicsLayers::bit("Terrain");
+    struct Lob { glm::vec3 start, velocity; };
+    const auto planLob = [&](const glm::vec3& muzzle, const glm::vec3& aim, int firstAttempt, Lob& out) -> bool
+    {
+        const glm::vec2 flat(aim.x - muzzle.x, aim.z - muzzle.z);
+        const float dist = glm::length(flat);
+        const float rise = aim.y - muzzle.y;
+        float time = glm::max(glm::max(dist / glm::max(m_settings.cannonShotSpeed, 1.0f), 1.0f),
+            std::sqrt(glm::max(2.0f * (dist - rise) / gravity, 0.0f)));
+        for (int attempt = 0; attempt < firstAttempt; ++attempt)
+            time *= 1.3f;
+        for (int attempt = firstAttempt; attempt < c_attempts; ++attempt, time *= 1.3f)
+        {
+            const glm::vec2 horizontal = dist > 1e-3f ? flat / time : glm::vec2(0.0f);
+            const float vertical = (rise + 0.5f * gravity * time * time) / time;
+            const auto arcAt = [&](float t) { return muzzle + glm::vec3(horizontal.x * t, vertical * t - 0.5f * gravity * t * t, horizontal.y * t); };
+            const float startTime = glm::min(c_launchAhead / glm::max(glm::length(glm::vec3(horizontal.x, vertical, horizontal.y)), 0.1f), time * 0.25f);
+            const float landSpeed = glm::length(glm::vec3(horizontal.x, vertical - gravity * time, horizontal.y));
+            const float endTime = glm::max(time - c_landClear / glm::max(landSpeed, 0.1f), startTime);
+            const glm::vec3 low(0.0f, c_shellRadius, 0.0f);
+            bool blocked = false;
+            glm::vec3 prev = arcAt(startTime) - low;
+            for (int k = 1; k <= c_clearSteps && !blocked; ++k)
+            {
+                const glm::vec3 next = arcAt(startTime + (endTime - startTime) * (float)k / c_clearSteps) - low;
+                blocked = Globals::physics.castRayClosest(prev, next - prev, clearMask, nullptr, true).hit;
+                prev = next;
+            }
+            if (!blocked)
+            {
+                out = { arcAt(startTime), glm::vec3(horizontal.x, vertical - gravity * startTime, horizontal.y) };
+                return true;
+            }
+        }
+        return false;
+    };
     for (Ref& ref : m_frame)
     {
         if (ref.type != EStructureType::Cannon)
@@ -534,8 +605,13 @@ void StructureSystem::tickCannons(float deltaSec)
             ref.cannonSeek = c_seekSeconds;
             const glm::vec3 fwd3 = facing * glm::vec3(0.0f, 0.0f, -1.0f); // an entity's forward is -Z
             const glm::vec2 fwd = glm::length(glm::vec2(fwd3.x, fwd3.z)) > 1e-4f ? glm::normalize(glm::vec2(fwd3.x, fwd3.z)) : glm::vec2(0.0f, -1.0f);
-            Entity* target = nullptr;
-            float bestDistSq = range * range;
+            // The c_candidates NEAREST enemy units in the arc (kept sorted while the query streams them), then the nearest
+            // of those a lob can reach: its HIGHEST lob clear (planLob's last attempt; the fire step picks the lowest
+            // clear one). None: no target - the gun holds rather than fire into its own wall.
+            constexpr int c_candidates = 4;
+            struct Candidate { float distSq; Entity* entity; };
+            Candidate nearest[c_candidates];
+            int count = 0;
             Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), range, SpatialLayer_Render, [&](uint64 user)
             {
                 Entity* other = reinterpret_cast<Entity*>(user);
@@ -544,13 +620,28 @@ void StructureSystem::tickCannons(float deltaSec)
                     return;
                 const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
                 const float distSq = glm::dot(d, d);
-                if (distSq >= bestDistSq || distSq < minRange * minRange)
+                if (distSq >= range * range || distSq < minRange * minRange)
                     return;
                 if (glm::dot(d, fwd) < cosHalfArc * std::sqrt(distSq))
                     return; // outside the arc
-                bestDistSq = distSq;
-                target = other;
+                if (count == c_candidates && distSq >= nearest[c_candidates - 1].distSq)
+                    return;
+                int k = glm::min(count, c_candidates - 1);
+                count = glm::min(count + 1, c_candidates);
+                for (; k > 0 && nearest[k - 1].distSq > distSq; --k)
+                    nearest[k] = nearest[k - 1];
+                nearest[k] = { distSq, other };
             });
+            Entity* target = nullptr;
+            for (int k = 0; k < count && !target; ++k)
+            {
+                const glm::vec3 to = nearest[k].entity->pos - pos;
+                const glm::vec2 dir = glm::length(glm::vec2(to.x, to.z)) > 1e-4f ? glm::normalize(glm::vec2(to.x, to.z)) : fwd;
+                const glm::vec3 muzzle = pos + glm::vec3(dir.x * c_muzzleOut, c_muzzleHeight, dir.y * c_muzzleOut);
+                Lob lob;
+                if (planLob(muzzle, nearest[k].entity->pos, c_attempts - 1, lob))
+                    target = nearest[k].entity;
+            }
             ref.cannonHasTarget = target != nullptr;
             if (target)
             {
@@ -566,46 +657,15 @@ void StructureSystem::tickCannons(float deltaSec)
         const glm::vec3 aimed3 = ref.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f); // the gun as it points now
         const glm::vec2 fwd = glm::length(glm::vec2(aimed3.x, aimed3.z)) > 1e-4f ? glm::normalize(glm::vec2(aimed3.x, aimed3.z)) : glm::vec2(0.0f, -1.0f);
         const glm::vec3 muzzle = pos + glm::vec3(fwd.x * c_muzzleOut, c_muzzleHeight, fwd.y * c_muzzleOut);
-        const glm::vec3 aim = ref.cannonTargetPos;
-        const glm::vec2 flat(aim.x - muzzle.x, aim.z - muzzle.z);
-        const float dist = glm::length(flat);
-        // THE FLIGHT TIME: the distance / "Shot speed", at least 1 s, and long enough for a launch at least 45 degrees up
-        // (vertical >= horizontal: dy + g t^2 / 2 >= dist), so the shell climbs steeply out of the muzzle. A cannon on a
-        // walkway deck has its muzzle only ~0.65 m over the wall in front.
-        const float rise = aim.y - muzzle.y;
-        float time = glm::max(glm::max(dist / glm::max(m_settings.cannonShotSpeed, 1.0f), 1.0f),
-            std::sqrt(glm::max(2.0f * (dist - rise) / gravity, 0.0f)));
-        // THE CLEARANCE: the arc's first c_clearDist metres (the shell's lowest point: its radius under the path) tested
-        // against the static world - walls, gates, buildings, the terrain. Blocked: a higher lob (a longer flight), a few
-        // tries; still blocked, it fires the highest one.
-        // THE START: the shell begins c_launchAhead metres ALONG ITS OWN ARC from the mouth (the place and the speed it
-        // would have there), so the wall or the ship's rail right in front of the barrel is behind it already. The arc is
-        // the same: it still comes down on the target. The muzzle flash shows there (cannonShell.pre MuzzleFlash).
-        constexpr float c_clearDist = 5.0f, c_shellRadius = 0.35f, c_launchAhead = 1.0f;
-        const uint64 clearMask = PhysicsLayers::bit("Default") | PhysicsLayers::bit("Gate") | PhysicsLayers::bit("Terrain");
-        glm::vec2 horizontal(0.0f);
-        float vertical = 0.0f, startTime = 0.0f;
-        const auto arcAt = [&](float t) { return muzzle + glm::vec3(horizontal.x * t, vertical * t - 0.5f * gravity * t * t, horizontal.y * t); };
-        for (int attempt = 0; attempt < 5; ++attempt, time *= 1.3f)
+        // The lowest lob whose whole arc is clear (planLob). None (the target moved behind a wall since the search): hold
+        // the shot and look again at once - the search takes the next target a lob can reach.
+        Lob lob;
+        if (!planLob(muzzle, ref.cannonTargetPos, 0, lob))
         {
-            horizontal = dist > 1e-3f ? flat / time : glm::vec2(0.0f);
-            vertical = (rise + 0.5f * gravity * time * time) / time;
-            startTime = glm::min(c_launchAhead / glm::max(glm::length(glm::vec3(horizontal.x, vertical, horizontal.y)), 0.1f), time * 0.25f);
-            const float clearTime = glm::min(c_clearDist / glm::max(glm::length(horizontal), 0.1f), time * 0.5f);
-            bool blocked = false;
-            const glm::vec3 low(0.0f, c_shellRadius, 0.0f);
-            glm::vec3 prev = arcAt(startTime) - low;
-            constexpr int c_steps = 4;
-            for (int k = 1; k <= c_steps && !blocked; ++k)
-            {
-                const glm::vec3 next = arcAt(startTime + clearTime * (float)k / c_steps) - low;
-                blocked = Globals::physics.castRayClosest(prev, next - prev, clearMask, nullptr, true).hit;
-                prev = next;
-            }
-            if (!blocked)
-                break;
+            ref.cannonSeek = 0.0f;
+            continue;
         }
-        m_cannonShots.push_back({ arcAt(startTime), glm::vec3(horizontal.x, vertical - gravity * startTime, horizontal.y), s.team });
+        m_cannonShots.push_back({ lob.start, lob.velocity, s.team });
         s.store[GoodMunitions] -= 1.0f;
         ref.cannonReload = glm::max(m_settings.cannonFireInterval, 0.1f);
     }
@@ -676,6 +736,7 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
     if (rubble && !s.state->rubble)
         GameSound::post(EGameSound::StructureCollapse, s.entity->pos, 1.0f, (float)footprintCellsOf(s.type));
     s.state->rubble = rubble ? 1 : 0;
+    s.rubbleUnsafe = rubble; // a fresh pile is unsafe until refreshRubbleSafety looks (its destroyer stands next to it)
     applyStructureTint(s);
     const bool aloft = s.onShip && !m_shipJoined; // its collider is the ship's box (shipColliderBoxes): its own stays off
     if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(s.entity))
@@ -736,8 +797,9 @@ void StructureSystem::tickConstructors(float deltaSec)
 
 // buildMode: the player's build UI is open - the builders' and the towers' ranges show. armed: the type on the ghost
 // (Count = none) - the harvest ranges of the built yards show only while a yard of THAT kind is on the ghost, the light
-// hubs' link ranges only while a type that uses light is, and the Healer's huts' reach only while a Healer's hut is.
-// selectedId: the selected structure (0 = none) - a Healer's hut shows its reach while it is selected.
+// hubs' link ranges only while a type that uses light is, the Healer's huts' reach only while a Healer's hut is, and the
+// armories' post range only while an Armory or a Mage tower is. selectedId: the selected structure (0 = none) - a
+// Healer's hut shows its reach, an armory (the Beacon too) its post range while it is selected.
 void StructureSystem::drawDebug(bool buildMode, EStructureType armed, uint32 selectedId) const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
@@ -805,6 +867,7 @@ void StructureSystem::drawDebug(bool buildMode, EStructureType armed, uint32 sel
     const uint32 constructorRing = packColor(glm::vec3(1.0f, 0.75f, 0.45f) * 0.6f);
     const uint32 towerRing = packColor(glm::vec3(0.6f, 0.8f, 1.0f) * 0.5f);
     const uint32 medicRing = packColor(glm::vec3(0.4f, 1.0f, 0.5f) * 0.6f);
+    const uint32 postRing = packColor(glm::vec3(1.0f, 0.45f, 0.35f) * 0.7f);
     const uint32 unpoweredColor = packColor(glm::vec3(1.0f, 0.25f, 0.2f));
     const GameStructureParams& params = Globals::settings.game.structureParams;
     for (const Ref& s : m_frame)
@@ -818,6 +881,14 @@ void StructureSystem::drawDebug(bool buildMode, EStructureType armed, uint32 sel
         if (s.type == EStructureType::MedicStation && !s.state->blueprint && s.state->powered
             && (armed == EStructureType::MedicStation || (selectedId != 0 && s.state->structureId == selectedId)))
             drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), medicHealRadius(), medicRing, 40);
+        // An armory's POST RANGE (the Armory, the Mage tower and the Beacon, which is an armory too): while it is
+        // selected, or while an Armory or a Mage tower is on the ghost (every built one, so the new one's place shows
+        // against them).
+        if ((s.type == EStructureType::Armory || s.type == EStructureType::MageTower || s.type == EStructureType::Base)
+            && !s.state->blueprint
+            && (armed == EStructureType::Armory || armed == EStructureType::MageTower
+                || (selectedId != 0 && s.state->structureId == selectedId)))
+            drawCircle(ground + glm::vec3(0.0f, 0.4f, 0.0f), m_settings.armoryPostRange, postRing, 48);
         if ((hasShieldEmitter(s.type) || s.type == EStructureType::MedicStation
             || s.type == EStructureType::Fabricator) && !s.state->powered && !s.state->blueprint)
             drawCircle(ground + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, unpoweredColor, 16);

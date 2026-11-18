@@ -1,5 +1,5 @@
-# Enemy Warrior: the tough grunt - a third more health and harder hits, no bubble (only the Titan
-# carries one). The early-wave line unit once the plain horde stops cutting it. Bigger than the
+# Enemy Warrior: the tough grunt - a third more health and harder hits, no bubble (the Bulwark, the
+# Aegis and the Titan carry one). The early-wave line unit once the plain horde stops cutting it. Bigger than the
 # grunt, yellow.
 Prefab gameEnemyWarrior
 	CullMode RootOnly

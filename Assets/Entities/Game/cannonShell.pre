@@ -8,8 +8,9 @@
 # Its own POINT LIGHT (Component Light): a cyan glow that lights the ground and the walls under its flight. It flies
 # 5 - 10 m up and the light falls off with the square of the distance, so it is a tenth as bright as the impact's light. It
 # sits at the crystal's centre and casts ray-traced shadows (walls, buildings): the crystal itself is out of ray tracing
-# (an emissive tint, Scene.md "Emissive"), so it does not block its own light. No field of its own (the enemy has no
-# fields to brake it). Replicated (Component Network).
+# (an emissive tint, Scene.md "Emissive"), so it does not block its own light. No field of its own. FieldDeflect: a
+# demon's bubble (the Bulwark's, the Aegis', the Titan's) bends its flight sideways out of it, a little (m/s^2 at full
+# depth). DeflectDrain: bending it costs that demon's battery (energy/s x the depth). Replicated (Component Network).
 Prefab gameCannonShell
 	Component Render
 		ObjectContainer gemsGlow
@@ -43,3 +44,5 @@ Prefab gameCannonShell
 		HitsShadows true
 		ImpactPuff true
 		MuzzleFlash true
+		FieldDeflect 10
+		DeflectDrain 40

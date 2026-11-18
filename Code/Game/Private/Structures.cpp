@@ -25,7 +25,7 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
     "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower",
-    "Ship rail", "Cannon", "Ammo works", "Ammo store" };
+    "Ship rail", "Cannon", "Ammo works", "Ammo store", "Resist ward", "Absorb ward", "Retaliate ward" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
@@ -36,7 +36,8 @@ static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f,
     0.5f,                                               // the Ship rail (1 m over the deck)
     1.1f,                                               // the Cannon (on the ground, a road piece, a walkway deck or a ship rail)
     1.5f,                                               // the Ammo works
-    0.75f };                                            // the Ammo store
+    0.75f,                                              // the Ammo store
+    1.75f, 1.75f, 1.75f };                              // the three wards (3.5 m: a little over a wall)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -190,12 +191,14 @@ oc::string StructureSystem::describeType(EStructureType type) const
         desc = "Bows for the workers. While a demon is in its range, free workers come by road, take a bow and stand guard on the walkways (or on the road) nearest to the demons. They go back to work when the demons are gone. It must touch a road.";
         line(oc::format("Up to {} guards", m_settings.armoryGuards));
         line(oc::format("A guard: {:g} damage every {:g} s, {:g} m", m_settings.guardDamage, m_settings.guardInterval, m_settings.guardRange));
+        line(oc::format("Guards stand within {:g} m of it", m_settings.armoryPostRange));
         range(m_settings.armoryRange);
         break;
     case EStructureType::MageTower:
         desc = "Staffs for the workers. While a demon is in its range, free workers come by road, take a staff and stand on the walkways (or on the road) nearest to the demons. Each turns a small cone of light on a demon: in it a demon is solid and burns. They go back to work when the demons are gone. It must touch a road.";
         line(oc::format("Up to {} mages", m_settings.mageCount));
         line(oc::format("A mage: {:g} damage/s to each demon in its cone, {:g} m", m_settings.mageDps, m_settings.mageRange));
+        line(oc::format("Mages stand within {:g} m of it", m_settings.armoryPostRange));
         range(m_settings.armoryRange);
         break;
     case EStructureType::ShipRail:
@@ -219,6 +222,36 @@ oc::string StructureSystem::describeType(EStructureType type) const
         banks(m_settings.ammoStoreCapacity, "munitions");
         line(oc::format("Blast: up to {:g} damage within {:g} m", m_settings.ammoBlastDamage, m_settings.ammoBlastRadius));
         break;
+    case EStructureType::WardResist:
+    case EStructureType::WardAbsorb:
+    case EStructureType::WardRetaliate:
+    {
+        if (type == EStructureType::WardResist)
+        {
+            desc = "Place it against a wall: a barrier of light around the wall takes a share off every hit on it.";
+            line(oc::format("{:g} % less damage", m_settings.wardResist * 100.0f));
+            line(oc::format("- {:g} light per damage it takes off", m_settings.wardResistCost));
+        }
+        else if (type == EStructureType::WardAbsorb)
+        {
+            desc = "Place it against a wall: each wall segment gets a shield of light that takes the hits before the wall does, and grows back.";
+            line(oc::format("A shield of {:g} health per segment", m_settings.wardAbsorbShield));
+            line(oc::format("+ {:g} health/s per segment, {:g} s after the last hit", m_settings.wardAbsorbRegen,
+                            m_settings.wardAbsorbDelay));
+            line(oc::format("- {:g} light per health of shield", m_settings.wardAbsorbCost));
+        }
+        else
+        {
+            desc = "Place it against a wall: spikes of light on the wall send a share of every bite back to the demon that bites.";
+            line(oc::format("{:g} % of each bite back", m_settings.wardRetaliate * 100.0f));
+            line(oc::format("- {:g} light per damage sent back", m_settings.wardRetaliateCost));
+        }
+        line(oc::format("Up to {} connected wall segments", m_settings.wardWalls));
+        banks(m_settings.wardCapacity, "light");
+        line(oc::format("Refills at most {:g} light/s", m_settings.wardIntake));
+        line(oc::format("When empty, off until {:g} % full", m_settings.wardRestart * 100.0f));
+        break;
+    }
     case EStructureType::CablePower:
     case EStructureType::CablePipe:
     case EStructureType::CableConveyor:
@@ -464,6 +497,7 @@ void StructureSystem::clear()
             Globals::world.removeRootEntity(s.rubbleVisual.get());
         if (s.walkPiece)
             Globals::world.removeRootEntity(s.walkPiece.get());
+        clearWardPieces(s);
     }
     for (const Walker& walker : m_walkers)
         if (walker.entity)
@@ -888,10 +922,13 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     // heal always ran between the killing blow and the sweep). A structure that ends a frame at
     // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
+    refreshRubbleSafety(deltaSec);
     tickConstructors(deltaSec);
     tickCannons(deltaSec);
     tickCarriers(deltaSec); // wood, stone and munitions: the walkers on the road
     tickLight(deltaSec);    // light: the beams between the buildings and their hubs
+    tickWardLinks(deltaSec, true);
+    tickWards(deltaSec);    // the wards pay for what their walls did, and the Absorb shields grow back
     drawLightLinks();       // HERE, not in drawDebug: a light record added before the begin-frame job is reset by it
     publishSearchlights();  // the same rule: its spot lights are light records
     // The transport: inject the due runs' supply/demand and kick the job - it overlaps present
@@ -936,6 +973,7 @@ void StructureSystem::tickMirror(float deltaSec)
         drawLightLinks();
     }
     publishSearchlights(); // the cones: aimed by the mirrored components themselves (see GameStructureComponent::update)
+    tickWardLinks(deltaSec, false); // the wards' pieces on the walls (the work and the pay are the authority's)
     for (Ref& ref : m_frame) // the cannons' guns turn toward the synced aim
         if (ref.type == EStructureType::Cannon)
             turnCannon(ref, deltaSec);

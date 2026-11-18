@@ -1085,6 +1085,8 @@ void EntityEditor::renderGameProjectileSection(EntityDocNode& node)
 	edited |= fieldCheck("Hits Shadows", projectile.hitsShadows, "Its damage hurts a shadow (a unit that is not solid) too");
 	edited |= fieldCheck("Impact Puff", projectile.impactPuff, "Its impact bursts (the game's shell blast puffs)");
 	edited |= fieldCheck("Muzzle Flash", projectile.muzzleFlash, "Its launch flashes where it starts: a burst, smoke and a short light");
+	edited |= fieldFloat("Field Deflect", projectile.fieldDeflect, 0.05f, 0.0f, 1000.0f, "m/s^2 at full depth: an enemy bubble bends its flight out of it");
+	edited |= fieldFloat("Deflect Drain", projectile.deflectDrain, 0.1f, 0.0f, 10000.0f, "Battery energy/s it takes, while bent, from the enemy unit whose bubble bends it");
 	if (edited)
 		markEdited();
 	ImGui::PopID();

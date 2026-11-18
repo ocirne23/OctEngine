@@ -1,0 +1,8 @@
+# A RETALIATE WARD's spikes on one open side of a wall segment: five cones of light out of the wall
+# (Models/wards.obj `Spikes`, modelled for the +X side). Render-only (StructureSystem::updateWardLooks).
+Prefab gameWardSpikes
+	Component Render
+		ObjectContainer wards
+		Node Spikes
+		Type StaticMesh
+		Color 1 0.4 0.25

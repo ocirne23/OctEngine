@@ -1,4 +1,4 @@
-# Enemy Titan: the wave 11+ boss body - a walking siege tower and THE ONE demon with a bubble: a
+# Enemy Titan: the night 6+ boss body (one now and then on night 5; MatchCoop's c_heavies) - a walking siege tower and the demon with the BIGGEST bubble (the Bulwark and the Aegis carry smaller ones): a
 # large field of darkness (about 13 m) that squishes the players' fields back where they meet and
 # drains the structures it covers. Enormous health and battery, crushing melee against structures
 # and players, and an emitter drain that blacks out a single emitter it leans on. Very slow.
@@ -7,12 +7,12 @@ Prefab gameEnemyTitan
 	CullMode RootOnly
 	Component Scene
 		Prefab CubeGuy        # the model - see enemyGrunt.pre
-			Position 0 2.76 0
-			Scale 1.12
+			Position 0 3.45 0
+			Scale 1.4
 	Component Physics
 		Body Dynamic
 		Shape Sphere
-		Radius 2
+		Radius 2.5
 		Density 450
 		Friction 0
 		LockRotation true
@@ -26,11 +26,11 @@ Prefab gameEnemyTitan
 	Component GameUnit
 		ShortName TITAN
 		Color 0.2 0.02 0.08
-		HealthMax 2200
-		EnergyMax 450
+		HealthMax 3200
+		EnergyMax 1350
 		ShieldOutput 2.2
 		MoveSpeed 1.6
-		AttackRange 4
+		AttackRange 5
 		AttackInterval 2.5
 		AttackDamage 140
 		PlayerDamage 112

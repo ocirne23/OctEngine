@@ -77,14 +77,22 @@ namespace
     constexpr int c_numWaveArchetypes = (int)(sizeof(c_waveArchetypes) / sizeof(c_waveArchetypes[0]));
 }
 
-ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 6>& mix) const
+ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 14>& mix) const
 {
     float total = 0.0f;
     for (const WaveMixEntry& e : mix)
         total += e.weight;
     if (total <= 0.0f)
         return ENpcType::Swarm; // no rolled mix (shouldn't happen): the classic mass
-    float r = glm::linearRand(0.0f, total);
+    // NOT glm::linearRand: it builds its value from std::rand() % 255 bytes, so it never comes within ~0.4 % of its max
+    // (and skips a small slice in every 1/255 of the range) - the mix's LAST entry, a Titan at a fraction of a percent
+    // of the weight, was never rolled. A SplitMix64 step, its top 24 bits into [0, 1).
+    m_mixRng += 0x9E3779B97F4A7C15ull;
+    uint64 z = m_mixRng;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    float r = (float)(z >> 40) * (1.0f / 16777216.0f) * total;
     for (const WaveMixEntry& e : mix)
     {
         r -= e.weight;
@@ -155,6 +163,9 @@ void GameMatch::tickWaves(float deltaSec)
         // The night's first wave waits for the Beacon: its ignition (tickBeacon) must be over before a demon comes out.
         if (m_nightWave == 0 && m_settings.beaconEnabled && m_beaconSet && m_beaconIgnite < 1.0f)
             return;
+        // After a load no wave comes out before the faction land is back (m_factionSettleIn): it picks the spawn point.
+        if (m_factionSettleIn >= 0.0f)
+            return;
     }
     m_waveTimer -= deltaSec;
     if (m_waveTimer > 0.0f)
@@ -183,7 +194,9 @@ void GameMatch::stampLightRules()
     unit.shadowTeam = m_sandboxWorld && m_settings.demonShadowForm ? (int)CoopAiTeam : -1;
     // The burn starts only with the sun OVER the horizon (daylight() already rises a little under it, for the dusk
     // of the fields and the mirrors): a wave that comes out right after sunset must not burn in the dark.
-    unit.sunDps = m_sandboxWorld ? m_settings.sunlightDps * glm::smoothstep(0.02f, 0.2f, Globals::settings.sky.sunHeight()) : 0.0f;
+    const float sunBurn = m_sandboxWorld ? glm::smoothstep(0.02f, 0.2f, Globals::settings.sky.sunHeight()) : 0.0f;
+    unit.sunDps = m_settings.sunlightDps * sunBurn;
+    unit.sunShare = m_settings.sunlightShare * sunBurn; // a Titan's 3200 health took minutes at the flat rate alone
     Globals::settings.game.structures.solarDaylight = daylight();
     Globals::settings.game.structures.fieldNight = m_sandboxWorld ? 1.0f - daylight() : 1.0f; // elsewhere no field sleeps
 }
@@ -458,6 +471,7 @@ void GameMatch::tickFaction(float deltaSec)
     const GameFactionSettings& s = Globals::settings.game.faction;
     if (!m_sandboxWorld || !s.enabled)
     {
+        m_factionSettleIn = -1.0f; // no layer: nothing for the waves to wait for
         if (m_faction.valid())
         {
             m_faction.clear();
@@ -486,7 +500,10 @@ void GameMatch::tickFaction(float deltaSec)
     if (!m_faction.valid())
     {
         if (!base)
+        {
+            m_factionSettleIn = -1.0f; // no Base: no land to restore
             return;
+        }
         m_faction.reset(glm::vec2(base->owner->pos.x, base->owner->pos.z), s.cellSize, (uint8)glm::clamp(s.startValue, 0, 255));
         send(nullptr);
         return; // one send a frame: the spread starts next frame
@@ -507,6 +524,17 @@ void GameMatch::tickFaction(float deltaSec)
     for (const EnemyOutpost& outpost : m_outposts) // the dark beacons
         m_factionSources.push_back({ glm::vec2(outpost.pos.x, outpost.pos.z), s.outpostRadius, -1.0f });
     m_faction.setSources(m_factionSources);
+    if (m_factionSettleIn >= 0.0f)
+    {
+        m_factionSettleIn -= deltaSec;
+        if (m_factionSettleIn < 0.0f) // the settle after a load: the land around the Base and the fields at once
+        {
+            ProfileScope settleScope("Faction settle", EProfileCategory::Game);
+            m_faction.settle();
+            send(nullptr);
+            return;
+        }
+    }
     glm::ivec4 dirty;
     if (m_faction.tick(deltaSec, dirty)) // a sweep ended and changed bytes: only their rectangle goes to the renderer
         send(&dirty);
@@ -931,15 +959,22 @@ void GameMatch::queueWave()
             m_waveMix.push_back({ entry.type, entry.weight * glm::linearRand(0.6f, 1.4f) });
     // THE SPRINKLE: one STRONG type on top of the recipe, a few bodies that stand out of the mass. It takes
     // c_sprinkleShare of the wave's points; a type is a candidate from its level on, when the recipe does not have it
-    // and that share pays for half a body at least (so a Titan waits for the big waves). The roll is between the two
-    // most expensive candidates: a late wave gets a Titan or a Giant, not one more Brute. RARE EARLY: from its rareLevel
-    // (the night) a type is a candidate only in c_rareChance of the waves, from its minLevel in every one - the first
-    // Giants show up now and then on night 3, the first Titans on night 4.
+    // and that share pays for half a body at least. The roll is between the two most expensive candidates: a later
+    // wave gets a Hive or a Brute, not one more Warrior. RARE EARLY: from its rareLevel (the night) a type is a candidate
+    // only in c_rareChance of the waves, from its minLevel in every one. (The Giants and Titans are THE HEAVIES below.)
+    // The mix weights are per BODY: the weight that gives `type` the share `share` of the POINTS.
+    const auto addShare = [&](ENpcType type, float share)
+    {
+        float cost = 0.0f;
+        for (const WaveMixEntry& e : m_waveMix)
+            cost += e.weight * waveCostOf(e.type);
+        m_waveMix.push_back({ type, share * cost / ((1.0f - share) * waveCostOf(type)) });
+    };
     {
         constexpr float c_sprinkleShare = 0.15f, c_rareChance = 0.15f;
         constexpr struct { ENpcType type; int minLevel; int rareLevel; } c_sprinkles[] = { // by rising cost
-            { ENpcType::Warrior, 1, 1 }, { ENpcType::Elite, 3, 3 }, { ENpcType::Brute, 2, 2 }, { ENpcType::Spawner, 4, 4 },
-            { ENpcType::Giant, 5, 3 }, { ENpcType::Titan, 6, 4 } };
+            { ENpcType::Warrior, 1, 1 }, { ENpcType::Bulwark, 1, 1 }, { ENpcType::Elite, 3, 3 }, { ENpcType::Brute, 2, 2 },
+            { ENpcType::Spawner, 4, 4 }, { ENpcType::Aegis, 4, 4 } };
         ENpcType candidates[2];
         int numCandidates = 0;
         for (const auto& s : c_sprinkles)
@@ -957,13 +992,81 @@ void GameMatch::queueWave()
             numCandidates = glm::min(numCandidates + 1, 2);
         }
         if (numCandidates > 0)
+            addShare(candidates[glm::linearRand(0.0f, 1.0f) < 0.5f ? 0 : numCandidates - 1], c_sprinkleShare);
+    }
+    // THE HEAVIES: Giants and Titans, on top of the recipe and the sprinkle (not when the recipe has them already). From
+    // its scatterLevel (the night) a heavy comes in c_scatterChance of the waves as a FEW bodies (scatterBodies); from
+    // its mainLevel it is in EVERY wave with mainShare of the points, one body at least. A share over c_maxHeavyShare
+    // (a wave too small for the body) is skipped. So the Giants come on night 5 with a scattering on night 4, the
+    // Titans on night 6 with a scattering on night 5.
+    {
+        constexpr float c_scatterChance = 0.3f, c_maxHeavyShare = 0.5f;
+        constexpr struct { ENpcType type; int scatterLevel, mainLevel; float scatterBodies, mainShare; } c_heavies[] = {
+            { ENpcType::Giant, 4, 5, 2.0f, 0.2f }, { ENpcType::Titan, 5, 6, 1.0f, 0.15f } };
+        for (const auto& h : c_heavies)
         {
-            const ENpcType type = candidates[glm::linearRand(0.0f, 1.0f) < 0.5f ? 0 : numCandidates - 1];
-            // The mix weights are per BODY: the weight that gives this type the share of the POINTS.
-            float cost = 0.0f;
+            bool inMix = false;
             for (const WaveMixEntry& e : m_waveMix)
-                cost += e.weight * waveCostOf(e.type);
-            m_waveMix.push_back({ type, c_sprinkleShare * cost / ((1.0f - c_sprinkleShare) * waveCostOf(type)) });
+                inMix |= e.type == h.type;
+            if (inMix || level < h.scatterLevel || budget <= 0.0f)
+                continue;
+            const float body = waveCostOf(h.type) / budget; // the share of the points one body takes
+            float share;
+            if (level >= h.mainLevel)
+                share = glm::max(h.mainShare, body);
+            else if (glm::linearRand(0.0f, 1.0f) < c_scatterChance)
+                share = h.scatterBodies * body;
+            else
+                continue;
+            if (share <= c_maxHeavyShare)
+                addShare(h.type, share);
+        }
+    }
+    // THE BODY CAP: the points grow x "Night growth" a night, so a late night's waves would field hundreds of
+    // thousands of small bodies. The bodies this wave may buy: "Target enemies alive" less the demons alive now, held to
+    // 1/8 .. 1 x "Wave max bodies". When the queued points would buy more with this mix, the mix SHIFTS TO THE COSTLY
+    // TYPES: every weight x cost^a, with a (0 .. 4, bisection) the smallest that brings the mean cost per body to
+    // points / bodies - the recipe keeps its character, the elites take its points. First the elite pool the night has
+    // unlocked joins at a tiny weight (a swarm recipe has nothing costly to shift to).
+    if (m_wavePendingBudget > 0.0f)
+    {
+        const int waveMax = glm::max(m_settings.waveMaxBodies, 8);
+        const int maxBodies = glm::clamp(m_settings.waveTargetAlive - aiAlive, waveMax / 8, waveMax);
+        const auto meanCost = [&](float a)
+        {
+            float weight = 0.0f, cost = 0.0f;
+            for (const WaveMixEntry& e : m_waveMix)
+            {
+                const float w = e.weight * std::pow(waveCostOf(e.type), a);
+                weight += w;
+                cost += w * waveCostOf(e.type);
+            }
+            return weight > 0.0f ? cost / weight : 1.0f;
+        };
+        const float wantedCost = m_wavePendingBudget / (float)maxBodies;
+        if (meanCost(0.0f) < wantedCost)
+        {
+            constexpr float c_poolWeight = 0.01f;
+            constexpr struct { ENpcType type; int level; } c_elitePool[] = {
+                { ENpcType::Brute, 2 }, { ENpcType::Elite, 3 }, { ENpcType::Aegis, 4 }, { ENpcType::Giant, 5 },
+                { ENpcType::Titan, 6 }, { ENpcType::Lobber, 7 } };
+            for (const auto& p : c_elitePool)
+            {
+                bool inMix = false;
+                for (const WaveMixEntry& e : m_waveMix)
+                    inMix |= e.type == p.type;
+                if (!inMix && level >= p.level && m_waveMix.size() < m_waveMix.capacity())
+                    m_waveMix.push_back({ p.type, c_poolWeight });
+            }
+            float lo = 0.0f, hi = 4.0f;
+            if (meanCost(hi) > wantedCost)
+                for (int i = 0; i < 20; ++i)
+                {
+                    const float mid = 0.5f * (lo + hi);
+                    (meanCost(mid) < wantedCost ? lo : hi) = mid;
+                }
+            for (WaveMixEntry& e : m_waveMix)
+                e.weight *= std::pow(waveCostOf(e.type), hi);
         }
     }
     // Size the blob for EVERYTHING still queued (a previous wave's tail included) - once, with the

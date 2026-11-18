@@ -1,0 +1,4 @@
+# The wards' pieces on the walls (Models/wards.obj): drawn LIT, like the Walkway's pieces - the sun, the lights and the
+# shadows fall on them; each piece prefab's `Color` is its tint. Entities/Game/wardResistPane.pre and the others draw them.
+ObjectContainer wards
+	Path "Models/wards.obj"

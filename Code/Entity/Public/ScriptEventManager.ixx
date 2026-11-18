@@ -1,4 +1,4 @@
-export module Entity:ScriptEventManager;
+ export module Entity:ScriptEventManager;
 
 import Core;
 import Core.glm;

@@ -10,7 +10,21 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, WardResist, WardAbsorb, WardRetaliate, Count };
+
+// THE WARDS: a 1x1 pylon with a light store that stands against a wall and strengthens the walls connected to it (a
+// breadth-first search over the touching wall and gate segments, "Walls per ward" at most). One kind each: RESIST takes
+// a share off every hit, ABSORB gives each segment a shield that takes hits first, RETALIATE sends a share of every
+// bite back to the biter. Each pays for its work from its own light store (StructureSystem::tickWards, Wards.cpp).
+export constexpr int WardKindCount = 3;
+export constexpr bool isWardType(EStructureType t)
+{
+    return t == EStructureType::WardResist || t == EStructureType::WardAbsorb || t == EStructureType::WardRetaliate;
+}
+export constexpr int wardKindOf(EStructureType t) // 0 Resist, 1 Absorb, 2 Retaliate; -1 = not a ward
+{
+    return t == EStructureType::WardResist ? 0 : t == EStructureType::WardAbsorb ? 1 : t == EStructureType::WardRetaliate ? 2 : -1;
+}
 
 // LINE types: 1-cell segments placed as a drag LINE (press, drag, release). The Wall and the Gate (a wall the PLAYERS
 // walk through: its collider is Layer Gate, which leaves the Player layer out).
@@ -141,10 +155,10 @@ export constexpr bool hasOrderByte(EStructureType t)
 // UNIT TYPES, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant,
 // Titan, Lobber - Npc.ixx static_asserts the count). Structures cannot import Npc, so the
 // per-type prices live there as plain arrays.
-export constexpr int GameNumUnitTypes = 11; // (+ Spawner, Warrior)
+export constexpr int GameNumUnitTypes = 13; // (+ Spawner, Warrior, Bulwark, Aegis)
 // What a barracks may be SET to produce: Grunt/Brute/Runner/Swarm/Warrior (10). The Spitter (3),
-// the elite tier (5..8) and the Spawner (9) are enemy-only wave units. Requests/mirrors/loads for
-// anything else fall back to the Grunt (0).
+// the elite tier (5..8), the Spawner (9) and the shielded Bulwark / Aegis (11, 12) are enemy-only wave units.
+// Requests/mirrors/loads for anything else fall back to the Grunt (0).
 export constexpr bool isBarracksUnitType(int t)
 {
     return t == 0 || t == 1 || t == 2 || t == 4 || t == 10;

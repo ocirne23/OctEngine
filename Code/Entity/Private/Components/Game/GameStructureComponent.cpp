@@ -56,12 +56,18 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     const bool client = Globals::networkManager.role() == ENetRole::Client;
     if (client && machineKind != EMachineKind::Searchlight)
         return;
-    // Any OTHER team's bubble over the point drains health - a blueprint under it un-builds.
+    // Any OTHER team's bubble over the point drains health - a blueprint under it un-builds. By the DEPTH in the bubble:
+    // nothing at its shell, the full rate where its field is twice the iso value - so the edge of a small demon bubble
+    // (the Bulwark's) barely touches a building, the core of a Titan's drains at the full rate.
     if (!invulnerable && !client)
     {
         const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(entity.pos, team);
         if (territory.valid && territory.inside && territory.owningTeam != (uint32)team)
-            fieldDrain(params.fieldDamageRate * deltaSec);
+        {
+            const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
+            const float depth = glm::clamp(territory.field / iso - 1.0f, 0.0f, 1.0f);
+            fieldDrain(params.fieldDamageRate * depth * deltaSec);
+        }
     }
 
     if (blueprint)
@@ -187,11 +193,36 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     }
 }
 
-void GameStructureComponent::damage(float amount)
+float GameStructureComponent::damage(float amount, bool retaliate)
 {
     if (invulnerable || rubble || amount <= 0.0f)
-        return;
-    atomicSubClamped(health, amount);
+        return 0.0f;
+    float back = 0.0f;
+    if (warded)
+    {
+        // THE WARDS: Retaliate sends its share of the whole hit back, Resist takes its share off, and the Absorb shield
+        // takes what is left first. The game pays the wards for resisted / retaliated (and for the shield's regrowth).
+        WallData& w = wall;
+        oc::atomic_ref<uint32>(w.struck).store(1u, oc::memory_order_relaxed);
+        back = retaliate ? amount * w.retaliate : 0.0f;
+        if (back > 0.0f)
+            atomicAdd(w.retaliated, back);
+        const float resisted = amount * glm::clamp(w.resist, 0.0f, 1.0f);
+        if (resisted > 0.0f)
+        {
+            atomicAdd(w.resisted, resisted);
+            amount -= resisted;
+        }
+        oc::atomic_ref<float> shield(w.shield);
+        float cur = shield.load(oc::memory_order_relaxed);
+        float take;
+        do { take = glm::min(cur, amount); } while (take > 0.0f && !shield.compare_exchange_weak(cur, cur - take));
+        if (take > 0.0f)
+            amount -= take;
+    }
+    if (amount > 0.0f)
+        atomicSubClamped(health, amount);
+    return back;
 }
 
 void GameStructureComponent::addLoad(float energyPerSec)

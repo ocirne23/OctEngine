@@ -59,6 +59,7 @@ these documents keep the code words.** The two tables are `structureNames` (Stru
 | Armory | Armory (ARMR): free workers take a bow and stand guard while enemies are near (Economy.md, The Armory) |
 | MageTower | Mage tower (MAGE): free workers take a staff and turn small light cones on the enemies (Economy.md, The Armory) |
 | ShipRail | Ship rail (RAIL): the ship's wall, one per edge tile of its deck (Ship.md, Building on the ship) |
+| WardResist / WardAbsorb / WardRetaliate | Resist ward (WRES) / Absorb ward (WABS) / Retaliate ward (WRET): a pylon against a wall that makes the connected wall segments stronger (Economy.md, The wards) |
 | Conveyor | Road (ROAD): the carriers walk it (the Bridge is a road segment on water). The Power cable (Light conduit) and the Pipeline (Wood track) are off the hotbar: light moves on beams |
 | the hotbar pages (`buildCategoryItems` 0..4) | Emplacement (EMPL) / Unit (UNIT) / Structure (STRC) / Production (PROD) / Resource (RSRC) |
 | HUD: Energy / Materials / Grid energy / Energy gen, use | Staff light / Stone / Stored light / Light in, out |
@@ -113,7 +114,8 @@ prefab table lives here), `StructuresNetwork.cpp` (`rebuildNetworks` + `updateAr
 `StructuresEconomy.cpp` (`tickProduction`, the death sweep, constructors, materials / repairs,
 the tint, `drawDebug`), `StructuresSync.cpp` (the `mirror*` appliers, `saveTo` / `loadFrom` /
 `clearAllStructures`), `Transport.cpp` (the cable transport tick), `Carriers.cpp` (the walkers that move wood and
-stone on the road) and `Light.cpp` (the light links and their flow) - see [Economy.md](Economy.md) - and
+stone on the road), `Light.cpp` (the light links and their flow) and `Wards.cpp` (the wards: their wall links, what they
+pay, the pieces on the walls) - see [Economy.md](Economy.md) - and
 `StructuresShip.cpp` (the structures on the ship's deck: their pose, the landing edges, the deck placement, the rails,
 the Beacon on the deck - see [Ship.md](Ship.md)).
 

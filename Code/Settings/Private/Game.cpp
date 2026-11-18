@@ -19,6 +19,8 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Wave max distance (m)", &s.sandboxWaveMaxDistance, 20.0f, 4000.0f, 5.0f);
     Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &s.waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
     Tweak::intVar("Game/Coop", "Max enemy units", &s.waveMaxAlive, 1, 100000, 50);
+    Tweak::intVar("Game/Coop", "Wave max bodies", &s.waveMaxBodies, 50, 100000, 50);
+    Tweak::intVar("Game/Coop", "Target enemies alive", &s.waveTargetAlive, 100, 100000, 100);
     Tweak::intVar("Game/Coop", "Spawns per frame", &s.spawnsPerFrame, 1, 200, 1);
     // waveCost is indexed by ENpcType.
     Tweak::floatVar("Game/Coop", "Cost grunt", &s.waveCost[0], 0.1f, 100.0f, 0.5f);
@@ -32,6 +34,8 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Cost lobber", &s.waveCost[8], 0.1f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Cost spawner", &s.waveCost[9], 0.1f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Cost warrior", &s.waveCost[10], 0.1f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Coop", "Cost bulwark", &s.waveCost[11], 0.1f, 500.0f, 0.5f);
+    Tweak::floatVar("Game/Coop", "Cost aegis", &s.waveCost[12], 0.1f, 500.0f, 0.5f);
     Tweak::floatVar("HUD", "Label max distance", &s.labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
     Tweak::floatVar("HUD", "Building bar distance (m)", &s.labelBarDistance, 0.0f, 2000.0f, 5.0f, {}, ETweakFlags::None);
     Tweak::floatVar("HUD", "Unit bar strength (x common enemy)", &s.labelUnitStrength, 0.0f, 10.0f, 0.1f, {}, ETweakFlags::None);
@@ -39,6 +43,7 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &s.focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
     Tweak::floatVar("Game/Coop", "Start time of day (h)", &s.startTimeOfDay, -1.0f, 24.0f, 0.25f);
     Tweak::floatVar("Game/Coop", "Sunlight damage/s", &s.sunlightDps, 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Coop", "Sunlight damage (share of health/s)", &s.sunlightShare, 0.0f, 1.0f, 0.005f);
     Tweak::boolean("Game/Coop", "Fields block demons", &s.fieldsBlockDemons);
     Tweak::boolean("Game/Coop", "Demon shadow form", &s.demonShadowForm);
     Tweak::floatVar("Game/Coop", "Staff light radius (m)", &s.staffLightRadius, 0.0f, 100.0f, 0.5f);
@@ -169,8 +174,23 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // Solar 5, Fabricator 6, Bastion 7, Barracks 8, Wall 9, Turret 10, MineralSilo 11, Constructor 12, Base 13,
     // CablePower 14, CablePipe 15, CableConveyor 16, CrossingPower 17, CrossingPipe 18, CrossingConveyor 19, House 20,
     // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29, ShipRail 30,
-    // Cannon 31, AmmoWorks 32, AmmoStore 33.
+    // Cannon 31, AmmoWorks 32, AmmoStore 33, WardResist 34, WardAbsorb 35, WardRetaliate 36.
     Tweak::floatVar("Game/Economy", "Ship rail repair cost", &s.costs[30], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Resist ward cost", &s.costs[34], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Absorb ward cost", &s.costs[35], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Retaliate ward cost", &s.costs[36], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Ward", "Light store", &s.wardCapacity, 1.0f, 5000.0f, 5.0f);
+    Tweak::floatVar("Game/Ward", "Refill (light/s)", &s.wardIntake, 0.0f, 100.0f, 0.1f);
+    Tweak::floatVar("Game/Ward", "Restart at (share of store)", &s.wardRestart, 0.0f, 1.0f, 0.01f);
+    Tweak::intVar("Game/Ward", "Walls per ward", &s.wardWalls, 1, 64, 1);
+    Tweak::floatVar("Game/Ward", "Resist share", &s.wardResist, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Ward", "Resist light per damage", &s.wardResistCost, 0.0f, 5.0f, 0.005f);
+    Tweak::floatVar("Game/Ward", "Absorb shield (health)", &s.wardAbsorbShield, 0.0f, 10000.0f, 5.0f);
+    Tweak::floatVar("Game/Ward", "Absorb regen (health/s)", &s.wardAbsorbRegen, 0.0f, 1000.0f, 0.5f);
+    Tweak::floatVar("Game/Ward", "Absorb regen delay (s)", &s.wardAbsorbDelay, 0.0f, 60.0f, 0.1f);
+    Tweak::floatVar("Game/Ward", "Absorb light per health", &s.wardAbsorbCost, 0.0f, 5.0f, 0.005f);
+    Tweak::floatVar("Game/Ward", "Retaliate share", &s.wardRetaliate, 0.0f, 5.0f, 0.01f);
+    Tweak::floatVar("Game/Ward", "Retaliate light per damage", &s.wardRetaliateCost, 0.0f, 5.0f, 0.005f);
     Tweak::floatVar("Game/Economy", "Cannon cost", &s.costs[31], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Ammo works cost", &s.costs[32], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Ammo store cost", &s.costs[33], 0.0f, 500.0f, 1.0f);
@@ -225,7 +245,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
             "Light conduit health", "Wood track health", "Road health", "Conduit crossing health", "Wood crossing health",
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
             "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health", "Ship rail health",
-            "Cannon health", "Ammo works health", "Ammo store health" };
+            "Cannon health", "Ammo works health", "Ammo store health", "Resist ward health", "Absorb ward health",
+            "Retaliate ward health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -249,6 +270,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Carriers", "Walk speed (m/s)", &s.carrierSpeed, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Carriers", "Build rate (stone/s)", &s.carrierBuildRate, 0.1f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Armory", "Range (m)", &s.armoryRange, 5.0f, 300.0f, 1.0f);
+    Tweak::floatVar("Game/Armory", "Post range (m)", &s.armoryPostRange, 2.0f, 300.0f, 1.0f);
     Tweak::intVar("Game/Armory", "Guards", &s.armoryGuards, 0, 64, 1);
     Tweak::floatVar("Game/Armory", "Stand down after (s)", &s.armoryStandDown, 0.0f, 120.0f, 1.0f);
     Tweak::floatVar("Game/Armory", "Guard range (m)", &s.guardRange, 2.0f, 100.0f, 0.5f);
@@ -359,6 +381,7 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
     // The shared unit-sim baseline (every unit of every team).
     Tweak::floatVar("Game/Enemies", "Unit energy drain/s @ pressure 1", &up.energyDrainRate, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies", "Shield drain (battery share/s at iso)", &up.shieldDrainShare, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Game/Enemies", "Push tension", &up.tension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field damage/s", &up.fieldDps, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Field damage mult", &up.fieldDpsMult, 0.0f, 10.0f, 0.05f);
@@ -369,6 +392,7 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     Tweak::floatVar("Game/Enemies", "Damage absorb (energy per hp)", &up.damageAbsorb, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Enemies", "Unit damage radius", &up.damageRadius, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
+    Tweak::floatVar("Game/Enemies", "Push on shielded units (x)", &up.shieldedPushMult, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Route engage radius", &up.routeEngageRadius, 0.0f, 60.0f, 0.5f);

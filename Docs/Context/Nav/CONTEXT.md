@@ -461,9 +461,11 @@ score = free · (Goal·dot(d, goal) + Flow·laneW·dot(d, lane) + Persist·dot(d
 
 ### Stall handling
 
-Position is checkpointed every 0.75 s. **Moving less than 0.6 m since the last checkpoint accrues
-stalled time** — displacement, not per-tick progress, because a jittering heading never accumulates
-progress.
+Position is checkpointed every 0.75 s. **Moving less than 40 % of the checkpoint's progress at the unit's own walk
+speed (MoveSpeed x its speedScale - the demon slow, the field slow - never more than 0.6 m) accrues stalled time** —
+displacement, not per-tick progress, because a jittering heading never accumulates progress. (A fixed 0.6 m read a
+slow demon in a player field - a Giant at 0.7 m/s - as stalled at every check, and the unstick ESCAPE turned it out of
+the field: it looked pushed.)
 
 | State | Threshold | Weight changes |
 |---|---|---|

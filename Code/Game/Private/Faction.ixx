@@ -41,6 +41,10 @@ public:
     // The spread: a slice of the active box's rows. Returns true on the frame a sweep ended that changed a byte; outDirty
     // is then the cell rectangle (x0, z0, x1, z1, inclusive) those changes lie in - what the renderer needs.
     bool tick(float deltaSec, glm::ivec4& outDirty);
+    // Puts the land under the current sources at its END STATE at once: each cell a source touches fully to that
+    // source's side (a LOAD: the save holds no land, so the land around the Base would otherwise take "Source time" to
+    // come back). Computed, not simulated. The caller sends all of the map.
+    void settle();
 
     // 0..255 at a world point (the nearest cell; the start value outside the grid).
     uint8 sample(float x, float z) const;

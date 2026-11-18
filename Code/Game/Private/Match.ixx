@@ -388,6 +388,10 @@ private:
     // an enemy walking into a far base's field ticks - and gets pushed - with no player near.
     // Refreshed on the cluster timer.
     oc::vector<glm::vec4> m_fieldZones;
+    // The SIM LOD zones as published: the field zones + THE BASE AREA (the Base's place, out to the farthest built
+    // structure of its team + c_baseZoneMargin), so a demon anywhere around the base ticks and keeps its bubble on
+    // with no player near (World's bubble gate is the tier: forceMaxTier). Not the units' field test (m_fieldZones is).
+    oc::vector<glm::vec4> m_simLodZones;
     // Team bits per nav cell, as a FLAT open-addressing map: the hash map it replaced freed every
     // node on clear() and re-allocated them all the next cycle - most of the nav feed's memory churn.
     // clear() only resets the slots; the table keeps its size across cycles.
@@ -599,8 +603,9 @@ private:
     // (single-type rush, screened siege, combined arms, ... - gated by the night so early nights stay simple) with its
     // weights jittered. Authority-only (clients never spawn).
     struct WaveMixEntry { ENpcType type; float weight; };
-    ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 6>& mix) const; // weighted type roll
-    oc::fixed_vector<WaveMixEntry, 6> m_waveMix; // a recipe's 5 at most + the sprinkle
+    ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 14>& mix) const; // weighted type roll
+    mutable uint64 m_mixRng = 0; // sampleMix's own generator (SplitMix64 state; glm::linearRand never reaches its max)
+    oc::fixed_vector<WaveMixEntry, 14> m_waveMix; // a recipe's 5 at most + the sprinkle + the two heavies + the body cap's elite pool (6)
     int m_lastArchetype = -1;    // never the same recipe twice in a row (when a choice exists)
     bool m_coop = false;
     float m_matchTime = 0.0f;    // authority sim seconds since the world spawned: the HUD "Time" clock, saved/restored
@@ -633,6 +638,11 @@ private:
     // cell is. Its sources: the Base and the field bubbles (the players), a wave's spawn site while its fog stands (the enemy).
     FactionLayer m_faction;
     oc::vector<FactionLayer::Source> m_factionSources; // kept: refilled every frame
+    // A LOAD (loadGame): the save holds no land, so the layer is made again around the loaded Base, and after
+    // a short delay (the field zones refresh first) the land under its sources is put at its end state at once
+    // (FactionLayer::settle: computed, not simulated). Until then no wave comes out: one would see enemy land at the min
+    // "Wave distance", which can be inside the base. < 0 = no settle pending.
+    float m_factionSettleIn = -1.0f;
     void tickFaction(float deltaSec);
     // THE ENEMY OUTPOSTS (tickOutposts, every instance; the sandbox world): the ring of dark beacons around the Base.
     // The positions exist from the moment the Base does (the beam and the faction source need no more); the BUILDING
@@ -745,11 +755,12 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "1", "2", "3", "4",
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "BRK", "WALL", "TOWR", "STOR",
-    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL", "CANN", "AMMO", "AMST" };
+    "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL", "CANN", "AMMO", "AMST",
+    "WRES", "WABS", "WRET" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
-    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
+    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior", "Bulwark", "Aegis" };
 static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
 static_assert((int)ENpcType::Count == GameUnitTypeCount); // GameMatchSettings::waveCost
 // The popup's buttons, in order: the producible types (isBarracksUnitType - no Spitter).

@@ -31,7 +31,8 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/bridge.pre", "Entities/Game/gate.pre", "Entities/Game/lens.pre",
     "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre",
     "Entities/Game/magetower.pre", "Entities/Game/shipRail.pre", "Entities/Game/cannon.pre",
-    "Entities/Game/ammoWorks.pre", "Entities/Game/ammoStore.pre" };
+    "Entities/Game/ammoWorks.pre", "Entities/Game/ammoStore.pre",
+    "Entities/Game/wardResist.pre", "Entities/Game/wardAbsorb.pre", "Entities/Game/wardRetaliate.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -319,6 +320,7 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
         Globals::world.removeRootEntity(s.rubbleVisual.get());
     if (s.walkPiece) // a Walkway's deck or stairs
         Globals::world.removeRootEntity(s.walkPiece.get());
+    clearWardPieces(s); // the wards' pieces on a wall segment
     eraseCells(s); // promotes an under-cable back to primary occupant
     m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     if (s.onShip)

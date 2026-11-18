@@ -368,8 +368,8 @@ bool GameUnitComponent::applyDamageAndHeal(Tick& t)
         if (remaining > 0.0f)
             health = glm::max(health - remaining, 0.0f);
     }
-    if (params.sunDps > 0.0f && (int)team == params.sunBurnTeam) // daylight burns this team (no shield absorbs it)
-        health = glm::max(health - params.sunDps * t.deltaSec, 0.0f);
+    if (const float burn = params.sunBurn(healthMax); burn > 0.0f && (int)team == params.sunBurnTeam) // daylight burns this team (no shield absorbs it)
+        health = glm::max(health - burn * t.deltaSec, 0.0f);
     // Death before the heal: a heal landing the same tick must not revive the unit (a medic
     // station's radius was making units immortal).
     if (health <= 0.0f || (params.flatGround && t.pos.y < params.voidY))
@@ -440,6 +440,7 @@ void GameUnitComponent::resolveNavTarget(Tick& t)
         hasTarget = true;
         t.walkTarget = targetPos;
         t.haveWalkTarget = true;
+        t.walkIsTarget = true;
         t.navDir = best.descentDir;
         t.navResolved = true;
         t.navTracking = best.dist <= params.targetTrackRadius;
@@ -494,7 +495,7 @@ void GameUnitComponent::searchLocalTarget(Tick& t)
                 return;
             }
             const GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
-            if (!sc || sc->invulnerable || sc->team == team || !sc->alive())
+            if (!sc || sc->invulnerable || sc->rubble || sc->team == team || !sc->alive()) // (rubble being built up has health: no target)
                 return;
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - t.here;
             const Candidate c{ glm::dot(d, d), other->pos };
@@ -526,6 +527,8 @@ void GameUnitComponent::searchLocalTarget(Tick& t)
     t.walkTarget = targetPos;
     t.haveWalkTarget = hasTarget;
     t.walkIsOrder = hasTarget && targetLocked && moveOrder && !wanderOrder;
+    // A hunted enemy, or a wave's march order (its spot is the building it marches at) - not a wander's random spot.
+    t.walkIsTarget = hasTarget && !(targetLocked && moveOrder && wanderOrder);
 }
 
 void GameUnitComponent::tickCombat(Tick& t)
@@ -603,8 +606,8 @@ void GameUnitComponent::tickCombat(Tick& t)
     {
         if (meleeVictim)
             meleeVictim->damage(swing, team);
-        else
-            bite->damage(structureDamage * params.structureBiteMult);
+        else if (const float back = bite->damage(structureDamage * params.structureBiteMult); back > 0.0f)
+            damage(back, bite->team, /*throughShadow*/ true); // a Retaliate ward's spikes: the biter is at the wall, solid or not
         m_attackTimer = attackInterval;
         const std::lock_guard<std::mutex> lock(g_unitEventMutex);
         g_hits.push_back(HitRecord{ t.pos, meleeVictim ? meleeVictimPos : bitePos });
@@ -619,6 +622,7 @@ void GameUnitComponent::tickCombat(Tick& t)
         t.walkTarget = engagePos; // the route waypoint waits (routeIndex is untouched)
         t.haveWalkTarget = true;
         t.walkIsOrder = false;
+        t.walkIsTarget = true;
     }
     if (ordered && bite && biteDist < breakRadius)
     {
@@ -627,12 +631,15 @@ void GameUnitComponent::tickCombat(Tick& t)
         t.walkTarget = bitePos;
         t.haveWalkTarget = true;
         t.walkIsOrder = false;
+        t.walkIsTarget = true;
     }
     if (ranged)
     {
         t.stopRange = standoffRange;
         m_fireTimer -= t.deltaSec;
-        if (t.haveWalkTarget && m_fireTimer <= 0.0f
+        // Only at a REAL target (walkIsTarget: an enemy the Nav field or the search found, or one it engages) - never
+        // at a route waypoint, an order's spot, or the follow band's lane point 8 m ahead: it shot at empty ground.
+        if (t.haveWalkTarget && t.walkIsTarget && m_fireTimer <= 0.0f
             && glm::distance(t.here, glm::vec2(t.walkTarget.x, t.walkTarget.z)) <= standoffRange)
         {
             const std::lock_guard<std::mutex> lock(g_unitEventMutex);
@@ -680,21 +687,26 @@ void GameUnitComponent::tickSteering(Tick& t)
             g_seedRequests.push_back(SeedRequest{ t.pos, t.walkTarget, (uint8)team,
                 m_pressureTimer > params.unstickAfter });
         }
+        const float walkSpeed = (wandering
+            ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed) * speedScale();
         // Stuck detection by displacement checkpoints: per-tick progress never accumulates on a
-        // jittering heading.
+        // jittering heading. STUCK = under 40 % of the progress its walk speed makes over a checkpoint, never more than
+        // 0.6 m: a fixed 0.6 m read a slow demon in a player field (a Giant: 2 x "Demon speed" 0.7 x "Demon field speed"
+        // 0.5 = 0.7 m/s, 0.53 m a checkpoint) as stuck at every check, and the unstick steering turned it away from the
+        // field - it looked pushed out.
+        constexpr float c_stuckCheckSec = 0.75f;
         m_stuckCheckTimer -= t.deltaSec;
         if (m_stuckCheckTimer <= 0.0f)
         {
             const float moved = m_hasStuckAnchor ? glm::distance(t.here, m_stuckAnchor) : 10.0f;
-            m_pressureTimer = moved < 0.6f ? m_pressureTimer + 0.75f : 0.0f;
+            const float stuckBelow = glm::min(0.6f, 0.4f * walkSpeed * c_stuckCheckSec);
+            m_pressureTimer = moved < stuckBelow ? m_pressureTimer + c_stuckCheckSec : 0.0f;
             m_stuckAnchor = t.here;
             m_hasStuckAnchor = true;
-            m_stuckCheckTimer = 0.75f;
+            m_stuckCheckTimer = c_stuckCheckSec;
         }
         const glm::vec2 dir = raster ? steerHeading(t, goalDir, *raster) : goalDir;
         const glm::vec2 measured(t.vel.x, t.vel.z); // the body's REAL planar velocity (pre-command)
-        const float walkSpeed = (wandering
-            ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed) * speedScale();
         glm::vec3 dv(dir.x * walkSpeed - t.vel.x, 0.0f, dir.y * walkSpeed - t.vel.z);
         const float maxDv = accel * t.deltaSec;
         const float dvLen = glm::length(dv);
@@ -843,15 +855,36 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
 
 void GameUnitComponent::tickField(Tick& t)
 {
-    if (t.fc && t.fc->emitter.isValid())
+    // A bubble that is GONE (collapsed to nothing) has no field at all: its emitter is off (here at once, and World's
+    // bubble gate keeps it off), and the unit takes the SHIELD-LESS path below - the baked field reveals, exposes and
+    // pushes it like any body. A heal that refills the battery brings the bubble back.
+    if (t.fc && t.fc->emitter.isValid() && shieldGone())
+        t.fc->emitter.setActive(false);
+    else if (t.fc && t.fc->emitter.isValid())
     {
         const float pressure = t.fc->emitter.getPressure();
         const float tension = 1.0f + params.tension * pressure;
         const float before = energy;
-        energy = glm::max(0.0f, energy - pressure * tension * params.energyDrainRate * t.deltaSec);
+        // THE DRAIN: "energy/s per unit of pressure" (the player rule) - but a pressure is a field value near the iso
+        // value (0.01), so that alone barely touched a battery of hundreds. Plus a SHARE OF THE BATTERY per second at the
+        // iso pressure ("Shield drain (battery share/s at iso)"; deeper pushes faster, up to 4x): a demon pushing into a
+        // player field empties in about the same time whatever its battery's size.
+        const float isoNow = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
+        const float shareDrain = glm::min(pressure / isoNow, 4.0f) * glm::max(params.shieldDrainShare, 0.0f) * energyMax;
+        const float deflected = oc::atomic_ref<float>(pendingShieldDrain).exchange(0.0f); // the shots it bent (drainShield)
+        energy = glm::max(0.0f, energy - (pressure * tension * params.energyDrainRate + shareDrain) * t.deltaSec - deflected);
         if (before > 0.0f && energy <= 0.0f)
             collapsed = true;
-        t.fc->emitter.setOutput(energy > 0.0f ? shieldOutput : 0.01f);
+        // THE COLLAPSE: an emptied battery SHRINKS the bubble to NOTHING over c_shieldCollapseSec (the output follows
+        // m_shieldFade down to 0), not at once. A heal that refills the battery brings it back at once. No floor: a
+        // 0.01 field per collapsed demon added up over a crowd to a real, invisible field - it bent the cannon shells and
+        // drained buildings. (So a collapsed unit's push readback is zero: only the demons carry bubbles, and the fields
+        // do not push demons in co-op.) A client follows the synced output (NetworkManager).
+        constexpr float c_shieldCollapseSec = 0.8f;
+        m_shieldFade = energy > 0.0f ? 1.0f : glm::max(m_shieldFade - t.deltaSec / c_shieldCollapseSec, 0.0f);
+        const float output = shieldOutput * m_shieldFade * m_shieldFade; // eased: it falls away faster at the end
+        t.fc->emitter.setOutput(output);
+        t.fc->emitter.setShellAlpha(m_shieldFade > 0.0f ? 1.0f : 0.0f);
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
         setSolid(t, pressure, iso);
@@ -865,11 +898,14 @@ void GameUnitComponent::tickField(Tick& t)
         // shield is shoved exactly like a live one.
         const glm::vec3 force = t.fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
         const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
+        // A unit whose SHIELD HOLDS (its battery is up) stands its ground: "Push on shielded units (x)" of the push. An
+        // empty battery is pushed like any body.
+        const float shieldedMult = energy > 0.0f ? glm::max(params.shieldedPushMult, 0.0f) : 1.0f;
         if ((params.fieldPush || fieldBlocked) && glm::dot(force, force) > 1e-8f && pushRamp > 0.0f)
-            t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp);
+            t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp * shieldedMult);
         m_outputHistory[0] = m_outputHistory[1];
         m_outputHistory[1] = m_outputHistory[2];
-        m_outputHistory[2] = energy > 0.0f ? shieldOutput : 0.01f;
+        m_outputHistory[2] = output;
         return;
     }
     const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(t.pos, team);
@@ -886,15 +922,17 @@ void GameUnitComponent::tickField(Tick& t)
     // Graded by field depth: the push equilibrium parks a pressing unit AT the shell, where a
     // binary `inside` test read false most frames (units ground against bubbles taking no damage).
     const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
-    float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
+    t.sheltered = fs.inside && fs.owningTeam == team ? 1 : 0; // (isSheltered's answer: this is the same sample)
+    float exposure = t.sheltered ? 0.0f : glm::smoothstep(0.0f, iso, fs.opposing);
     // ON TERRAIN (not flatGround) the bake is ONE horizontal slice of the field, at one world height: a unit higher
     // or lower than that slice reads a weaker field than the one it stands in, or none. The combat probe's planar
     // test against the emitters' bubble radii (inEnemyBubble) does not depend on the height: inside a bubble by it,
     // the unit is in the field whatever the slice says.
-    bool inBubble = !params.flatGround && t.inEnemyBubble;
+    // A SHELTERED unit (its own team's bubble owns the point) is in no enemy bubble, whatever the radii say.
+    bool inBubble = !params.flatGround && t.inEnemyBubble && !t.sheltered;
     // The published field zones cover what the probe's radius does not: a large bubble's outer part is farther
     // from its emitter than the probe reaches.
-    if (!params.flatGround && !inBubble && (int)team != params.fieldZoneTeam)
+    if (!params.flatGround && !inBubble && !t.sheltered && (int)team != params.fieldZoneTeam)
         for (int i = 0; i < glm::min(params.fieldZoneCount, 64) && !inBubble; ++i)
         {
             const float* zone = params.fieldZones[i];
@@ -927,11 +965,24 @@ void GameUnitComponent::tickField(Tick& t)
     }
 }
 
-// Solid from half the iso field on: a little outside the drawn shell, so a turret reaches a demon at the edge.
+bool GameUnitComponent::isSheltered(Tick& t)
+{
+    if (t.sheltered < 0)
+    {
+        const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(t.pos, team);
+        const bool sheltered = fs.valid ? fs.inside && fs.owningTeam == team
+                                        : t.fc && t.fc->emitter.isValid() && energy > 0.0f;
+        t.sheltered = sheltered ? 1 : 0;
+    }
+    return t.sheltered != 0;
+}
+
+// Solid from half the iso field on: a little outside the drawn shell, so a turret reaches a demon at the edge. Not
+// where a bubble of its own team is the stronger one (isSheltered): an enemy field that reaches into it does not own it.
 void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
 {
-    inField = opposing >= iso * 0.5f; // for speedScale: a field slows the slow team (next tick's steering reads it)
-    bool now = (int)team != params.shadowTeam || params.sunDps > 0.0f || inField;
+    inField = opposing >= iso * 0.5f && !isSheltered(t); // for speedScale: a field slows the slow team (next tick's steering reads it)
+    bool now = (int)team != params.shadowTeam || params.sunBurn(healthMax) > 0.0f || inField;
     for (int i = 0; !now && i < glm::min(params.lightPointCount, 8); ++i) // a player's staff light
     {
         const float* light = params.lightPoints[i];
@@ -979,6 +1030,9 @@ void GameUnitComponent::setSolid(Tick& t, float opposing, float iso)
                 coneTeam = (uint32)cone[6];
             }
         }
+        // SHELTERED (isSheltered): inside a bubble of its OWN team the cones do nothing to it - no reveal, no burn.
+        if (cones > 0 && isSheltered(t))
+            cones = 0;
         if (cones > 0)
         {
             now = true;
@@ -1043,6 +1097,12 @@ void GameUnitComponent::heal(float amount)
 {
     if (amount > 0.0f)
         atomicAdd(pendingHeal, amount);
+}
+
+void GameUnitComponent::drainShield(float amount)
+{
+    if (amount > 0.0f)
+        atomicAdd(pendingShieldDrain, amount);
 }
 
 float GameUnitComponent::takePendingDamage()
@@ -1149,8 +1209,8 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client || puppet || !alive() || deltaSec <= 0.0f)
         return false;
-    if (params.sunDps > 0.0f && (int)team == params.sunBurnTeam) // the full sim's daylight burn, at the far cadence
-        health = glm::max(health - params.sunDps * deltaSec, 0.0f);
+    if (const float burn = params.sunBurn(healthMax); burn > 0.0f && (int)team == params.sunBurnTeam) // the full sim's daylight burn, at the far cadence
+        health = glm::max(health - burn * deltaSec, 0.0f);
     // The full sim never visits an unselected unit: kill it here.
     if (health <= 0.0f || (params.flatGround && entity.pos.y < params.voidY))
     {

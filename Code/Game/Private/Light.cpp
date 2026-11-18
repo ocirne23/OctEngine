@@ -38,6 +38,9 @@ namespace
         case EStructureType::Barracks: return 3.15f;
         case EStructureType::Lens:     return 2.2f;
         case EStructureType::Searchlight: return c_searchlightLamp;
+        case EStructureType::WardResist:
+        case EStructureType::WardAbsorb:
+        case EStructureType::WardRetaliate: return 2.65f; // the `Crystal` child of the ward prefabs
         default:                       return -1.0f;
         }
     }
@@ -68,24 +71,91 @@ void StructureSystem::rebuildLightLinks()
         if (isLightHub(m_frame[i].type) && !m_frame[i].state->blueprint)
             hubs.push_back(i);
     }
-    // Two passes: everything but the lenses, then THE LENSES. A lens is a RELAY: a hub with a small store that links
-    // to the nearest hub within "Lens range" - but not to one that links to IT already (that pair is joined). Each
-    // structure has one link, so without this rule a lens between a store and the next lens would link back to the
-    // store that links to it, and the chain would end there. The lenses come last, so they see the others' links;
-    // a later lens also sees the earlier lenses' links.
-    for (int pass = 0; pass < 2; ++pass)
+    // ---- THE HUB NETWORKS: a spanning forest (Kruskal) ----
+    // Every pair of hubs of one team in reach of each other ("Hub link range"; a pair with a Lens end: "Lens range"),
+    // the shortest first; a pair joins two networks that are not joined yet if its line is clear. So every hub that can
+    // reach another by a chain of links is in ONE network, with one link less than it has hubs. The nearest-hub links
+    // this replaces made islands: two pairs of stores close together each linked inside the pair, and their light never
+    // met. A ray is cast only for a pair that would join two networks.
+    m_lightNet.clear();
+    {
+        struct Pair { float dist; int a, b; }; // indices into hubs
+        oc::vector<Pair> pairs;
+        for (int a = 0; a < (int)hubs.size(); ++a)
+            for (int b = a + 1; b < (int)hubs.size(); ++b)
+            {
+                const Ref& ra = m_frame[hubs[a]];
+                const Ref& rb = m_frame[hubs[b]];
+                if (ra.state->team != rb.state->team)
+                    continue;
+                const float range = ra.type == EStructureType::Lens || rb.type == EStructureType::Lens ? m_settings.lensRange
+                    : m_settings.lightHubLinkRange;
+                const float dist = glm::distance(glm::vec2(ra.entity->pos.x, ra.entity->pos.z), glm::vec2(rb.entity->pos.x, rb.entity->pos.z));
+                if (dist <= range)
+                    pairs.push_back({ dist, a, b });
+            }
+        oc::sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y) { return x.dist < y.dist; });
+        oc::vector<int> root(hubs.size());
+        for (int a = 0; a < (int)hubs.size(); ++a)
+            root[a] = a;
+        const auto find = [&](int a) { while (root[a] != a) a = root[a] = root[root[a]]; return a; };
+        oc::vector<oc::small_vector<int, 4>> adjacent(hubs.size());
+        for (const Pair& p : pairs)
+        {
+            const int ra = find(p.a), rb = find(p.b);
+            if (ra == rb)
+                continue;
+            if (!lightLineClear(m_frame[hubs[p.a]], m_frame[hubs[p.b]]))
+            {
+                m_frame[hubs[p.a]].lightBlocked = m_frame[hubs[p.b]].lightBlocked = true;
+                continue;
+            }
+            root[ra] = rb;
+            adjacent[p.a].push_back(p.b);
+            adjacent[p.b].push_back(p.a);
+        }
+        // Each network as a tree in breadth-first order from its root (the Beacon when it is in it, else its first hub):
+        // m_lightNet, and each hub's lightId = its parent.
+        oc::vector<int> netIndex(hubs.size(), -1);
+        const auto addNetwork = [&](int start)
+        {
+            const size_t begin = m_lightNet.size();
+            netIndex[start] = (int)begin;
+            m_lightNet.push_back({ m_frame[hubs[start]].state->structureId, -1 });
+            oc::small_vector<int, 32> order{ start };
+            for (size_t head = 0; head < order.size(); ++head)
+                for (const int next : adjacent[order[head]])
+                    if (netIndex[next] < 0)
+                    {
+                        netIndex[next] = (int)m_lightNet.size();
+                        m_lightNet.push_back({ m_frame[hubs[next]].state->structureId, netIndex[order[head]] });
+                        Ref& child = m_frame[hubs[next]];
+                        child.lightId = m_frame[hubs[order[head]]].state->structureId;
+                        child.lightBlocked = false;
+                        order.push_back(next);
+                    }
+            if (m_lightNet.size() > begin + 1)
+                m_frame[hubs[start]].lightBlocked = false;
+        };
+        for (int a = 0; a < (int)hubs.size(); ++a)
+            if (m_frame[hubs[a]].type == EStructureType::Base && netIndex[a] < 0)
+                addNetwork(a);
+        for (int a = 0; a < (int)hubs.size(); ++a)
+            if (netIndex[a] < 0)
+                addNetwork(a);
+    }
+
+    // ---- The producers and the consumers: each to one hub ----
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         Ref& ref = m_frame[i];
-        const bool lens = ref.type == EStructureType::Lens;
-        if (lens != (pass == 1))
+        if (isLightHub(ref.type)) // (the networks above)
             continue;
         if (ref.state->blueprint || isCableOrCrossing(ref.type) || ref.state->capacity[0] <= 0.0f)
             continue;
         const ETransportRole role = transportRoleOf(ref.type, 0);
-        const float range = lens ? m_settings.lensRange : ref.type == EStructureType::Solar ? m_settings.mirrorBeamRange
+        const float range = ref.type == EStructureType::Solar ? m_settings.mirrorBeamRange
             : role == ETransportRole::Storage ? m_settings.lightHubLinkRange : m_settings.lightHubReach;
-        const uint32 ownId = ref.state->structureId;
         // The nearest USEFUL hub in range with a clear line, else the nearest one. Useful: for a CONSUMER a hub that
         // has light to give (over the Beacon's reserve), for a PRODUCER one with room. The nearest hub alone left a
         // turret or a barracks dark next to a full Crystal store whenever an empty hub stood nearer (the Beacon down
@@ -106,7 +176,7 @@ void StructureSystem::rebuildLightLinks()
         for (const int h : hubs)
         {
             const Ref& hub = m_frame[h];
-            if (h == i || hub.state->team != ref.state->team || (lens && hub.lightId == ownId))
+            if (h == i || hub.state->team != ref.state->team)
                 continue;
             const float dist = glm::distance(glm::vec2(hub.entity->pos.x, hub.entity->pos.z), glm::vec2(ref.entity->pos.x, ref.entity->pos.z));
             // A link with a lens at an end is no longer than the lens reaches, whatever the other end's own range is.
@@ -142,9 +212,9 @@ void StructureSystem::rebuildLightLinks()
     m_lightLinkCount = m_frame.size();
 }
 
-// The flow along the links (authority). Three moves, each bounded by a rate: a producer empties its buffer into its
-// hub; a consumer fills from its hub (the barracks and the turret at their METERED intake: their store is their build
-// / reload bar); two linked hubs level their fill fractions.
+// The flow along the links (authority). Three moves, each bounded by a rate: each hub network levels as one pool
+// (levelLightNet); a producer empties its buffer into its hub; a consumer fills from its hub (the barracks and the turret
+// at their METERED intake: their store is their build / reload bar).
 void StructureSystem::tickLight(float deltaSec)
 {
     if (!m_settings.lightBeams)
@@ -154,6 +224,17 @@ void StructureSystem::tickLight(float deltaSec)
     {
         m_lightLinkTimer = c_linkPeriod;
         rebuildLightLinks();
+    }
+    // THE HUB NETWORKS first: each levels as one pool (each network starts at its root, parent -1).
+    m_lightPoolMoved.assign(m_frame.size(), 0.0f);
+    for (size_t begin = 0; begin < m_lightNet.size();)
+    {
+        size_t end = begin + 1;
+        while (end < m_lightNet.size() && m_lightNet[end].parent >= 0)
+            ++end;
+        if (end - begin > 1)
+            levelLightNet(begin, end, deltaSec);
+        begin = end;
     }
     const GameStructureParams& params = Globals::settings.game.structureParams;
     const float smooth = glm::min(deltaSec * 3.0f, 1.0f); // the flow gauge: ~1/3 s, so a beam does not blink per tick
@@ -185,6 +266,7 @@ void StructureSystem::tickLight(float deltaSec)
         {
             const float rate = isBarracksType(ref.type) ? m_settings.barracksEnergyIntake
                 : ref.type == EStructureType::Turret ? params.turretShotEnergy / glm::max(params.turretFireInterval, 1e-3f)
+                : isWardType(ref.type) ? glm::min(m_settings.wardIntake, m_settings.lightFeedRate) // the ward's refill limit
                 : m_settings.lightFeedRate;
             // The Beacon keeps a reserve for its own field: its consumers cannot drain it dark.
             const float reserve = m_frame[hubIndex].type == EStructureType::Base ? hub.capacity[0] * c_baseReserve : 0.0f;
@@ -193,36 +275,65 @@ void StructureSystem::tickLight(float deltaSec)
             s.store[0] += take;
             moved = take;
         }
-        else if (s.capacity[0] > 0.0f && hub.capacity[0] > 0.0f) // two hubs: toward equal fill fractions
-        {
-            // A link with a Lens at an end is a BEAM: it moves light at the beam rate (a relay must keep up with what the
-            // producers send into it).
-            const float rate = (ref.type == EStructureType::Lens || m_frame[hubIndex].type == EStructureType::Lens
-                ? m_settings.lightBeamRate : m_settings.lightShareRate) * deltaSec;
-            // THE STORE PRIORITY: equal ranks level the fill fractions; otherwise the light goes one way, from the lower
-            // rank (Drain, then Balance) into the higher one (Fill) until the giver is empty or the taker is full. A
-            // giving Beacon keeps its reserve for its own field.
-            const int rankS = storeRank(ref), rankH = storeRank(m_frame[hubIndex]);
-            float move;
-            if (rankS == rankH)
-            {
-                const float diff = hub.store[0] / hub.capacity[0] - s.store[0] / s.capacity[0]; // > 0: the other hub is fuller
-                move = glm::clamp(diff * glm::min(s.capacity[0], hub.capacity[0]) * 0.5f, -rate, rate);
-            }
-            else
-            {
-                const bool intoS = rankS > rankH;
-                const GameStructureComponent& giver = intoS ? hub : s;
-                const GameStructureComponent& taker = intoS ? s : hub;
-                const bool giverBase = (intoS ? m_frame[hubIndex].type : ref.type) == EStructureType::Base;
-                const float spare = glm::max(giver.store[0] - (giverBase ? giver.capacity[0] * c_baseReserve : 0.0f), 0.0f);
-                const float amount = glm::min(glm::min(rate, spare), glm::max(taker.capacity[0] - taker.store[0], 0.0f));
-                move = intoS ? amount : -amount;
-            }
-            hub.store[0] -= move;
-            s.store[0] += move;
-            moved = glm::abs(move);
-        }
+        else if (isLightHub(ref.type)) // a tree link of a hub network: what the pool moved over it above
+            moved = m_lightPoolMoved[(size_t)(&ref - m_frame.data())];
+    }
+}
+
+void StructureSystem::levelLightNet(size_t begin, size_t end, float deltaSec)
+{
+    struct Node { int index; float free, locked, want, move; int rank; };
+    oc::small_vector<Node, 32> nodes;
+    float capacity[3] = {}, pool = 0.0f;
+    for (size_t k = begin; k < end; ++k)
+    {
+        const int index = structureIndexById(m_lightNet[k].id);
+        if (index < 0 || m_frame[index].state->blueprint)
+            return; // a hub died since the last derivation: the next one (within a second) leaves it out
+        const Ref& ref = m_frame[index];
+        const GameStructureComponent& s = *ref.state;
+        // The Beacon's RESERVE is its own: locked out of the pool (as much of it as it holds), and its capacity in the
+        // pool is what lies over it.
+        const float reserve = ref.type == EStructureType::Base ? s.capacity[0] * c_baseReserve : 0.0f;
+        Node node{ index, glm::max(s.capacity[0] - reserve, 0.0f), glm::min(s.store[0], reserve), 0.0f, 0.0f, storeRank(ref) };
+        capacity[node.rank] += node.free;
+        pool += s.store[0] - node.locked;
+        nodes.push_back(node);
+    }
+    // THE SHARES: the pool fills the Fill hubs first, then the Balance hubs, then the Drain hubs - within a rank all to
+    // the same fill fraction.
+    float fraction[3] = {};
+    for (int rank = 2; rank >= 0; --rank)
+    {
+        fraction[rank] = capacity[rank] > 0.0f ? glm::clamp(pool / capacity[rank], 0.0f, 1.0f) : 0.0f;
+        pool = glm::max(pool - fraction[rank] * capacity[rank], 0.0f);
+    }
+    // THE MOVE: each hub toward its share at its own rate (a Lens at the beam rate: a relay keeps up with the producers
+    // behind it). What the takers can take and what the givers can give is scaled to the same total, so no light is
+    // made or lost.
+    float take = 0.0f, give = 0.0f;
+    for (Node& node : nodes)
+    {
+        const Ref& ref = m_frame[node.index];
+        const float rate = (ref.type == EStructureType::Lens ? m_settings.lightBeamRate : m_settings.lightShareRate) * deltaSec;
+        node.want = glm::clamp(node.locked + fraction[node.rank] * node.free - ref.state->store[0], -rate, rate);
+        (node.want > 0.0f ? take : give) += glm::abs(node.want);
+    }
+    const float total = glm::min(take, give);
+    if (total <= 1e-6f)
+        return;
+    for (Node& node : nodes)
+    {
+        node.move = node.want * total / (node.want > 0.0f ? take : give);
+        m_frame[node.index].state->store[0] += node.move;
+    }
+    // THE BEAMS: the light on a tree link is what the child's whole subtree took or gave (children come after their
+    // parent, so one pass from the back sums the subtrees).
+    for (size_t k = end - 1; k > begin; --k)
+    {
+        const Node& node = nodes[k - begin];
+        m_lightPoolMoved[(size_t)node.index] = glm::abs(node.move);
+        nodes[(size_t)m_lightNet[k].parent - begin].move += node.move;
     }
 }
 

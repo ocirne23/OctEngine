@@ -1,0 +1,9 @@
+# An ABSORB WARD's shield on one open side of a wall segment: a smaller pane in front of the Resist barrier
+# (Models/wards.obj `AbsorbPane`, modelled for the +X side). Render-only; shown while the segment's shield holds
+# (StructureSystem::updateWardLooks).
+Prefab gameWardAbsorbPane
+	Component Render
+		ObjectContainer wards
+		Node AbsorbPane
+		Type StaticMesh
+		Color 0.55 0.85 1

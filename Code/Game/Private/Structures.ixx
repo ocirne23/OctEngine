@@ -96,9 +96,9 @@ public:
         bool cannonHasTarget = false;
         glm::vec3 cannonTargetPos{ 0.0f };    // the target's place at the last search
         float buildIncoming = 0.0f; // a blueprint: the stone the walkers carry toward it now (counted fresh every tickCarriers)
-        // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store or the
-        // Beacon) this structure sends its light to (a producer), takes it from (a consumer) or shares with (another
-        // hub). 0 = none. lightBlocked: a hub is in range but nothing has a clear line to it.
+        // THE LIGHT LINK (Light.cpp; derived on every instance about once a second): the HUB (a Crystal store, a Lens or
+        // the Beacon) this structure sends its light to (a producer), takes it from (a consumer) or - a hub - its parent
+        // in its hub network's tree. 0 = none. lightBlocked: a hub is in range but nothing has a clear line to it.
         uint32 lightId = 0;
         bool lightBlocked = false;
         float lightFlow = 0.0f; // light/s on the link, smoothed (tickLight; an estimate on a mirror): the beam shows while > 0
@@ -112,6 +112,19 @@ public:
         // A SHIP RAIL's collider (buildRailBody): the rail pieces on its open sides only, so the tile is walked on. Landed
         // and not rubble only (aloft the ship's body carries them). Shared: the roster hands out copies of a Ref.
         mutable oc::shared_ptr<PhysicsBody> railBody;
+        // THE WARDS (Wards.cpp; derived on every instance by rebuildWardLinks). On a wall or gate segment: the ward of
+        // each kind that covers it (0 = none), and the render-only pieces that show it (wardPieces: root entities of
+        // their own, owned here; wardLook: what they show now, so they are spawned again only when it changes). On a
+        // ward: the segments it covers, and the latch (wardDrained: its store ran empty, and it stays off until the
+        // store is back at "Restart at"; updateWardLatches, every instance).
+        uint32 wardOf[WardKindCount] = {};
+        uint16 wardWalls = 0;
+        bool wardDrained = false;
+        mutable oc::vector<EntityPtr> wardPieces;
+        mutable uint32 wardLook = 0;
+        // RUBBLE: a living enemy unit in "Rubble safe radius (m)" at the last refreshRubbleSafety (a fresh pile counts as
+        // unsafe until then: setRubble). rubbleBlocked reads it instead of a sphere query per call.
+        mutable bool rubbleUnsafe = false;
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -223,6 +236,8 @@ public:
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.houses : 0;
     }
     uint32 structureLinkedId(int index) const { return m_frame[index].linkedId; } // House -> barracks
+    int structureWardWalls(int index) const { return m_frame[index].wardWalls; } // a ward: the wall segments it covers
+    bool structureWardDrained(int index) const { return m_frame[index].wardDrained; } // a ward: off until its store refills
     // A cable segment / crossing's transport readout (the selected-cable label): its own fill
     // against the segment capacity, the cells leaving it as a rate averaged over ~2 s, the segment's
     // out-rate, and its run's total fill / capacity / segment count. false = not conducting (a
@@ -264,6 +279,7 @@ public:
     // units); these read them for the player heal, the ghost and the ring.
     float medicHealRadius() const { return Globals::settings.game.structureParams.medicRange; }
     float medicHealRate() const { return Globals::settings.game.structureParams.medicHealRate; }
+    float armoryPostRange() const { return m_settings.armoryPostRange; } // the guards' / mages' posts lie this near their armory
     int housePopulation() const { return m_settings.housePopulation; }
     oc::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
     {
@@ -315,6 +331,7 @@ public:
     bool structureRubble(int index) const { return m_frame[index].state->rubble; }
     void setRubble(const Ref& s, bool rubble); // the flag + its tint + its collider (off while rubble)
     // Rubble with a body on the pile, or (not for a player) with a living enemy unit in "Rubble safe radius (m)": it is not built up.
+    // The enemy part is Ref::rubbleUnsafe (refreshRubbleSafety, ~4 times a second); the body on the pile is checked live.
     bool rubbleBlocked(const Ref& s, bool byPlayer = false) const;
     bool structurePowered(int index) const { return m_frame[index].state->powered; }
 
@@ -393,6 +410,9 @@ public:
         case EStructureType::Battery:     return m_settings.batteryCapacity;
         case EStructureType::Lens:        return m_settings.lensBuffer;
         case EStructureType::Base:        return m_settings.baseEnergyCapacity; // feeds its always-on shield
+        case EStructureType::WardResist:
+        case EStructureType::WardAbsorb:
+        case EStructureType::WardRetaliate: return m_settings.wardCapacity; // what it pays its walls' protection from
         default:                          return 0.0f;
         }
     }
@@ -759,14 +779,28 @@ private:
     void tickProduction(float deltaSec); // income, fuel burn, consumer drain, emitter ramps
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
+    // Every c_rubbleCheckPeriod: Ref::rubbleUnsafe of each rubble pile, ONE sphere query each (the searches for build
+    // work ran one per pile per searcher per frame, which a late game with much rubble and a large wave made very slow).
+    void refreshRubbleSafety(float deltaSec);
+    float m_rubbleCheckTimer = 0.0f;
     // ---- LIGHT ON BEAMS (Light.cpp; "Game/Light" "Beams") ----
     // Light does not ride the cable transport: the power cable is off the hotbar. HUBS are the Crystal stores and the
     // Beacon. A MIRROR sends its light on one beam to the nearest hub within "Mirror beam range" that it has a clear
     // line to; a Hearth to the nearest hub in the hub reach. A hub FEEDS every consumer in "Hub reach" with a clear
-    // line, and SHARES with the nearest other hub in "Hub link range". rebuildLightLinks derives the links (every
-    // instance); tickLight moves the light along them (authority); drawLightLinks draws the beams.
+    // line. THE HUBS form NETWORKS: a spanning tree over the hub pairs in "Hub link range" (a Lens end: "Lens range")
+    // with a clear line, the shortest first, so every hub that can reach another one by a chain of links is in one
+    // network; each tree link is the child's lightId to its parent. A network levels as ONE POOL (levelLightNet).
+    // rebuildLightLinks derives the links (every instance); tickLight moves the light along them (authority);
+    // drawLightLinks draws the beams.
     void rebuildLightLinks();
     void tickLight(float deltaSec);
+    // One network, m_lightNet[begin, end): every hub moves toward its share of the network's light (the store priority:
+    // Fill hubs fill first, then Balance, then Drain; the Beacon keeps its reserve), each at its own rate; the light on
+    // each tree link (the flow out of the child's subtree) goes to m_lightPoolMoved for the beams.
+    void levelLightNet(size_t begin, size_t end, float deltaSec);
+    struct LightNetNode { uint32 id; int parent; }; // parent: an index into m_lightNet, -1 = a network's root
+    oc::vector<LightNetNode> m_lightNet; // every network's hubs, each network a tree in breadth-first order from its root
+    oc::vector<float> m_lightPoolMoved;  // per roster index, this tick: the light on the hub's link to its parent
     void drawLightLinks() const;
     // THE SEARCHLIGHTS (every instance, each frame): the shining ones' cones into GameUnitParams::lightCones (the
     // units' reveal + burn) and one SpotLight each. The aim and the draw are the component's (EMachineKind::Searchlight).
@@ -775,6 +809,25 @@ private:
     glm::vec3 beamPointOf(const Ref& ref) const; // a beam's end on a building: the centre of its crystal
     float m_lightLinkTimer = 0.0f;
     size_t m_lightLinkCount = 0; // the roster size of the last derivation: a change re-derives at once
+    // ---- THE WARDS (Wards.cpp) ----
+    // rebuildWardLinks: every built ward runs ONE breadth-first search from the wall and gate segments that touch its
+    // cell over the connected built segments of its team (the 8 cells around each), "Walls per ward" segments at most,
+    // and covers the ones no earlier ward of its kind covers (Ref::wardOf). Every instance, about twice a second and at
+    // once when the roster size changes. tickWards (authority): pays each ward for what its walls did since the last
+    // tick, grows the Absorb shields back (not within "Absorb regen delay" of a hit), and stamps each segment's shares
+    // (GameStructureComponent::wall), 0 for a ward that is not active. updateWardLatches (every instance): an emptied
+    // ward stays off until its store is back at "Restart at". updateWardLooks (every instance): the pieces on the open
+    // sides of each covered segment.
+    void rebuildWardLinks();
+    void updateWardLatches();
+    void tickWards(float deltaSec);
+    void updateWardLooks(bool authority);
+    void tickWardLinks(float deltaSec, bool authority); // the timers of the two derivations above (the authority's tick and the mirror's)
+    static void clearWardPieces(const Ref& s);
+    bool wardActive(uint32 wardId) const; // the ward stands built, is not latched off and its store holds light
+    float m_wardLinkTimer = 0.0f;
+    float m_wardLookTimer = 0.0f;
+    size_t m_wardLinkCount = 0;
     // ---- THE CARRIERS (Carriers.cpp, authority) ----
     // Wood and stone do not ride the cable transport ("Game/Carriers" "Enabled"): WORKERS carry them over the ROAD
     // (built conveyor segments and conveyor crossings). A walker is one FREE worker of its team (workers - production
@@ -1070,6 +1123,7 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
 //                             the tint, drawDebug
 //   Carriers.cpp            - the walkers that move wood and stone on the road (tickCarriers, findRoadTarget)
 //   Light.cpp               - light on beams: the derived links to the hubs, their flow, their lines
+//   Wards.cpp               - the wards: their wall links, what they pay, the pieces on the walls
 //   StructuresSync.cpp      - the mirror* appliers, saveTo / loadFrom / clearAllStructures
 //   StructuresShip.cpp      - the structures on the ship's deck (their pose, the landing edges, the deck placement, the rails)
 //   Transport.cpp           - the cable transport tick (see the block above)

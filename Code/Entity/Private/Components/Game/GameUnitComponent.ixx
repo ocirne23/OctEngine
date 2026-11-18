@@ -121,6 +121,7 @@ export struct GameUnitComponent
     float pendingDamage = 0.0f; // damage inbox: units drain it in their own tick (shield-first),
                                 // puppets' is routed to the owning GamePlayer by the game
     float pendingShadowDamage = 0.0f; // ... the part that hurts a SHADOW too (damage's throughShadow: a cannon shell)
+    float pendingShieldDrain = 0.0f;  // battery energy a shot this bubble DEFLECTS takes (drainShield; tickField applies it)
     float materialsFrac = 0.0f; // players: carried construction stock (server-authoritative)
     bool collapsed = false;     // latched at empty battery; only a heal lifts it
     bool deathReported = false;
@@ -167,7 +168,11 @@ export struct GameUnitComponent
     void damage(float amount, uint32 sourceTeam = UnknownTeam, bool throughShadow = false);
     float takePendingDamage(); // main thread: drain the puppet inbox (both parts)
     bool alive() const { return health > 0.0f; }
+    // The bubble is GONE: the battery is empty and the collapse has shrunk it to nothing (authority; a client never
+    // runs the collapse, so it says false there). Its emitter is then switched off - World's bubble gate reads this.
+    bool shieldGone() const { return energy <= 0.0f && m_shieldFade <= 0.0f; }
     void heal(float amount); // atomic inbox; applied in the unit's own tick (keeps `energy` single-writer)
+    void drainShield(float amount); // the same: a deflected shot's cost to the battery (GameProjectileComponent's FieldDeflect)
     float pendingHeal = 0.0f;
     static void applyTeamTint(Entity& entity); // main thread; idempotent (spawn + replicated team)
     uint8 tintState = 0; // 0 authored, 1 friendly green, 2 authored (restored after a re-team)
@@ -201,6 +206,7 @@ private:
         bool routing = false;
         bool haveWalkTarget = false;
         bool walkIsOrder = false;   // a route waypoint or a move order, not a hunted enemy
+        bool walkIsTarget = false;  // the walk target IS an enemy (Nav source, local search, engage): a ranged unit fires only at one
         glm::vec3 walkTarget{ 0.0f };
         bool navResolved = false;   // a Nav team field settled the target (the local re-search stays off)
         bool navSteer = false;      // navResolved AND the descent is usable (it is zero AT a source)
@@ -208,7 +214,12 @@ private:
         glm::vec2 navDir{ 0.0f };
         float stopRange = 0.0f;     // hold this far from the walk target
         bool inEnemyBubble = false; // stamped-radius signal - the shield-less fallback when the bake is off
+        int8 sheltered = -1;        // isSheltered's answer this tick (-1 = not asked yet)
     };
+    // SHELTERED: the point it stands on is owned by a bubble of its OWN team (the baked field: its team's field is the
+    // strongest there and over the iso value) - no enemy field or light cone reveals it there. With no bake: its own
+    // bubble while its battery holds. Asked lazily, once a tick (one bake sample).
+    bool isSheltered(Tick& t);
     void tickHurtLight(const Entity& entity, float deltaSec); // every role, before the client gate
     void tickModel(Entity& entity, float deltaSec);           // every role too: works off the position delta
     void applyHeightLimit(Tick& t);
@@ -250,6 +261,7 @@ private:
     glm::vec2 m_lastDir{ 0.0f };
     bool m_hasLastDir = false;
     float m_outputHistory[3] = { 0.8f, 0.8f, 0.8f }; // push normalizes by the ~2-frame-old output
+    float m_shieldFade = 1.0f; // 1 = the bubble at full output; an empty battery takes it to 0 over a short time (tickField)
 };
 
 export const GameUnitComponent::SpawnInfo* getGameUnitSpawnInfo(const Entity* entity);

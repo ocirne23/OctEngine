@@ -824,7 +824,14 @@ static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
     unit->energy = blob[1] / 255.0f * unit->energyMax;
     unit->collapsed = (blob[4] & 1u) != 0;
     if (hasEmitter) // the remote bubble renders the true drain/collapse state
-        fc->emitter.setOutput(glm::max(blob[2] / 255.0f * GameBlobOutputRange, 0.01f));
+    {
+        // A UNIT's collapsed bubble goes to 0 (GameUnitComponent::tickField shrinks an emptied bubble over a short time,
+        // and the output carries that); a player's collapsed shield keeps its 0.01 floor and its own look.
+        const float synced = blob[2] / 255.0f * GameBlobOutputRange;
+        fc->emitter.setOutput(unit->puppet ? glm::max(synced, 0.01f) : synced);
+        if (!unit->puppet)
+            fc->emitter.setShellAlpha(blob[2] > 0 ? 1.0f : 0.0f);
+    }
 }
 
 void NetworkManagerState::sendClaims()
