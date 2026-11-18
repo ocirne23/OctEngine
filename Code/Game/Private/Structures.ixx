@@ -135,10 +135,12 @@ public:
         // THE WARDS (Wards.cpp; derived on every instance by rebuildWardLinks). On a wall or gate segment: the ward of
         // each kind that covers it (0 = none), and the render-only pieces that show it (wardPieces: root entities of
         // their own, owned here; wardLook: what they show now, so they are spawned again only when it changes). On a
-        // ward: the segments it covers, and the latch (wardDrained: its store ran empty, and it stays off until the
-        // store is back at "Restart at"; updateWardLatches, every instance).
+        // ward: the segments it covers, the segments its search reaches (wardReach: also the ones a nearer ward of its kind
+        // covers), and the latch (wardDrained: its store ran empty, and it stays off until the store is back at
+        // "Restart at"; updateWardLatches, every instance).
         uint32 wardOf[WardKindCount] = {};
         uint16 wardWalls = 0;
+        uint16 wardReach = 0;
         bool wardDrained = false;
         mutable oc::vector<EntityPtr> wardPieces;
         mutable uint32 wardLook = 0;
@@ -257,6 +259,7 @@ public:
     }
     uint32 structureLinkedId(int index) const { return m_frame[index].linkedId; } // House -> barracks
     int structureWardWalls(int index) const { return m_frame[index].wardWalls; } // a ward: the wall segments it covers
+    int structureWardReach(int index) const { return m_frame[index].wardReach; } // a ward: the wall segments its search reaches
     bool structureWardDrained(int index) const { return m_frame[index].wardDrained; } // a ward: off until its store refills
     // A cable segment / crossing's transport readout (the selected-cable label): its own fill
     // against the segment capacity, the cells leaving it as a rate averaged over ~2 s, the segment's

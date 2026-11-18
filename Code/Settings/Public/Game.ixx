@@ -15,9 +15,9 @@ export struct GameMatchSettings
     // archetype fields far fewer bodies than a swarm flood of the same budget. Wave k (0-based) of night n (0-based):
     //   waveBudget x nightGrowth^n x (1 + waveGrowthPerWave x k) x random(1 +- waveVariation)
     int waveBudget = 200;          // points of the first night's first wave
-    float nightGrowth = 1.75f;        // x every wave's points per night
+    float nightGrowth = 1.5f;       // x every wave's points per night
     int   nightWaves = 14;            // waves in one night (the first at dusk): the time between them is the night's length / this
-    float waveGrowthPerWave = 0.25f;  // each later wave of a night is this much bigger (x the night's first wave, added per wave)
+    float waveGrowthPerWave = 0.2f; // each later wave of a night is this much bigger (x the night's first wave, added per wave)
     float waveVariation = 0.4f;       // random +- on a wave's size and on the time to the next one
     float waveCost[GameUnitTypeCount] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                           15.0f, 100.0f, 500.0f, 30.0f, 40.0f, // Elite, Giant, Titan, Lobber, Spawner

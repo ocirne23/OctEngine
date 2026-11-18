@@ -95,7 +95,7 @@ void StructureSystem::rebuildWardLinks()
     {
         for (uint32& id : r.wardOf)
             id = 0;
-        r.wardWalls = 0;
+        r.wardWalls = r.wardReach = 0;
     }
     // A built wall or gate segment of `team` in a cell (rubble is a blueprint too, and a ship aloft has no cells).
     const auto segmentAt = [&](int cx, int cz, uint32 team) -> int
@@ -109,15 +109,22 @@ void StructureSystem::rebuildWardLinks()
         const Ref& r = m_frame[index];
         return isLineType(r.type) && r.state->team == team && !r.state->blueprint ? index : -1;
     };
-    // ONE breadth-first search per ward, in roster order (the older ward first). It visits "Walls per ward" segments at
-    // most and covers the ones no earlier ward of its kind covers; a covered segment is still walked through, so a ward
-    // behind another one reaches the walls past it.
-    oc::vector<uint32> visited(m_frame.size(), 0u);
+    // ONE breadth-first search per ward. It visits "Walls per ward" segments at most, and walks through the segments
+    // another ward covers too, so a ward behind another one reaches the walls past it. Each segment goes to the NEAREST
+    // ward of each kind whose search reaches it (fewest steps; a tie to the older ward, roster order): two wards of a kind
+    // on one wall line share it. (First come, first served left a newer ward on a line an older one already covered with
+    // nothing: "No wall", though it touched one.)
+    const size_t count = m_frame.size();
+    oc::vector<uint32> visited(count, 0u);
+    oc::vector<uint16> bestSteps(count * WardKindCount, 0xFFFFu);
+    oc::vector<int> bestWard(count * WardKindCount, -1);
     oc::vector<int> queue;
+    oc::vector<uint16> steps;
     uint32 stamp = 0;
     const int limit = glm::max(m_settings.wardWalls, 1);
-    for (Ref& ward : m_frame)
+    for (size_t wardIndex = 0; wardIndex < count; ++wardIndex)
     {
+        Ref& ward = m_frame[wardIndex];
         const int kind = wardKindOf(ward.type);
         if (kind < 0 || ward.state->blueprint || (ward.onShip && !m_shipJoined))
             continue;
@@ -125,21 +132,25 @@ void StructureSystem::rebuildWardLinks()
         const glm::ivec2 home = cellOf(ward.entity->pos);
         ++stamp;
         queue.clear();
+        steps.clear();
         for (const glm::ivec2& side : c_sides) // the segments that TOUCH the ward
             if (const int index = segmentAt(home.x + side.x, home.y + side.y, team); index >= 0 && visited[index] != stamp)
             {
                 visited[index] = stamp;
                 queue.push_back(index);
+                steps.push_back(0);
             }
         for (size_t head = 0; head < queue.size() && (int)head < limit; ++head)
         {
-            Ref& segment = m_frame[queue[head]];
-            if (segment.wardOf[kind] == 0)
+            const int segmentIndex = queue[head];
+            const uint16 step = steps[head];
+            ++ward.wardReach;
+            if (const size_t slot = (size_t)segmentIndex * WardKindCount + kind; step < bestSteps[slot])
             {
-                segment.wardOf[kind] = ward.state->structureId;
-                ++ward.wardWalls;
+                bestSteps[slot] = step;
+                bestWard[slot] = (int)wardIndex;
             }
-            const glm::ivec2 cell = cellOf(segment.entity->pos);
+            const glm::ivec2 cell = cellOf(m_frame[segmentIndex].entity->pos);
             for (int dz = -1; dz <= 1; ++dz) // the 8 cells around it: a line dragged at a slant joins at the corners
                 for (int dx = -1; dx <= 1; ++dx)
                     if ((dx != 0 || dz != 0))
@@ -147,9 +158,17 @@ void StructureSystem::rebuildWardLinks()
                         {
                             visited[index] = stamp;
                             queue.push_back(index);
+                            steps.push_back((uint16)glm::min((int)step + 1, 0xFFFE));
                         }
         }
     }
+    for (size_t index = 0; index < count; ++index)
+        for (int kind = 0; kind < WardKindCount; ++kind)
+            if (const int wardIndex = bestWard[index * WardKindCount + kind]; wardIndex >= 0)
+            {
+                m_frame[index].wardOf[kind] = m_frame[wardIndex].state->structureId;
+                ++m_frame[wardIndex].wardWalls;
+            }
     // The flag damage() reads. A segment that comes under a ward or leaves it starts clean: no shield, nothing owed.
     for (Ref& r : m_frame)
     {

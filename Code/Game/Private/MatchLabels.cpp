@@ -110,11 +110,12 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
             return "No stone track";
         }
     }
-    // 1a) A WARD WITH NO WALL: it covers nothing until a wall or gate segment touches its side.
+    // 1a) A WARD WITH NO WALL: it covers nothing until a wall or gate segment touches its side. One that reaches walls but
+    // covers none: a ward of its kind is nearer to every one of them (two of a kind on the same segment).
     if (isWardType(type) && m_structures.structureWardWalls(index) == 0)
     {
         color = c_amber;
-        return "No wall";
+        return m_structures.structureWardReach(index) == 0 ? "No wall" : "Wall has ward";
     }
     // 1a') A WARD LATCHED OFF: its store ran empty; it protects nothing until it is back at "Restart at".
     if (isWardType(type) && m_structures.structureWardDrained(index) && !m_structures.structureBlueprint(index))
