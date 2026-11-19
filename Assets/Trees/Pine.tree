@@ -82,7 +82,6 @@ TreeSpecies Pine
 		Relief 1.2
 		Lichen 0.1
 	Billboard
-		NormalBend 0.0
 		AlbedoScale 1.3
 		TopCardHeight 0.25
 	Color

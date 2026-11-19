@@ -498,13 +498,11 @@ protected:
     using TreeInstanceRep = RenderTreeSet::Rep;
     using TreeInstanceType = RenderTreeSet::Type;
     using TreeInstancePiece = RenderTreeSet::Piece;
-    using TreeInstanceChunk = RenderTreeSet::Range;
     using TreeChunkDraw = RenderTreeSet::ChunkDraw;
     struct TreeInstanceSet
     {
         Buffer pieces;  // TreeCullPieceGpu per piece slot (device-local)
         Buffer types;   // TreeCullTypeGpu per type (device-local)
-        uint32 numPieces = 0; // the piece slots up to the highest one in use (the volume's splat range)
         // One CHUNK: its piece range (count 0 = a dead or empty chunk), with its RT-capable pieces (an RT representation
         // with a BLAS - tree_cull.inc.glsl treeCullRtPiece) FIRST, rtCount of them inside the sphere rtCentre / rtRadius,
         // and its bucket sizes (level-0 mesh, instances).
@@ -522,9 +520,8 @@ protected:
         // pair - a piece draws the normal OR the fade material of a mesh) for the bucket sizes.
         oc::vector<uint8> typeRtCapable;
         oc::vector<oc::small_vector<uint16, 5>> typeMeshes;
-        // A DYNAMIC set (createDynamicTreeSet): a fixed capacity of piece slots in blocks of TREE_SET_BLOCK, a
-        // removed chunk's blocks reused NUM_FRAMES_IN_FLIGHT frames later, its index the frame after.
-        bool dynamic = false;
+        // The piece slots (createTreeSet): a fixed capacity in blocks of TREE_SET_BLOCK (topBlock: the highest one ever
+        // used), a removed chunk's blocks reused NUM_FRAMES_IN_FLIGHT frames later, its index the frame after.
         uint32 numBlocks = 0;
         uint32 topBlock = 0;
         IndexRangeFreeList freeBlocks;
@@ -532,13 +529,11 @@ protected:
         oc::vector<PendingFree> pendingFrees;
         oc::vector<uint32> freeChunks;
         oc::vector<oc::pair<uint32, uint32>> pendingChunks; // (index, the frame it was removed in)
-        uint32 emptyVolumeType = 0;                         // the volume's sentinel type (res 0) for free slots
-        oc::span<TreeVolumePieceGpu> mappedVolumePieces;
         // This frame's list (piece | passMask << 28 per listed piece): host-visible, one per frame slot.
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> lists;
         oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> mappedLists;
-        Buffer volumePieces; // TreeVolumePieceGpu per piece slot (the far-tree volume's bake; host-visible)
-        Buffer volumeTypes;  // TreeVolumeTypeGpu per type, + the sentinel
+        // The far-tree volume's view of the TYPES (the record bake expands the world's records into them).
+        Buffer volumeTypes;  // TreeVolumeTypeGpu per type
         Buffer volumeData;   // the types' extinction mip chains (floats)
         // The FAR VOXEL TREES' view of the types (initTreeSetTypes): per type its voxel bucket, material and box; the
         // buckets (one per distinct voxel mesh) with their draw ranges.
@@ -548,12 +543,11 @@ protected:
         bool hasVolume = false;
         bool alive = false;
     };
-    static constexpr uint32 TREE_SET_BLOCK = 64; // a dynamic set's piece-slot allocation unit
+    static constexpr uint32 TREE_SET_BLOCK = 64; // a set's piece-slot allocation unit
     oc::vector<TreeInstanceSet> m_treeSets;
-    // A dynamic set's chunks change on MAIN (add / remove) while the terrain walk lists them on a worker
-    // (renderTreeSet).
+    // A set's chunks change on MAIN (add / remove) while the terrain walk lists them on a worker (renderTreeSet).
     std::mutex m_treeSetMutex;
-    bool m_treeSetsChanged = false;    // a dynamic set changed: the far volume re-bakes (throttled, recordFarTrees)
+    bool m_treeSetsChanged = false;    // the record chunks changed: the far volume re-bakes (throttled, recordFarTrees)
     uint32 m_treeVolumeMarkFrame = 0;
     uint32 allocTreeSet();
     void initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanceType> types);
@@ -561,8 +555,7 @@ protected:
     // Writes a chunk's pieces (RT-capable first) into the set's slots [first, first + pieces.size()).
     void writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first);
     // The tree set handle's calls (RenderTreeSet: their API).
-    uint32 createTreeSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces, oc::span<const TreeInstanceChunk> chunks);
-    uint32 createDynamicTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity);
+    uint32 createTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity);
     uint32 addTreeSetChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces);
     void removeTreeSetChunk(uint32 setId, uint32 index);
     void destroyTreeSet(uint32 setId);

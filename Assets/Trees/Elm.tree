@@ -98,7 +98,6 @@ TreeSpecies Elm
 		Relief 2.5
 		Lichen 0.25
 	Billboard
-		NormalBend 0.0
 		TopCardHeight 0.7
 	Color
 		Bark 0.40 0.37 0.33

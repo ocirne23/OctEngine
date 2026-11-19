@@ -12,7 +12,7 @@
 //   out = T * F.rgb + C.a * S + (1 - T) * C.rgb  +  scene * (T * F.a)
 // exact for a cloud at one distance, and linear in the scene, so the blend state stays the same.
 // THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliage_farMarched = it marched this frame) at its
-// weighted mean distance: fogged at the terrain BEHIND it, the trees read twice as hazy as the billboards next to them.
+// weighted mean distance: fogged at the terrain BEHIND it, the trees read twice as hazy as the voxel trees next to them.
 // Two layers compose front to back: with P = (1 - T) F_layer.rgb + F_layer.a S, the nearer one's P + T x the farther's.
 // THE AERIAL PERSPECTIVE (aerial_lut.cs.glsl) is a second medium BEHIND the fog: fog + fog.a x air (in thick fog the
 // air behind must not shine through). Scene and far trees take it; the clouds do not (their march has its own,

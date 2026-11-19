@@ -224,6 +224,27 @@ float grassTerrainCover(TerrainLayers L)
         + n1 * grassTextureAmount(climatePickIdx(L.g, 1)) + n2 * grassTextureAmount(climatePickIdx(L.g, 2)));
 }
 
+// THE GRASS AT A RAY HIT on the terrain (the water's reflection rays; N = the hit's normal, `dir` = the ray, unit): no
+// blade is in the TLAS and the hit's splat is the soil under them, so the hit takes THE FAR TIER's colour by the far
+// tier's view cover, with the ray for the view (below: grassGroundCanopy, grassFarAlbedo). No blade cover to leave out,
+// and no stripes: a ray has no anchor and no pixel footprint. rgb = the colour, a = its weight; 0 without grass.
+vec4 grassRayAlbedo(TerrainLayers L, vec3 pos, vec3 N, vec3 dir, float temperature)
+{
+    if (u_grass_farExtinction <= 0.0)
+        return vec4(0.0);
+    const float cover = grassTerrainCover(L);
+    if (cover <= 0.0)
+        return vec4(0.0);
+    const float clump = grassClump(pos.xz);
+    const float coverSize = grassCoverSize(cover);
+    const float tau = u_grass_farExtinction * cover * grassWidthSize(coverSize, clump) * clump * grassCanopyHeight(clump, coverSize)
+        / max(abs(dot(N, dir)), 0.05);
+    const float dryness = smoothstep(0.0, 0.3, grassValueNoise(pos.xz * (u_grass_invClumpSize * 0.37) + 17.3) - (1.0 - u_grass_dryAmount));
+    const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, temperature);
+    return vec4(mix(u_grass_tipAlbedo, u_grass_dryAlbedo, dryness) * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * u_grass_farBrightness),
+        1.0 - exp(-tau));
+}
+
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL // it reads the near grass cascade (the lit core's u_shadowMap)
 // The ground UNDER the grass at pos (the terrain FS; N = its smooth normal): x = its sun - the near cascade's blade
 // shadows inside its box (on ANY ground there: blades also shade the bare soil beside them), blending into the
@@ -489,6 +510,8 @@ float grassFarBladeSun(vec3 pos, float stripe)
 #endif
 #endif
 
+// GRASS_NO_GROUND: an includer that only shades (the water's ray hits) has no ground table and no terrain vertices.
+#ifndef GRASS_NO_GROUND
 // The fraction of the blades kept at a distance: all of them inside "Thinning start", then (start / d)^exponent
 // (the blade count per screen area stays about constant), faded to none over the last "Range fade" metres.
 float grassKeep(float dist)
@@ -597,5 +620,6 @@ vec3 grassGroundRiverData(GrassGround g, vec2 xz)
 
 // The river influence alone (grassGroundRiverData's x).
 float grassGroundRiver(GrassGround g, vec2 xz) { return grassGroundRiverData(g, xz).x; }
+#endif // !GRASS_NO_GROUND
 
 #endif

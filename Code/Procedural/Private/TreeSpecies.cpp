@@ -319,7 +319,6 @@ namespace Procedural
 		{
 			readFloat(*billboard, "Distance", out.billboardDistance);
 			readInt(*billboard, "Resolution", out.billboardSize);
-			readFloat(*billboard, "NormalBend", out.billboardNormalBend);
 			readFloat(*billboard, "FadeWidth", out.billboardFadeWidth);
 			readFloat(*billboard, "AlbedoScale", out.billboardAlbedoScale);
 			readFloat(*billboard, "FarAlbedoScale", out.farAlbedoScale);
@@ -427,7 +426,6 @@ namespace Procedural
 		out.lodErrorScale = glm::max(out.lodErrorScale, 0.0f);
 		out.variantCount = glm::clamp(out.variantCount, 1, 64);
 		out.billboardDistance = glm::max(out.billboardDistance, 0.0f);
-		out.billboardNormalBend = glm::clamp(out.billboardNormalBend, 0.0f, 1.0f);
 		out.billboardFadeWidth = glm::clamp(out.billboardFadeWidth, 1.0f, 1023.0f); // the material packs 10 bits
 		out.billboardAlbedoScale = glm::clamp(out.billboardAlbedoScale, 0.0f, 8.0f);
 		out.farAlbedoScale = glm::clamp(out.farAlbedoScale, 0.0f, 8.0f);

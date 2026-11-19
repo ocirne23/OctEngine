@@ -1,8 +1,8 @@
 #ifndef LEAF_LOOK_INC_GLSL
 #define LEAF_LOOK_INC_GLSL
 
-// THE LEAF LOOK, shared by the tree meshes' leaves (instanced_indirect_tree.fs.glsl) and the foliage cards
-// (instanced_indirect_foliage.fs.glsl). Requires the UBO and hashU (shared.inc.glsl).
+// THE LEAF LOOK, shared by the tree meshes' leaves (instanced_indirect_tree.fs.glsl) and the voxel tier
+// (instanced_indirect_tree_voxel.fs.glsl). Requires the UBO and hashU (shared.inc.glsl).
 
 // The TRANSMITTED sun's colour: the leaf colour ^ "Foliage transmission saturation", shifted WARM by "Foliage
 // transmission warmth" (x a yellow: red up, blue down), back at the leaf colour's own luminance - light through a leaf

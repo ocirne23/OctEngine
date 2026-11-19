@@ -362,7 +362,8 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
     return initialize(width, height, format, imgData, generateMips, (name && *name) ? name : "Texture.generated");
 }
 
-bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName)
+bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName,
+    bool redAsAlpha)
 {
     vk::Device vkDevice = Globals::device.getDevice();
 	m_width = width;
@@ -411,6 +412,9 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
             .layerCount = imageCreateInfo.arrayLayers
         }
     };
+    // A one-channel MASK: its channel reads as alpha too (and as G and B), so every alpha reader takes it as any texture's.
+    if (redAsAlpha)
+        imageViewInfo.components = { vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR };
 
     auto createImageViewResult = vkDevice.createImageView(imageViewInfo);
     if (createImageViewResult.result != vk::Result::eSuccess)

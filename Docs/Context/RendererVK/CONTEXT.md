@@ -176,7 +176,7 @@ Desktop, as recorded by `recordCommandBuffers` (`recordPrimaryPreScene` + `recor
 ```
 GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests)
-    → Far tree shadows                     (the far ring's trees as billboard casters - cull, prefix, scatter; off: emptied; Scene.md)
+    → Far tree shadows                     (the far ring's trees as shadow-billboard casters - cull, prefix, scatter; off: emptied; Scene.md)
     → Shadow cull → Shadow draw            (all three skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see Scene.md)
     → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Terrain wetness                      (tick frames only)

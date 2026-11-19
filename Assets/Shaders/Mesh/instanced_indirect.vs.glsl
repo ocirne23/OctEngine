@@ -7,13 +7,13 @@
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
-// The tree variants (LitTree: TREE_ORIGIN, LitFoliage: FOLIAGE, LitTreeVoxel: TREE_VOXEL) draw tree pieces only -
-// instances that never move and are never skinned, so their only motion is the wind's (TREE_STATIC). A billboard, a
-// branch card and the voxel box carry no leaf-card TIP vertex: their wind compiles without the flutter.
-#if defined(FOLIAGE) || defined(TREE_ORIGIN) || defined(TREE_VOXEL)
+// The tree variants (LitTree: TREE_ORIGIN, LitTreeVoxel: TREE_VOXEL) draw tree pieces only - instances that never move
+// and are never skinned, so their only motion is the wind's (TREE_STATIC). The voxel box carries no leaf-card TIP
+// vertex: its wind compiles without the flutter.
+#if defined(TREE_ORIGIN) || defined(TREE_VOXEL)
 #define TREE_STATIC
 #endif
-#if defined(FOLIAGE) || defined(TREE_VOXEL)
+#ifdef TREE_VOXEL
 #define TREE_WIND_NO_FLUTTER
 #endif
 #include "tree_wind.inc.glsl"
@@ -58,11 +58,7 @@ layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#if defined(FOLIAGE)
-// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS), and the
-// tree's origin, which its distance fade measures from (tree_fade.inc.glsl).
-layout (location = 5) out flat vec3 out_instanceOrigin;
-#elif defined(TREE_ORIGIN)
+#ifdef TREE_ORIGIN
 // LitTree: the camera's distance to the tree's origin - its distance fade (tree_fade.inc.glsl), one value a tree.
 layout (location = 5) out flat float out_treeDistance;
 #endif
@@ -123,8 +119,8 @@ void main()
     vec3 windOffset = vec3(0.0);
     vec3 windPrevDelta = vec3(0.0);
     // A tree RECORD (the main cull) carries its tree's whole wind in its three "last frame" fields (tree_wind.inc.glsl
-    // treeWindPack: the gusts, the trunk's sway and the fades, once per tree). Any other node with a wind payload (the CPU
-    // path's tree pieces) works it out here, per vertex.
+    // treeWindPack: the gusts, the trunk's sway and the fades, once per tree). Any other node with a wind payload works
+    // it out here, per vertex.
     const bool treeRecord = treeWindIsRecord(inst.prevPosScale);
 #ifndef TREE_VOXEL
     uint windPayload;
@@ -155,9 +151,7 @@ void main()
 #else
     out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
 #endif
-#if defined(FOLIAGE)
-    out_instanceOrigin = inst_pos;
-#elif defined(TREE_ORIGIN) || defined(TREE_VOXEL)
+#if defined(TREE_ORIGIN) || defined(TREE_VOXEL)
     out_treeDistance = distance(u_viewPos, inst_pos);
 #endif
 #ifdef TREE_VOXEL

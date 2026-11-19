@@ -178,7 +178,7 @@ private:
 };
 
 // Binds push values in DECLARATION order: `PushValue<float> radius = g("radius");`, an address
-// `PushValue<uint64> pieces = g("pieces", "PieceList");`.
+// `PushValue<uint64> types = g("types", "TypeList");`.
 export struct PushGroup
 {
     PushBlock& block;

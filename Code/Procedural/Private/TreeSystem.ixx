@@ -16,12 +16,9 @@ import :TreeGenerator;
 import :TreeWorld;
 import :MeshCache;
 
-// Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library, and draws
-// either the WORLD (TreeWorld's records expanded around the camera into a dynamic GPU set - "World mode" in
-// Procedural CONTEXT) or a PREVIEW: a grove of composited trees in front of the camera plus the piece
-// library itself, drawn through the plain RenderMesh path (one node per placed piece mesh, GPU mesh LOD
-// chains, billboards beyond a distance). The dedicated GPU tree path (bone palettes, own
-// shaders) replaces the preview draw in G4; see Docs/Context/Procedural/Trees.md.
+// Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library and its baked
+// whole-tree variants, and draws the WORLD: TreeWorld's records expanded around the camera into one dynamic GPU set
+// ("World mode" in Docs/Context/Procedural/Trees.md). Without TreeWorld or the terrain nothing draws.
 export namespace Procedural
 {
 	class TreeSystem
@@ -33,7 +30,7 @@ export namespace Procedural
 		TreeSystem& operator=(const TreeSystem&) = delete;
 
 		void initialize(); // attaches the "Trees" listeners (and TreeWorld's)
-		// Per frame, after the terrain. `maps` places the grove on the terrain (y = 0 without it).
+		// Per frame, after the terrain. `maps`: the terrain the trees stand on (nullptr = no trees).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 		// The tree and rock COLLIDERS' focus points (at most MaxColliderFocus; before update, every frame): a body exists
 		// within "Radius (m)" of any of them. None = the camera. The game passes its players and its Base. Only the trees
@@ -56,105 +53,63 @@ export namespace Procedural
 		void joinWorldPool() { m_world.joinPool(); }
 
 	private:
-		// LEVEL 0 of each piece mesh (uploadLevelZero: no GPU LOD chains, the levels above stay empty).
+		// One baked whole-tree variant's GPU objects. LEVEL 0 of each mesh (uploadLevelZero: no GPU LOD chains, the levels
+		// above stay empty).
 		struct PieceMeshes
 		{
 			RenderMesh bark[TREE_PIECE_LODS];
 			RenderMesh leaves[TREE_PIECE_LODS];
-			// Modules only, Far mode Billboards: the billboard cards (LitFoliage) with their own baked material (owned).
+			// THE SHADOW BILLBOARD (a species with a `Billboard Distance`): three crossed cards with their own mask material
+			// (owned; RendererVK MATERIAL_FLAG_BILLBOARD) - the variant's shadow caster and what the rays see. Never in the
+			// main pass.
 			RenderMesh billboard;
 			RenderMaterial billboardMaterial;
-			// Baked variants with billboards (the GPU MID tier): the bark split into the trunk's and the branches',
-			// and the BRANCH CARD mesh - every module placement's billboard cards merged into one mesh,
-			// UVs into the species' card atlas (Species::cardAtlasMaterial), each card's axis in its tangent w.
-			RenderMesh trunkBark[TREE_PIECE_LODS];
-			RenderMesh branchBark[TREE_PIECE_LODS];
-			RenderMesh cards;
-			// Baked TREE variants with "Voxel impostors" (GPU path): the voxel tier - the box the march starts from, its
-			// material (the grid's opacity / surface brick atlases, owned; LitTreeVoxel) and the brick index texture the
-			// opacity atlas's header names. Main pass only, in the billboard's place.
+			// THE VOXEL TIER ("Voxel impostors"): the box the march starts from, its material (the grid's opacity / surface
+			// brick atlases, owned; LitTreeVoxel) and the brick index texture the opacity atlas's header names. The main
+			// pass past the species' band.
 			RenderMesh voxelBox;
 			RenderMaterial voxelMaterial;
 			RenderTexture voxelIndex;
-			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
-			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
-			// Baked variants only: the far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
+			glm::vec3 farCentre{ 0.0f }; // tree-local centre of the variant's box (the switch distance, the RT range)
+			float farRadius = 0.0f;      // tree-local radius around it (the crossfade band test)
+			// The far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
 			oc::vector<float> density;
 			glm::vec3 densityMin{ 0.0f };
 			glm::vec3 densityMax{ 0.0f };
 		};
-		// One placed piece of the preview. Beyond its far distance the billboard replaces the mesh LOD nodes; it is
-		// real geometry and casts its own shadow, so the mesh nodes then stop drawing.
-		//
-		// Billboards CROSSFADE instead of switching: over a band of `Billboard FadeWidth` around the switch
-		// distance the module draws as barkFade / leavesFade (the same meshes on LitTree with the species'
-		// fade-OUT materials) plus the billboard (its material fades IN over the same band): a dither in the
-		// lit FS hands every pixel to exactly one of them. Outside the band only one side draws, the mesh on its
-		// normal (early-depth) materials.
-		struct PlacedPiece
-		{
-			RenderNode bark;
-			RenderNode leaves;
-			RenderNode barkFade;               // billboard modules only: the crossfade copies of bark / leaves
-			RenderNode leavesFade;
-			RenderNode far;                    // invalid for trunks / Far mode None
-			glm::vec3 centre{ 0.0f };          // world, for the switch distance
-			float radius = 0.0f;               // world, around `centre`
-			float farDistance = 0.0f;
-			float fadeWidth = 0.0f;
-		};
 		struct Species
 		{
 			TreeSpeciesDesc desc;
-			// The GPU meshes of the piece library and of the baked whole-tree variants (bakeTreeVariant: what the grove places,
-			// one "piece" each). The CPU meshes are not kept: reload frees them once uploaded and baked.
-			oc::vector<PieceMeshes> trunkMeshes;
-			oc::vector<PieceMeshes> moduleMeshes;
+			// The GPU meshes of the baked whole-tree variants (bakeTreeVariant: what a record expands to). The CPU meshes
+			// (the piece library too) are not kept: the load frees them once uploaded and baked.
 			oc::vector<PieceMeshes> variantMeshes;
-			float moduleLength = 1.0f; // the first module's length (m): the library row's spacing
-			// The materials the pieces draw with: ownBarkMaterial's / ownLeafMaterial's, or a shared one (the solid leaf colour).
+			// The materials the trees draw with: ownBarkMaterial's / ownLeafMaterial's, or a shared one (the solid leaf colour).
 			uint16 barkMaterial = 0;
 			uint16 leafMaterial = 0;
 			RenderMaterial ownBarkMaterial; // the procedural bark texture material
 			RenderMaterial ownLeafMaterial; // a cluster texture material
 			RendererVKLayout::EPipelineIndex leafPipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
-			// The MID tier (GPU path): the module billboards stacked into ONE atlas (owned; LitFoliage, no edge fade). Declared
-			// before the materials derived from it below, so they are destroyed first.
-			RenderMaterial cardAtlasMaterial;
-			// Billboard crossfade: bark / leaf materials derived with a distance fade-OUT (shared textures). Invalid without
-			// billboards.
+			// The mesh -> voxels crossfade: bark / leaf materials derived with a distance fade-OUT (shared textures). Invalid
+			// without a far tier (`Billboard Distance` 0).
 			RenderMaterial barkFadeMaterial;
 			RenderMaterial leafFadeMaterial;
-			// The MID tier's derived fade-IN (the mid band) / fade-OUT (the far band) copies of the atlas for the variants' card
-			// meshes; the leaves' and the branch bark's fade-OUT over the mid band. The trunk keeps barkMaterial / barkFadeMaterial.
-			RenderMaterial cardInMaterial;
-			RenderMaterial cardOutMaterial;
-			RenderMaterial leafMidFadeMaterial;
-			RenderMaterial branchMidFadeMaterial;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
 		// THE SPECIES LOAD runs on JOBS (one Low job per .tree, loadSpecies): the meshes (MeshCache or generated), the
-		// textures (.tex or generated), the billboard bakes and the card meshes - everything but the GPU objects. Main
-		// uploads each species as its job finishes (uploadSpecies: meshes, materials) and frees its CPU data; the trees
+		// textures (.tex or generated), the shadow billboards' masks and the voxel grids - everything but the GPU objects.
+		// Main uploads each species as its job finishes (uploadSpecies: meshes, materials) and frees its CPU data; the trees
 		// spawn once every species is in. The job reads only its slot and a snapshot of the settings.
 		struct LoadSettings
 		{
 			bool compressTextures = true;
 			bool regenerateTextures = false;
-			bool billboards = true;   // Far mode Billboards
-			bool showLibrary = false;
-			bool branchCards = false; // "Branch card distance" > 0 (GPU path): the mid tier's module billboards, atlas and card meshes
-			uint32 billboardViews = 2;
-			uint32 voxelRes = 0;      // "Voxel impostors": the voxel tier's grid resolution; 0 = off
+			uint32 voxelRes = 0;      // "Voxel impostors": the voxel tier's grid resolution for a tree (a bush: a quarter); 0 = off
 		};
-		struct PieceBillboard
+		struct VariantBillboard // a baked variant's shadow billboard
 		{
-			CachedTexture texture; // uploaded when `upload` (and kept for a module: the atlas)
+			CachedTexture mask; // one channel: `albedo` only (bakeBillboardMask)
 			TreeMesh cards;
-			glm::vec3 farCentre{ 0.0f };
-			float farRadius = 0.0f;
-			bool upload = false;   // a whole tree's, or any with "Show piece library"
 		};
 		struct SpeciesLoad
 		{
@@ -162,16 +117,18 @@ export namespace Procedural
 			bool valid = false;
 			TreeSpeciesDesc desc;
 			oc::string name;
-			TreeLibrary library;
 			oc::vector<TreePiece> variants;
+			oc::vector<glm::vec4> variantBounds; // per baked variant: its box's centre + half diagonal (tree space)
 			oc::vector<TreeDensityGrid> density;
 			CachedTexture bark;
 			CachedTexture leaves; // cluster species only
 			glm::vec3 volumeAlbedo{ 0.0f };
-			bool billboards = false;
-			oc::vector<PieceBillboard> pieceBillboards[3]; // modules, trunks, baked variants
-			CachedTexture atlas;                           // the mid tier's card atlas (empty: none)
-			oc::vector<TreeMesh> variantCards;             // per baked variant: its branch-card mesh
+			// The shadow billboard's two colours for the rays (linear): the bark texture's mean, the leaves' (x `Billboard
+			// AlbedoScale`).
+			glm::vec3 barkColour{ 0.0f };
+			glm::vec3 leafColour{ 0.0f };
+			bool farTier = false;                           // `Billboard Distance` > 0: the shadow billboards (and the voxel tier)
+			oc::vector<VariantBillboard> variantBillboards; // per baked variant
 			oc::vector<CachedTexture> voxelTextures;       // per baked variant: the voxel tier's atlases (empty: none)
 			oc::vector<CachedTexture> voxelIndex;          // ... and its brick index
 			oc::vector<TreeMesh> voxelBoxes;               // ... and its box
@@ -187,27 +144,25 @@ export namespace Procedural
 		bool pumpLoad(Renderer& renderer);
 		void stopLoad(); // joins the load jobs, drops their slots
 		static void loadSpecies(const LoadSettings& settings, SpeciesLoad& out);
-		// The billboard bakes (or their .tex), the card atlas and the variants' card meshes, into `out`. The bark / leaf
-		// level-0 images are the bake's input: empty (their .tex was loaded) = generated here on a bake miss.
-		static void buildBillboards(const LoadSettings& settings, SpeciesLoad& out,
+		// The variants' FAR TIER into `out`: their shadow billboards (the mask bakes or their .tex, the card meshes) and
+		// their voxel grids. The bark / leaf level-0 images are the bakes' input: empty (their .tex was loaded) = generated
+		// here on a bake miss.
+		static void buildFarTier(const LoadSettings& settings, SpeciesLoad& out,
 			oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize);
 		void uploadSpecies(Renderer& renderer, SpeciesLoad& load, Species& species);
-		void clearAll(); // nodes first, then the species' meshes and owned materials
-		void destroyTreeSet(); // the GPU expansion set (drains the GPU)
-		// Writes every species' crossfade band (billboard distance x Far distance scale, FadeWidth) into its
-		// fade-out materials and its billboards' fade-in materials.
+		void clearAll(); // the set first, then the species' meshes and owned materials
+		void destroyTreeSet(); // the world set (drains the GPU)
+		// Writes every species' crossfade band (`Billboard Distance` x Far distance scale, FadeWidth) into its meshes'
+		// fade-out materials and its voxel materials (fade-in).
 		void applyFadeBands(Renderer& renderer);
-		float midDistance(const Species& species) const; // the mid tier's switch distance (m, unscaled); 0 = off
-		float fadeWidth(const Species& species) const;   // the blend band's width (m): FadeWidth x "Fade width scale"
+		float fadeWidth(const Species& species) const;  // the blend band's width (m): FadeWidth x "Fade width scale"
 		float farDistance(const Species& species) const; // the blend band's centre (m, before "Far distance scale")
-		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
-		void spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform);
-		// The GPU set's piece TYPES: one per library piece (trunks, modules, baked variants) of every species.
+		// The GPU set's piece TYPES: one per baked variant of every species.
 		void buildGpuTypes(oc::vector<RenderTreeSet::Type>& outTypes, oc::unordered_map<const PieceMeshes*, uint32>& outTypeOf) const;
-		// Hooks a set into the terrain chunks: the walk lists the drawn chunks (m_vegChunkOf: coordinate -> set chunk).
+		// Hooks the set into the terrain chunks: the walk lists the drawn chunks (m_vegChunkOf: coordinate -> set chunk).
 		void hookTerrain(uint32 numChunks);
 
-		// --- WORLD MODE (Trees/World/Enabled + GPU expansion; Docs/Context/Procedural/Trees.md, W3) ---
+		// --- WORLD MODE (Trees/World/Enabled; Docs/Context/Procedural/Trees.md, W3) ---
 		// The near chunks of TreeWorld's records, EXPANDED into one DYNAMIC set: per record the tree (variant, scale, yaw from
 		// its hash, the exact ground) plus its bushes, chunk by chunk on Low jobs; a chunk that leaves the near radius frees
 		// its set chunk. Everything an expansion reads is in an immutable ExpandContext.
@@ -298,14 +253,13 @@ export namespace Procedural
 
 		TreeSettings& m_settings = Globals::settings.trees; // "Trees" (the buttons are cleared here)
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
-		RenderTreeSet m_treeSet;              // the grove's GPU expansion set; destroyed before the meshes (destroyTreeSet)
-		// The set's chunks are the TERRAIN's (spawnPreview: Globals::terrain.setVegetation): terrain chunk coordinate ->
-		// set chunk, at the chunk size they were sorted with. The sink reads the band settings through the atomics (it
-		// runs on the terrain's walk job). m_vegFallback: every chunk, when no walk lists them.
+		RenderTreeSet m_treeSet;              // the world set; destroyed before the meshes (destroyTreeSet)
+		// The set's chunks are the TERRAIN's (hookTerrain: Globals::terrain.setVegetation): terrain chunk coordinate ->
+		// set chunk, at the chunk size of the spawn. The sink reads the band settings through the atomics (it runs on the
+		// terrain's walk job). m_vegFallback: every chunk, when no walk lists them.
 		oc::unordered_map<uint64, int32> m_vegChunkOf;
 		oc::vector<uint64> m_prevSetKeys; // last frame's set chunks, sorted (updateWorld: the far voxel trees' exclusion)
 		int m_vegChunkSize = 0;
-		uint32 m_vegNumChunks = 0;
 		bool m_vegHooked = false;
 		oc::vector<RenderTreeSet::ChunkDraw> m_vegFallback;
 		oc::atomic<float> m_sinkDistanceScale{ 4.0f };
@@ -321,7 +275,7 @@ export namespace Procedural
 
 		TreeWorld m_world; // every tree of the terrain ring as records (Docs/Context/Procedural/Trees.md)
 		// World mode.
-		bool m_worldMode = false;      // this spawn is the world (else the preview grove)
+		bool m_worldMode = false;      // this spawn has the world set (else none: TreeWorld is off, or there is no terrain)
 		bool m_worldFullLogged = false;
 		bool m_recordTypesSet = false; // the renderer holds this spawn's record types (the far volume's records)
 		uint32 m_worldGeneration = 0;  // TreeWorld's, at the spawn
@@ -341,9 +295,7 @@ export namespace Procedural
 		oc::atomic<int32> m_expandInFlight{ 0 };
 		JobCounter m_expandCounter;
 
-		// Nodes after the meshes: members destruct in reverse order, and a node must die before its mesh.
 		oc::vector<Species> m_species;
-		oc::vector<PlacedPiece> m_pieces;
 	};
 }
 

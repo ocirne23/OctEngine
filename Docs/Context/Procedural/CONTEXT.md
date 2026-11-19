@@ -18,7 +18,7 @@ file of every system you touch BEFORE changing it.**
 | [Rivers.md](Rivers.md) | Rivers: the coarse network (`:RiverNetwork`), the units (`:RiverUnits`, `:RiverSystem`), the sampler (`:RiverTerrain`) |
 | [TerrainStreamer.md](TerrainStreamer.md) | `TerrainStreamer` (node memory, edge stitching, THE world datum, the terrain-data map) and `HeightMapBaker` (`applyWaterReach`, `applyFlowField`) |
 | [Ocean.md](Ocean.md) | `OceanGenerator`: world scale, the geometry clipmap, sectors, what runs where, `sampleWaterHeight`, wind, near-field shading |
-| [Trees.md](Trees.md) | Trees: the piece-library model, the `.tree` grammar, piece LODs, far representations, textures, bark, leaves, baked variants, GPU expansion, world records, world mode, the preview |
+| [Trees.md](Trees.md) | Trees: the piece-library model, the `.tree` grammar, piece LODs, far representations (the voxel tier, the shadow billboard), textures, bark, leaves, baked variants, the tree set, world records, world mode |
 | [Rocks.md](Rocks.md) | Rocks: the SDF + LOD chain model, the `.rock` grammar, DEAD WOOD, ground placement, the preview |
 | [Clutter.md](Clutter.md) | Ground clutter: the `.clutter` grammar, the meshes |
 
@@ -46,7 +46,7 @@ and deliberately independent.**
 
 **Every tweak VALUE lives in the Settings library**, not in these classes: `Globals::settings.terrain` /
 `terrainCollider` (Settings.Terrain, which also holds `WaterReach` / `FlowField`), `.ocean` (Settings.Ocean),
-`.trees` / `.treeWorld` (Settings.Trees, with `TREE_GROVE_TYPES`), `.rockSystem` (Settings.Rocks, with
+`.trees` / `.treeWorld` (Settings.Trees), `.rockSystem` (Settings.Rocks, with
 `RockWorldDesc`), `.clutter` (Settings.Clutter). Each system holds one `m_settings` reference and reads it directly;
 its `initialize()` only attaches the reactions (`Tweak::onChange`: config-dirty, grid-dirty, fade bands, remesh), so
 the settings must be registered first. Button settings (`reload`, `respawn`, `logStats`, ...) are cleared by the
@@ -204,10 +204,10 @@ The tree, rock and clutter generators' OUTPUT is saved under `Assets/Local` and 
 
 | What | File | Key (hashed into the file's header) |
 |---|---|---|
-| A tree species: its piece library, its baked variants, their far-volume density grids | `Local/Trees/Meshes/<species>.treemesh` | the `.tree` file's text, `TREE_DENSITY_RES` |
+| A tree species: its baked variants and their far-volume density grids (the piece library is their input only: not kept) | `Local/Trees/Meshes/<species>.treemesh` | the `.tree` file's text, `TREE_DENSITY_RES` |
 | A rock variant: its `RockShape`, LOD meshes, density grid | `Local/Rocks/Meshes/<type>_v<i>.rockmesh` | the `.rock` file's text, the grid resolution, the variant seed |
 | A clutter type's meshes (every LOD) | `Local/Clutter/Meshes/<type>.cluttermesh` | the `.clutter` file's text, `Clutter/Mesh resolution` |
-| A tree material's textures AS UPLOADED (bark, leaves, each billboard, each variant's voxel brick atlases + their index, a second `.tex`; `CachedTexture`) | `Local/Trees/Textures/<name>.tex` | the `.tree` file's text, `Trees/Compress textures`, the size (the voxel atlases: + the resolution and `TREE_VOXEL_BAKE_VERSION`) |
+| A tree material's textures AS UPLOADED (bark, leaves, each variant's shadow billboard mask, each variant's voxel brick atlases + their index, a second `.tex`; `CachedTexture`) | `Local/Trees/Textures/<name>.tex` | the `.tree` file's text, `Trees/Compress textures`, the size (the voxel atlases: + the resolution and `TREE_VOXEL_BAKE_VERSION`) |
 | A dead-wood rock type's tinted bark, as uploaded | `Local/Rocks/Textures/<type>.tex` | the bark `.tree` file's text, the tint, the size |
 | A flower clutter type's texture (BC3), as uploaded | `Local/Clutter/Textures/<type>.tex` | the `.clutter` file's text |
 

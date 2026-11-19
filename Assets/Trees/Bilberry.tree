@@ -59,7 +59,6 @@ TreeSpecies Bilberry
 	Billboard
 		Distance 20
 		Resolution 256
-		NormalBend 0.0
 		FadeWidth 5
 	Bark
 		Plates 8 4

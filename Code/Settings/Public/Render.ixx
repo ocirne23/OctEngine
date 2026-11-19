@@ -363,59 +363,35 @@ export struct ShadowParams
                                 // sample spacing self-consistent (this is a cone trace, not a point march).
 };
 
-// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD - the tree billboards) - "Foliage ..." in the TweakPanel's "Trees" category.
-// UBO-driven (u_foliage), so changes apply live.
+// THE TREES' SHADING: the mesh leaves (LitTree) and the voxel tier (LitTreeVoxel) - the "Foliage ...", "Leaf ..." and
+// "Voxel ..." rows in the TweakPanel's "Trees" category - plus the tree wind. UBO-driven (u_foliage), so changes apply live.
 export struct FoliageParams
 {
-    float crownNormal = 0.5f; // blend of the shading normal toward a CROWN normal - the view ray's hit on a
-                                // sphere around the card's centre (0 = the baked normals only; 1 at the axis
-                                // regardless). The same for both crossed cards, so the shading no longer splits
-                                // at their crossing axis (each card's bake shades its own view's side).
-    float shadowLength = 3.0f;  // the sun shadow fades in over this many metres between the receiver and its
-                                // blockers (>= 0.05): light reaches into a crown, so its own
-                                // crossed cards darken it gradually instead of with a hard edge at the crossing
-                                // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float leafShadowLength = 3.0f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
-                                   // strength) - a leaf just under its own billboard's top card is barely shaded,
-                                   // one deep under it fully
-    float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
-                                // (from the piece's own crown field: any crown shape), on the sun and the ambient
-                                // alike (0 = off) - a fully lit crown otherwise looked flat.
+    float shadowLength = 3.0f;  // the voxel tier: the sun shadow fades in over this many metres between the receiver
+                                // and its blockers (>= 0.05): light reaches into a crown, so its own caster darkens it
+                                // gradually. Blockers far up-sun (another tree, terrain) still shadow fully.
+    float leafShadowLength = 3.0f; // the same for the tree MESH leaves (0 = off: the caster's shadow at full
+                                   // strength) - a leaf just under its own shadow billboard's top card is barely
+                                   // shaded, one deep under it fully
+    float interiorShadow = 0.5f; // the voxel tier: darkening of the leaves deep INSIDE the crown, by the BAKED interior
+                                // (any crown shape), on the ambient (0 = off) - a fully lit crown otherwise looked flat.
     float interiorStart = 0.5f; // the baked interior (0 = the crown's surface, 1 = about its core depth) where the
     float interiorEnd = 1.0f;   // darkening starts / reaches full strength (smoothstep between)
-    // On the SUN (direct + transmitted) the interior fades out by this x |V.L|: from the front the leaves seen through
-    // the gaps are lit through those gaps, from the back the self-shadow below darkens the whole crown. The ambient keeps
-    // it (AO). 0 = the interior on the sun from every side.
-    float interiorViewFade = 1.0f;
-    // THE CROWN SELF-SHADOW (billboards): the sun x exp(-this x the chord from the view ray's entry on the crown
-    // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
-    // side-lit one darker. 0 = off.
-    float selfShadow = 1.0f;
-    float transmissionSelfShadow = 0.5f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
-                                         // through the leaves: at 1 a crown seen toward the sun hid the transmission)
-    float interiorTopCardScale = 2.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
-                                // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
-    // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
-    // card smears its texture into streaks. Near the crossing axis both thresholds are x edgeFadeCentreScale
-    // (back to x1 at half the crown radius): < 1 keeps the centre, > 1 fades it sooner.
-    float edgeFadeStart = 0.1f;
-    float edgeFadeEnd = 0.6f;
-    float edgeFadeCentreScale = 1.33f;
-    // TRANSMISSION (MATERIAL_FLAG_LEAF on LitFoliage: the billboards and card atlases; the LitMasked leaf clusters have
-    // none): the sun through the leaves - a diffuse back
-    // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
+    float transmissionSelfShadow = 0.5f; // the far-tree volume: the share of its self-shadow the TRANSMITTED sun takes (it
+                                         // scatters forward through the leaves: at 1 a crown seen toward the sun hid it)
+    // TRANSMISSION (MATERIAL_FLAG_LEAF: the leaf clusters on LitTree, the voxel tier): the sun through the leaves - a
+    // diffuse back term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
-    // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
+    // shaded side sits in its own crown's shadow, which would leave it no glow.
     float transmission = 2.0f;
     float transmissionFocus = 40.0f;
     float transmissionGlow = 1.0f;
     float transmissionShadow = 0.8f;
     // LEAVES (MATERIAL_FLAG_LEAF) seen nearly edge-on: their shading normal is bent toward the viewer until N.V reaches
-    // this (0 = off). The cards' normals are bent (NormalBend), so N.V can approach 0 while N.L > 0: the sun's GGX at
-    // grazing (Fresnel -> 1, the Smith term growing) lit a single leaf near the sun hundreds of times brighter than
-    // its diffuse - a blinding spot with bloom.
+    // this (0 = off). N.V can approach 0 while N.L > 0: the sun's GGX at grazing (Fresnel -> 1, the Smith term growing)
+    // lit a single leaf near the sun hundreds of times brighter than its diffuse - a blinding spot with bloom.
     float minNoV = 0.04f;
-    // THE LEAF LOOK (LitTree's cluster leaves; the transmission colour on LitFoliage too):
+    // THE LEAF LOOK (LitTree's cluster leaves; the transmission colour on the voxel tier too):
     float leafNormalStrength = 1.0f;     // x the cluster leaves' normal-map slope (0 = flat cards)
     // The mesh leaves' SUN SPECULAR from the normal map's slope x this (a more curved leaf: some spot on each meets the
     // highlight - a glint, not a faint even sheen); the diffuse keeps "Leaf normal strength". 0 = the shading normal.
@@ -439,21 +415,19 @@ export struct FoliageParams
     // A leaf facing DOWN takes its ambient (GI) from its normal mirrored this far toward the sky (0 = its own side
     // only, 1 = fully mirrored): a thin leaf is lit through from the sky behind it, not only by the dark ground.
     float leafSkyWrap = 0.5f;
-    // The tree BILLBOARDS' sun-shadow casters shifted this far (m) toward the sun (< 0: away from it), in the shadow
-    // pass only: the flat cards stand at the crown's middle, so their shadow started there, not at the sun side.
-    float billboardShadowShift = 2.0f;
-    float edgeFadeTopCardScale = 1.0f; // x both thresholds on a whole tree's HORIZONTAL card (on top of the centre
-                                // scale): > 1 hands the top-down view to the vertical cards sooner
+    // The trees' SHADOW BILLBOARDS shifted this far (m) toward the sun (< 0: away from it), in the shadow pass: the
+    // flat cards stand at the crown's middle, so their shadow started there, not at the sun side.
+    float billboardShadowShift = 3.0f;
     // A tree casts into sun cascade c only while its distance from the cascades' centre (the scene focus) minus its
     // radius stays within that cascade's split + this (m): far trees out of the near cascades. The margin keeps the
     // long shadows of trees up-sun, which fall into a nearer cascade's range (a 20 m tree at a 17 degree sun: ~65 m).
     float shadowCascadeMargin = 64.0f;
     // A tree farther than this (m) from the scene focus is not in the TLAS (no GI / RT shadow / RTAO / reflection hits;
     // 0 = only the general "RT/TLAS Range"): every tree there is an overlapping box every ray has to traverse.
-    float rtRange = 600.0f;
-    // TREE WIND ("Trees/Wind", tree_wind.inc.glsl): vertex-shader sway of the mesh trees, branch cards and billboards in the
-    // shared wind (u_weather: "Sky/Wind"). Three layers: the TRUNK bend (every representation, from the
-    // height alone), the BRANCH sway and the LEAF flutter (meshes only, from the bake's per-vertex payload).
+    float rtRange = 1000.0f;
+    // TREE WIND ("Trees/Wind", tree_wind.inc.glsl): vertex-shader sway of the mesh trees, the voxel boxes and the shadow
+    // billboards in the shared wind (u_weather: "Sky/Wind"). Three layers: the TRUNK bend (every representation, from
+    // the height alone), the BRANCH sway and the LEAF flutter (meshes only, from the bake's per-vertex payload).
     float windBend = 0.004f;        // the trunk's lean at the reference height, m per (m/s)^2 of wind (10 m/s: 0.4 m)
     float windRefHeight = 10.0f;    // m: the bend grows with (height / this)^2
     float windSway = 0.35f;         // the trunk's oscillation, x the lean
@@ -462,12 +436,11 @@ export struct FoliageParams
     float windBranchFrequency = 0.6f; // Hz
     float windLeaf = 0.04f;         // a leaf card tip's flutter (m)
     float windLeafFrequency = 3.0f; // Hz
-    float windBranchFadeStart = 40.0f; // m: the branch sway fades out between these (before the mid tier's cards)
+    float windBranchFadeStart = 40.0f; // m: the branch sway fades out between these (before the voxel tier)
     float windBranchFadeEnd = 70.0f;
     float windLeafFadeStart = 20.0f;   // m: the leaf flutter fades out between these
     float windLeafFadeEnd = 40.0f;
     float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (>= 100); a 100 m band fades it out
-    float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (>= 0.0005)
     // THE VOXEL TIER (instanced_indirect_tree_voxel.fs.glsl, "Trees/Voxel impostors"):
     float voxelLodBias = 0.0f;      // + the grid level the march picks (log2: +1 = voxels twice as large, half the steps)
     float voxelSharpness = 0.95f;    // 0..0.95: the march's filter reach - 0 = trilinear (each voxel's opacity a voxel into its
@@ -485,7 +458,7 @@ export struct FoliageParams
     float voxelSaturation = 1.1f;
     float voxelBrightness = 1.05f;   // x the voxel colour (linear), after the saturation
     // The voxel tier's LEAF TRANSMISSION: x the "Foliage transmission" strength / glow / focus, and the share of the voxel
-    // self-shadow the transmitted sun takes (its own: the cards' crown chord is another measure).
+    // self-shadow the transmitted sun takes.
     float voxelTransmission = 0.9f;
     float voxelTransmissionGlow = 1.0f;
     float voxelTransmissionFocus = 1.0f;
@@ -496,7 +469,7 @@ export struct FoliageParams
     float voxelNormalHull = 0.02f;   // the shading normal toward the crown's outward direction where the leaves face every
                                     // way (a short mean normal): x (1 - its length) x this (0 = the mean normal only)
     // The trees' SUN SHADOW CASTER in the cascades: their voxel grid (marched toward the sun, at every distance) instead of
-    // their billboard, for the types that have one. RT keeps the billboard.
+    // their shadow billboard, for the types that have one. RT keeps the billboard.
     bool voxelShadows = false;
     float voxelShadowCoverage = 0.5f; // the coverage along the light at which the voxel caster's depth is written
     // + the caster's grid level (log2), on top of a voxel about a cascade texel: the near cascade's texels are a few cm, so
@@ -655,7 +628,7 @@ export struct RockParams
 
 // FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
 // a camera-centred POLAR volume (angle x log radius, startDistance .. endDistance: cells grow with the distance) and
-// marched there - beyond the billboards, kilometres out. The volume geometry re-bakes on change; the resolutions
+// marched there - beyond the voxel trees, kilometres out. The volume geometry re-bakes on change; the resolutions
 // recreate the images.
 export struct FarTreeParams
 {

@@ -15,7 +15,8 @@ export class RenderMaterial final : public RenderMaterialState
 public:
 
     // What the mip bytes ARE: RGBA8, or BC blocks the caller compressed (File TextureConvert::compressBlockRows). BC4 / R8: ONE channel, never sRGB
-    // (the trees' voxel opacity atlas). Appended only: the .tex cache files store the value.
+    // (the trees' voxel opacity atlas, their shadow billboards' mask); as a material's albedo it reads in all four channels, so its `.a` is the mask.
+    // Appended only: the .tex cache files store the value.
     enum class ETextureEncoding : uint8 { Rgba8, BC1, BC3, BC5, BC4, R8 };
 
     struct TextureDesc
@@ -24,7 +25,8 @@ public:
         uint32 height = 0;
         const oc::vector<oc::span<uint8>>* albedoMips = nullptr;  // sRGB, level 0 first, each level half the previous
         const oc::vector<oc::span<uint8>>* normalMips = nullptr;  // optional, the same size: a LINEAR RGB tangent-space normal map (x along U, y along V)
-        uint32 normalWidth = 0;     // the normal slot's own size (0 = the albedo's): a pipeline whose FS reads that slot its own way (the trees' voxel tier)
+        uint32 normalWidth = 0;     // the normal slot's own size (0 = the albedo's): a reader that takes that slot its own way (the trees' voxel tier, their
+                                    // shadow billboards' two colours)
         uint32 normalHeight = 0;
         ETextureEncoding albedoEncoding = ETextureEncoding::Rgba8;
         ETextureEncoding normalEncoding = ETextureEncoding::Rgba8; // BC5 sets MATERIAL_FLAG_BC5_NORMAL (Z rebuilt)

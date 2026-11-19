@@ -267,7 +267,7 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 
 	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's film gate)
 	// resolves it before computeLitColor (a no-op here then); other materials pay the fetch on sun-facing pixels only.
-	// LIT_NO_UNDERWATER (the trees' leaves, billboards and voxels: never under the water): no water-level fetch, no
+	// LIT_NO_UNDERWATER (the trees' leaves and voxels: never under the water): no water-level fetch, no
 	// caustics - the whole underwater path compiles out.
 #ifndef LIT_NO_UNDERWATER
 	resolveLiveDepth(worldPos);
@@ -405,10 +405,9 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
 	float16_t ao = float16_t(1.0);
 	f16vec3 bentN = N;
-	// LIT_NO_RTAO: no RTAO read at all. The grass (grass.fs.glsl): its own root occlusion stands in. The tree billboards
-	// and voxels: the AO is traced from the depth image, so on a card it is the occlusion of the flat card by the crossing
-	// card and the ground (on a voxel hit: of a point inside a crown), not of the crown it stands for - their baked
-	// interior is their AO.
+	// LIT_NO_RTAO: no RTAO read at all. The grass (grass.fs.glsl): its own root occlusion stands in. The trees' voxels:
+	// the AO is traced from the depth image, so on a voxel hit it is the occlusion of a point inside a crown, not of the
+	// crown - their baked interior is their AO.
 #ifndef LIT_NO_RTAO
 	// Past the RTAO max distance the trace writes exactly (0, 1.0) (rtao.cs.glsl early-out), so skip the upsample and
 	// use those constants. The gate measures from the SCENE FOCUS, as that early-out does; the camera distance still

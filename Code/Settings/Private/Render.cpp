@@ -92,17 +92,13 @@ void Settings::registerShadow(ShadowParams& s)
 
 void Settings::registerFoliage(FoliageParams& s)
 {
-    // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
-    Tweak::floatVar("Trees", "Foliage crown normal", &s.crownNormal, 0.0f, 1.0f, 0.01f);
+    // In the Procedural TreeSystem's "Trees" category: the trees are their only user.
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.05f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Leaf shadow length (m)", &s.leafShadowLength, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Foliage interior depth start", &s.interiorStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior depth end", &s.interiorEnd, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior view fade", &s.interiorViewFade, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage self shadow", &s.selfShadow, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission self shadow", &s.transmissionSelfShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow", &s.interiorShadow, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior shadow top card scale", &s.interiorTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission", &s.transmission, 0.01f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission focus", &s.transmissionFocus, 1.0f, 64.0f, 0.1f);
     Tweak::floatVar("Trees", "Foliage transmission glow", &s.transmissionGlow, 0.0f, 8.0f, 0.01f);
@@ -137,10 +133,6 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Voxel shadow LOD bias", &s.voxelShadowLodBias, -2.0f, 4.0f, 0.05f);
     Tweak::boolean("Trees", "Voxel far trees", &s.voxelFarTrees);
     Tweak::floatVar("Trees", "Voxel far end (m)", &s.voxelFarEnd, 100.0f, 40000.0f, 10.0f);
-    Tweak::floatVar("Trees", "Foliage edge fade start", &s.edgeFadeStart, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage edge fade end", &s.edgeFadeEnd, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage edge fade centre scale", &s.edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage edge fade top card scale", &s.edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow cascade margin (m)", &s.shadowCascadeMargin, 0.0f, 10000.0f, 1.0f);
     Tweak::floatVar("Trees", "RT range (m)", &s.rtRange, 0.0f, 10000.0f, 5.0f);
     Tweak::floatVar("Trees/Wind", "Bend", &s.windBend, 0.0f, 0.2f, 0.0005f);
@@ -156,7 +148,6 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees/Wind", "Leaf fade start (m)", &s.windLeafFadeStart, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Trees/Wind", "Leaf fade end (m)", &s.windLeafFadeEnd, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Trees/Wind", "Trunk fade end (m)", &s.windTrunkFadeEnd, 100.0f, 20000.0f, 10.0f);
-    Tweak::floatVar("Trees/Wind", "Billboard waves", &s.windBillboardWaves, 0.0005f, 0.1f, 0.0005f);
 }
 
 void Settings::registerFarTree(FarTreeParams& s)

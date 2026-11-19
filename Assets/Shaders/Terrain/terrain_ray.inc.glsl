@@ -230,4 +230,37 @@ vec3 terrainRayNormal(vec3 hitPos)
     return normalize(nd + (nc - nd) * (1.0 - f.x) + (nb - nd) * (1.0 - f.y));
 }
 
+// The RIVER INFLUENCE of the surface at a march hit (0..1: the vertices' own, TerrainFields::river as the terrain VS hands
+// it on - a river's and a lake's bed and shore). terrainRayNormal's lookup, on the vertex's data word (its low byte).
+float terrainRayRiver(vec3 hitPos)
+{
+    TerrainRayTable table = TERRAIN_RAY_TABLE;
+    const float chunkSize = TERRAIN_RAY_CHUNK_SIZE;
+    const ivec2 chunk = ivec2(floor(hitPos.xz / chunkSize));
+    const ivec2 cellInTable = clamp(chunk - table.tableMin, ivec2(0), ivec2(int(table.tableDim) - 1));
+    const TerrainRayEntry entry = table.entries[uint(cellInTable.y) * table.tableDim + uint(cellInTable.x)];
+    if (entry.firstVertex == TERRAIN_RAY_NO_NODE)
+        return 0.0;
+
+    const int span = 1 << entry.lod;
+    const vec2 nodeLo = vec2((chunk >> entry.lod) * span) * chunkSize;
+    const float quad = TERRAIN_RAY_LOD0_QUAD * float(span);
+    const uint res = TERRAIN_RAY_LOD0_RES;
+    const uint vpr = res + 1u;
+    const vec2 local = clamp((hitPos.xz - nodeLo) / quad, vec2(0.0), vec2(float(res) - 1e-3));
+    const uvec2 cell = uvec2(local);
+    const vec2 f = local - vec2(cell);
+    TerrainRayWords words = TerrainRayWords(table.vertices);
+    const uint a = (entry.firstVertex + cell.y * vpr + cell.x) * 3u + 2u; // the data word of vertex a
+    const float rb = float(words.w[a + 3u] & 255u);
+    const float rc = float(words.w[a + vpr * 3u] & 255u);
+    if (f.x + f.y <= 1.0)
+    {
+        const float ra = float(words.w[a] & 255u);
+        return (ra + (rb - ra) * f.x + (rc - ra) * f.y) * (1.0 / 255.0);
+    }
+    const float rd = float(words.w[a + (vpr + 1u) * 3u] & 255u);
+    return (rd + (rc - rd) * (1.0 - f.x) + (rb - rd) * (1.0 - f.y)) * (1.0 / 255.0);
+}
+
 #endif

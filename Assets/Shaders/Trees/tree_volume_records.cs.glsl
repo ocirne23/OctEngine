@@ -1,8 +1,8 @@
 #version 460
 
 // FAR-TREE VOLUME BAKE from the WORLD TREE RECORDS, far out (TreeVolumePipeline): one workgroup per record chunk BEYOND the
-// record detail distance of the bake centre (the ones within it splat in detail: tree_volume_splat.cs's TREE_SPLAT_RECORDS,
-// the same test). Every record adds its tree's MASS (its extinction integrated over its volume, m^2: its variant's at scale
+// record detail distance of the bake centre (the ones within it splat in detail: tree_volume_splat.cs, the same
+// test). Every record adds its tree's MASS (its extinction integrated over its volume, m^2: its variant's at scale
 // 1 x its scale^2, both from its seed as Procedural TreeSystem::expandChunk picks them) / the column's area into a 2D image,
 // fixed point, over a TENT as wide as its crown (at least a cell each way: a point splat made thin pillars where a column is
 // smaller than a crown). The weights are normalized per axis, so a tree adds its whole mass. Its nearest column also takes

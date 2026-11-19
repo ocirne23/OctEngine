@@ -74,7 +74,7 @@ export namespace Procedural
 		TreeWorld& operator=(const TreeWorld&) = delete;
 
 		void initialize(); // attaches the "Trees/World" listeners
-		// Main thread, every frame (also with the tree preview off): joins the last BOOKKEEPING JOB, then the config, the
+		// Main thread, every frame (also with "Trees/Enabled" off): joins the last BOOKKEEPING JOB, then the config, the
 		// restart and the renderer side (the record pool's adds / removes the job queued, updateTreeRecords).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 		// Kicks the bookkeeping job (the finished chunks, the ring rescan, the next upload batch): main.cpp calls it after

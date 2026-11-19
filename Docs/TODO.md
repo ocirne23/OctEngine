@@ -44,8 +44,7 @@ Code comments that contradict the code (found in the 2026-10-15 doc review; the 
 * Core / Threading: `Time.ixx` says the escape overlay sets the fps ceiling; `Profiler.ixx` says the tracker is XCA3
   (XCA2); `JobSystemDesc` says "PHYSICAL cores - 2".
 * RendererVK: `Layout.ixx` `INITIAL_UNIQUE_MESHES` ("whole range"; it is 2048) and the mega-buffer sizes (1.5 / 0.5 GiB;
-  768 / 256 MiB), `TerrainLit` "no textures"; `BindlessTextures.ixx` "six pipelines" (seven); `FoliageParams` crown
-  normal "sphere" (ellipsoid) and transmission "LitFoliage only"; `GiSettings` example still 10 m / falloff 3;
+  768 / 256 MiB), `TerrainLit` "no textures"; `BindlessTextures.ixx` "six pipelines" (seven); `GiSettings` example still 10 m / falloff 3;
   `RendererRecord.cpp` says `recordGlobalIllum` builds the TLAS (`recordGlobalIllumPrep` does).
 * Procedural: `TreeSystem.ixx` preview text (G4 future, GPU LOD chains) and `TreeSystem.cpp` "the generator still builds
   every level" (`MESHED_LODS` = 1); dated comments in `RockGenerator.cpp` / `ClutterSystem`; `TerrainColliderSettings::
@@ -126,8 +125,7 @@ See [RendererVK](Context/RendererVK/CONTEXT.md).
   point.
 * Bisect: lit FS +8 registers (09-23 → 09-29); `vol_apply` and lit #0/#1 +16 B (09-29 → 10-04);
   the film's 64/16 cause. With every tweak lock on, ground #8 and the film get worse (parked).
-* Measure: TLAS spikes from the 4 km grove (~20 ms "TLAS + probe trace", unconfirmed); rocks in the
-  tree instance set; the terrain FS after the grass canopy term; POM silhouette `discard`; wet sky
+* Measure: rocks in the tree instance set; the terrain FS after the grass canopy term; POM silhouette `discard`; wet sky
   reflection and glints register cost; the film flow's second tap; a shoreline view (ocean lost
   early-Z on the tessellated seabed).
 
@@ -145,8 +143,7 @@ See [RendererVK](Context/RendererVK/CONTEXT.md).
 * Particles and transparents inside a cloud / fog get the opaque pixel's cloud.
 * POM silhouettes (`TERRAIN_POM_SILHOUETTE`) do not work (holes behind ridges, a sky strip).
 * Biplanar rock AO comes from the top plane only (stretched on steep faces).
-* Tree wind: billboards do not wave in the shadow pass or motion vectors; the TLAS sees unswayed
-  trees.
+* Tree wind: the TLAS sees unswayed trees.
 * Push blocks without lockable values are still hand-written with mirrored C++ structs.
 * Tweak lock state is not saved (user decision).
 * OpenXR's command pool and clear buffer have no debug names.
@@ -193,15 +190,14 @@ far-tree volume in [RendererVK Vegetation](Context/RendererVK/Vegetation.md).
   unknown); pixel-skip copies arrive 1-3 frames late; under temporal "1 of 4" runs as "1 of 2".
 * The far records pass adds no bushes past the detail distance.
 * Inside the crossfade band the shadow pass is not dithered (both tiers cast).
-* RT sees only whole-tree billboards; bushes and tree meshes have no BLAS.
-* Fixed pools with no growth: 128 MB record pool, 600k-piece dynamic set. A ring-radius change
+* RT sees a tree as its shadow billboard (opacity + the mean bark and leaf colours); bushes and tree meshes have no BLAS.
+* Fixed pools with no growth: 128 MB record pool, 600k-piece tree set. A ring-radius change
   restarts everything.
 * Per-tree VS warp for near uniqueness (G4b), device-local expansion records, scaling past ~100k
   trees (per-tree GPU cull + compaction).
 * Tree mesh LODs are off (GPU uses LOD 0); `lodError` / `Lod ErrorScale` unused.
-* No BC7 encoder (billboard normals use BC3). Bark and leaf textures are procedural until authored.
-* Texture parameters do not regenerate an existing PNG; no species hot reload; `TREE_GROVE_TYPES`
-  is a hand-kept list.
+* No BC7 encoder. Bark and leaf textures are procedural until authored.
+* Texture parameters do not regenerate an existing PNG; no species hot reload.
 * Option B: `tree_cull.inc.glsl` reads the 4-byte records directly (measure Option A first).
 * Record benefits not used yet: felled-tree edits, trunk colliders, Nav / gameplay queries.
 * Remove the scatter's `tree_small_02` rules "when this ships".
@@ -222,7 +218,6 @@ See [Procedural Rocks](Context/Procedural/Rocks.md).
   per-material blob shrink (A/B with the user).
 * Not built: `Tilt`, satellite `Cluster`s, dual contouring / locked fracture edges, per-column albedo
   sums in the far volume, a per-type `shadowDistance`.
-* A rock has no billboard, so no far-volume hand-over: it draws wherever its chunk is in the set.
 * The triplanar rock material's per-pixel cost is a guess.
 * Small ground clutter (pebbles, scree, branches) is a later, separate system.
 * Open questions Q1-Q4 in the plan (Nav blocking, `Huge` class, normal bake, climate box).

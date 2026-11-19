@@ -33,6 +33,7 @@ layout (location = 0, index = 0) out vec4 out_color;  // added colour
 layout (location = 0, index = 1) out vec4 out_factor; // the ground's multiplier
 
 #include "instanced_indirect_lit.inc.glsl"
+#include "tree_card.inc.glsl" // a tree's shadow billboard at a reflection hit: its colour
 #include "terrain_common.inc.glsl"
 #include "ocean_bubbles.inc.glsl"
 #include "ocean_foam_field.inc.glsl"
@@ -97,9 +98,17 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 					hitN = -hitN;
 				if (materialIdx < in_materialInfos.length())
 				{
-					const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
+					const uint diffuseNormalTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx;
 					const float lod = clamp(log2(max(t, 1.0)) + 1.0, 0.0, 7.0); // ray-cone-ish LOD by distance
-					albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, lod).rgb;
+					const vec4 tap = textureLod(u_textures[nonuniformEXT(diffuseNormalTexIdx & 0x0000FFFFu)], uv, lod);
+					albedo = tap.rgb;
+					if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u)
+					{
+						albedo = treeCardAlbedo(diffuseNormalTexIdx, tap.a);
+						hitN = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true))
+							* treeCardNormal(rayQueryGetIntersectionObjectRayOriginEXT(rq, true), rayQueryGetIntersectionObjectRayDirectionEXT(rq, true),
+								mi.center, in_vertices[v0].tangent.xyz));
+					}
 				}
 			}
 		}

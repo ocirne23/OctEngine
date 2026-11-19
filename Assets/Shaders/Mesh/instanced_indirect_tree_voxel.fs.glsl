@@ -8,14 +8,14 @@
 #extension GL_EXT_ray_query : enable
 
 // EPipelineIndex::LitTreeVoxel: THE VOXEL TIER of the procedural trees (Procedural TreeSystem, "Trees/Voxel impostors").
-// The main pass draws it wherever a tree's whole billboard would draw (tree_cull.inc.glsl treeCullMainFar); shadows, GI
-// and RT keep the billboard. The mesh is the variant's grid box (Procedural treeVoxelBoxMesh), front faces only; this
+// The main pass draws it past the tree's band, in its meshes' place (tree_cull.inc.glsl treeCullMainPiece); the shadows
+// and the rays take the tree's shadow billboard. The mesh is the variant's grid box (Procedural treeVoxelBoxMesh), front faces only; this
 // shader marches the tree's PREFILTERED voxel grid (sparse bricks: tree_voxel.inc.glsl, Procedural TreeImpostor.ixx "The VOXEL tier") from the
 // face along the view ray at the level whose voxel is about a pixel, stops where the ray's coverage passes this pixel's
 // threshold (stochastic coverage: TAA / DLSS resolve it), writes that point's depth and lights it with the foliage
-// cards' terms - the leaf transmission, the N.V bend, the sky wrap, the interior as AO - and a real self-shadow: the sun
+// terms - the leaf transmission, the N.V bend, the sky wrap, the interior as AO - and a real self-shadow: the sun
 // marched through the tree's own voxels. The cascades' shadow is looked up where that sun path LEAVES the box, so the
-// tree's own billboard (its shadow caster) does not shadow it twice.
+// tree's own shadow caster (its billboard) does not shadow it twice.
 // Drawn from its own command list (StaticMeshGraphicsPipeline::record): it writes FragDepth, which no pipeline of the
 // DGC execution set does. The VS is instanced_indirect.vs.glsl with TREE_VOXEL.
 
@@ -87,7 +87,7 @@ void main()
 #endif
 	const uint materialIdx = in_meshIdxMaterialIdx >> 16;
 	const MaterialInfo material = in_materialInfos[materialIdx];
-	// The crossfade with the meshes / branch cards (the billboard's band), per tree: before the march.
+	// The crossfade with the meshes (the type's band), per tree: before the march.
 	if (treeDistanceFaded(material.flags, in_treeDistance))
 		discard;
 
@@ -242,7 +242,7 @@ void main()
 	// position, the colour, the normal and three scalars (the AO, the transmission's back + glow, the sun march's result).
 	// A voxel material is always a LEAF material (Procedural createVoxelMaterial): no leaf test.
 
-	// THE INTERIOR (the surface atlas's colour A) as the billboards': an AO on the ambient, remapped by "Foliage interior depth
+	// THE INTERIOR (the surface atlas's colour A): an AO on the ambient, remapped by "Foliage interior depth
 	// start / end" x "Foliage interior shadow". The sun takes the real self-shadow instead.
 	const float16_t surfaceAO = float16_t(1.0 - u_foliage_interiorShadow * smoothstep(u_foliage_interiorStart, u_foliage_interiorEnd, interiorTap));
 
@@ -289,9 +289,9 @@ void main()
 
 	// The cascades' shadow (and the terrain's, the clouds'). With the SELF-SHADOW on ("Voxel self shadow" > 0): where the
 	// sun path leaves the box - the march above already darkens by the tree's own leaves, and its own caster (the voxel
-	// grid with "Trees/Voxel shadows", else the billboard, shifted toward the sun by "Billboard shadow shift") lies inside
-	// the box: it would shadow it twice. With it OFF: at the hit itself, so the tree takes its own caster's shadow from the
-	// cascades as a billboard tree does.
+	// grid with "Trees/Voxel shadows", else the shadow billboard, shifted toward the sun by "Billboard shadow shift") lies
+	// inside the box: it would shadow it twice. With it OFF: at the hit itself, so the tree takes its own caster's shadow
+	// from the cascades.
 	const float casterShift = u_foliage_voxelShadows > 0.5 ? 0.0 : max(u_foliage_billboardShadowShift, 0.0);
 	const vec3 shadowPos = u_foliage_voxelSelfShadow > 0.0 ? pos + L * (exitDist + casterShift + 0.5) : pos;
 	g_shadowFoliage = true;

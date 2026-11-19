@@ -29,8 +29,8 @@ namespace
 {
 	using namespace Procedural;
 
-	// `raytraced`: whether RT (GI, RT shadows, RTAO, reflections) sees it - a BLAS only then (TreeSystem::reload:
-	// with billboards only the trees' whole billboards; bushes never).
+	// `raytraced`: whether RT (GI, RT shadows, RTAO, reflections) sees it - a BLAS only then (TreeSystem::uploadSpecies:
+	// the trees' shadow billboards; bushes never).
 	RenderMesh uploadTreeMesh(Renderer& renderer, const TreeMesh& mesh, bool raytraced)
 	{
 		if (mesh.indices.empty())
@@ -53,7 +53,7 @@ namespace
 	size_t numTriangles(const TreeMesh& mesh) { return mesh.indices.size() / 3; }
 
 	// Uploads LEVEL 0 only, no GPU LOD chain (a one-level RenderMesh): trees switch representation through their own tiers
-	// (mid tier, billboard, far volume), and the mesh LOD steps underneath popped visibly (fewer, larger leaf cards per
+	// (the voxels, the far volume), and the mesh LOD steps underneath popped visibly (fewer, larger leaf cards per
 	// level, no crossfade). The generator still builds every level (the bakes read level 0); outMeshes[1..] stay empty.
 	void uploadLevelZero(Renderer& renderer, const TreeMesh (&levels)[TREE_PIECE_LODS], RenderMesh (&outMeshes)[TREE_PIECE_LODS], bool raytraced)
 	{
@@ -61,11 +61,9 @@ namespace
 	}
 
 	// Species textures are generated ONCE into Assets/Local/Trees/Textures (TREE_TEXTURE_DIR: <species>_bark.tex,
-	// _leaves.tex, the billboard bakes) in their UPLOAD encoding (MeshCache's CachedTexture) and read back on later loads.
+	// _leaves.tex, the shadow masks, the voxel grids) in their UPLOAD encoding (MeshCache's CachedTexture) and read back on later loads.
 	// Generated output: not in git.
 
-	// Far-representation cache name infix per piece set (modules keep the original, unprefixed names).
-	constexpr const char* PIECE_KINDS[3] = { "", "trunk", "tree" };
 	constexpr uint32 TREE_TEXTURE_SIZE = 1024;
 	constexpr uint32 TREE_DENSITY_RES = 32; // the far-tree volume's per-variant extinction grid (bakeTreeDensity)
 
@@ -171,6 +169,32 @@ namespace
 		out.normalEncoding = textureEncoding(normalFormat);
 	}
 
+	// A SHADOW BILLBOARD's mask (bakeBillboardMask's one-channel levels, taken) into its UPLOAD encoding: BC4 when
+	// `compress`, else R8.
+	void encodeMask(bool compress, uint32 size, oc::vector<oc::vector<uint8>>& levels, CachedTexture& out)
+	{
+		out = {};
+		out.width = size;
+		out.height = size;
+		if (!compress)
+		{
+			out.albedo = oc::move(levels);
+			out.albedoEncoding = RenderMaterial::ETextureEncoding::R8;
+			return;
+		}
+		// The block compressor reads RGBA texels (BC4: their red).
+		oc::vector<oc::vector<uint8>> rgba(levels.size());
+		for (size_t k = 0; k < levels.size(); ++k)
+		{
+			rgba[k].assign(levels[k].size() * 4, 0);
+			for (size_t i = 0; i < levels[k].size(); ++i)
+				rgba[k][i * 4] = levels[k][i];
+		}
+		levels = {};
+		encodeChain(rgba, size, size, TextureConvert::EBlockFormat::BC4, out.albedo);
+		out.albedoEncoding = RenderMaterial::ETextureEncoding::BC4;
+	}
+
 	// The VOXEL tier's bake (TreeImpostor.ixx) into its UPLOAD encoding, two .tex files: `atlases` = the opacity atlas (the
 	// albedo: BC4, else R8) and the surface atlas (the normal: BC3, else RGBA8 - half the opacity atlas each way), `index` =
 	// the index texture (RGBA8: its bytes are exact). Takes the bake's images.
@@ -239,6 +263,37 @@ namespace
 		return RenderMaterial::createTextured(desc);
 	}
 
+	// A SHADOW BILLBOARD's material (RendererVK MATERIAL_FLAG_BILLBOARD): its mask in the albedo slot, alpha-tested at the
+	// mask's own threshold; its two colours for the rays (linear: the bark's, the leaves') as a 2 x 1 texture in the normal
+	// slot, stored as their square roots (tree_card.inc.glsl squares the tap).
+	RenderMaterial createBillboardMaterial(CachedTexture& mask, const glm::vec3& barkColour, const glm::vec3& leafColour, const char* debugName)
+	{
+		oc::vector<oc::span<uint8>> maskMips, colourMips;
+		for (oc::vector<uint8>& level : mask.albedo)
+			maskMips.push_back(oc::span<uint8>(level.data(), level.size()));
+		uint8 colours[8];
+		const glm::vec3 pair[2] = { barkColour, leafColour };
+		for (uint32 t = 0; t < 2; ++t)
+		{
+			for (uint32 c = 0; c < 3; ++c)
+				colours[t * 4 + c] = (uint8)(std::sqrt(glm::clamp(pair[t][(int)c], 0.0f, 1.0f)) * 255.0f + 0.5f);
+			colours[t * 4 + 3] = 255;
+		}
+		colourMips.push_back(oc::span<uint8>(colours, sizeof(colours)));
+		RenderMaterial::TextureDesc desc;
+		desc.width = mask.width;
+		desc.height = mask.height;
+		desc.albedoMips = &maskMips;
+		desc.albedoEncoding = mask.albedoEncoding;
+		desc.normalMips = &colourMips;
+		desc.normalWidth = 2;
+		desc.normalHeight = 1;
+		desc.alphaCutoff = 0.5f;
+		desc.extraFlags = RendererVKLayout::MATERIAL_FLAG_BILLBOARD;
+		desc.debugName = debugName;
+		return RenderMaterial::createTextured(desc);
+	}
+
 	// The VOXEL tier's material (the opacity atlas in the albedo slot, the surface atlas in the normal slot) and its index
 	// texture (`outIndex`, linear: exact bytes). The opacity atlas's HEADER - slot 0, no brick: its first two 4 x 4 blocks -
 	// takes the index texture's bindless id, low byte then high: the main pass and the shadow casters, which get the opacity
@@ -280,12 +335,13 @@ namespace
 	}
 
 	// A tree species' UNDERGROWTH: x = its bushes per tree, y = how far out they go (m, at least the trunk's 1.5 m). The
-	// species' `Undergrowth` block, else "Bushes per tree" and 0.75 x "Spacing (m)". The preview, the world expansion and
-	// the far volume's record types (TreeRecordTypeGpu, per type) all read it.
+	// species' `Undergrowth` block, else "Bushes per tree" and DEFAULT_BUSH_RADIUS. The world expansion and the far
+	// volume's record types (TreeRecordTypeGpu, per type) both read it.
+	constexpr float DEFAULT_BUSH_RADIUS = 8.25f;
 	glm::vec2 bushUndergrowth(const TreeSpeciesDesc& desc, const TreeSettings& settings)
 	{
 		const float perTree = desc.undergrowthBushes >= 0.0f ? desc.undergrowthBushes : settings.bushesPerTree;
-		const float radius = desc.undergrowthRadius >= 0.0f ? desc.undergrowthRadius : 0.75f * settings.spacing;
+		const float radius = desc.undergrowthRadius >= 0.0f ? desc.undergrowthRadius : DEFAULT_BUSH_RADIUS;
 		return glm::vec2(glm::max(perTree, 0.0f), glm::max(radius, 1.5f));
 	}
 }
@@ -305,7 +361,6 @@ namespace Procedural
 	{
 		stopLoad(); // its jobs write only their slots: joined before the species they upload into go
 		destroyTreeSet();
-		m_pieces.clear();
 		m_species.clear(); // the meshes and the materials (Species: the derived ones before their sources)
 	}
 
@@ -316,7 +371,7 @@ namespace Procedural
 		m_colliderBodies = 0;
 		m_rockColliderMeshes.clear();
 		m_expandContext = nullptr;
-		// Without world mode the far volume has no record types (it ignores the records).
+		// Without the world set the far volume has no record types (it ignores the records).
 		if (m_recordTypesSet)
 		{
 			m_world.joinPool(); // the pool job writes the same record pool
@@ -329,7 +384,6 @@ namespace Procedural
 		m_vegHooked = false;
 		m_vegChunkOf.clear();
 		m_prevSetKeys.clear();
-		m_vegNumChunks = 0;
 		Globals::rendererVK.setTreeNearChunks({});
 		m_treeSet.destroy();
 		m_setHasRocks = false;
@@ -355,30 +409,11 @@ namespace Procedural
 			const uint32 fadeIn = RendererVKLayout::makeDistanceFadeFlags(start, width, true);
 			setFade(species.barkFadeMaterial, fadeOut);
 			setFade(species.leafFadeMaterial, fadeOut);
-			// Force far draws the billboards at every distance: no fade-in then, or they would vanish nearby.
-			const uint32 billboardFade = m_settings.forceFar ? 0u : fadeIn;
-			for (oc::vector<PieceMeshes>* pieces : { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes })
-				for (PieceMeshes& meshes : *pieces)
-				{
-					setFade(meshes.billboardMaterial, billboardFade);
-					setFade(meshes.voxelMaterial, billboardFade); // the voxel tier: the billboard's band (it takes its place)
-				}
-			// The MID tier: the leaves and the branch bark fade OUT and the card mesh IN over the mid band; the card mesh
-			// fades OUT over the far band with the trunk (barkFadeMaterial) while the billboard fades in
-			// (tree_cull.inc.glsl picks the side per tree).
-			if (!species.leafMidFadeMaterial.isValid())
-				continue;
-			const float midStart = glm::max(midDistance(species) * m_settings.farDistanceScale - width * 0.5f, 0.0f);
-			setFade(species.leafMidFadeMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, false));
-			setFade(species.branchMidFadeMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, false));
-			setFade(species.cardInMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, true));
-			setFade(species.cardOutMaterial, fadeOut);
+			// Force far draws the voxels at every distance: no fade-in then, or they would vanish nearby.
+			const uint32 voxelFade = m_settings.forceFar ? 0u : fadeIn;
+			for (PieceMeshes& meshes : species.variantMeshes)
+				setFade(meshes.voxelMaterial, voxelFade);
 		}
-	}
-
-	float TreeSystem::midDistance(const Species& species) const
-	{
-		return species.desc.billboardDistance * m_settings.branchCardDistance;
 	}
 
 	float TreeSystem::fadeWidth(const Species& species) const
@@ -404,7 +439,6 @@ namespace Procedural
 		Tweak::onChange(m_settings.farDistanceScale, this, [this]() { m_fadeBandsDirty = true; if (m_settings.voxelStart > 0.0f) m_settings.respawn = true; });
 		Tweak::onChange(m_settings.fadeWidthScale, this, fadeBandsDirty);
 		Tweak::onChange(m_settings.voxelStart, this, fadeBandsDirty);
-		Tweak::onChange(m_settings.branchCardDistance, this, fadeBandsDirty);
 		Tweak::onChange(m_settings.forceFar, this, fadeBandsDirty);
 		m_world.initialize();
 		// The world set draws RockSystem's meshes (spawnWorld): before RockSystem frees them (a reload, a disable), the
@@ -453,12 +487,12 @@ namespace Procedural
 			m_loaded = true;
 			m_spawned = false;
 		}
-		// The terrain's chunk size changed: the pieces sort into the old chunks.
+		// The terrain's chunk size changed: the set's chunks are the old size.
 		if (m_vegHooked && m_vegChunkSize != Globals::terrain.chunkSize())
 			m_settings.respawn = true;
-		// WORLD MODE: TreeWorld's records instead of the preview grove (the GPU path only). Switching, or new records
-		// (a TreeWorld restart), respawns.
-		const bool worldMode = m_world.enabled() && m_settings.gpuExpansion && maps != nullptr;
+		// WORLD MODE: TreeWorld's records on the terrain; without either nothing draws. Switching, or new records (a
+		// TreeWorld restart), respawns.
+		const bool worldMode = m_world.enabled() && maps != nullptr;
 		m_world.requireKeepRadius(worldMode ? m_settings.nearRadius + 1 : 0);
 		if (worldMode != m_worldMode || (worldMode && m_world.generation() != m_worldGeneration))
 			m_settings.respawn = true;
@@ -473,12 +507,9 @@ namespace Procedural
 		{
 			m_settings.respawn = false;
 			destroyTreeSet();
-			m_pieces.clear();
 			m_worldMode = worldMode;
 			if (worldMode)
 				spawnWorld(renderer, maps);
-			else
-				spawnPreview(renderer, camera, maps.get());
 			m_spawned = true;
 		}
 		if (m_worldMode)
@@ -489,8 +520,8 @@ namespace Procedural
 			applyFadeBands(renderer);
 		}
 
-		// The GPU path: the expansion decides per piece (the same rules as the CPU loop below). The terrain's walk lists
-		// the chunks (the sink, spawnPreview); without it - terrain off, or no walk this frame - every chunk draws.
+		// The culls decide per tree (tree_cull.inc.glsl). The terrain's walk lists the chunks (the sink, hookTerrain);
+		// without it - no walk this frame, or the frame of a respawn - every chunk draws.
 		m_sinkDistanceScale.store(m_settings.farDistanceScale, oc::memory_order_relaxed);
 		m_sinkForceFar.store(m_settings.forceFar, oc::memory_order_relaxed);
 		if (m_treeSet.isValid())
@@ -498,53 +529,11 @@ namespace Procedural
 			m_treeSet.bind();
 			if (!m_vegHooked || !Globals::terrain.vegetationRouted() || respawned)
 			{
-				// Every chunk of the set (a dynamic set: the live ones).
 				m_vegFallback.clear();
-				if (m_worldMode)
-					for (const auto& [key, chunk] : m_vegChunkOf)
-						m_vegFallback.push_back({ (uint32)chunk, RendererVKLayout::PASS_ALL });
-				else
-					for (uint32 c = 0; c < glm::max(m_vegNumChunks, 1u); ++c)
-						m_vegFallback.push_back({ c, RendererVKLayout::PASS_ALL });
+				for (const auto& [key, chunk] : m_vegChunkOf)
+					m_vegFallback.push_back({ (uint32)chunk, RendererVKLayout::PASS_ALL });
 				m_treeSet.render(m_vegFallback, m_settings.farDistanceScale, m_settings.forceFar);
 			}
-		}
-		// The CPU path (GPU expansion off): per piece, its billboard crossfade (see PlacedPiece); without a far
-		// representation (Far mode None) the meshes alone.
-		constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
-		RenderBatch renderBatch(renderer);
-		for (PlacedPiece& piece : m_pieces)
-		{
-			if (piece.far.isValid())
-			{
-				// The same band the materials carry (applyFadeBands). A pixel's distance varies by up to the
-				// module's radius from the centre's, so both sides draw while any of it can be in the band.
-				// The billboard stands in for the piece in every pass but MAIN (shadow, GI, RT): the mesh draws in
-				// MAIN only, the cards always draw, in MAIN too only while they show (as tree_cull.inc.glsl).
-				const float switchDistance = piece.farDistance * m_settings.farDistanceScale;
-				const float bandStart = glm::max(switchDistance - piece.fadeWidth * 0.5f, 0.0f);
-				const float bandEnd = bandStart + piece.fadeWidth;
-				const float distance = glm::distance(camera.position, piece.centre);
-				if (m_settings.forceFar)
-					renderBatch.push(piece.far);
-				else if (switchDistance <= 0.0f || distance + piece.radius < bandStart)
-				{
-					renderBatch.push(piece.bark, RendererVKLayout::PASS_MAIN);
-					renderBatch.push(piece.leaves, RendererVKLayout::PASS_MAIN);
-					renderBatch.push(piece.far, SHADOW_AND_GI);
-				}
-				else if (distance - piece.radius > bandEnd)
-					renderBatch.push(piece.far);
-				else
-				{
-					renderBatch.push(piece.barkFade, RendererVKLayout::PASS_MAIN);
-					renderBatch.push(piece.leavesFade, RendererVKLayout::PASS_MAIN);
-					renderBatch.push(piece.far);
-				}
-				continue;
-			}
-			renderBatch.push(piece.bark);
-			renderBatch.push(piece.leaves);
 		}
 	}
 
@@ -564,13 +553,7 @@ namespace Procedural
 		LoadSettings settings;
 		settings.compressTextures = m_settings.compressTextures;
 		settings.regenerateTextures = m_settings.regenerateTextures;
-		settings.billboards = m_settings.farMode == 0;
-		settings.showLibrary = m_settings.showLibrary;
-		settings.branchCards = m_settings.branchCardDistance > 0.0f && m_settings.gpuExpansion;
-		settings.billboardViews = m_settings.billboardViews == 0 ? 2u : 4u;
-		// The voxel tier needs the GPU path (its record) and the billboards (it takes their place and keeps their shadows).
-		settings.voxelRes = m_settings.voxelImpostors && m_settings.gpuExpansion && settings.billboards
-			? 32u << glm::clamp(m_settings.voxelResolution, 0, 3) : 0u;
+		settings.voxelRes = m_settings.voxelImpostors ? 32u << glm::clamp(m_settings.voxelResolution, 0, 3) : 0u;
 		for (const FileSystem::DirEntry& entry : entries)
 		{
 			if (entry.isDirectory || entry.extension != ".tree")
@@ -646,22 +629,23 @@ namespace Procedural
 		const oc::string& name = out.name;
 		const TreeSpeciesDesc& desc = out.desc;
 
-		// THE MESH CACHE (MeshCache): the library, the baked variants and their far-volume grids, keyed by the species
-		// file's text. A miss generates them and writes the file. Main frees them once uploaded (and baked into the
-		// billboards / card meshes below): nothing reads them after - a few hundred MB over all species.
+		// THE MESH CACHE (MeshCache): the baked variants and their far-volume grids, keyed by the species file's text. A
+		// miss generates the piece library, bakes the variants from it and writes the file; the library is not kept. Main
+		// frees the variants once uploaded (and baked into the far tier below): nothing reads them after - a few hundred MB
+		// over all species.
 		const float leafCoverage = desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
 		const uint64 textHash = meshCacheHash(FileSystem::readFileStr(out.path)); // the mesh and texture caches' key
 		{
 			const uint64 meshHash = meshCacheMix(textHash, TREE_DENSITY_RES);
 			const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
-			if (!loadTreeMeshes(meshPath, meshHash, out.library, out.variants, out.density))
+			if (!loadTreeMeshes(meshPath, meshHash, out.variants, out.density))
 			{
-				out.library = {};
-				generateTreeLibrary(desc, out.library);
+				TreeLibrary library;
+				generateTreeLibrary(desc, library);
 				out.variants.clear();
 				out.variants.resize((size_t)desc.variantCount);
 				for (int v = 0; v < desc.variantCount; ++v)
-					bakeTreeVariant(desc, out.library, treeHash(desc.seed, 5000u + (uint32)v), out.variants[(size_t)v]);
+					bakeTreeVariant(desc, library, treeHash(desc.seed, 5000u + (uint32)v), out.variants[(size_t)v]);
 				// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline).
 				out.density.resize(out.variants.size());
 				for (size_t v = 0; v < out.variants.size(); ++v)
@@ -671,12 +655,19 @@ namespace Procedural
 					out.density[v].min = box.min;
 					out.density[v].max = box.max;
 				}
-				saveTreeMeshes(meshPath, meshHash, out.library, out.variants, out.density);
+				saveTreeMeshes(meshPath, meshHash, out.variants, out.density);
 			}
 		}
+		// Each variant's bounds: the sphere around its box (the culls' band test, the RT range).
+		out.variantBounds.resize(out.variants.size());
+		for (size_t v = 0; v < out.variants.size(); ++v)
+		{
+			const TreeBillboardBox box = billboardBox(out.variants[v]);
+			out.variantBounds[v] = glm::vec4((box.min + box.max) * 0.5f, glm::length(box.max - box.min) * 0.5f);
+		}
 
-		// Level-0 images for the billboard bake: only those generated here (a .tex holds no RGBA8 level 0), so
-		// buildBillboards generates any it lacks when a bake misses.
+		// Level-0 images for the far tier's bakes: only those generated here (a .tex holds no RGBA8 level 0), so
+		// buildFarTier generates any it lacks when a bake misses.
 		oc::vector<uint8> barkAlbedo, leafImage;
 		uint32 barkSize = 0, leafSize = 0;
 		glm::vec3 barkMean(0.0f), leafMean(0.0f);
@@ -742,9 +733,12 @@ namespace Procedural
 		const glm::vec3 far = desc.farColor;
 		const bool leafless = out.variants.empty() || out.variants[0].leaves[0].indices.empty();
 		out.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : leafless ? barkMean : leafMean) * desc.farAlbedoScale;
-		out.billboards = settings.billboards && desc.billboardDistance > 0.0f;
-		if (out.billboards)
-			buildBillboards(settings, out, barkAlbedo, barkSize, leafImage, leafSize);
+		// What a ray sees of the shadow billboard: the two textures' means (a leafless species: its bark for both).
+		out.barkColour = barkMean;
+		out.leafColour = (leafless ? barkMean : leafMean) * desc.billboardAlbedoScale;
+		out.farTier = desc.billboardDistance > 0.0f;
+		if (out.farTier)
+			buildFarTier(settings, out, barkAlbedo, barkSize, leafImage, leafSize);
 		out.valid = true;
 	}
 
@@ -752,37 +746,30 @@ namespace Procedural
 	void TreeSystem::uploadSpecies(Renderer& renderer, SpeciesLoad& load, Species& species)
 	{
 		species.desc = oc::move(load.desc);
-		species.moduleLength = load.library.modules.empty() ? 1.0f : load.library.modules[0].length;
 		species.volumeAlbedo = load.volumeAlbedo;
 		const oc::string& name = load.name;
 
 		size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
-		// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
-		// shadow + GI); with billboards the whole billboard is the tree's only RT representation (buildBillboards).
-		// Bushes never: too small to matter to GI / RT shadows, and too many for the TLAS.
-		const bool meshesRaytraced = m_settings.farMode != 0 && !species.desc.bush;
-		auto uploadPieces = [&](const oc::vector<TreePiece>& pieces, oc::vector<PieceMeshes>& out)
+		// RT sees the MESHES only of a species with no shadow billboard (`Billboard Distance` 0: its meshes cast and stand
+		// in the TLAS); else the billboard is the tree's only RT representation. Bushes never: too small to matter to GI /
+		// RT shadows, and too many for the TLAS.
+		const bool meshesRaytraced = !load.farTier && !species.desc.bush;
+		// The baked whole trees only: the piece library (its trunks and modules) is the bakes' input, never drawn.
+		species.variantMeshes.resize(load.variants.size());
+		for (size_t v = 0; v < load.variants.size(); ++v)
 		{
-			out.resize(pieces.size());
-			for (size_t i = 0; i < pieces.size(); ++i)
+			const TreePiece& variant = load.variants[v];
+			PieceMeshes& meshes = species.variantMeshes[v];
+			uploadLevelZero(renderer, variant.bark, meshes.bark, meshesRaytraced);
+			uploadLevelZero(renderer, variant.leaves, meshes.leaves, meshesRaytraced);
+			meshes.farCentre = glm::vec3(load.variantBounds[v]);
+			meshes.farRadius = load.variantBounds[v].w;
+			for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
 			{
-				uploadLevelZero(renderer, pieces[i].bark, out[i].bark, meshesRaytraced);
-				uploadLevelZero(renderer, pieces[i].leaves, out[i].leaves, meshesRaytraced);
-				// Baked variants: the bark split as well (the mid tier's trunk / branches, main pass only); empty
-				// elsewhere - no meshes.
-				uploadLevelZero(renderer, pieces[i].trunkBark, out[i].trunkBark, false);
-				uploadLevelZero(renderer, pieces[i].branchBark, out[i].branchBark, false);
-				for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
-				{
-					barkTris[k] += numTriangles(pieces[i].bark[k]);
-					leafTris[k] += numTriangles(pieces[i].leaves[k]);
-				}
+				barkTris[k] += numTriangles(variant.bark[k]);
+				leafTris[k] += numTriangles(variant.leaves[k]);
 			}
-		};
-		uploadPieces(load.library.trunks, species.trunkMeshes);
-		uploadPieces(load.library.modules, species.moduleMeshes);
-		// The baked whole trees the grove places (counted into the same triangle totals).
-		uploadPieces(load.variants, species.variantMeshes);
+		}
 		for (size_t v = 0; v < load.variants.size() && v < load.density.size(); ++v)
 		{
 			PieceMeshes& meshes = species.variantMeshes[v];
@@ -806,35 +793,17 @@ namespace Procedural
 		else
 			species.leafMaterial = RenderMaterial::getOrCreateSolidColor(species.desc.leafColor);
 
-		if (load.billboards)
+		if (load.farTier)
 		{
-			oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
-			for (uint32 set = 0; set < 3; ++set)
-				for (size_t i = 0; i < load.pieceBillboards[set].size() && i < meshSets[set]->size(); ++i)
-				{
-					PieceBillboard& billboard = load.pieceBillboards[set][i];
-					PieceMeshes& meshes = (*meshSets[set])[i];
-					meshes.farCentre = billboard.farCentre;
-					meshes.farRadius = billboard.farRadius;
-					if (!billboard.upload)
-						continue;
-					const bool horizontal = set == 2;
-					// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
-					// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
-					meshes.billboardMaterial = createTreeMaterial(billboard.texture, TREE_LEAF_ALPHA_CUTOFF,
-						oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
-						| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
-					// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
-					// views), and never a bush's.
-					meshes.billboard = uploadTreeMesh(renderer, billboard.cards, horizontal && !species.desc.bush);
-				}
-			if (!load.atlas.albedo.empty())
+			// The SHADOW BILLBOARDS. "TreeBillboard/<variant>": one box per billboard in the VRAM view.
+			for (size_t v = 0; v < load.variantBillboards.size() && v < species.variantMeshes.size(); ++v)
 			{
-				// Foliage cards like the whole-tree billboards (LitFoliage: the same shading, tweaks and edge-on fade).
-				species.cardAtlasMaterial = createTreeMaterial(load.atlas, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeCardAtlas/{}", name).c_str(),
-					RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF);
-				for (size_t v = 0; v < load.variantCards.size() && v < species.variantMeshes.size(); ++v)
-					species.variantMeshes[v].cards = uploadTreeMesh(renderer, load.variantCards[v], false); // main pass only
+				VariantBillboard& billboard = load.variantBillboards[v];
+				PieceMeshes& meshes = species.variantMeshes[v];
+				meshes.billboardMaterial = createBillboardMaterial(billboard.mask, load.barkColour, load.leafColour,
+					oc::format("TreeBillboard/{}_tree{}", name, v).c_str());
+				// RT: never a bush's.
+				meshes.billboard = uploadTreeMesh(renderer, billboard.cards, !species.desc.bush);
 			}
 			// The VOXEL tier (main pass only: no BLAS). LEAF: the leaf terms (transmission, the N.V bend, the sky wrap).
 			for (size_t v = 0; v < load.voxelTextures.size() && v < species.variantMeshes.size(); ++v)
@@ -846,33 +815,23 @@ namespace Procedural
 					oc::format("TreeVoxel/{}_{}", name, v).c_str(), RendererVKLayout::MATERIAL_FLAG_LEAF);
 				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
 			}
-			// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
+			// The crossfade's fade-out copies of the mesh materials (bands set by applyFadeBands).
 			species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
 			species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
-			// The MID tier's (bands set by applyFadeBands): the leaves and the branch bark fading out over the mid band,
-			// the card mesh fading in over it (from the atlas buildBillboards made) and out over the far band.
-			species.leafMidFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
-			species.branchMidFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
-			if (species.cardAtlasMaterial.isValid())
-			{
-				species.cardInMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
-				species.cardOutMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
-			}
 		}
-		Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
-			species.desc.name, load.library.trunks.size(), load.library.modules.size(),
+		Log::info(oc::format("Trees: '{}' - {} variants, triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
+			species.desc.name, load.variants.size(),
 			barkTris[0], leafTris[0], barkTris[1], leafTris[1], barkTris[2], leafTris[2], barkTris[3], leafTris[3]));
 	}
 
 	// On the species' load job (loadSpecies).
-	void TreeSystem::buildBillboards(const LoadSettings& settings, SpeciesLoad& out,
+	void TreeSystem::buildFarTier(const LoadSettings& settings, SpeciesLoad& out,
 		oc::vector<uint8>& barkAlbedo, uint32& barkSize, oc::vector<uint8>& leafImage, uint32& leafSize)
 	{
 		const TreeSpeciesDesc& desc = out.desc;
-		const TreeLibrary& library = out.library;
 		const oc::vector<TreePiece>& variants = out.variants;
 		const oc::string& name = out.name;
-		// The bake's inputs, generated on the first miss when their .tex was loaded (the same images: the generators are
+		// The bakes' inputs, generated on the first miss when their .tex was loaded (the same images: the generators are
 		// deterministic).
 		const auto bakeInputs = [&]()
 		{
@@ -890,7 +849,6 @@ namespace Procedural
 			}
 		};
 		const uint32 size = (uint32)desc.billboardSize;
-		const uint32 numViews = settings.billboardViews;
 
 		oc::vector<FileSystem::DirEntry> existing;
 		FileSystem::listDirectory(TREE_TEXTURE_DIR, existing);
@@ -900,115 +858,48 @@ namespace Procedural
 		for (const char c : FileSystem::readFileStr(desc.path))
 			speciesHash = (speciesHash ^ (uint8)c) * 16777619u;
 
-		// Modules, trunks and the baked whole trees alike. A trunk's / tree's +Y is world up, so its "top" card
-		// (normal +Z) stands vertical too: two crossed vertical cards through the trunk axis. A whole tree also gets
-		// a HORIZONTAL card for the top-down view (a module's "top" card already lies flat; a bare trunk from
-		// above is a dot).
-		const oc::vector<TreePiece>* pieceSets[3] = { &library.modules, &library.trunks, &variants };
-		// The modules' textures (their encoded mip chains) and axis-coded cards, kept for the mid tier's atlas + card meshes
-		// (below).
-		const size_t numModules = library.modules.size();
-		oc::vector<CachedTexture> moduleTextures(numModules);
-		oc::vector<TreeMesh> moduleCards(numModules);
-		for (uint32 set = 0; set < 3; ++set)
-			out.pieceBillboards[set].resize(pieceSets[set]->size());
-		for (uint32 set = 0; set < 3; ++set)
-		for (size_t i = 0; i < pieceSets[set]->size(); ++i)
+		// THE SHADOW BILLBOARDS: per baked variant its MASK (bakeBillboardMask: one channel, a level per mip) in
+		// "<species>_shadowmask<v>_<hash>.tex", and its three cards. The cache: the bake's inputs in the name, a variant's
+		// stale files removed.
+		const uint32 numMips = billboardLayout(size).numMips;
+		out.variantBillboards.resize(variants.size());
+		for (size_t v = 0; v < variants.size(); ++v)
 		{
-			const TreePiece& piece = (*pieceSets[set])[i];
-			PieceBillboard& billboard = out.pieceBillboards[set][i];
-			const TreeBillboardBox box = billboardBox(piece);
-			const bool horizontal = set == 2;
-			billboard.farCentre = (box.min + box.max) * 0.5f;
-			billboard.farRadius = glm::length(box.max - box.min) * 0.5f;
-			// A module / trunk billboard is needed only by the piece library rows and (modules) the mid tier's atlas: without
-			// them it is neither baked nor loaded.
-			if (set != 2 && !settings.showLibrary && !(set == 0 && settings.branchCards))
-				continue;
-			// Mips down to ~4 px per strip, while the strip boundaries stay on texel boundaries (billboardLayout).
-			const uint32 numMips = billboardLayout(size, numViews, horizontal).numMips;
-
-			// The cache: geometry + settings in the name, stale slot files removed.
-			// The view count is in the name, so both Billboard views settings keep their own cache.
-			const oc::string prefix = oc::format("{}_{}billboard{}v{}_", name, PIECE_KINDS[set], i, numViews);
-			// Before the view count was named.
-			const oc::string legacyPrefix = oc::format("{}_{}billboard{}_", name, PIECE_KINDS[set], i);
-			const float bend = desc.billboardNormalBend;
-			const uint32 settingsHash = treeHash(0xB1B0A2D5u ^ numViews, (uint32)std::round(bend * 1000.0f));
-			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(set, (uint32)i)), 2u, size) ^ settingsHash);
+			const oc::string prefix = oc::format("{}_shadowmask{}_", name, v);
+			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(2u, (uint32)v)), 3u, size));
 			const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
 			const uint64 textureHash = meshCacheMix(meshCacheHash(stem), settings.compressTextures ? 1u : 0u);
-
-			CachedTexture texture;
-			if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture) || texture.width != size || texture.height != size
-				|| texture.albedo.size() != numMips || texture.normal.size() != numMips)
+			VariantBillboard& billboard = out.variantBillboards[v];
+			CachedTexture& mask = billboard.mask;
+			if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, mask) || mask.width != size || mask.height != size
+				|| mask.albedo.size() != numMips)
 			{
-				// Stale slot files go (and the level-0 PNGs of before the .tex).
 				for (const FileSystem::DirEntry& entry : existing)
-					if (entry.name.rfind(prefix.c_str(), 0) == 0 || entry.name.rfind(legacyPrefix.c_str(), 0) == 0)
+					if (entry.name.rfind(prefix.c_str(), 0) == 0)
 						FileSystem::remove(entry.path);
-				bakeInputs();
-				oc::vector<uint8> albedo, normal;
-				bakeBillboards(piece, TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize }, size, bend, numViews,
-					horizontal, albedo, normal);
-
-				// `Billboard AlbedoScale` (whole trees only): x the colour in LINEAR space (the texture is sRGB). Baked into the
-				// .tex: the species file's text keys it, so a change re-bakes anyway.
-				const float albedoScale = desc.billboardAlbedoScale;
-				if (horizontal && albedoScale != 1.0f)
+				// The leaf atlas alone (its alpha): the bark is opaque, and the mask holds no colour.
+				if (leafImage.empty())
 				{
-					uint8 lut[256];
-					for (uint32 v = 0; v < 256; ++v)
-					{
-						const float c = (float)v / 255.0f;
-						const float lin = (c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f)) * albedoScale;
-						const float enc = lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(glm::min(lin, 1.0f), 1.0f / 2.4f) - 0.055f;
-						lut[v] = (uint8)(glm::clamp(enc, 0.0f, 1.0f) * 255.0f + 0.5f);
-					}
-					for (size_t t = 0; t + 3 < albedo.size(); t += 4)
-						for (size_t c = 0; c < 3; ++c)
-							albedo[t + c] = lut[albedo[t + c]];
+					oc::vector<uint8> normal; // drawn as for the .tex, so the image is the same
+					leafSize = TREE_TEXTURE_SIZE;
+					generateLeafClusterImage(desc, leafSize, leafImage, &normal);
 				}
-
-				// Coverage-preserving albedo mips (alpha scaled up per level to keep the level-0 coverage), down to numMips.
-				TreeLeafTexture albedoChain;
-				buildLeafClusterMips(albedo, size, albedoChain);
-				oc::vector<oc::vector<uint8>> normalChain;
-				buildNormalMips(normal, size, normalChain); // RGB renormalized, A (the interior) averaged
-				albedoChain.mips.resize(numMips);
-				normalChain.resize(numMips);
-				// BC3 normal: RGB the full normal (sign kept), A the baked interior - no two-channel format holds both.
-				texture = {};
-				encodeTexture(settings.compressTextures, size, size, albedoChain.mips, TextureConvert::EBlockFormat::BC3,
-					normalChain, TextureConvert::EBlockFormat::BC3, texture);
-				saveTexture(path, textureHash, texture);
+				oc::vector<oc::vector<uint8>> levels;
+				bakeBillboardMask(variants[v], TreeBakeImage{ leafImage, leafSize }, size, RendererVKLayout::TREE_CARD_BARK, levels);
+				encodeMask(settings.compressTextures, size, levels, mask);
+				saveTexture(path, textureHash, mask);
 			}
-
-			// The module / trunk billboards draw only in the piece library (debug rows): without it they are not uploaded
-			// (the modules' chains still feed the card atlas below).
-			billboard.upload = set == 2 || settings.showLibrary;
-			if (billboard.upload)
-				billboardMesh(box, size, numViews, horizontal, billboard.cards, false, desc.billboardTopCardHeight);
-			if (set == 0 && settings.branchCards)
-			{
-				// The atlas's (and the card meshes') - a copy only when the module's own billboard uploads too.
-				if (billboard.upload)
-					moduleTextures[i] = texture;
-				else
-					moduleTextures[i] = oc::move(texture);
-				billboardMesh(box, size, numViews, false, moduleCards[i], true);
-			}
-			if (billboard.upload)
-				billboard.texture = oc::move(texture);
+			billboardMesh(billboardBox(variants[v]), size, desc.billboardTopCardHeight, billboard.cards);
 		}
 
-		// THE VOXEL TIER: per baked variant of a TREE (bushes keep their billboards) its prefiltered voxel grid as SPARSE
-		// BRICKS (bakeTreeVoxels): the opacity + surface atlases in "<species>_treevoxel<v>r<res>_<hash>.tex" and the index
-		// in "..._index.tex" beside the billboards, keyed as they are plus TREE_VOXEL_BAKE_VERSION. Its box comes from the
-		// geometry on every load (treeVoxelBox).
-		if (settings.voxelRes > 0 && !desc.bush)
+		// THE VOXEL TIER: per baked variant its prefiltered voxel grid as SPARSE BRICKS (bakeTreeVoxels): the opacity +
+		// surface atlases in "<species>_treevoxel<v>r<res>_<hash>.tex" and the index in "..._index.tex" beside the masks,
+		// keyed as they are plus TREE_VOXEL_BAKE_VERSION. Its box comes from the geometry on every load (treeVoxelBox). A
+		// BUSH takes a quarter of the resolution (at least 32): it is about a metre, and its band starts a few tens of
+		// metres out - a voxel of the full grid would be far under a pixel there.
+		if (settings.voxelRes > 0)
 		{
-			const uint32 res = settings.voxelRes;
+			const uint32 res = desc.bush ? glm::max(settings.voxelRes / 4u, 32u) : settings.voxelRes;
 			out.voxelTextures.resize(variants.size());
 			out.voxelIndex.resize(variants.size());
 			out.voxelBoxes.resize(variants.size());
@@ -1044,151 +935,47 @@ namespace Procedural
 				treeVoxelBoxMesh(treeVoxelBox(variants[v], res), out.voxelBoxes[v]);
 			}
 		}
-
-		// THE MID TIER's BRANCH CARDS. One ATLAS per species: the module billboards stacked top to bottom (module m in
-		// rows [m, m + 1) x size), each level the stack of the modules' own levels - exact (every module block halves
-		// cleanly) and every module keeps its coverage-preserving alpha. The levels are stacked IN THEIR ENCODING: a BC
-		// block covers 4x4 texels of one module, since every level a material gets is a multiple of 4 high (billboardLayout
-		// keeps >= 4 px per strip). Then per baked variant ONE card mesh: each module placement's cards in the variant's
-		// space, v remapped into the module's block, the card axis code (texCoords.z, billboardMesh) remapped with it.
-		if (!settings.branchCards || numModules == 0 || variants.empty())
-			return;
-		const uint32 numMips = billboardLayout(size, numViews, false).numMips;
-		CachedTexture atlas;
-		atlas.width = size;
-		atlas.height = size * (uint32)numModules;
-		atlas.albedoEncoding = moduleTextures[0].albedoEncoding;
-		atlas.normalEncoding = moduleTextures[0].normalEncoding;
-		if (atlas.albedoEncoding != RenderMaterial::ETextureEncoding::Rgba8 && ((size >> (numMips - 1)) & 3u) != 0)
-		{
-			Log::warning(oc::format("Trees: '{}' - billboard size {} leaves a mip under 4 px: no card atlas", name, size));
-			return;
-		}
-		atlas.albedo.resize(numMips);
-		atlas.normal.resize(numMips);
-		for (uint32 k = 0; k < numMips; ++k)
-			for (const CachedTexture& module : moduleTextures)
-			{
-				atlas.albedo[k].insert(atlas.albedo[k].end(), module.albedo[k].begin(), module.albedo[k].end());
-				atlas.normal[k].insert(atlas.normal[k].end(), module.normal[k].begin(), module.normal[k].end());
-			}
-		out.atlas = oc::move(atlas); // uploadSpecies makes its material
-
-		const float invModules = 1.0f / (float)numModules;
-		out.variantCards.resize(variants.size());
-		for (size_t v = 0; v < variants.size(); ++v)
-		{
-			TreeMesh& merged = out.variantCards[v];
-			for (const TreePiecePlacement& placement : variants[v].placements)
-			{
-				if (placement.trunk || placement.pieceIdx >= numModules)
-					continue;
-				const TreeMesh& src = moduleCards[placement.pieceIdx];
-				const Transform& t = placement.local;
-				const float block = (float)placement.pieceIdx;
-				const uint32 base = merged.numVertices();
-				// The wind: a weight along the module's +Y (0 at its root, 15 at the cards' top end) and the placement's
-				// phase, as the module mesh's own branch sway (TREE_CARD_WIND_STEP).
-				float top = 1e-3f;
-				for (const glm::vec3& p : src.positions)
-					top = glm::max(top, p.y);
-				for (uint32 k = 0; k < src.numVertices(); ++k)
-				{
-					const uint32 windWeight = (uint32)std::round(glm::clamp(src.positions[k].y / top, 0.0f, 1.0f) * 15.0f);
-					const float wind = TREE_CARD_WIND_STEP * (float)(windWeight | ((uint32)placement.windPhase << 4));
-					merged.positions.push_back(t.transformPoint(src.positions[k]));
-					merged.normals.push_back(t.quat * src.normals[k]); // uniform scale: directions only rotate
-					merged.tangents.push_back(t.quat * src.tangents[k]);
-					merged.bitangents.push_back(t.quat * src.bitangents[k]);
-					const glm::vec3 uv = src.texCoords[k];
-					const float axisZ = uv.z >= 2.0f ? TREE_CARD_AXIS_CODE + (block + (uv.z - TREE_CARD_AXIS_CODE)) * invModules + wind : 0.0f;
-					merged.texCoords.push_back(glm::vec3(uv.x, (block + uv.y) * invModules, axisZ));
-					merged.bones.push_back(0);
-				}
-				for (uint32 index : src.indices)
-					merged.indices.push_back(base + index);
-			}
-		}
-	}
-
-	void TreeSystem::spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform)
-	{
-		PlacedPiece& piece = m_pieces.emplace_back();
-		// Level 0: the GPU cull redirects each instance to its LOD through the chain.
-		if (meshes.bark[0].isValid())
-			piece.bark = renderer.spawnMeshNode(meshes.bark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque, transform);
-		if (meshes.leaves[0].isValid())
-			piece.leaves = renderer.spawnMeshNode(meshes.leaves[0], species.leafMaterial, species.leafPipeline, transform);
-		if (meshes.billboard.isValid())
-		{
-			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage, transform);
-			piece.farDistance = farDistance(species);
-			piece.fadeWidth = fadeWidth(species);
-			piece.radius = meshes.farRadius * transform.scale;
-			// The crossfade copies: the same LOD-chain meshes on LitTree (the dither discards) with the fade-out
-			// materials. Drawn only inside the band, so the bark keeps LitOpaque's early depth elsewhere.
-			if (meshes.bark[0].isValid())
-				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree, transform);
-			if (meshes.leaves[0].isValid())
-				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree, transform);
-		}
-		piece.centre = transform.transformPoint(meshes.farCentre);
 	}
 
 	void TreeSystem::buildGpuTypes(oc::vector<RenderTreeSet::Type>& gpuTypes, oc::unordered_map<const PieceMeshes*, uint32>& typeOf) const
 	{
 		for (const Species& species : m_species)
-			for (const oc::vector<PieceMeshes>* set : { &species.trunkMeshes, &species.moduleMeshes, &species.variantMeshes })
-				for (const PieceMeshes& meshes : *set)
+			for (const PieceMeshes& meshes : species.variantMeshes)
+			{
+				RenderTreeSet::Type type;
+				const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
+				const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
+				type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
+				type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
+				if (!meshes.density.empty())
 				{
-					RenderTreeSet::Type type;
-					const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
-					const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
-					type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-					type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
-					if (!meshes.density.empty())
-					{
-						type.density = meshes.density.data();
-						type.densityRes = TREE_DENSITY_RES;
-						type.densityMin = meshes.densityMin;
-						type.densityMax = meshes.densityMax;
-						type.albedo = species.volumeAlbedo;
-					}
-					if (meshes.billboard.isValid())
-					{
-						type.billboard = { &meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
-						type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-						type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-						type.farDistance = farDistance(species);
-						type.fadeWidth = fadeWidth(species);
-						// The VOXEL tier: the billboard's place in the main pass (its band, its fade-in material).
-						if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid())
-							type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
-						// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
-						// the BRANCH bark and the leaves fading out over the mid band while the CARD mesh (every module
-						// placement's billboard, merged; the species' atlas) fades in - and out over the far band.
-						if (set == &species.variantMeshes && midDistance(species) > 0.0f && meshes.cards.isValid()
-							&& meshes.trunkBark[0].isValid() && species.cardInMaterial.isValid())
-						{
-							const RenderMesh* branches = meshes.branchBark[0].isValid() ? &meshes.branchBark[0] : nullptr;
-							type.trunk = { &meshes.trunkBark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-							type.bark = { branches, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.barkFade = { branches, species.branchMidFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-							type.leavesFade = { leaves, species.leafMidFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-							type.cardsIn = { &meshes.cards, species.cardInMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
-							type.cardsOut = { &meshes.cards, species.cardOutMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
-							type.midDistance = midDistance(species);
-							type.midFadeWidth = fadeWidth(species);
-						}
-					}
-					if (species.desc.bush)
-						type.shadowDistance = m_settings.bushShadowDistance;
-					type.windTrunk = species.desc.windTrunk;
-					type.windBranch = species.desc.windBranch;
-					typeOf.emplace(&meshes, (uint32)gpuTypes.size());
-					gpuTypes.push_back(type);
+					type.density = meshes.density.data();
+					type.densityRes = TREE_DENSITY_RES;
+					type.densityMin = meshes.densityMin;
+					type.densityMax = meshes.densityMax;
+					type.albedo = species.volumeAlbedo;
 				}
+				// The SHADOW BILLBOARD: the shadow passes and the rays only (its pipeline is not read).
+				if (meshes.billboard.isValid() && meshes.billboardMaterial.isValid())
+					type.shadowBillboard = { &meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitOpaque };
+				// The VOXEL tier past the species' band, the meshes fading out over it on their derived materials.
+				if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid() && species.barkFadeMaterial.isValid())
+				{
+					type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
+					type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
+					type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
+					type.farDistance = farDistance(species);
+					type.fadeWidth = fadeWidth(species);
+				}
+				// The far voxel trees (past the near set) draw the trees only.
+				type.farRing = !species.desc.bush;
+				if (species.desc.bush)
+					type.shadowDistance = m_settings.bushShadowDistance;
+				type.windTrunk = species.desc.windTrunk;
+				type.windBranch = species.desc.windBranch;
+				typeOf.emplace(&meshes, (uint32)gpuTypes.size());
+				gpuTypes.push_back(type);
+			}
 	}
 
 	void TreeSystem::hookTerrain(uint32 numChunks)
@@ -1207,187 +994,9 @@ namespace Procedural
 		};
 		Globals::terrain.setVegetation(lookup, sink, numChunks);
 		m_vegHooked = true;
-		m_vegNumChunks = numChunks;
 	}
 
-	void TreeSystem::spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps)
-	{
-		if (m_species.empty())
-			return;
-
-		// Grove centred in front of the camera, aligned to its heading.
-		glm::vec2 fwd(-camera.viewMatrix[0][2], -camera.viewMatrix[2][2]);
-		fwd = glm::dot(fwd, fwd) > 1e-6f ? glm::normalize(fwd) : glm::vec2(0.0f, -1.0f);
-		const glm::vec2 right(-fwd.y, fwd.x);
-		const int grid = glm::max(m_settings.gridSize, 1);
-		const float half = (float)(grid - 1) * 0.5f * m_settings.spacing;
-		const glm::vec2 center = glm::vec2(camera.position.x, camera.position.z) + fwd * (half + 15.0f);
-		auto groundAt = [&](glm::vec2 p) { return maps ? maps->sampleHeight(p.x, p.y) : 0.0f; };
-
-		// Grove type: one species by name, or all alternating (also when the named one is not loaded).
-		const Species* only = nullptr;
-		if (m_settings.groveType > 0 && m_settings.groveType < (int)std::size(TREE_GROVE_TYPES))
-		{
-			for (const Species& species : m_species)
-				if (oc::string_view(species.desc.name) == TREE_GROVE_TYPES[m_settings.groveType])
-					only = &species;
-			if (!only)
-				Log::warning(oc::format("Trees: grove type '{}' has no loaded species of that name - using a mixed grove",
-					TREE_GROVE_TYPES[m_settings.groveType]));
-		}
-
-		// G4: on the GPU path every placed piece goes into ONE baked set (RendererVK tree_cull.inc.glsl): a
-		// piece TYPE per library piece, then per frame one call instead of a renderNode per piece node.
-		const bool gpu = m_settings.gpuExpansion;
-		oc::vector<RenderTreeSet::Type> gpuTypes;
-		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
-		oc::vector<RenderTreeSet::Piece> gpuPieces;
-		if (gpu)
-			buildGpuTypes(gpuTypes, typeOf);
-		auto place =[&](const Species& species, const PieceMeshes& meshes, const Transform& transform)
-		{
-			if (!gpu)
-			{
-				spawnPiece(renderer, species, meshes, transform);
-				return;
-			}
-			RenderTreeSet::Piece& piece = gpuPieces.emplace_back();
-			piece.transform = transform;
-			piece.centre = transform.transformPoint(meshes.farCentre);
-			piece.radius = meshes.farRadius * transform.scale;
-			piece.type = typeOf[&meshes];
-		};
-
-		// A BAKED variant per plant (no runtime composite): variant, scale and yaw from the seed.
-		auto placeVariant = [&](const Species& species, uint32 seed, glm::vec2 p)
-		{
-			if (species.variantMeshes.empty())
-				return;
-			const uint32 variant = treeHash(seed, 102u) % (uint32)species.variantMeshes.size();
-			// The species' own range, then "Size variation": x 2^(+-v), log-uniform, so halving and doubling are as likely.
-			const float scale = glm::mix(species.desc.scale.x, species.desc.scale.y, treeHash01(treeHash(seed, 103u)))
-				* std::exp2(m_settings.sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0f - 1.0f));
-			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
-			place(species, species.variantMeshes[variant], Transform(glm::vec3(p.x, groundAt(p) - 0.05f, p.y), scale, yaw));
-		};
-		// Trees from the TREE species only ("Mixed" alternates them); BUSHES (`Kind Bush`) are scattered around them.
-		oc::vector<const Species*> treeSpecies, bushSpecies;
-		for (const Species& species : m_species)
-			(species.desc.bush ? bushSpecies : treeSpecies).push_back(&species);
-
-		// Per tree species the bushes of its CLIMATE (`Climate`, case-insensitive), each `Weight` times; a tree whose climate
-		// no bush shares takes every bush.
-		oc::vector<const Species*> weightedBushes;
-		for (const Species* bush : bushSpecies)
-			for (int w = 0; w < bush->desc.weight; ++w)
-				weightedBushes.push_back(bush);
-		oc::unordered_map<const Species*, oc::vector<const Species*>> bushesFor;
-		for (const Species* tree : treeSpecies)
-		{
-			oc::vector<const Species*>& list = bushesFor[tree];
-			for (const Species* bush : weightedBushes)
-				if (bushClimateMatches(bush->desc.climate, tree->desc.climate))
-					list.push_back(bush);
-			if (list.empty())
-				list = weightedBushes;
-		}
-
-		auto placeTree = [&](const Species* tree, uint32 seed, glm::vec2 p)
-		{
-			if (tree)
-				placeVariant(*tree, seed, p);
-			// The species' undergrowth (bushUndergrowth): the whole part always, the fraction by chance. Each around its
-			// tree - out of the trunk's way (1.5 m), out to its radius (area-uniform) - a bush species of its climate.
-			const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : weightedBushes;
-			const glm::vec2 undergrowth = tree ? bushUndergrowth(tree->desc, m_settings)
-				: glm::vec2(m_settings.bushesPerTree, glm::max(0.75f * m_settings.spacing, 1.5f));
-			if (bushes.empty() || undergrowth.x <= 0.0f)
-				return;
-			const float whole = std::floor(undergrowth.x);
-			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < undergrowth.x - whole ? 1u : 0u);
-			for (uint32 b = 0; b < count; ++b)
-			{
-				const uint32 bushSeed = treeHash(seed, 200u + b);
-				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
-				const float radius = glm::mix(1.5f, undergrowth.y, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
-				const Species& bush = *bushes[treeHash(bushSeed, 113u) % (uint32)bushes.size()];
-				placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
-			}
-		};
-
-		uint32 treeIdx = 0;
-		for (int j = 0; j < grid; ++j)
-		{
-			for (int i = 0; i < grid; ++i, ++treeIdx)
-			{
-				const uint32 seed = treeHash((uint32)m_settings.seed, treeIdx);
-				const glm::vec2 jitter(treeHash01(treeHash(seed, 100u)) - 0.5f, treeHash01(treeHash(seed, 101u)) - 0.5f);
-				const glm::vec2 p = center + right * ((float)i * m_settings.spacing - half) + fwd * ((float)j * m_settings.spacing - half)
-					+ jitter * (m_settings.spacing * m_settings.positionJitter);
-				placeTree(only ? only : !treeSpecies.empty() ? treeSpecies[(size_t)(i + j * grid) % treeSpecies.size()] : nullptr, seed, p);
-			}
-		}
-
-		if (m_settings.showLibrary)
-		{
-			// The piece library: one row per species behind the grove, trunks first, then the modules upright.
-			const glm::quat faceCamera = glm::angleAxis(std::atan2(fwd.x, fwd.y), glm::vec3(0.0f, 1.0f, 0.0f));
-			for (size_t s = 0; s < m_species.size(); ++s)
-			{
-				const Species& species = m_species[s];
-				const glm::vec2 rowStart = center - fwd * (half + 25.0f + (float)s * 15.0f) - right * half;
-				float x = 0.0f;
-				auto placeInRow = [&](const PieceMeshes& meshes, float width)
-				{
-					const glm::vec2 p = rowStart + right * (x + width * 0.5f);
-					place(species, meshes, Transform(glm::vec3(p.x, groundAt(p), p.y), 1.0f, faceCamera));
-					x += width;
-				};
-				for (const PieceMeshes& meshes : species.trunkMeshes)
-					placeInRow(meshes, 3.0f);
-				const float moduleWidth = glm::max(species.moduleLength * 0.8f, 1.0f);
-				for (const PieceMeshes& meshes : species.moduleMeshes)
-					placeInRow(meshes, moduleWidth);
-			}
-		}
-
-		if (!gpu || gpuPieces.empty())
-			return;
-
-		// THE VEGETATION IN THE TERRAIN CHUNKS: the pieces sorted by the terrain chunk under their base, one set chunk
-		// per terrain chunk. The terrain's render walk lists the chunks it draws (with their passes) and hands the list
-		// to the renderer (the sink below): the culls see only the plants of the visible and the shadow / GI chunks.
-		m_vegChunkSize = Globals::terrain.chunkSize();
-		const float chunkSize = (float)m_vegChunkSize;
-		auto chunkKey = [&](const RenderTreeSet::Piece& piece)
-		{
-			const int32 x = (int32)std::floor(piece.transform.pos.x / chunkSize);
-			const int32 z = (int32)std::floor(piece.transform.pos.z / chunkSize);
-			return (uint64)(uint32)x | ((uint64)(uint32)z << 32);
-		};
-		oc::vector<oc::pair<uint64, uint32>> order(gpuPieces.size());
-		for (uint32 i = 0; i < (uint32)gpuPieces.size(); ++i)
-			order[i] = { chunkKey(gpuPieces[i]), i };
-		oc::sort(order.begin(), order.end());
-		oc::vector<RenderTreeSet::Piece> sorted(gpuPieces.size());
-		oc::vector<RenderTreeSet::Range> chunks;
-		m_vegChunkOf.clear();
-		for (uint32 i = 0; i < (uint32)order.size(); ++i)
-		{
-			sorted[i] = gpuPieces[order[i].second];
-			if (i == 0 || order[i].first != order[i - 1].first)
-			{
-				m_vegChunkOf.emplace(order[i].first, (int32)chunks.size());
-				chunks.push_back({ i, 0 });
-			}
-			++chunks.back().count;
-		}
-		m_treeSet = RenderTreeSet::create(gpuTypes, sorted, chunks);
-		m_treeSet.bind();
-		hookTerrain((uint32)chunks.size());
-	}
-
-	// WORLD MODE's spawn: the dynamic set (every type, no pieces yet), the expansion context, the terrain hook.
+	// WORLD MODE's spawn: the set (every type, no pieces yet), the expansion context, the terrain hook.
 	void TreeSystem::spawnWorld(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
 		m_worldGeneration = m_world.generation();
@@ -1465,7 +1074,7 @@ namespace Procedural
 		context->bushRadius = 1.5f;
 		context->riverClear = Globals::settings.terrain.riverVegetationClear;
 		// Every loaded species (its baked variants; a tree its undergrowth), then per TREE species the bushes of its climate
-		// (as the preview: case-insensitive, each `Weight` times; a tree whose climate no bush shares takes every bush).
+		// (case-insensitive, each `Weight` times; a tree whose climate no bush shares takes every bush).
 		oc::vector<uint32> bushes;
 		for (const Species& species : m_species)
 		{
@@ -1522,7 +1131,7 @@ namespace Procedural
 		}
 		m_expandContext = context;
 
-		m_treeSet = RenderTreeSet::createDynamic(gpuTypes,(uint32)glm::max(m_settings.worldCapacity, 1));
+		m_treeSet = RenderTreeSet::create(gpuTypes, (uint32)glm::max(m_settings.worldCapacity, 1));
 
 		// The far volume's view of the RECORDS (RendererVK TreeRecordTypeGpu), per record type (TreeWorld's name-sorted
 		// species, bushes too): how a record EXPANDS - the same rules as expandChunk (its variants as this set's types,
@@ -1919,10 +1528,10 @@ namespace Procedural
 		}
 	}
 
-	// One chunk's trees + bushes from its records: the preview's placeVariant rules (variant, scale, yaw from the seed),
-	// the record's seed for the tree, the ground from one Full grid at 2 m (the terrain's LOD 0 spacing) over the chunk
-	// plus the bushes' reach. MIRRORED on the GPU by the far volume (tree_volume_splat.cs's TREE_SPLAT_RECORDS,
-	// tree_volume_records.cs) - keep the hashes and the order of the choices in step.
+	// One chunk's trees + bushes from its records: a BAKED variant per plant - variant, scale and yaw from its seed (the
+	// record's for the tree) - on the ground from one Full grid at 2 m (the terrain's LOD 0 spacing) over the chunk plus
+	// the bushes' reach. MIRRORED on the GPU by the far volume (tree_volume_splat.cs, tree_volume_records.cs) and the far
+	// voxel trees (tree_voxel_far.cs) - keep the hashes and the order of the choices in step.
 	void TreeSystem::expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
 		oc::vector<RenderTreeSet::Piece>& out, oc::vector<ExpandCollider>& outColliders)
 	{
@@ -1963,6 +1572,7 @@ namespace Procedural
 			if (species.variants.empty())
 				return;
 			const ExpandVariant& variant = species.variants[treeHash(seed, 102u) % (uint32)species.variants.size()];
+			// The species' own range, then "Size variation": x 2^(+-v), log-uniform, so halving and doubling are as likely.
 			const float scale = glm::mix(species.scale.x, species.scale.y, treeHash01(treeHash(seed, 103u)))
 				* std::exp2(context.sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0f - 1.0f));
 			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));

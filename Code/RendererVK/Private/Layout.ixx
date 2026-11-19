@@ -722,16 +722,14 @@ export namespace RendererVKLayout
         TerrainOverlay = 11, // the terrain chunks drawn AGAIN over the ground (surface-water film, later snow ...):
                              // never on a material - the main cull emits it for TerrainLit instances inside the
                              // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
-        LitFoliage     = 12, // LitMasked + the FOLIAGE card paths (FOLIAGE): the tree billboards' materials
-                             // (MATERIAL_FLAG_BILLBOARD) only - kept out of LitMasked's register allocation
-        LitRock        = 13, // the procedural rocks (instanced_indirect_rock.vs/.fs.glsl): lit opaque, no textures
+        LitRock        = 12, // the procedural rocks (instanced_indirect_rock.vs/.fs.glsl): lit opaque, no textures
                              // of its own - the CLIMATE's terrain bedrock material, world-space biplanar, plus
                              // the terrain's snow, a ground cover and a contact band. The material is not read.
-        River          = 14, // river and lake water (River/river.vs/.fs.glsl; Procedural RiverSystem's meshes):
+        River          = 13, // river and lake water (River/river.vs/.fs.glsl; Procedural RiverSystem's meshes):
                              // the ocean's shading without its waves, dual-source composited like the ocean
-        LitTree        = 15, // LitMasked + the tree terms (instanced_indirect_tree.fs.glsl): the distance fade and
+        LitTree        = 14, // LitMasked + the tree terms (instanced_indirect_tree.fs.glsl): the distance fade and
                              // the leaf terms - the procedural tree MESHES (TreeSystem), kept out of LitMasked
-        LitTreeVoxel   = 16, // the VOXEL tier of the procedural trees (instanced_indirect_tree_voxel.fs.glsl): a box
+        LitTreeVoxel   = 15, // the VOXEL tier of the procedural trees (instanced_indirect_tree_voxel.fs.glsl): a box
                              // whose FS marches the tree's prefiltered voxel grid and writes the hit's depth
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
@@ -748,8 +746,8 @@ export namespace RendererVKLayout
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays
-    constexpr uint32 MATERIAL_FLAG_LEAF = 1u << 30; // LitTree / LitFoliage: thin leaves (the leaf clusters, billboards,
-                                                    // card atlases): the sun-side shadow, the N.V bend ("Trees/Foliage
+    constexpr uint32 MATERIAL_FLAG_LEAF = 1u << 30; // LitTree / LitTreeVoxel: thin leaves (the leaf clusters, the voxel
+                                                    // tier): the sun-side shadow, the N.V bend ("Trees/Foliage
                                                     // min N.V") and the sun THROUGH them - a diffuse back term + a
                                                     // forward glow ("Trees/Foliage transmission"). LitMasked ignores it.
     constexpr uint32 MATERIAL_FLAG_BC5_NORMAL = 1u << 29; // normal map is a two-channel BC5 texture (X/Y only):
@@ -758,10 +756,10 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
                                                        // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
-    // DISTANCE FADE (LitTree / LitFoliage only, tree_fade.inc.glsl): a dithered fade over a camera-distance band, packed into the low flag bits -
+    // DISTANCE FADE (LitTree / LitTreeVoxel only, tree_fade.inc.glsl): a dithered fade over a camera-distance band, packed into the low flag bits -
     // start in metres (bits 0..11), width in metres (bits 12..21). Without FADE_IN the surface fades OUT across
     // the band, with it IN; an out and an in material over the same band keep complementary pixels (the tree
-    // mesh -> billboard crossfade). makeDistanceFadeFlags packs it.
+    // mesh -> voxels crossfade). makeDistanceFadeFlags packs it.
     constexpr uint32 MATERIAL_FLAG_FADE_IN = 1u << 24;
     constexpr uint32 MATERIAL_FLAG_DISTANCE_FADE = 1u << 25;
     constexpr uint32 MATERIAL_FADE_BAND_MASK = 0x3FFFFFu; // bits 0..21
@@ -776,12 +774,13 @@ export namespace RendererVKLayout
         const uint32 width = (uint32)(widthMetres < 1.0f ? 1.0f : widthMetres > 1023.0f ? 1023.0f : widthMetres);
         return MATERIAL_FLAG_DISTANCE_FADE | (fadeIn ? MATERIAL_FLAG_FADE_IN : 0u) | start | (width << 12);
     }
-    constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // drawn on LitFoliage (its paths assume it): the sun shadow is NOT rejected by the geometric
-                                                       // normal's facing (a flat card standing for a foliage clump,
-                                                       // the tree billboards) - the normal-mapped normal decides
-    constexpr uint32 MATERIAL_FLAG_BILLBOARD_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
-                                                       // HORIZONTAL card (its top-down view; the card whose normal
-                                                       // points up) - the lit FS's crown frame runs along its normal
+    // A tree's SHADOW BILLBOARD (Procedural TreeSystem): crossed cards that stand for the tree in the shadow passes and
+    // the TLAS, NEVER in the main pass. Its albedo slot is a ONE-CHANNEL mask, read through `.a` like any alpha: 0 = empty,
+    // >= the cutoff = solid, and above it the LEAF SHARE (TREE_CARD_BARK = all bark .. 1 = all leaves). Its "normal" slot
+    // is a 2 x 1 texture of its two colours, bark then leaves (stored as their square roots): a ray hit takes its albedo
+    // from them (tree_card.inc.glsl). The shadow cull shifts it toward the sun; RTAO's rays skip it (gi_tlas_instances).
+    constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26;
+    constexpr float TREE_CARD_BARK = 0.625f; // the mask's value on bark; the leaf share runs from here to 1
 
     struct alignas(16) MaterialInfo
     {

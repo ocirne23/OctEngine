@@ -72,7 +72,6 @@ TreeSpecies Bushwillow
 	Billboard
 		Distance 30
 		Resolution 256
-		NormalBend 0.0
 		FadeWidth 6
 	Bark
 		Plates 12 5

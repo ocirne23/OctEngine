@@ -2,51 +2,37 @@ export module Settings.Trees;
 
 import Core;
 
-// "Trees": Procedural's TreeSystem (the species, the preview grove, the world set) and "Trees/World": its TreeWorld
-// (every tree of the terrain ring as records). Docs/Context/Procedural/Trees.md.
-
-// "Trees/Grove type": "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name. The names
-// are fixed here (a tweak enum registers before the species load) - add a new species' name.
-export inline constexpr oc::string_view TREE_GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow", "Birch", "BirchClump", "Cedar", "Elm", "Aspen" };
+// "Trees": Procedural's TreeSystem (the species, the world set) and "Trees/World": its TreeWorld (every tree of the
+// terrain ring as records). Docs/Context/Procedural/Trees.md.
 
 export struct TreeSettings
 {
 	bool enabled = true;
 	bool reload = false;             // button: re-read the .tree files, regenerate, respawn (TreeSystem clears it)
-	bool respawn = false;            // button: respawn the preview in front of the camera (TreeSystem clears it)
+	bool respawn = false;            // button: build the world set again (TreeSystem clears it)
 	bool regenerateTextures = false; // button: regenerate the species textures over the files on disk
-	bool showLibrary = false;        // also reloads: without it the module / trunk billboards are never baked or loaded
-	bool compressTextures = true;    // BC: bark BC1 + BC5 normal, leaves / billboards / card atlas BC3 (reloads)
-	int gridSize = 1;
-	float spacing = 11.0f;
-	float positionJitter = 0.8f;      // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)
+	bool compressTextures = true;    // BC: bark BC1 + BC5 normal, leaves BC3, the shadow masks and the voxel opacity BC4 (reloads)
 	float sizeVariation = 0.6f;       // extra per-tree scale on top of the species range: x 2^(+-this), log-uniform
-	float bushesPerTree = 4.0f;       // `Kind Bush` species scattered around each grove tree (the fraction by chance)
+	float bushesPerTree = 4.0f;       // `Kind Bush` species around each tree whose species has no `Undergrowth` block (the fraction by chance)
 	float bushShadowDistance = 100.0f; // bushes cast no sun shadow beyond this from the cascades' centre (m); 0 = no limit
-	int seed = 1;
-	int groveType = 1;                // 0 = mixed (species alternate), else TREE_GROVE_TYPES[i] by species name (1 = Oak)
-	// World mode.
 	int nearRadius = 3;               // chunks (Chebyshev) around the camera chunk whose trees are expanded
-	int worldCapacity = 600000;       // the dynamic set's piece slots (trees + bushes)
+	int worldCapacity = 600000;       // the world set's piece slots (trees + bushes)
 	int expandPerFrame = 2;           // expanded chunks added to the set per frame
-	// COLLIDERS (world mode, "Trees/World/Colliders"): static bodies on the "Vegetation" layer for the expanded trees (a
+	// COLLIDERS ("Trees/World/Colliders"): static bodies on the "Vegetation" layer for the expanded trees (a
 	// cylinder each: the trunk) and rocks (their LOD chain's last level as a mesh) within colliderRadius of the camera.
 	bool colliders = true;
 	float colliderRadius = 80.0f;     // m (horizontal); a body goes again 10 % past it
 	int collidersPerFrame = 64;       // bodies created per frame (removals are not budgeted)
-	int farMode = 0;                  // 0 = billboards, 1 = none (reloads)
-	int billboardViews = 0;           // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-	float farDistanceScale = 1.0f;    // x every species' billboard distance; 0 = off
-	float fadeWidthScale = 2.0f;      // x every species' `Billboard FadeWidth`: the mesh <-> voxels / billboard blend band (respawns)
-	float voxelStart = 0.0f;          // m: the TREES' (not the bushes') mesh -> voxels / billboard blend starts here; 0 = each
+	float farDistanceScale = 1.0f;    // x every species' `Billboard Distance` (the mesh -> voxels switch); 0 = the meshes at every distance
+	float fadeWidthScale = 2.0f;      // x every species' `Billboard FadeWidth`: the mesh <-> voxels blend band (respawns)
+	float voxelStart = 0.0f;          // m: the TREES' (not the bushes') mesh -> voxels blend starts here; 0 = each
 	                                  // species' `Billboard Distance` x farDistanceScale - FadeWidth / 2 (respawns)
-	float branchCardDistance = 0.0f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
-	// THE VOXEL TIER (GPU path, trees only - not bushes): in the MAIN pass a baked variant's whole-tree billboard is replaced
-	// by its prefiltered voxel grid, marched per pixel (LitTreeVoxel). Shadows, GI and RT keep the billboard. Reloads.
+	// THE VOXEL TIER: past its species' band the main pass draws a baked variant's prefiltered voxel grid, marched per
+	// pixel (LitTreeVoxel), in its meshes' place. Off: the meshes at every distance. The shadows and the rays take the
+	// variant's shadow billboard either way. Reloads.
 	bool voxelImpostors = true;
-	int voxelResolution = 3;          // 0 = 32^3, 1 = 64^3, 2 = 128^3, 3 = 256^3 voxels at level 0 (reloads)
-	bool forceFar = false;            // debug: every module as its far representation
-	bool gpuExpansion = true;         // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
+	int voxelResolution = 3;          // a tree's grid: 0 = 32^3, 1 = 64^3, 2 = 128^3, 3 = 256^3 voxels at level 0; a bush's: a quarter (reloads)
+	bool forceFar = false;            // debug: every plant as its voxels
 };
 
 export struct TreeWorldSettings

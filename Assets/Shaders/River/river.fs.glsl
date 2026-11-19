@@ -48,14 +48,18 @@ float nearMapWeight(vec2 xz)
 
 // The bed (water_scene.inc.glsl's bed hook): the terrain splat with the river bed's beach layer (river = 1) and the
 // full-wetness darkening. The column stays the caller's (the river surface, not the terrain map's water level).
-vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel)
+// A ray with NO column (the mirror ray: its hits are the land above the water, found by the terrain march) takes the
+// ground as the terrain draws it - the river value of the hit's own vertices (terrainRayRiver: the sand of the bank
+// and the shore, fading out over the floodplain) - with the grass over its soil.
+vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, vec3 rayDir, float rayT, inout float waterLevel)
 {
+    const bool land = waterLevel < -1e29;
     TerrainFields f; // mild-climate fallbacks without a map, as the terrain VS
     f.altitude    = worldPos.y - u_terrain_seaLevel;
     f.temperature = 12.5;
     f.humidity    = 0.5;
     f.waterLevel  = u_terrain_seaLevel;
-    f.river       = 1.0;
+    f.river       = land ? terrainRayRiver(worldPos) : 1.0;
     if (terrainHeightMapPresent())
     {
         const vec4 td      = terrainDataAt(worldPos.xz);
@@ -67,10 +71,15 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
     }
 
     g_seabedLod = min(log2(max(rayT, 1.0)) + 1.0, 7.0);
-    f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
-    if (u_terrainWater_enabled > 0.5)
+    const TerrainLayers layers = terrainLayers(worldPos, geoN, f);
+    // The grass BEFORE the splat: one half vector stays live across it, not the layers' picks.
+    f16vec4 grass = f16vec4(0.0);
+    if (land)
+        grass = f16vec4(grassRayAlbedo(layers, worldPos, geoN, rayDir, f.temperature));
+    f16vec3 albedo = terrainSplatLayers(worldPos, geoN, layers).albedo;
+    if (!land && u_terrainWater_enabled > 0.5) // the bed is fully wet; the land above the water is not
         albedo *= float16_t(u_terrainWater_darkening);
-    return vec3(albedo);
+    return vec3(mix(albedo, grass.rgb, grass.a));
 }
 
 // The body's in-scatter. Entrained air (aeration, from the turbulence) moves it toward the foam colour: a riffle goes
@@ -108,7 +117,7 @@ vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sun
             hit.pos = surfPos + dir * hit.t;
             hit.N = vec3(0.0, 1.0, 0.0);
             hit.waterLevel = surfPos.y;
-            hit.albedo = waterBedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
+            hit.albedo = waterBedAlbedo(hit.pos, hit.N, dir, hit.t, hit.waterLevel);
             haveHit = true;
         }
     }

@@ -24,7 +24,7 @@ import Settings;
 namespace
 {
     constexpr uint32 TREE_RECORD_ABSENT = 0xFFFFFFFFu;
-    constexpr uint32 TREE_RECORDS_PER_PIECE = 4; // at most 4 representations draw at once (tree_cull.inc.glsl)
+    constexpr uint32 TREE_RECORDS_PER_PIECE = 3; // at most 3 representations draw at once: bark, leaves, voxels (tree_cull.inc.glsl)
 
     // One representation: an InMeshInstance minus its node (meshIdx | materialIdx << 16, pipelineIdx | alphaMode << 16).
     struct TreeCullRecordGpu
@@ -33,27 +33,21 @@ namespace
         uint32 pipelineAlpha = 0;
     };
 
-    // A piece TYPE (one library piece of one species): its representations and its crossfade bands.
+    // A piece TYPE (one baked variant of one species, or a rock variant): its representations and its crossfade band.
     struct TreeCullTypeGpu
     {
         TreeCullRecordGpu bark;
         TreeCullRecordGpu barkFade;
         TreeCullRecordGpu leaves;
         TreeCullRecordGpu leavesFade;
-        TreeCullRecordGpu billboard;
-        TreeCullRecordGpu trunk;      // the mid tier (tree_cull.inc.glsl): the trunk on its own ...
-        TreeCullRecordGpu trunkFade;
-        TreeCullRecordGpu cardsIn;    // ... and the merged branch-card mesh
-        TreeCullRecordGpu cardsOut;
-        TreeCullRecordGpu voxel;      // the voxel tier: the billboard's place in the main pass (absent = the billboard)
-        float farDistance = 0.0f; // billboard switch distance (m); x the frame's distance scale
+        TreeCullRecordGpu voxel;           // the voxel tier: the main pass past the band (absent = the meshes at every distance)
+        TreeCullRecordGpu shadowBillboard; // the shadow passes and the TLAS only (absent = the meshes cast)
+        float farDistance = 0.0f; // mesh -> voxels switch distance (m); x the frame's distance scale
         float fadeWidth = 1.0f;   // crossfade band (m), centred on it
-        float midDistance = 0.0f; // the mid tier from here (m; x the scale); 0 = none
-        float midFadeWidth = 1.0f;
         float shadowDistance = 0.0f; // no sun shadow beyond this from the cascades' centre (m); 0 = no limit
         uint32 wind = 0;             // x the trunk bend | x the branch sway << 16, each 4.12 fixed point (tree_wind.inc.glsl)
     };
-    static_assert(sizeof(TreeCullTypeGpu) == 104);
+    static_assert(sizeof(TreeCullTypeGpu) == 64);
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -87,7 +81,7 @@ uint32 RendererState::giTlasLiveCount() const
     return oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
 }
 
-// 0 = no volume; the billboards draw through its fade-in band - an overlap, not a seam.
+// 0 = no volume; the voxel trees draw through its fade-in band - an overlap, not a seam.
 float RendererState::treeCullVolumeStart() const
 {
     const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
@@ -121,17 +115,10 @@ uint32 RendererState::allocTreeSet()
     return setId;
 }
 
-RenderTreeSet RenderTreeSet::create(oc::span<const Type> types, oc::span<const Piece> pieces, oc::span<const Range> chunks)
+RenderTreeSet RenderTreeSet::create(oc::span<const Type> types, uint32 pieceCapacity)
 {
     RenderTreeSet set;
-    set.m_setId = Globals::rendererVK.createTreeSet(types, pieces, chunks);
-    return set;
-}
-
-RenderTreeSet RenderTreeSet::createDynamic(oc::span<const Type> types, uint32 pieceCapacity)
-{
-    RenderTreeSet set;
-    set.m_setId = Globals::rendererVK.createDynamicTreeSet(types, pieceCapacity);
+    set.m_setId = Globals::rendererVK.createTreeSet(types, pieceCapacity);
     return set;
 }
 
@@ -163,43 +150,20 @@ void RenderTreeSet::render(oc::span<const ChunkDraw> chunks, float distanceScale
     Globals::rendererVK.renderTreeSet(m_setId, chunks, distanceScale, forceFar);
 }
 
-uint32 RendererState::createTreeSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
-    oc::span<const TreeInstanceChunk> chunks)
+uint32 RendererState::createTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
 {
     const uint32 setId = allocTreeSet();
     TreeInstanceSet& set = m_treeSets[setId];
-    initTreeSetTypes(set, types);
-    initTreeSetPieces(set, (uint32)pieces.size());
-    // The chunks (no table = one chunk over every piece): each written into its own range.
-    const TreeInstanceChunk whole{ 0, (uint32)pieces.size() };
-    const oc::span<const TreeInstanceChunk> ranges = chunks.empty() ? oc::span<const TreeInstanceChunk>(&whole, 1) : chunks;
-    set.chunks.resize(ranges.size());
-    for (size_t c = 0; c < ranges.size(); ++c)
-    {
-        assert(ranges[c].first + ranges[c].count <= pieces.size());
-        writeTreeChunk(set, set.chunks[c], pieces.subspan(ranges[c].first, ranges[c].count), ranges[c].first);
-    }
-    set.numPieces = (uint32)pieces.size();
-    m_treeVolume.markDirty();
-    return setId;
-}
-
-uint32 RendererState::createDynamicTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
-{
-    const uint32 setId = allocTreeSet();
-    TreeInstanceSet& set = m_treeSets[setId];
-    set.dynamic = true;
     set.numBlocks = (oc::max(pieceCapacity, 1u) + TREE_SET_BLOCK - 1) / TREE_SET_BLOCK;
     initTreeSetTypes(set, types);
     initTreeSetPieces(set, set.numBlocks * TREE_SET_BLOCK);
-    set.numPieces = 0;
-    m_treeVolume.markDirty();
+    m_treeVolume.markDirty(); // the records expand into this set's volume types
     return setId;
 }
 
 uint32 RendererState::addTreeSetChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces)
 {
-    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
+    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive)
         return UINT32_MAX;
     TreeInstanceSet& set = m_treeSets[setId];
     std::lock_guard<std::mutex> lock(m_treeSetMutex);
@@ -256,13 +220,12 @@ uint32 RendererState::addTreeSetChunk(uint32 setId, oc::span<const TreeInstanceP
     chunk = {};
     if (blocks > 0)
         writeTreeChunk(set, chunk, pieces, firstBlock * TREE_SET_BLOCK);
-    set.numPieces = oc::max(set.numPieces, set.topBlock * TREE_SET_BLOCK);
-    return index; // (no re-bake: the far volume never splats a dynamic set - recordFarTrees)
+    return index; // (no re-bake: the far volume reads the records, never a set's pieces - recordFarTrees)
 }
 
 void RendererState::removeTreeSetChunk(uint32 setId, uint32 index)
 {
-    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
+    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive)
         return;
     TreeInstanceSet& set = m_treeSets[setId];
     std::lock_guard<std::mutex> lock(m_treeSetMutex);
@@ -273,10 +236,6 @@ void RendererState::removeTreeSetChunk(uint32 setId, uint32 index)
     {
         const uint32 blocks = (chunk.count + TREE_SET_BLOCK - 1) / TREE_SET_BLOCK;
         set.pendingFrees.push_back({ chunk.first / TREE_SET_BLOCK, blocks, m_frameCounter + RendererVKLayout::NUM_FRAMES_IN_FLIGHT });
-        // The far volume skips its slots from the next bake on (a bake in flight reads either - both harmless).
-        for (uint32 i = 0; i < chunk.count; ++i)
-            set.mappedVolumePieces[chunk.first + i].type = set.emptyVolumeType;
-        set.volumePieces.flushMappedMemory(chunk.count * sizeof(TreeVolumePieceGpu), chunk.first * sizeof(TreeVolumePieceGpu));
     }
     chunk = {};
     set.pendingChunks.push_back({ index, m_frameCounter });
@@ -300,29 +259,23 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         const TreeInstanceType& type = types[t];
         TreeCullTypeGpu& gpu = gpuTypes[t];
         gpu = TreeCullTypeGpu{ record(type.bark), record(type.barkFade), record(type.leaves), record(type.leavesFade),
-            record(type.billboard), record(type.trunk), record(type.trunkFade), record(type.cardsIn), record(type.cardsOut),
-            record(type.voxel), type.farDistance, type.fadeWidth };
-        // The voxel tier stands in for a billboard only.
-        if (gpu.billboard.meshMaterial == TREE_RECORD_ABSENT)
+            record(type.voxel), record(type.shadowBillboard), type.farDistance, type.fadeWidth };
+        // The voxel tier needs its band (tree_cull.inc.glsl treeCullMainPiece).
+        if (type.farDistance <= 0.0f)
             gpu.voxel = TreeCullRecordGpu{};
-        // The mid tier only with its card mesh, its trunk and a billboard to hand over to (tree_cull.inc.glsl).
-        const bool mid = type.midDistance > 0.0f && gpu.cardsIn.meshMaterial != TREE_RECORD_ABSENT
-            && gpu.trunk.meshMaterial != TREE_RECORD_ABSENT && gpu.billboard.meshMaterial != TREE_RECORD_ABSENT;
-        gpu.midDistance = mid ? type.midDistance : 0.0f;
-        gpu.midFadeWidth = type.midFadeWidth;
         gpu.shadowDistance = type.shadowDistance;
         auto fixed = [](float v) { return (uint32)std::round(glm::clamp(v, 0.0f, 15.99f) * 4096.0f); };
         gpu.wind = fixed(type.windTrunk) | (fixed(type.windBranch) << 16);
     }
 
-    // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves,
-    // else the bark - a rock) has a BLAS. The others (bushes: created without one) would only ever take inactive TLAS
-    // slots.
+    // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the shadow billboard, else the
+    // leaves, else the bark - a rock) has a BLAS. The others (bushes: created without one) would only ever take inactive
+    // TLAS slots.
     set.typeRtCapable.assign(types.size(), 0);
     set.typeMeshes.assign(types.size(), {});
     for (size_t t = 0; t < types.size(); ++t)
     {
-        const TreeCullRecordGpu& rec = gpuTypes[t].billboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].billboard
+        const TreeCullRecordGpu& rec = gpuTypes[t].shadowBillboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].shadowBillboard
             : gpuTypes[t].leaves.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].leaves : gpuTypes[t].bark;
         set.typeRtCapable[t] = rec.meshMaterial != TREE_RECORD_ABSENT && m_rt.hasStaticBlas(rec.meshMaterial & 0xFFFFu) ? 1 : 0;
         // The bucket sizes: a piece draws each of its meshes at most once (normal OR fade material - the same mesh).
@@ -336,18 +289,14 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         };
         mesh(type.bark, type.barkFade);
         mesh(type.leaves, type.leavesFade);
-        mesh(type.billboard, type.billboard);
+        mesh(type.shadowBillboard, type.shadowBillboard);
         if (gpuTypes[t].voxel.meshMaterial != TREE_RECORD_ABSENT)
             mesh(type.voxel, type.voxel);
-        if (gpuTypes[t].midDistance > 0.0f)
-        {
-            mesh(type.trunk, type.trunkFade);
-            mesh(type.cardsIn, type.cardsOut);
-        }
     }
 
-    // THE FAR VOXEL TREES' view: per type its voxel bucket (one per distinct voxel mesh), material, trunk-bend scale and
-    // box (centre height, half diagonal at scale 1); the buckets' draw ranges from the meshes' level 0.
+    // THE FAR VOXEL TREES' view: per type of the far ring (`farRing`: the trees, not the bushes) its voxel bucket (one per
+    // distinct voxel mesh), material, trunk-bend scale and box (centre height, half diagonal at scale 1); the buckets' draw
+    // ranges from the meshes' level 0.
     // resize, not assign(n, {}): that left `bucket` 0 (not the member default, "none") on every type without a voxel tier,
     // and the bushes and rocks drew as bucket 0's box with material 0.
     set.farTypes.clear();
@@ -357,7 +306,7 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
     for (size_t t = 0; t < types.size(); ++t)
     {
         const TreeInstanceRep& voxel = types[t].voxel;
-        if (gpuTypes[t].voxel.meshMaterial == TREE_RECORD_ABSENT || !voxel.mesh)
+        if (!types[t].farRing || gpuTypes[t].voxel.meshMaterial == TREE_RECORD_ABSENT || !voxel.mesh)
             continue;
         const uint16 meshIdx = voxel.mesh->m_meshIdx;
         uint32 bucket = UINT32_MAX;
@@ -379,8 +328,8 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         far.centreY = voxel.mesh->getBounds().pos.y;
         far.radius = voxel.mesh->getBounds().radius;
 
-        // THE FAR SHADOW CASTERS: the same trees as their BILLBOARD (its own buckets) with its alpha mask.
-        const TreeInstanceRep& billboard = types[t].billboard;
+        // THE FAR SHADOW CASTERS: the same trees as their SHADOW BILLBOARD (its own buckets) with its mask.
+        const TreeInstanceRep& billboard = types[t].shadowBillboard;
         if (!billboard.mesh || !billboard.mesh->isValid())
             continue;
         const uint16 billboardIdx = billboard.mesh->m_meshIdx;
@@ -405,10 +354,9 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
     set.types.upload(gpuTypes.size() * sizeof(TreeCullTypeGpu), gpuTypes.data());
 
     // The far-tree volume's view (TreeVolumePipeline): per type its extinction mip chain (box filtered down to
-    // 1^3). Types without density add nothing to the volume. One more type at the end: the SENTINEL (res 0) a free
-    // piece slot of a dynamic set points at. Host-visible, read through device addresses at its (rare) rebakes.
-    oc::vector<TreeVolumeTypeGpu> volumeTypes(types.size() + 1);
-    set.emptyVolumeType = (uint32)types.size();
+    // 1^3). Types without density add nothing to the volume. Host-visible, read through device addresses at its (rare)
+    // rebakes.
+    oc::vector<TreeVolumeTypeGpu> volumeTypes(types.size());
     oc::vector<float> volumeData;
     for (size_t t = 0; t < types.size(); ++t)
     {
@@ -459,22 +407,12 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
     upload(set.volumeData, volumeData.data(), volumeData.size() * sizeof(float), "TreeVolumeData");
 }
 
-// The piece slots: the culls' pieces (device-local, written per chunk through the staging ring), the volume's pieces
-// (host-visible, every slot on the sentinel type until a chunk writes it) and the per-frame lists (at most every slot).
+// The piece slots: the culls' pieces (device-local, written per chunk through the staging ring) and the per-frame lists
+// (at most every slot).
 void RendererState::initTreeSetPieces(TreeInstanceSet& set, uint32 capacity)
 {
     set.pieces.initialize(oc::max<size_t>((size_t)capacity * sizeof(TreeCullPieceGpu), 16),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "TreeCullPieces");
-    set.volumePieces.initialize(oc::max<size_t>((size_t)capacity * sizeof(TreeVolumePieceGpu), 16),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-        vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeVolumePieces", BufferHostAccess::eSequentialWrite);
-    set.mappedVolumePieces = oc::span<TreeVolumePieceGpu>((TreeVolumePieceGpu*)set.volumePieces.mapMemory().data(), capacity);
-    TreeVolumePieceGpu empty;
-    empty.type = set.emptyVolumeType;
-    for (TreeVolumePieceGpu& piece : set.mappedVolumePieces)
-        piece = empty;
-    if (capacity > 0)
-        set.volumePieces.flushMappedMemory((size_t)capacity * sizeof(TreeVolumePieceGpu));
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
         set.lists[f].initialize(oc::max<size_t>((size_t)capacity * sizeof(uint32), 16), vk::BufferUsageFlagBits2::eStorageBuffer,
@@ -521,10 +459,6 @@ void RendererState::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk&
             .radius = piece.radius,
             .type = piece.type,
         };
-        TreeVolumePieceGpu& volume = set.mappedVolumePieces[first + i];
-        volume.posScale = gpuPieces[i].posScale;
-        volume.quat = gpuPieces[i].quat;
-        volume.type = piece.type;
         for (uint16 mesh : set.typeMeshes[piece.type])
             ++meshCounts[mesh];
     }
@@ -533,14 +467,12 @@ void RendererState::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk&
     const size_t bytes = gpuPieces.size() * sizeof(TreeCullPieceGpu);
     for (size_t offset = 0; offset < bytes; offset += CHUNK)
         set.pieces.upload(oc::min(CHUNK, bytes - offset), (const uint8*)gpuPieces.data() + offset, (size_t)first * sizeof(TreeCullPieceGpu) + offset);
-    if (!pieces.empty())
-        set.volumePieces.flushMappedMemory(pieces.size() * sizeof(TreeVolumePieceGpu), (size_t)first * sizeof(TreeVolumePieceGpu));
 }
 
 // "Far start" scaled with the camera's height h above the ground under it: sqrt(start^2 + h^2) is the 3D distance
-// of a ground tree at HORIZONTAL distance start. The billboards hand over (tree_cull) and the march starts there,
+// of a ground tree at HORIZONTAL distance start. The voxel trees hand over (tree_cull) and the march starts there,
 // so from the air the hand-over stays at horizontal "Far start" - where the volume's fixed ring begins - instead of
-// moving in under the camera (the billboards vanished below it with nothing in their place).
+// moving in under the camera (the trees vanished below it with nothing in their place).
 float RendererState::farTreesStart() const
 {
     const float ground = std::isnan(m_cameraGround) ? m_terrain.getHeightMap().getUserParam() : m_cameraGround;
@@ -611,14 +543,8 @@ void RendererState::updateTreeVoxelFar(uint32 frameIdx)
 
 bool RendererState::farTreesActive() const
 {
-    if (!m_farTreeParams.enabled || m_sceneViewCount != 1)
-        return false;
-    if (m_treeRecords.numTypes() > 0)
-        return true; // the world tree records (W4)
-    for (const TreeInstanceSet& set : m_treeSets)
-        if (set.alive && set.hasVolume)
-            return true;
-    return false;
+    // The volume's only source: the world tree records (W4).
+    return m_farTreeParams.enabled && m_sceneViewCount == 1 && m_treeRecords.numTypes() > 0;
 }
 
 void RendererState::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const oc::function<void(const TreeVolumePipeline::RecordParams*)>& march)
@@ -631,14 +557,9 @@ void RendererState::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, c
         m_treeVolumeMarkFrame = m_frameCounter;
         m_treeVolume.markDirty();
     }
-    // The static sets (the preview grove). A DYNAMIC set (the world) never: its trees come from their records, which
-    // expand to the same trees (W4) - one source, so a chunk entering / leaving the set never changes the volume.
-    oc::small_vector<TreeVolumePipeline::Source, 4> sources;
-    for (const TreeInstanceSet& set : m_treeSets)
-        if (set.alive && set.hasVolume && !set.dynamic)
-            sources.push_back(TreeVolumePipeline::Source{ set.volumePieces.getDeviceAddress(), set.volumeTypes.getDeviceAddress(),
-                set.volumeData.getDeviceAddress(), set.numPieces });
-    // The world tree records (W4): this frame slot's chunk table, expanded into the world set's volume types.
+    // The world tree records (W4): this frame slot's chunk table, expanded into the world set's volume types. The set's
+    // own pieces are never a source: the records expand to the same trees - one source, so a chunk entering / leaving the
+    // set never changes the volume.
     TreeVolumePipeline::RecordSource records;
     if (m_treeRecords.numTypes() > 0 && m_treeRecords.tableCount(frameIdx) > 0 && m_treeRecordSet < (uint32)m_treeSets.size()
         && m_treeSets[m_treeRecordSet].alive)
@@ -688,7 +609,6 @@ void RendererState::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, c
         .factionSampler = m_terrain.getFactionMap().getSampler(),
         .cameraPos = m_cameraPos,
         .startDistance = farTreesStart(),
-        .sources = oc::span<const TreeVolumePipeline::Source>(sources.data(), sources.size()),
         .records = records,
         .settings = m_farTreeParams,
         .frameNumber = m_frameCounter,
@@ -739,7 +659,6 @@ void RendererState::destroyTreeSet(uint32 setId)
     }
     set.pieces.destroy();
     set.types.destroy();
-    set.volumePieces.destroy();
     set.volumeTypes.destroy();
     set.volumeData.destroy();
     set.hasVolume = false;
@@ -749,18 +668,15 @@ void RendererState::destroyTreeSet(uint32 setId)
         set.lists[f].destroy();
         set.mappedLists[f] = {};
     }
-    set.mappedVolumePieces = {};
     set.chunks.clear();
     set.typeRtCapable.clear();
     set.typeMeshes.clear();
-    set.dynamic = false;
     set.numBlocks = 0;
     set.topBlock = 0;
     set.freeBlocks = {};
     set.pendingFrees.clear();
     set.freeChunks.clear();
     set.pendingChunks.clear();
-    set.numPieces = 0;
     set.alive = false;
 }
 
@@ -779,14 +695,14 @@ void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> ch
     if (setId != m_treeCullSet || setId >= (uint32)m_treeSets.size())
         return;
     TreeInstanceSet& set = m_treeSets[setId];
-    if (!set.alive || set.numPieces == 0)
+    if (!set.alive || set.topBlock == 0)
         return;
     if (m_treeCullTaken.exchange(true, oc::memory_order_relaxed))
     {
         assert(false && "RenderTreeSet::render: one call per frame");
         return;
     }
-    std::lock_guard<std::mutex> lock(m_treeSetMutex); // a dynamic set's chunks change on main meanwhile
+    std::lock_guard<std::mutex> lock(m_treeSetMutex); // the set's chunks change on main meanwhile
 
     // The LIST in two sections. First the RT section: the RT-capable pieces (first in their chunk) of the chunks drawn
     // for GI / shadows whose RT sphere reaches into "Trees/RT range" of the scene focus - the TLAS takes ONE slot per

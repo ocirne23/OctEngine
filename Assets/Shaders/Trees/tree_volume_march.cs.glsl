@@ -331,7 +331,7 @@ void marchAt(ivec2 px)
 
     // The volume is the ring rMin..rMax around the BAKE centre; rMin lies far enough inside "Far start" to cover the
     // hand-over wherever the camera moved since the bake. The march starts at "Far start" from the CAMERA and fades in
-    // over "Far overlap", where the billboards still draw (tree_cull.inc.glsl).
+    // over "Far overlap", where the voxel trees still draw (tree_cull.inc.glsl).
     const vec2 rel = u_viewPos.xz - bakeCentre();
     const float a = dot(dir.xz, dir.xz);
     const float b = dot(rel, dir.xz);
@@ -391,10 +391,10 @@ void marchAt(ivec2 px)
     const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
 
-    // TWO SEGMENTS, split at the fade-in's end: the BAND (over "Far overlap", where the billboards still draw) and BEHIND
+    // TWO SEGMENTS, split at the fade-in's end: the BAND (over "Far overlap", where the voxel trees still draw) and BEHIND
     // it, each with its own in-scatter, transmittance and weighted distance. Only the band fades in, as a whole (one fade
     // for the whole ray let a band tree's blob fade out the far trees behind it: a sky-coloured outline along the
-    // billboards).
+    // drawn trees).
     const float fadeEnd = pc_startDistance + u_foliage_farOverlap;
     // A segment's distance weights sum to 1 - its transmittance (sum of T x alpha telescopes): no weight sums are kept.
     vec3 inBand = vec3(0.0), inBehind = vec3(0.0);
@@ -553,7 +553,7 @@ void marchAt(ivec2 px)
                 const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
                 vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + u_ambientColor) * interior;
                 // + the TRANSMISSION: no N.L (it lights the far side), through the crown at "Foliage transmission self
-                // shadow"'s share of its optical depth (as the billboards'), in the leaves' deepened colour; no rock.
+                // shadow"'s share of its optical depth, in the leaves' deepened colour; no rock.
                 if (transmitLobe > 0.0 && rock < 1.0)
                     lit += leafTransmitColor(albedo) * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock)
                         * exp(-sunDepth * u_foliage_transmissionSelfShadow) * terrainVis * cloudT * interior));

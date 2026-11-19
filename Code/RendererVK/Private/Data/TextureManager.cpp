@@ -62,9 +62,9 @@ uint16 TextureManager::uploadRgba8Mips(uint32 width, uint32 height, const oc::ve
 	return uploadImpl([&](Texture& texture) { return texture.initialize(width, height, format, mips, false, debugName); });
 }
 
-uint16 TextureManager::uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+uint16 TextureManager::uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName, bool redAsAlpha)
 {
-	return uploadImpl([&](Texture& texture) { return texture.initialize(width, height, format, mips, false, debugName); });
+	return uploadImpl([&](Texture& texture) { return texture.initialize(width, height, format, mips, false, debugName, redAsAlpha); });
 }
 
 uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize)

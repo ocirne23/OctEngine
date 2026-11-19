@@ -78,6 +78,7 @@ layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the
 #include "gi_probe.inc.glsl"
 
 #include "rt_shadow.inc.glsl"
+#include "tree_card.inc.glsl" // a tree's shadow billboard at a hit: its colour
 
 // Sun CSM (PCSS) fallback when RT sun shadows are off.
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;
@@ -150,9 +151,12 @@ float g_seabedLod = 0.0;
 #define TERRAIN_MACRO_TEX(tex, uv) textureLod(tex, uv, 0.0) // metres-wide texels: the top mip is fine under the water
 #define TERRAIN_SPLAT_ALBEDO_ONLY
 #include "terrain_splat.inc.glsl"
+#define GRASS_NO_GROUND // the grass at a ray hit only (grassRayAlbedo): no ground table, no terrain vertices
+#include "grass.inc.glsl"
 
-// The includer's bed at a terrain hit. It may set waterLevel from its own terrain fetch (one fetch serves both).
-vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel);
+// The includer's bed at a terrain hit (rayDir: the ray, unit). It may set waterLevel from its own terrain fetch (one
+// fetch serves both). A hit on land ABOVE the water (a reflection's) takes the grass over its soil (grassRayAlbedo).
+vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, vec3 rayDir, float rayT, inout float waterLevel);
 
 // columnLevel: the water surface over an underwater ray's hits; < -1e29 for none (a ray above the water, or one whose column
 // waterBedAlbedo or the caller fills in).
@@ -178,7 +182,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
         hit.N = terrainRayNormal(hit.pos);
         if (dot(hit.N, dir) > 0.0)
             hit.N = -hit.N;
-        hit.albedo = waterBedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
+        hit.albedo = waterBedAlbedo(hit.pos, hit.N, dir, hit.t, hit.waterLevel);
         return true;
     }
 
@@ -214,9 +218,17 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
 
                 if (materialIdx < in_materialInfos.length())
                 {
-                    const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
+                    const uint diffuseNormalTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx;
                     const float lod = min(log2(max(hit.t, 1.0)) + 1.0, 7.0); // ray-cone-ish LOD by distance
-                    hit.albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, lod).rgb;
+                    const vec4 tap = textureLod(u_textures[nonuniformEXT(diffuseNormalTexIdx & 0x0000FFFFu)], uv, lod);
+                    hit.albedo = tap.rgb;
+                    if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u)
+                    {
+                        hit.albedo = treeCardAlbedo(diffuseNormalTexIdx, tap.a);
+                        hit.N = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true))
+                            * treeCardNormal(rayQueryGetIntersectionObjectRayOriginEXT(rq, true), rayQueryGetIntersectionObjectRayDirectionEXT(rq, true),
+                                mi.center, in_vertices[v0].tangent.xyz));
+                    }
                 }
             }
         }

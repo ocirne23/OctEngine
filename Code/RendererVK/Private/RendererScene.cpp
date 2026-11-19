@@ -371,8 +371,11 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
     assert(desc.albedoMips && "RenderMaterial::TextureDesc needs albedoMips");
     // "<debugName>/albedo" and "/normal": the VRAM view (MemoryPanel) splits a name on '/', so each material is a
     // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
+    // A ONE-CHANNEL albedo (BC4 / R8) is a mask: its channel reads as alpha too, so the alpha readers (the shadow
+    // casters, the ray queries) take it as any texture's. The voxel tier's opacity atlas reads its red as before.
+    const bool mask = desc.albedoEncoding == RenderMaterial::ETextureEncoding::BC4 || desc.albedoEncoding == RenderMaterial::ETextureEncoding::R8;
     const uint16 texIdx = Globals::textureManager.uploadMips(desc.width, desc.height, toFormat(desc.albedoEncoding, true), *desc.albedoMips,
-        oc::format("{}/albedo", desc.debugName).c_str());
+        oc::format("{}/albedo", desc.debugName).c_str(), mask);
     RendererVKLayout::MaterialInfo material{};
     material.flags = desc.extraFlags;
     material.diffuseTexIdx = texIdx;

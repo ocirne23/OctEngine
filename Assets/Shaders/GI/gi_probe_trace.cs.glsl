@@ -95,6 +95,7 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 // (GI_LIGHT_RT_SHADOWS - lighting.inc.glsl needs rtShadowVisibility in scope, so this comes first).
 #include "rt_shadow.inc.glsl"
 #define GI_LIGHT_RT_SHADOWS
+#include "tree_card.inc.glsl" // a tree's shadow billboard at a hit: its colour
 
 // Light grid (read) + shared diffuse lighting.
 #define GRID_DATA_NAME  in_gridData
@@ -223,8 +224,17 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
         worldN = mat3(o2w) * (b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz);
         const vec2 uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
                       + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
-        const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
-        albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, GI_ALBEDO_LOD).rgb;
+        const uint diffuseNormalTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx;
+        const vec4 tap = textureLod(u_textures[nonuniformEXT(diffuseNormalTexIdx & 0x0000FFFFu)], uv, GI_ALBEDO_LOD);
+        albedo = tap.rgb;
+        // A tree's shadow billboard: the crown shape's normal, which faces the ray (never a backface: a probe is not
+        // inside a card).
+        if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u)
+        {
+            albedo = treeCardAlbedo(diffuseNormalTexIdx, tap.a);
+            worldN = mat3(o2w) * treeCardNormal(rayQueryGetIntersectionObjectRayOriginEXT(rq, true), rayQueryGetIntersectionObjectRayDirectionEXT(rq, true),
+                mi.center, in_vertices[v0].tangent.xyz);
+        }
     }
     worldN = normalize(worldN);
     const vec3 worldPos = origin + dir * t;

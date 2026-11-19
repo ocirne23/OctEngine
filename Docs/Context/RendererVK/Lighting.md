@@ -439,7 +439,7 @@ raster-bound: with every terrain triangle made degenerate it still cost ~70% of 
   forest, 13:00: the shadow draw 1.08 -> 0.47 ms (far ring 0.36, the near trees and the terrain 0.35). Checked at 07:00
   and 18:18 against the uncut pass: the same picture.
 * **In a forest the trees are the other half of the UNCUT pass** (1.10 ms; 0.49 ms with no trees). With
-  EVERY caster made degenerate that pass still costs 0.56 ms: the vertex work again. The alpha test of the tree
+  EVERY caster made degenerate that pass still costs 0.56 ms: the vertex work again. The alpha test of the trees' shadow
   billboards is 0.13 ms, their raster 0.31 ms. The casters' vertex MATH is not the cost: the far casters' shader without
   the wind bend (a third of its code) took the same time. Bushes and rocks cost nothing here.
 * What is left: caching the static casters' cascades.

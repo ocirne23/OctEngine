@@ -71,7 +71,6 @@ TreeSpecies Shrub
 	Billboard
 		Distance 25
 		Resolution 256
-		NormalBend 0.0
 		FadeWidth 6
 	Bark
 		Plates 12 4

@@ -74,8 +74,8 @@ float16_t F_SchlickH(float16_t u, float16_t f0)
 }
 
 // The seabed (water_scene.inc.glsl's bed hook). waterLevel returns the calm level the fields carry: the hit's column,
-// one terrain fetch for both.
-vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel)
+// one terrain fetch for both. Land ABOVE that level (what a reflection ray hits) takes the grass over its soil.
+vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, vec3 rayDir, float rayT, inout float waterLevel)
 {
     TerrainFields f; // mild-climate fallbacks without a map, as the terrain VS
     f.altitude = worldPos.y - u_terrain_seaLevel;
@@ -97,12 +97,17 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
     waterLevel = f.waterLevel;
 
     g_seabedLod = min(log2(max(rayT, 1.0)) + 1.0, 7.0);
-    f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
+    const TerrainLayers layers = terrainLayers(worldPos, geoN, f);
+    // The grass BEFORE the splat: one half vector stays live across it, not the layers' picks.
+    f16vec4 grass = f16vec4(0.0);
+    if (worldPos.y > f.waterLevel)
+        grass = f16vec4(grassRayAlbedo(layers, worldPos, geoN, rayDir, f.temperature));
+    f16vec3 albedo = terrainSplatLayers(worldPos, geoN, layers).albedo;
     // The seabed is fully wet: darken it as the terrain shader darkens ground at full wetness ("Wet darkening"), so the
     // sand under the water and the wet sand it just left match at the waterline.
     if (u_terrainWater_enabled > 0.5)
         albedo *= float16_t(u_terrainWater_darkening);
-    return vec3(albedo);
+    return vec3(mix(albedo, grass.rgb, grass.a));
 }
 
 // The water body along `dir` from `origin` (a surface point offset to the water side): the scene hit (TLAS; the baked
@@ -135,7 +140,7 @@ vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunT
         {
             hit.pos = surfPos + dir * hit.t;
             hit.N = vec3(0.0, 1.0, 0.0);
-            hit.albedo = waterBedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
+            hit.albedo = waterBedAlbedo(hit.pos, hit.N, dir, hit.t, hit.waterLevel);
             haveHit = true;
         }
     }

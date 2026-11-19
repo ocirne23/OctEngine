@@ -1,23 +1,21 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, the splat (TreeVolumePipeline): one workgroup per placed tree ADDS the tree's type extinction volume
-// into the polar volume (tree_volume.inc.glsl), fixed point through imageAtomicAdd - overlapping crowns sum, as extinction
-// does. Every texel the tree's box touches samples the type volume at the mip that matches the texel's footprint (tree
-// space), at the texel centre clamped into the box, x the tree's TENT weight horizontally and the slice's box overlap
-// vertically: a texel larger than the tree still gets the tree's share. The column's colour takes the tree type's albedo
-// (last writer wins; a record's bushes write none). The type volumes: per type a res^3 float mip chain (x fastest, then y, then z), the mips following
-// level 0.
+// FAR-TREE VOLUME BAKE, the splat (TreeVolumePipeline): one workgroup per WORLD TREE RECORD of the chunks within the record
+// detail distance of the bake centre (the ones beyond: tree_volume_records.cs, the same test). The record is EXPANDED
+// exactly as Procedural TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on its chunk's
+// ground grid, into the world set's volume types, and each of its plants ADDS its type's extinction volume into the polar
+// volume (tree_volume.inc.glsl), fixed point through imageAtomicAdd - overlapping crowns sum, as extinction does. Every
+// texel the tree's box touches samples the type volume at the mip that matches the texel's footprint (tree space), at the
+// texel centre clamped into the box, x the tree's TENT weight horizontally and the slice's box overlap vertically: a texel
+// larger than the tree still gets the tree's share. The column's colour takes the tree type's albedo (last writer wins; a
+// record's bushes write none). The type volumes: per type a res^3 float mip chain (x fastest, then y, then z), the mips
+// following level 0.
 //
 // TREE_FLOOR_PASS 1 and 2 (dispatched first, in that order): the same footprint walk per COLUMN, setting the column's FLOOR:
 // the base of its DOMINANT tree, the one whose tent covers it most (pass 1: the largest coverage per column, atomic max;
 // pass 2: the trees at that coverage write their base, the lowest among ties). With the lowest base of any tree instead, a
 // cliff-top tree sat above the layer in its edge columns. A ring column no tree covers (coverage 0) keeps the lowest base
 // of the trees whose rectangle reaches it.
-//
-// TREE_SPLAT_RECORDS (all three passes): the trees come from the WORLD TREE RECORDS: one workgroup per record of the chunks
-// within the record detail distance of the bake centre (the ones beyond: tree_volume_records.cs, the same test), each
-// EXPANDED exactly as Procedural TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on its
-// chunk's ground grid, into the world set's volume types.
 //
 // albedo.w < 0.75 = a SOLID: it stores OCCUPANCY (0..1) and its extinction is "Far rock extinction" at any size (a crown's
 // thins with its scale - its leaves spread over a larger volume - a solid's does not). albedo.w < 0.25 = a ROCK: no colour,
@@ -29,12 +27,10 @@
 
 #include "shared.inc.glsl"
 #include "tree_volume.inc.glsl"
-#ifdef TREE_SPLAT_RECORDS
 #define TERRAIN_HEIGHT_BINDING 1
 #include "terrain_height.inc.glsl"
 #define TREE_RECORD_GROUND
 #include "tree_record.inc.glsl"
-#endif
 
 layout (local_size_x = 64) in;
 
@@ -52,7 +48,7 @@ bool g_writeColour = true;
 // A tree's coverage of a column as an orderable key: 0 = only the rectangle's ring reaches it.
 uint coverKey(float coverXZ) { return coverXZ > 0.0 ? 1u + uint(coverXZ * 65534.0) : 0u; }
 
-// The layouts mirror TreeVolumePipeline.ixx (TreeVolumeTypeGpu / TreeVolumePieceGpu).
+// Mirrors TreeVolumePipeline.ixx (TreeVolumeTypeGpu).
 struct VolumeType
 {
     vec3 boxMin;
@@ -62,15 +58,14 @@ struct VolumeType
     vec4 albedo;
 };
 
+// One plant of a record, expanded (splatRecordPlant): its transform (uniform scale) and its volume type.
 struct VolumePiece
 {
     vec4 posScale;
     vec4 quat;
     uint type;
-    uint pad0, pad1, pad2;
 };
 
-layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PieceList { VolumePiece p[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { VolumeType t[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer FloatList { float v[]; };
 
@@ -97,12 +92,8 @@ struct RecordType
 // A detail chunk (TreeVolumePipeline::bake): coord.xy, its first record's pool word, its first workgroup.
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer DetailList { uvec4 d[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RecordTypeList { RecordType t[]; };
-#ifndef TREE_SPLAT_RECORDS
-layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TreeRecordWords { uint w[]; };
-#endif
 
-// The push block: TreeVolumePipeline's SplatPush (pc_pieces, or pc_map under TREE_SPLAT_RECORDS; pc_vol_*: the bake's
-// lockable values).
+// The push block: TreeVolumePipeline's SplatPush (pc_vol_*: the bake's lockable values).
 #include "push.generated.glsl"
 
 uint mipOffset(VolumeType t, uint mip)
@@ -290,7 +281,6 @@ void splatPiece(VolumePiece piece)
     }
 }
 
-#ifdef TREE_SPLAT_RECORDS
 // One plant of a record (its tree, or one of its bushes): Procedural TreeSystem::expandChunk's placeVariant - keep in
 // step. It stands on its chunk's height grid, on the terrain map only where that chunk holds none.
 void splatRecordPlant(uint recordType, uint seed, vec2 p)
@@ -313,15 +303,13 @@ void splatRecordPlant(uint recordType, uint seed, vec2 p)
     piece.type = pc_recordTypes.t[recordType].variantType[variant];
     splatPiece(piece);
 }
-#endif
 
 void main()
 {
-#ifdef TREE_SPLAT_RECORDS
     // ONE WORKGROUP PER RECORD (past 65535 the dispatch wraps into y), not per chunk (a chunk's ~3000 plants in
     // sequence were too slow): its chunk by a binary search over the detail chunks' first workgroups.
     const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
-    if (local >= pc_numPieces)
+    if (local >= pc_numRecords)
         return;
     const uint wg = local + pc_wgOffset; // this frame's slice of the bake
     uint lo = 0u, hi = pc_numDetailChunks - 1u;
@@ -362,10 +350,4 @@ void main()
         const uint bushType = pc_recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
         splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
     }
-#else
-    const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
-    if (local >= pc_numPieces)
-        return;
-    splatPiece(pc_pieces.p[local + pc_wgOffset]); // this frame's slice of the set (the bake spreads it over frames)
-#endif
 }

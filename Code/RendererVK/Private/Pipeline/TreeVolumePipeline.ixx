@@ -17,17 +17,17 @@ import :PushBlock;
 import Settings.fwd;
 
 // FAR TREES as a marched volume (Docs/Context/Procedural/Trees.md, prototype P1). Three stages:
-//   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
+//   bake  : the WORLD TREE RECORDS' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
 //           log radius from "Far start" to "Far end" (cells grow linearly with the distance - tree_volume.inc.glsl),
-//           z = height above the column's tree FLOOR. tree_volume_splat.cs twice (one workgroup per tree): its
-//           TREE_FLOOR_PASS variant (each column's lowest tree base, R32UI 2D), then the splat (fixed-point atomics,
-//           R32UI 3D); then tree_volume_resolve.cs (in place: the extinction's float bits) and, after the hand-over,
+//           z = height above the column's tree FLOOR. Within "Far record detail" each record expands to its exact trees:
+//           tree_volume_splat.cs three times (one workgroup per record) - its TREE_FLOOR_PASS variants (each column's
+//           dominant tree base, R32UI 2D), then the splat (fixed-point atomics, R32UI 3D). Beyond, the records' mass per
+//           column (tree_volume_records.cs, a tent over the crown's columns), then per column the terrain floor where
+//           no tree floor is and the slices from the type's height profile (tree_volume_far.cs). Then
+//           tree_volume_resolve.cs (in place: the extinction's float bits) and, after the hand-over,
 //           tree_volume_copy.cs (-> the R16F density, filterable). Re-baked only when the camera leaves the snap radius
-//           around the bake centre, a set changes, or a volume setting changes.
-//           The WORLD TREE RECORDS: within "Far record detail" each record expands to its exact trees (the splat's
-//           TREE_SPLAT_RECORDS variants, in every pass); beyond, their mass per column (tree_volume_records.cs, a tent
-//           over the crown's columns), then per column the terrain floor where no tree floor is and the slices from
-//           the type's height profile (tree_volume_far.cs). A dynamic set (the world) is never splatted.
+//           around the bake centre, the records change, or a volume setting changes. A tree set's own pieces are never
+//           splatted: the records expand to the same trees.
 //   march : tree_volume_march.cs, full res, the view ray from the start distance to the scene surface.
 //   temporal: cloud_temporal.cs's TREE_TEMPORAL instance ("Far temporal blend" > 0): last frame's result reprojected
 //           at the trees' mean distance, rejected / neighbourhood-clamped as for the clouds, blended in. OFF COSTS
@@ -36,7 +36,7 @@ import Settings.fwd;
 //   apply : a scene-forward stage (before the cloud / fog apply): colour + scene x transmittance.
 // Desktop only (one view). Every image stays in GENERAL for life.
 //
-// The type / piece layouts below are MIRRORED in tree_volume_splat.cs.glsl - keep them in step.
+// The type layout below is MIRRORED in tree_volume_splat.cs.glsl - keep them in step.
 
 // A tree TYPE's volume: its box (type space), its float mip chain in the data buffer (res^3 at `offset`, the
 // smaller mips following), its mean albedo. res 0 = the type adds nothing. albedo.w 0 = a SOLID (a rock): the chain is
@@ -50,16 +50,6 @@ export struct TreeVolumeTypeGpu
     glm::vec4 albedo{ 0.0f };
 };
 static_assert(sizeof(TreeVolumeTypeGpu) == 48);
-
-// A placed tree: its transform (uniform scale) and type.
-export struct TreeVolumePieceGpu
-{
-    glm::vec4 posScale{ 0.0f };
-    glm::vec4 quat{ 0.0f, 0.0f, 0.0f, 1.0f };
-    uint32 type = 0;
-    uint32 pad[3] = {};
-};
-static_assert(sizeof(TreeVolumePieceGpu) == 48);
 
 // ---- The passes' push blocks (PushBlock: bound in declaration order, each served as its shader's push.generated.glsl).
 // The VOLUME PARAMS in a block (tree_volume.inc.glsl's TV_PUSH_VOL, members pc_vol_*): the centre per dispatch, the rest
@@ -76,18 +66,16 @@ struct TvVolPush
     PushValue<float> height = g("height");              // m above the terrain the volume covers
     PushValue<float> densityScale = g("densityScale");  // x the baked extinction
 };
-// tree_volume_splat.cs.glsl: the static sets' pieces, or (recordsVariant: TREE_SPLAT_RECORDS) the detail chunks' records.
+// tree_volume_splat.cs.glsl: the detail chunks' records.
 struct SplatPush
 {
-    bool recordsVariant;
     PushGroup g;
-    PushValue<uint64> source = g(recordsVariant ? "map" : "pieces", recordsVariant ? "TreeRecordMap" : "PieceList"); // the pieces / the chunk map
-    PushValue<uint64> types = g("types", "TypeList");      // TREE_SPLAT_RECORDS: the world set's
+    PushValue<uint64> map = g("map", "TreeRecordMap");     // the chunk map
+    PushValue<uint64> types = g("types", "TypeList");      // the world set's volume types
     PushValue<uint64> data = g("data", "FloatList");
-    PushValue<uint32> numPieces = g("numPieces");          // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
-    PushValue<uint32> mapSize = g("mapSize");              // TREE_SPLAT_RECORDS: the chunk map's size
+    PushValue<uint32> numRecords = g("numRecords");        // this dispatch's detail records (one workgroup each)
+    PushValue<uint32> mapSize = g("mapSize");              // the chunk map's size
     TvVolPush vol{ { g.block, "vol_" } };
-    // TREE_SPLAT_RECORDS only:
     PushValue<uint64> records = g("records", "TreeRecordWords"); // each chunk's ground, then its records
     PushValue<uint64> detailChunks = g("detailChunks", "DetailList"); // uvec4 per detail chunk: coord, its first record's pool word, its first workgroup
     PushValue<uint64> recordTypes = g("recordTypes", "RecordTypeList");
@@ -95,7 +83,7 @@ struct SplatPush
     PushValue<uint32> worldSeed = g("worldSeed");
     PushValue<uint32> numDetailChunks = g("numDetailChunks");
     PushValue<uint32> numRecordTypes = g("numRecordTypes");
-    PushValue<uint32> wgOffset = g("wgOffset");            // this dispatch's first record / piece (the bake spreads both over frames)
+    PushValue<uint32> wgOffset = g("wgOffset");            // this dispatch's first record (the bake spreads them over frames)
     PushValue<float> rockExtinction = g("rockExtinction"); // lockable: a SOLID type's extinction (1/m) over its occupancy ("Far rock extinction")
 };
 // tree_volume_records.cs.glsl: the records' mass per column.
@@ -183,7 +171,7 @@ public:
     void initialize(uint32 width, uint32 height, vk::RenderPass sceneRenderPass);
     void recreateImages(uint32 width, uint32 height); // the march outputs (render size)
     void reloadShaders(vk::RenderPass sceneRenderPass); // the caller has waited for the GPU
-    void markDirty() { m_dirty = true; }               // a tree set changed: re-bake (after a running bake)
+    void markDirty() { m_dirty = true; }               // the records or the set's types changed: re-bake (after a running bake)
     // What a running bake reads is going away (a tree set, the record types, the pool): drop it, re-bake from scratch.
     // A bake already handing over (or copying) reads none of that any more: it finishes, the re-bake follows.
     void invalidate()
@@ -213,25 +201,17 @@ public:
     // (marchSettings) - the density scale the live one. `settings` is Globals::settings.farTree (the lambdas keep the
     // reference). The Renderer marks the blocks dirty; prepare() re-bakes them.
     void registerPushFields(const FarTreeParams& settings);
-    oc::array<PushBlock*, 9> pushBlocks()
+    oc::array<PushBlock*, 8> pushBlocks()
     {
-        return { &m_splatBlock, &m_recordSplatBlock, &m_resolveBlock, &m_floorSmoothBlock, &m_recordsBlock, &m_farBlock,
+        return { &m_splatBlock, &m_resolveBlock, &m_floorSmoothBlock, &m_recordsBlock, &m_farBlock,
             &m_marchBlock, &m_temporalBlock, &m_upsampleBlock };
     }
 
-    // One GPU tree set's volume data (device addresses).
-    struct Source
-    {
-        vk::DeviceAddress pieces = 0; // TreeVolumePieceGpu[numPieces]
-        vk::DeviceAddress types = 0;  // TreeVolumeTypeGpu[]
-        vk::DeviceAddress data = 0;   // float[]
-        uint32 numPieces = 0;
-    };
     // The WORLD TREE RECORDS (TreeRecordPool; W4): every record's tree. A chunk inside "Far record detail" of the bake
     // centre EXPANDS each record exactly as Procedural's world expansion (variant, scale, yaw, its bushes; the ground
-    // from the terrain map) into the world set's volume types and splats it in detail (tree_volume_splat.cs, its
-    // TREE_SPLAT_RECORDS variants); beyond it each record adds its exact mass to its columns (tree_volume_records.cs),
-    // spread over the slices by its type's height profile (tree_volume_far.cs). numTypes 0 = none.
+    // from the terrain map) into the world set's volume types and splats it in detail (tree_volume_splat.cs); beyond it
+    // each record adds its exact mass to its columns (tree_volume_records.cs), spread over the slices by its type's
+    // height profile (tree_volume_far.cs). numTypes 0 = none.
     struct RecordSource
     {
         vk::DeviceAddress records = 0;     // uint32 per record; each chunk's ground right before its records
@@ -270,8 +250,7 @@ public:
         vk::Sampler factionSampler;
         glm::vec3 cameraPos{ 0.0f };
         float startDistance = 0.0f;   // the march's start (3D, m): "Far start" scaled with the camera's height
-                                      // (Renderer::farTreesStart), the billboards' hand-over
-        oc::span<const Source> sources;
+                                      // (Renderer::farTreesStart), the voxel trees' hand-over
         RecordSource records;
         const FarTreeParams& settings;
         uint32 frameNumber = 0;       // monotonic: the history is last frame's only when this follows the last march
@@ -307,7 +286,7 @@ private:
         VmaAllocation memory{};
         vk::ImageView view;
     };
-    void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records);
+    void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass);
     void buildResolveLayout(ComputePipelineLayout& layout);
     void buildFloorSmoothLayout(ComputePipelineLayout& layout);
     void buildClearLayout(ComputePipelineLayout& layout);
@@ -330,8 +309,8 @@ private:
     void destroyTemporalImages();
     void destroyImage(Image& image);
     // THE BAKE, SPREAD OVER FRAMES ("Far bake frames"): startBake snapshots everything it reads, stepBake runs this
-    // frame's share - the clears; the floor coverage, the floor and the splat (the record splat's workgroups spread
-    // evenly); the smoothing; the records' mass; the far columns; the resolve; the max-floor grid; the hand-over; the
+    // frame's share - the clears; the floor coverage, the floor and the splat (their workgroups spread evenly); the
+    // smoothing; the records' mass; the far columns; the resolve; the max-floor grid; the hand-over; the
     // copy + the front / back swap. The march reads the FRONT floor, colour, max floor and the density - during the
     // hand-over the BACK ones and the accumulation too.
     void startBake(const RecordParams& params, uint32 frameNumber, glm::vec2 centre);
@@ -349,10 +328,8 @@ private:
     void reloadMarchPasses();
 
     // The push blocks: the bake passes' ...
-    PushBlock m_splatBlock;       // the static splat passes (the floor coverage, the floor, the splat)
-    SplatPush m_splatPush{ false, { m_splatBlock } };
-    PushBlock m_recordSplatBlock; // their TREE_SPLAT_RECORDS variants
-    SplatPush m_recordSplatPush{ true, { m_recordSplatBlock } };
+    PushBlock m_splatBlock;       // the splat passes (the splat, the floor coverage, the floor)
+    SplatPush m_splatPush{ { m_splatBlock } };
     PushBlock m_resolveBlock;
     ResolvePush m_resolvePush{ { m_resolveBlock } };
     PushBlock m_floorSmoothBlock;
@@ -369,9 +346,10 @@ private:
     PushBlock m_upsampleBlock;
     UpsamplePush m_upsamplePush{ { m_upsampleBlock } };
 
-    ComputePipeline m_floorCoverPipeline; // the splat shader's TREE_FLOOR_PASS 1 variant (the coverage per column)
-    ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)
-    ComputePipeline m_splatPipeline;
+    // tree_volume_splat.cs, per pass: [0] the splat, [1] its TREE_FLOOR_PASS 1 variant (the coverage per column), [2] its
+    // TREE_FLOOR_PASS 2 variant (the dominant tree's base).
+    oc::array<ComputePipeline, 3> m_splatPipelines;
+    oc::array<DescriptorSet, 3 * RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_splatSets;
     ComputePipeline m_resolvePipeline;
     ComputePipeline m_clearPipeline;       // tree_volume_clear.cs: the accumulation, a slice range per dispatch
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_clearSets;
@@ -383,10 +361,7 @@ private:
     ComputePipeline m_marchTemporalHandoverPipeline;
     ComputePipeline m_floorSmoothPipeline; // the floor's separable blur (floor -> floorCover -> floor)
     ComputePipeline m_recordsPipeline;     // tree_volume_records.cs: the records' mass per column
-    // The splat's TREE_SPLAT_RECORDS variants, per pass: [0] the splat, [1] the floor coverage, [2] the floor.
-    oc::array<ComputePipeline, 3> m_recordSplatPipelines;
-    oc::array<DescriptorSet, 3 * RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_recordSplatSets;
-    ComputePipeline m_farPipeline;         // tree_volume_far.cs: the columns' floor from the terrain + their slices
+    ComputePipeline m_farPipeline;        // tree_volume_far.cs: the columns' floor from the terrain + their slices
     // tree_volume_floor_max.cs: the floor -> the block max, then (TREE_FLOOR_MAX_DILATE) the dilated max-floor grid.
     ComputePipeline m_floorMaxPipeline;
     ComputePipeline m_floorDilatePipeline;
@@ -400,9 +375,6 @@ private:
     ComputePipeline m_temporalPipeline;      // cloud_temporal.cs.glsl, TREE_TEMPORAL
     ComputePipeline m_upsamplePipeline;      // tree_volume_upsample.cs.glsl ("Far half res")
     GraphicsPipeline m_applyPipeline;
-    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_floorCoverSets;
-    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_floorSets;
-    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_splatSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_resolveSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_recordsSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_farSets;
@@ -505,8 +477,8 @@ private:
         EBakeStage stage = EBakeStage::Clear;
         // THE STAGES SPREAD OVER FRAMES ("Far bake frames"): each takes a share of them, so no stage runs whole in one
         // frame unless it is small (the smoothing, the max-floor grid) - or a copy without a cross-fade (crossFade).
-        uint32 progress = 0;      // the units done in this stage (slices / pieces + records / chunks / rows)
-        uint32 perFrame = 1;      // the splat passes' units (the static sets' pieces, then the detail records) per frame
+        uint32 progress = 0;      // the units done in this stage (slices / records / chunks / rows)
+        uint32 perFrame = 1;      // the splat passes' detail records per frame
         uint32 clearPerFrame = 1; // the accumulation's slices per frame
         uint32 massPerFrame = 1;  // the records' mass: chunks per frame
         uint32 rowsPerFrame = 8;  // the far columns: radial rows per frame (a multiple of the 8-row group)
@@ -517,12 +489,10 @@ private:
         bool crossFade = false;
         uint32 handoverStart = 0;   // the frame the hand-over began (the march's variant starts the frame after)
         double handoverStartSec = 0.0; // ... and its real time (the UBO's fade counts from it: "Far swap time")
-        uint32 staticPieces = 0;  // the static sets' pieces (each splat pass walks them before the records)
         uint32 startFrame = 0;
         double startSec = 0.0;    // real time (the next bake's lead: this one's duration)
         glm::vec2 centre{ 0.0f };
         oc::unique_ptr<FarTreeParams> settings;
-        oc::vector<Source> sources; // the static sets
         RecordSource records;       // with the snapshot buffers' addresses
         uint32 detailRecords = 0;
         uint32 numDetailChunks = 0;

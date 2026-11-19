@@ -84,9 +84,9 @@ calls `reloadShaders()`.
 * **Terrain register savers:** `ClimatePick` (terrain_splat.inc.glsl) packs its three indices into one uint (8 bits
   each), and `pickClimate` keeps its running weights in HALF. **`terrainFbm` is `[[dont_unroll]]`** (its includers
   enable GL_EXT_control_flow_attributes): unrolled, the 12 corner hashes overlapped and cost the TES ~20 registers.
-* **Only `EPipelineIndex::LitMasked` / `LitTree` / `LitFoliage` / `LitTreeVoxel` discard** among the static-mesh variants
-  that write depth (the lit fragment compiled with `ALPHA_MASK`, instanced_indirect_tree.fs.glsl,
-  instanced_indirect_foliage.fs.glsl and instanced_indirect_tree_voxel.fs.glsl - the last also writes `gl_FragDepth`; the
+* **Only `EPipelineIndex::LitMasked` / `LitTree` / `LitTreeVoxel` discard** among the static-mesh variants
+  that write depth (the lit fragment compiled with `ALPHA_MASK`, instanced_indirect_tree.fs.glsl
+  and instanced_indirect_tree_voxel.fs.glsl - the last also writes `gl_FragDepth`; the
   clutter's textured flowers have their own pipeline for the same reason). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is every opaque
   pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque` (after the `.oc` overrides) to
@@ -107,13 +107,13 @@ calls `reloadShaders()`.
   registers / 32 B with one site, 64 / 48 with two.
 * **The lit core's includer defines** (instanced_indirect_lit.inc.glsl), each compiling a path OUT for a material that
   never takes it:
-  * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter, the tree billboards and voxels (their baked interior is their
+  * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter and the tree voxels (their baked interior is their
     AO; a runtime flag kept the whole upsample compiled).
-  * `LIT_NO_UNDERWATER` - no water-level fetch, no caustics: the tree leaves, billboards and voxels.
+  * `LIT_NO_UNDERWATER` - no water-level fetch, no caustics: the tree leaves and voxels.
   * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
-    the light loop, the diffuse takes no (1 - metalness). The three tree shaders.
+    the light loop, the diffuse takes no (1 - metalness). The two tree shaders.
   * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided
-    test and horizon fade per light kind; no view vector, no Fresnel, no GGX): the tree billboards and voxels, rough
+    test and horizon fade per light kind; no view vector, no Fresnel, no GGX): the tree voxels, rough
     surfaces seen from tens of metres. The sun keeps the full BRDF. Voxel FS 64/32 -> 64/16.
   * `LIT_SUN_SHADOW_HARD` - the sun's cascade shadow as ONE hardware-PCF tap (`sampleSunShadowHard`, the ocean's form;
     not on the RT sun path): the tree voxels, whose pixels are stochastic coverage. Voxel FS 64/0 -> 56/32, 10 KB less
@@ -121,23 +121,22 @@ calls `reloadShaders()`.
 * **`u_sunLit`** (a live UBO value, `registerUboValues`): 1 while the sun's radiance at the ground is above 0, 0 below
   the horizon (`u_sunTransmittance` is 0 there) and in a full eclipse - worked out once per frame on the CPU. Every
   reader of `sunShadowVisibility` multiplies it by that radiance, so the shaders that take their shadow with NO facing
-  test gate the search by `u_sunLit > 0.5` at their call site: the tree leaves, the foliage cards, the voxels (and the
+  test gate the search by `u_sunLit > 0.5` at their call site: the tree leaves, the voxels (and the
   voxels' sun march), the flowers. At night each of their pixels paid the whole search for a light of 0. **Not inside
   `sunShadowVisibility`**: there the grass FS went from 56 / 32 B to 64 / 0, and every lit binary changed; **not at the
   grass's own call either** (56 / 32 B -> 64 / 16 B). The two SHADOW CULLS (instanced_indirect_shadow.cs.glsl, the far
   casters' tree_voxel_far.cs.glsl) emit no caster while it is 0: the shadow pass still runs and clears its maps (their
   layouts stay valid for the shaders that sample them x a radiance of 0), at 0.03 ms. A forest view at night: the GPU
   frame 9.8 -> 7.4 ms with all of it.
-* **The tree fragment shaders hold nothing for the output across the lit core**: LitTree / LitFoliage write alpha 1 (no
+* **The tree fragment shaders hold nothing for the output across the lit core**: LitTree writes alpha 1 (no
   blending: the texture's alpha and the material's opacity were two values live to the end, across the light loop),
   and the voxel FS forms its depth and motion vector AFTER the lighting, from the position.
-* **The tree VS variants** (instanced_indirect.vs.glsl with `TREE_ORIGIN` / `FOLIAGE` / `TREE_VOXEL`): `TREE_STATIC` -
+* **The tree VS variants** (instanced_indirect.vs.glsl with `TREE_ORIGIN` / `TREE_VOXEL`): `TREE_STATIC` -
   a tree piece never moves and is never skinned, so no previous-transform work, the motion is the wind's alone;
-  `TREE_WIND_NO_FLUTTER` (the billboards, the voxel box: no leaf-card TIP vertex); the voxel box passes payload 0 as a
+  `TREE_WIND_NO_FLUTTER` (the voxel box: no leaf-card TIP vertex); the voxel box passes payload 0 as a
   constant (the trunk bend only) and writes no normal / tangent. A tree's whole wind comes per TREE, not per vertex
   ([Vegetation.md](Vegetation.md) "Tree wind"). `TREE_ORIGIN` / `TREE_VOXEL` hand the fragment shader the camera's
-  DISTANCE to the tree's origin (one flat float: `treeDistanceFaded`), not the origin for every pixel to measure;
-  `FOLIAGE` keeps the origin (its FS needs the point itself).
+  DISTANCE to the tree's origin (one flat float: `treeDistanceFaded`), not the origin for every pixel to measure.
 * **Statement order sets a vertex shader's registers.** In instanced_indirect.vs.glsl the wind is worked out BEFORE the
   vertex's own transform: the transformed position and normal held across the wind were 15 registers of the generic
   lit VS (63 -> 48; unlit 62 -> 48, tree 48 -> 40). The voxel box is the exception (its transform first: 40, the other
@@ -261,7 +260,7 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 `float16_t -> float` widening).
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0), tree FS 64/16
-(its VS 40/0), foliage FS 56/48 (its VS 39/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
+(its VS 40/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
 shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
 cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
@@ -278,8 +277,8 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
     still NaN - a bright point at the sun's position on the ocean after sunset. `halfVectorH` (punctual_lights.inc.glsl)
     floors it at 1e-4 IN HALF (an fp32 sum there moved the grass FS from 64/16 to 56/48) for the SUN's BRDF
     (`doLightH`, `doLightSplitH`); the ocean takes its fp32 floored form (no register change there). NOT in the area
-    lights' specular (`doAreaLightSpecularH`, the light loop - the register peak): there it took the lit, tree and
-    foliage FS from 64 to 72 registers, and V = -L against an area light is a rare view.
+    lights' specular (`doAreaLightSpecularH`, the light loop - the register peak): there it took the lit and tree
+    FS from 64 to 72 registers, and V = -L against an area light is a rare view.
   * A half that is only STORED (math still fp32) gains nothing: it is not packed, it takes a full 32-bit register, and
     the conversions add temporaries. Only whole blocks of fp16 MATH pay.
   * A value must not be live in BOTH precisions across a peak (a ray query, PCSS, the light loop): convert once,

@@ -86,7 +86,6 @@ TreeSpecies Aspen
 		Patches 0.05
 		Sections 0.25
 	Billboard
-		NormalBend 0.0
 		TopCardHeight 0.6
 		AlbedoScale 0.9
 		FarAlbedoScale 1.1

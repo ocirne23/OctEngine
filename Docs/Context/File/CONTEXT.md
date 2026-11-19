@@ -320,7 +320,7 @@ gone: any `<stem>_clips_<8 hex>.vsc` serves, like a scene.
   where the alpha channel survives compression (BC3) and the full-res coverage is not already
   all-or-nothing.
 
-* **The roughness floor — THE SHADERS RELY ON IT.** The lit / tree / foliage FS read the metal-roughness G as
+* **The roughness floor — THE SHADERS RELY ON IT.** The lit / tree FS read the metal-roughness G as
   the GGX alpha with NO `max(.., 0.01)` of their own. Every texture in a metal-roughness slot gets, in every BC
   colour block of every mip, both 565 endpoints raised to G6 >= 1 (`ROUGHNESS_FLOOR_8` = 4/255 decoded;
   >= ~3.5/255 = 0.0137 after the palette rounding). The palette interpolates the endpoints, and filtering and

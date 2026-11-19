@@ -23,9 +23,8 @@ float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 
 #ifdef SHADOW_FOLIAGE_BIAS
-// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD; set by the lit FS around its lookup): the constant depth bias only. A crossed
-// billboard's back half sits in the crossing card's shadow by a small depth step, which the slope-scaled bias and the
-// normal offset would erase (a strip lit through the tree). Alpha-tested foliage hides the bit of acne this allows.
+// FOLIAGE receivers (the trees' voxel tier sets it around its lookup): the constant depth bias only. A voxel hit lies
+// inside a crown, a small depth step from its own caster, which the slope-scaled bias and the normal offset would erase.
 bool g_shadowFoliage = false;
 #endif
 
@@ -35,9 +34,9 @@ float g_shadowLeafLength = 0.0;
 #endif
 
 // FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers, 1 - exp(-gap /
-// length (m)). The crossed cards' own shadow then starts at nothing on their crossing axis and deepens into the crown;
-// a blocker far up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker. The length is
-// u_foliage_shadowLength on the billboard cards, g_shadowLeafLength on the tree mesh leaves (a leaf just under its own
+// length (m)). The tree's own caster then shades it from nothing at the caster and deepens into the crown; a blocker far
+// up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker. The length is
+// u_foliage_shadowLength on the voxel tier, g_shadowLeafLength on the tree mesh leaves (a leaf just under its own shadow
 // billboard's top card is barely shaded, one deep under it fully).
 float foliageTransmit(float visibility, float gap, int cascade)
 {

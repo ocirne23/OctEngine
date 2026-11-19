@@ -6,7 +6,7 @@
 
 "Trees" tweaks. `TreeSystem` loads every `Assets/Trees/*.tree` species, generates its piece library and baked
 variants (through the generated-mesh cache - "The generated-mesh cache" in [CONTEXT.md](CONTEXT.md)), and draws
-either the WORLD (TreeWorld's records, "World mode") or a PREVIEW grove ("The preview").
+the WORLD: TreeWorld's records ("World mode"). Without TreeWorld or the terrain no tree draws.
 
 ### The model: a piece library, composited per tree
 
@@ -40,9 +40,8 @@ TreeSpecies <name>
 	Wood x (a Tree, default 1: x the wood a LUMBERYARD counts for one of its trees, after the size and the game's size
 	        exponent - `TreeWorld::surveyHarvest`'s weight. The Cedar 0.35: its massive buttressed trunk read as ~6 trees)
 	Undergrowth { Bushes (per tree, the fraction by chance) · Radius (m: out to this from the tree, at least 1.5) }
-	Wind { Trunk (x the trunk lean + sway, 0..4, default 1) · Branch (x the branch sway, meshes + branch cards) }
-	        (a Tree; absent = "Trees/Bushes per tree" and 0.75 x "Trees/Spacing (m)"; the far volume reads it per
-	        record type)
+	Wind { Trunk (x the trunk lean + sway, 0..4, default 1) · Branch (x the branch sway of the meshes) }
+	        (a Tree; absent = "Trees/Bushes per tree" out to 8.25 m; the far volume reads it per record type)
 	Trunk   Count (1..64) · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5)
 	        · <shape> · Lobes n (0..12 ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius
 	        fractions) · LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over
@@ -133,14 +132,16 @@ TreeSpecies <name>
 	        the dome left the limbs above the cards)
 	Lod     ErrorScale (x the per-level error; unused while the trees upload level 0 only - "Piece mesh LODs")
 	Bake    Variants (baked whole trees per species, 1..64, default 3)
-	Billboard Distance (m, 0 = none; default 50) · Resolution (px, rounded up to a power of two, 16..2048; 512)
-	          NormalBend (0..1, default 0) · FadeWidth (m, 1..1023, the mesh <-> billboard crossfade band centred on
+	Billboard (what stands for a baked variant where its meshes do not: "Far representations")
+	          Distance (m: the mesh -> VOXELS switch; 0 = the meshes at every distance, casting their own shadow, and
+	          no shadow billboard; default 50) · FadeWidth (m, 1..1023, the mesh <-> voxels crossfade band centred on
 	          Distance; 10)
-	          AlbedoScale (x the WHOLE-TREE billboards' colour, linear, 0..8; default 1 - applied after the cache, at
-	          load: a change needs no re-bake; the module billboards / branch cards and the far volume keep theirs)
-	          FarAlbedoScale (x the FAR-TREE VOLUME's colour, linear, 0..8; default 1 - with or without `Color Far`)
-	          TopCardHeight (the WHOLE-TREE billboard's horizontal card, a fraction of the tree's height: 0 = bottom,
+	          Resolution (px: the SHADOW BILLBOARD's mask, rounded up to a power of two, 16..2048; 512)
+	          TopCardHeight (the shadow billboard's horizontal card, a fraction of the tree's height: 0 = bottom,
 	          1 = top; default 0.5 - its bake is orthographic from above, so only the card mesh moves: no re-bake)
+	          AlbedoScale (x the voxel grid's colour and the leaf colour a ray sees on the shadow billboard, linear,
+	          0..8; default 1)
+	          FarAlbedoScale (x the FAR-TREE VOLUME's colour, linear, 0..8; default 1 - with or without `Color Far`)
 	Bark    Plates lines rows (1..64 fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
 	        Lenticels (0..1: birch dashes - the share of a 6 around x 24 along lattice's cells that hold a short dark
@@ -344,10 +345,9 @@ The round bushes, two per climate:
   at the tips, broad leaves), both `Weight 2`, plus `Bilberry` and `DwarfBirch` (`Climate Boreal BirchWood`).
 
 A bush is a tree species with a short trunk, slots from the ground (`Crown Start 0`), a large `BranchRadius`
-(the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`. **Billboard texture budget:**
-every bush bakes 2 variants (`Bake Variants 2`) from 4 modules (`Module Count 4`; the succulents 3) - each variant is a
-whole-plant billboard, each module a billboard bake and a row of the card atlas, and small plants that look alike need
-no more.
+(the thin trunk would otherwise cap the module scale) and a short `Billboard Distance` (20-30 m: its voxels take over
+there). **Texture budget:** every bush bakes 2 variants (`Bake Variants 2`) from 4 modules (`Module Count 4`; the
+succulents 3) - each variant is a voxel grid and a shadow mask, and small plants that look alike need no more.
 
 The SUCCULENTS - `Climate Desert` (no tree's, so never undergrowth), placed ON THEIR OWN by their `Placement` blocks:
 `Agave` (a dense FLOWER-SHAPED rosette: 40 slots on a short hidden trunk, the crown from 30 % of its height so the outer
@@ -357,8 +357,8 @@ top, widths +-25 % per module), `Swell 1.0`, `Tip 0.25`, 14 rings x 12 sides, no
 `Wind Trunk 0`; the desert sand box 20 C up / 0..350 mm, 60 / ha) and `Aloe` (17 LONG, narrower, thicker green blades
 rising and curving UP, not fanning out - `Angle 42 15`, `UpAttract 0.5`, `Cup 25`, `Curve 8` -, `Section 1.2 0.5 0.35
 0.25`, `Swell 0.4`; pale flecks in bands = the bark's `Lenticels` in a pale `Color Mark`; 18 C up / 50..400 mm,
-40 / ha). Both bake 2 variants (`Bake Variants 2`: the plants look alike - half the billboard textures) from 3 leaf
-modules (`Module Count 3`: each module is a billboard bake and a row of the card atlas). Having no leaves, they enter the far-tree volume by their BARK blades (`bakeTreeDensity`) in the
+40 / ha). Both bake 2 variants (`Bake Variants 2`: the plants look alike) from 3 leaf
+modules (`Module Count 3`). Having no leaves, they enter the far-tree volume by their BARK blades (`bakeTreeDensity`) in the
 bark texture's mean colour.
 
 ### Piece mesh LODs
@@ -375,7 +375,7 @@ it (`PIECE_LODS` table in TreeGenerator.cpp):
 | 3 | 25 % / 34 % | two deepest dropped (never below level 1) | 8 | no | 0.005 |
 
 **The GPU uses LEVEL 0 ONLY: no LOD levels for tree pieces** (`uploadLevelZero` uploads level 0 only, as a
-one-level `RenderMesh`, and leaves the array's levels above empty). The trees switch through their own tiers (mid tier, billboard, far volume); mesh LOD steps
+one-level `RenderMesh`, and leaves the array's levels above empty). The trees switch through their own tiers (the voxels, the far volume); mesh LOD steps
 underneath popped visibly (fewer, larger leaf cards per level, no crossfade). The generator meshes level 0 only
 (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table stays for a return of mesh LODs); `lodError` / `Lod ErrorScale`
 are unused, and RendererVK allocates no hysteresis slots for tree records.
@@ -383,124 +383,100 @@ are unused, and RendererVK allocates no hysteresis slots for tree records.
 ### The species load
 
 **On JOBS, one Low job per `.tree`** ("Tree species load", `kickLoad` -> `loadSpecies`): the `.tree` parse, the meshes
-(the `.treemesh` cache or generated), the textures (`.tex` or generated), the billboard bakes, the card atlas and the
-variants' card meshes - everything but the GPU objects - into the job's own slot (`SpeciesLoad`), from a snapshot of
+(the `.treemesh` cache or generated), the textures (`.tex` or generated), the shadow billboards' masks and the voxel
+grids (`buildFarTier`) - everything but the GPU objects - into the job's own slot (`SpeciesLoad`), from a snapshot of
 the settings (`LoadSettings`). Each `TreeSystem::update` UPLOADS the species whose jobs finished (`pumpLoad` ->
-`uploadSpecies`: the piece meshes, the materials, the billboards, the derived fade materials) and frees that slot's
+`uploadSpecies`: the baked variants' meshes, the materials, the shadow billboards, the voxel tier, the derived fade materials) and frees that slot's
 CPU data at once; once every species is in, the failed ones drop out of `m_species` (name order kept), the fade bands
 are written and the trees spawn. Nothing draws while a load runs. `clearAll` (a reload, a disable, the destructor)
 joins the jobs first (`stopLoad`).
 
-**The CPU meshes are not kept**: `Species` holds only the GPU `PieceMeshes`, `moduleLength` (the library row's
-spacing) and `volumeAlbedo`.
+**The CPU meshes are not kept, and the piece library is never uploaded or cached**: `Species` holds only the GPU
+`PieceMeshes` of its baked variants and `volumeAlbedo`. The trunks and the modules are the variant bake's input only:
+`loadSpecies` generates them on a `.treemesh` miss and drops them.
 
-### Far representations (`Trees/Far mode`)
+### Far representations
 
-The SHARED pieces — modules AND trunks, and the baked whole-tree variants — get a billboard each (a trunk's +Y is
-world up, so its billboard's "top" card stands vertical: two crossed vertical trunk cards), crossfaded in per placed
-piece beyond its distance × `Trees/Far distance scale` (default 1; `Trees/Force far` shows them all). Two modes,
-`Billboards` and `None`; changing the mode reloads. The bakes live in `TreeImpostor.cpp`: a small software rasterizer
-(2×2 supersampled, back faces culled, leaves alpha-tested). Cache files `<species>_<kind>billboard<i>v<views>_<hash>.tex`
-(both maps, see "Texture files"; kind "" = module, `trunk`, `tree` = baked variant; stale files of the same prefix are
-removed).
-`treeBakeHash` names them by the bake's INPUTS: the species file's text, the piece's set and index, `BAKE_VERSION`
-and the settings - **never by the geometry**: its floats differ in their last bits between Debug and the optimized
+A tree draws as its MESHES or as its VOXELS, nothing else. A species with a `Billboard Distance` (> 0) gives every
+baked variant two things for where its meshes do not stand (`buildFarTier`, on the species job):
+
+* **THE VOXEL TIER** ("The voxel tier" below): past the species' band - its distance × `Trees/Far distance scale`
+  (default 1) - the MAIN pass draws the variant's voxel grid in its meshes' place. With `Trees/Voxel impostors` off the
+  meshes draw at every distance. `Trees/Force far` draws every plant as its voxels.
+* **THE SHADOW BILLBOARD**: three crossed cards with a mask. It is the variant's sun-shadow caster and rain shelter at
+  EVERY distance, and what the rays see of it. It never draws in the main pass.
+
+A species with `Billboard Distance 0` has neither: its meshes draw at every distance, cast their own shadow and (a
+tree) get a BLAS.
+
+`treeBakeHash` names the cache files by a bake's INPUTS: the species file's text, the variant's index, `BAKE_VERSION`
+and the size - **never by the geometry**: its floats differ in their last bits between Debug and the optimized
 builds (`/fp:fast`), which renamed (and re-baked) the cache at every config switch. **A generator change that moves
 geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenerate textures`.
 
-* **Billboards** (default): two crossed cards along the module axis from its LOD-0 box — a vertical card
-  (normal +X) and a horizontal card (normal +Z = world-up after the composite), their views stacked as strips
-  of one square texture (`bakeBillboards`, `billboardMesh` in TreeImpostor.cpp). `Trees/Billboard views`
-  (reloads): **2** (default) — a strip per card (side, top), the back face showing the front view through the
-  card; **4** — each FACE its own strip, top to bottom: side from +X, side from −X, top, bottom. A back view
-  keeps the card's right / up and negates only the view direction: stored as seen THROUGH the card, it reads
-  the right way round on the back face, and its tangent-space normals match the back face's TBN (same tangent /
-  bitangent, the handedness flips) — no shader change. Both card PLANES pass through the branch axis (module
-  x = 0 / z = 0), not the box centre, so the root lands at the trunk. **Whole trees** (the baked variants, whose +Y
-  is up, so both cards above stand vertical) get a THIRD, horizontal card for the top-down view
-  (`billboardHorizontalView`): across the axis at `TopCardHeight`, seen from above, u (+Z) spanning at least the
-  tree's height so the lit FS's crown radius matches the vertical cards'. The material carries
-  `MATERIAL_FLAG_BILLBOARD_TOP_CARD`; the lit FS finds the card by its up-facing normal (RendererVK). The
-  edge-on fade hands over between the vertical cards and it.
-* **Strip layout** (`billboardLayout`): 3 cards share the texture (3 strips with 2 views, 6 with 4), each strip's
-  height rounded DOWN to a multiple of the largest power of two p that leaves ≥ 4 px per strip at mip log2(p) — so
-  every strip boundary lands on a texel boundary at every mip the material gets and no mip mixes two cards. 512 / 3:
-  p = 32, 160 rows a strip, 32 spare rows at the bottom. 2 cards: 256 rows. Mips stop at ~4 px per strip.
-* **THE CROWN FIELD** (`buildCrownField`, TreeImpostor.cpp): the piece's LOD-0 leaves (its bark when it has none)
-  splatted by area into a grid of cubic cells (`CROWN_RES` = 32 along the longest side), Gaussian-blurred (sigma 2.5
-  cells, ~8 % of the longest side) and normalized to a peak of 1 - a soft hull of whatever shape the leaves make.
-  Per texel, at its leaf's 3D point (the card point + the baked depth): the **hull normal** = the field's outward
-  gradient (the box centre where the field is flat), and the **interior** = the optical depth out along that normal /
-  the field's CORE depth (from its peak out to the side, the mean of 4 horizontal directions), clamped to 0..1 -
-  linear, so the lit FS's `Foliage interior depth start / end` remap it, and per-tree normalized, so a narrow pine and
-  a wide oak both reach ~1 at their core. **VOLUME normals**: each texel's normal is bent by `Billboard NormalBend`
-  toward the hull normal (not "out of the box centre": on a tall tree that points up at the top and down at the
-  bottom) and keeps its sign, in each card face's tangent space. **The normal image is the CROWN layout**: RGB =
-  that normal, **A = the interior** (RendererVK: remapped, x `Trees/Foliage interior shadow`); the mips are the
-  bark's `buildNormalMips` (RGB renormalized, A averaged).
-* The billboard materials carry `MATERIAL_FLAG_BILLBOARD`, so the lit FS does not reject the sun shadow by the flat
-  card normal — without it a whole card went dark whenever the sun was behind it. They and the leaf cluster
-  material also carry `MATERIAL_FLAG_LEAF`: the sun shines through them (RendererVK leaf transmission on `LitTree` /
-  `LitFoliage`, `Trees/Foliage transmission*` tweaks). The lit FS also blends their normals toward a view-ray CROWN
-  normal (an ellipsoid of the card's proportions; `Trees/Foliage crown normal`), so the two cards stop shading
-  differently at their crossing axis. This needs the card's +u axis to run from the instance origin
-  (`billboardViews`: right = piece +Y). A billboard material must draw on `LitFoliage`; **the cards cast their own
-  alpha-tested shadows**, so the mesh nodes stop drawing entirely past the band.
-* **In the main pass a TREE's whole billboard is replaced by its voxel grid** with "Trees/Voxel impostors" ("The voxel
-  tier" below); everything here still holds for its shadows, GI and RT, and for the bushes.
-* **Crossfade** (billboards only): a band `FadeWidth` × `Trees/Fade width scale` wide (default 2; clamped to 1..1023 m,
-  the material's 10 bits; respawns - the GPU set keeps the width per type), centred on the billboard distance × `Far
-  distance scale`. The voxel tier and the mid tier take the same width. `Trees/Voxel start (m)` (default 0 = off; respawns)
-  sets where a TREE's band STARTS, in metres, for every tree species (bushes keep their own): `farDistance` stores it
-  unscaled, (start + width / 2) / `Far distance scale`, so the culls and the fade bands, which apply the scale, land it
-  there - and a `Far distance scale` change respawns while it is on. Inside it (centre distance ± the piece radius) the piece draws its mesh as `barkFade` / `leavesFade`
-  — the same meshes on `LitTree` with species materials DERIVED with a distance fade-OUT
-  (`RenderMaterial::derive`, shared textures) — plus the billboard, whose material fades IN over the same
-  band. The tree FSs' dither (tree_fade.inc.glsl, RendererVK `MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to
-  exactly one of them; TAA blends the per-frame dither. Outside the band only one side draws, the mesh on its
-  normal (early-depth) materials. `applyFadeBands` writes the bands into the material flags (at reload and when the
-  distance scale changes — no reload). Not dithered in the shadow pass: inside the band both cast. `Force far`
-  keeps the hard switch. Turning the cards about the branch axis toward the camera was tried and dropped (the look).
-* **RT (GI, RT shadows, RTAO, reflections) sees only the WHOLE-TREE billboards** of TREE species: every other tree
-  mesh is created without a BLAS (`createMesh(..., raytraced = false)`) - bark / leaves / trunk / branches, the card
-  meshes, the module / trunk billboards (the library rows) - and BUSHES never get one. Without billboards (Far mode
-  None) the tree species' bark + leaves are raytraced instead.
-* **Branch cards — the MID tier** (GPU path, baked variants; `Trees/Branch card distance`, default 0 = off: the mesh hands over to the whole tree's voxels / billboard, and the load bakes / loads no module
-  billboards, no card atlas and no card meshes (`LoadSettings::branchCards`); else × each species' billboard distance;
-  reloads): every baked variant keeps its composite (`TreePiece::placements`)
-  and its bark SPLIT in two (`trunkBark` - the trunk alone - and `branchBark` - the modules'; `bark` stays whole for
-  the bakes and the CPU path). `buildBillboards` stacks the module billboards into ONE CARD ATLAS per species (module
-  m in rows [m, m + 1) x size; each mip the stack of the modules' own coverage-preserved levels) and merges per
-  variant ONE CARD MESH: every module placement's cards in the variant's space, v into the module's block. Between
-  the full mesh and the whole-tree billboard the tree draws the TRUNK (shared by both - it never fades at the mid
-  band) plus the CARD mesh: over the mid band (`FadeWidth` wide) the branch bark (`branchMidFadeMaterial`) and the
-  leaves (`leafMidFadeMaterial`) fade out while the cards fade in (`cardInMaterial`); over the far band the trunk
-  (`barkFadeMaterial`) and the cards (`cardOutMaterial`) fade out while the whole billboard fades in (derived
-  materials, bands in `applyFadeBands`). The cards draw on LitFoliage with the whole-tree billboards' shading and
-  "Foliage ..." tweaks and the same edge-on fade (without it a grazing card smeared into streaks). Their crown frame is still per
-  MODULE: `billboardMesh(..., axisInZ)` puts each card's axis (its module's +Y line, as a texture v) into
-  texCoords.z = 3 + v (`TREE_CARD_AXIS_CODE`), which rides the tangent's w magnitude to the lit FS. On top of it the
-  card's WIND, + `TREE_CARD_WIND_STEP` (4) x (weight | phase << 4): the vertex's weight along its module's +Y (0 at
-  the root, 15 at the cards' top end) and the placement's `windPhase` (`TreePiecePlacement`, set by
-  `bakeTreeVariant`: the module mesh's phase) - the cards bend per module like the mesh (RendererVK "Tree wind"). MAIN pass only:
-  shadows, GI and RT keep the whole billboard. 4 fixed record slots per tree, no pool (RendererVK "BAKED TREE
-  RECORDS"). The CPU path (GPU expansion off) has no mid tier.
-* **None**: the meshes only.
+#### The shadow billboard
+
+* **The cards** (`billboardMesh`, TreeImpostor.cpp): two vertical cards crossed on the trunk axis - seen along X and
+  along Z; their PLANES pass through x = 0 / z = 0, not the box centre, so the trunk lands on the crossing - and a
+  HORIZONTAL card across the axis at `TopCardHeight` of the box, seen from above (the shadow under a high sun, the rain
+  shelter). Both faces of a card read the same strip: a silhouette is the same from both sides. Plain vertices: no
+  wind payload, no codes (the shadow VS bends every tree caster by the trunk's sway alone). **Every vertex's tangent =
+  the CROWN SHAPE's radii** (the cards' half extents): a ray that shades a hit takes its normal from an ellipsoid in
+  the cards' box, not from the flat card (RendererVK Scene.md, `MATERIAL_FLAG_BILLBOARD`).
+* **THE MASK** (`bakeBillboardMask`): ONE channel - no albedo, no normal. A small software rasterizer (2×2
+  supersampled, back faces culled, the leaf texture's alpha tested) draws each card's view into its strip of one
+  square texture. A texel's value: **0 = empty, >= 128 = solid**, and a solid texel says WHAT it is - `TREE_CARD_BARK`
+  (0.625, RendererVK Layout.ixx) = bark only .. 1 = leaves only, the leaf share of its covered subsamples between.
+  The alpha test (0.5) reads cover; a ray hit reads the share (below). Cache: `<species>_shadowmask<v>_<hash>.tex`.
+* **Strip layout** (`billboardLayout`): 3 strips, each strip's height rounded DOWN to a multiple of the largest power
+  of two p that leaves ≥ 4 px per strip at mip log2(p) — so every strip boundary lands on a texel boundary at every
+  mip and no mip (and no BC block) mixes two cards. 512 / 3: p = 32, 160 rows a strip, 32 spare rows at the bottom.
+  Mips stop at ~4 px per strip.
+* **The mips keep the cover**: a level's cover is the mean of the level below (unscaled), its test runs on that cover
+  × a scale found by binary search so the SOLID share of the level equals level 0's (as the leaf clusters' mips) - a
+  crown casts as much shadow in a far cascade as in a near one. A level's leaf share is the cover-weighted mean.
+* **The material** (`createBillboardMaterial`; `PieceMeshes::billboardMaterial`, `MATERIAL_FLAG_BILLBOARD`,
+  alpha-tested at 0.5): the mask in the albedo slot - BC4, or R8 without "Compress textures"; RendererVK shows a
+  one-channel albedo in all four channels, so every alpha reader (the shadow casters, the ray queries) takes it from
+  `.a` as any texture's. The normal slot holds a **2 x 1 texture of the species' two colours for the rays**: the bark
+  texture's linear mean, then the leaves' (× `Billboard AlbedoScale`; a leafless species: its bark for both), stored
+  as their square roots. A ray that shades a hit (GI, the water's and the film's reflections) mixes the two by the
+  mask's leaf share (`tree_card.inc.glsl`; an empty texel takes the leaf colour: those rays treat the whole card as
+  solid).
+* **RT (GI, RT shadows, RTAO, reflections) sees only the shadow billboards** of TREE species: every tree mesh is
+  created without a BLAS (`createMesh(..., raytraced = false)`), and BUSHES never get one (their billboard casts in
+  the cascades only).
+
+#### The crossfade
+
+A band `FadeWidth` × `Trees/Fade width scale` wide (default 2; clamped to 1..1023 m, the material's 10 bits; respawns -
+the GPU set keeps the width per type), centred on the species' distance × `Far distance scale`. `Trees/Voxel start
+(m)` (default 0 = off; respawns) sets where a TREE's band STARTS, in metres, for every tree species (bushes keep their
+own): `farDistance` stores it unscaled, (start + width / 2) / `Far distance scale`, so the culls and the fade bands,
+which apply the scale, land it there - and a `Far distance scale` change respawns while it is on. Inside the band
+(centre distance ± the piece radius) the tree draws its meshes as `barkFade` / `leavesFade` — the same meshes on
+`LitTree` with species materials DERIVED with a distance fade-OUT (`RenderMaterial::derive`, shared textures) — plus
+its voxels, whose material fades IN over the same band. The tree FSs' dither (tree_fade.inc.glsl, RendererVK
+`MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to exactly one of them; TAA blends the per-frame dither. Outside the
+band only one side draws, the meshes on their normal (early-depth) materials. `applyFadeBands` writes the bands into
+the material flags (at reload and when the distance scale changes — no reload). The shadow pass has no fade: the
+shadow billboard casts at every distance. `Force far` keeps the hard switch.
 
 ### The voxel tier (`Trees/Voxel impostors`)
 
-On by default; GPU path with billboards; TREES only (a bush keeps its billboard). In the MAIN pass a baked variant's
-whole-tree billboard is replaced by its PREFILTERED VOXEL GRID, marched per pixel (RendererVK `LitTreeVoxel`, Scene.md
-"THE VOXEL TIER"): the same band, the same fade-in, the same hand-over to the far-tree volume. With "Trees/Voxel
+On by default, for every species with a `Billboard Distance` - trees and BUSHES. Past the species' band the MAIN pass
+draws a baked variant's PREFILTERED VOXEL GRID, marched per pixel (RendererVK `LitTreeVoxel`, Scene.md
+"THE VOXEL TIER"), up to the hand-over to the far-tree volume. With "Trees/Voxel
 shadows" (off, live) the grid is also the tree's sun-shadow caster at every distance (Scene.md "THE VOXEL SHADOW
-CASTERS"); GI and RT keep the billboard, so its texture stays. Past the world set's near chunks the renderer draws the
+CASTERS"); the rays keep the shadow billboard. Past the world set's near chunks the renderer draws the
 records' trees as voxels too ("Trees/Voxel far trees", RendererVK Scene.md "THE FAR VOXEL TREES"): `updateWorld` hands it
-the set's chunk coordinates every frame. "Trees/Voxel resolution" (32 / 64 / 128 / **256** voxels per axis
-at level 0) and the toggle both reload. 256: its bake holds ~1 GB of level-0 grids on the CPU while it runs (16.7 M voxels,
+the set's chunk coordinates every frame (trees only: `RenderTreeSet::Type::farRing` is off for a bush). "Trees/Voxel
+resolution" (32 / 64 / 128 / **256** voxels per axis at level 0 for a TREE; a BUSH takes a quarter, at least 32: it is
+about a metre, and its band starts 20-30 m out) and the toggle both reload. 256: its bake holds ~1 GB of level-0 grids on the CPU while it runs (16.7 M voxels,
 leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <stored> of <all> bricks stored (%), MB".
 
-* **The bake** (`bakeTreeVoxels`, TreeImpostor.cpp; in `buildBillboards`, on the species job): over `treeVoxelBox` (the
-  billboard box + 1.5 voxels each side), the LOD-0 leaves and bark splatted by PROJECTED area per point of a barycentric
+* **The bake** (`bakeTreeVoxels`, TreeImpostor.cpp; in `buildFarTier`, on the species job): over `treeVoxelBox` (the
+  tree's box + 1.5 voxels each side), the LOD-0 leaves and bark splatted by PROJECTED area per point of a barycentric
   grid (half a voxel apart: up to 1024 points an edge - with a low limit the points of a large trunk triangle stand
   further apart than a voxel of the 256 grid), each point's weight x the texture's ALPHA there and its colour the
   texture's (linear):
@@ -515,9 +491,8 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   with the wall's colour and normal. The wall voxels keep their partial opacity, so the silhouette does not grow. Then
   the mean colour and the MEAN normal (short where
   the leaves face every way), the bark weighted by what the voxel's own leaves leave of it, `exp(-leaf area /
-  crossing^2)` - by area alone the branches inside the crown greyed it, where the billboard bake's depth test hides them
-  (a bark-only voxel, the trunk under the crown, keeps the bark) - then x `Billboard AlbedoScale` as the whole-tree
-  billboards; and the INTERIOR = the smallest optical depth to the box's side along the six axes, over the tree's largest.
+  crossing^2)` - by area alone the branches inside the crown greyed it
+  (a bark-only voxel, the trunk under the crown, keeps the bark) - then x `Billboard AlbedoScale`; and the INTERIOR = the smallest optical depth to the box's side along the six axes, over the tree's largest.
   Colour and normal are dilated two rings into the empty voxels (the filter would pull a surface voxel toward black).
 * **The levels** halve down to 4 voxels: a coarse voxel's opacity is 1 - the MEAN TRANSMISSION through its children along
   the three axes (12 two-voxel columns), not the mean opacity, so a dense clump keeps its cover far away; the rest
@@ -542,14 +517,14 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
     its D^3 bricks (D = `treeVoxelBricks(n)` = ceil((n - 1) / 7)): brick (x, y, z) at (x + z D, y), RGB = its slot,
     0 = EMPTY. At 256: 1369 x 76.
   * Two `.tex` files per variant: `<species>_treevoxel<v>r<res>_<hash>.tex` (the opacity atlas as its albedo, the
-    surface atlas as its normal) and `..._index.tex`, keyed as the billboards are plus `TREE_VOXEL_BAKE_VERSION` (bump
+    surface atlas as its normal) and `..._index.tex`, keyed as the shadow masks are plus `TREE_VOXEL_BAKE_VERSION` (bump
     it when the bake changes). The box is rebuilt from the geometry on every load.
 * **The material** (`createVoxelMaterial`; `PieceMeshes::voxelMaterial`, `MATERIAL_FLAG_LEAF`): the opacity atlas in the
   albedo slot, the surface atlas in the normal slot (`TextureDesc::normalWidth / normalHeight`: its own size); the index
   is a bare linear `RenderTexture` (`PieceMeshes::voxelIndex`). **The opacity atlas's header carries the index texture's
   bindless id** (its first two 4 x 4 blocks = the id's low and high byte, written at upload: a BC4 block of two equal
   endpoints decodes exactly): the shadow casters get ONE texture index (the cull's alpha index), and both passes find
-  the index through it (`voxelGrid`). It takes the billboard's fade-in band in `applyFadeBands`; the box mesh
+  the index through it (`voxelGrid`). It takes the band's fade-in in `applyFadeBands`; the box mesh
   (`treeVoxelBoxMesh`) has no BLAS.
 * Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel sharpness" (0..0.95,
   default 0.95: the filter's REACH - the bake writes every surface point into its one voxel, but trilinear sampling spreads
@@ -562,7 +537,7 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   texture, a sparse voxel's branches - read greyer than the mesh leaves), "Voxel brightness" (x the linear colour, after
   the saturation), "Voxel transmission" / "... glow" / "... focus" (x the "Foliage transmission" ones) and "Voxel
   transmission self shadow" (the share of the voxel self-shadow the transmitted sun takes; in place of "Foliage
-  transmission self shadow"); the other "Foliage ..." leaf terms apply as on the billboards.
+  transmission self shadow"); the other "Foliage ..." leaf terms apply as on the mesh leaves.
 
 ### Texture files (`Assets/Local/Trees/Textures`)
 
@@ -573,29 +548,26 @@ far volume's colour), zstd. A load is one read and one decompress - no image dec
 `<species>_bark.tex`, `<species>_leaves.tex` (cluster species only; its normal map: the leaves' tangent-space normals -
 cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage as the colour; A = the leaf's RIM, 0
 at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness; BC3 on the GPU for the A), plus the
-billboard bakes `<stem>.tex`. Keyed inside by the species file's text, `Compress textures` and the size, so a changed
-`.tree` regenerates them; `Trees/Regenerate textures` overwrites all. Writing a `.tex` removes the level-0 PNGs it
-replaces. **A `.tex` holds no RGBA8 level 0**: a billboard bake miss regenerates the bark / leaf images it needs
-(`buildBillboards`' `bakeInputs`; the generators are deterministic). The rocks' DEAD WOOD keeps its own tinted bark
+shadow masks and the voxel grids `<stem>.tex`. Keyed inside by the species file's text, `Compress textures` and the
+size, so a changed `.tree` regenerates them; `Trees/Regenerate textures` overwrites all. Writing a `.tex` removes the
+level-0 PNGs it replaces. **A `.tex` holds no RGBA8 level 0**: a mask or voxel bake miss regenerates the bark / leaf
+images it needs (`buildFarTier`; the generators are deterministic). The rocks' DEAD WOOD keeps its own tinted bark
 `.tex` ([Rocks.md](Rocks.md)).
 
 **GPU formats** (`Trees/Compress textures`, default on, reloads; a change is a `.tex` miss, so it re-bakes the
-billboards): the finished mip chains (coverage-preserving alpha, AlbedoScale applied) are BC-compressed when generated
-(File `TextureConvert::compressBlockRows`, stb_dxt, every level's block rows a `parallelFor` task, "Tree texture BC").
-The card atlas stacks the module billboards' levels IN THEIR ENCODING (every level is a multiple of 4 px high):
+masks and the voxel grids): the finished mip chains are BC-compressed when generated
+(File `TextureConvert::compressBlockRows`, stb_dxt, every level's block rows a `parallelFor` task, "Tree texture BC"):
 
 | Texture | Format |
 |---|---|
 | bark albedo | BC1 sRGB (opaque) |
 | bark normal | BC5 (XY; MATERIAL_FLAG_BC5_NORMAL rebuilds Z) |
 | leaf cluster atlas | BC3 sRGB (alpha-tested) |
-| billboard + card-atlas albedo | BC3 sRGB |
-| billboard + card-atlas normal | BC3 linear - RGB the full normal WITH its sign, A the baked interior: no two-channel format holds both, and there is no BC7 encoder |
+| shadow billboard mask | BC4 (one channel: cover + leaf share) |
+| voxel opacity atlas / surface atlas | BC4 / BC3 linear |
 
-4x less VRAM (BC1: 8x). Off = the RGBA8 chains (the A/B for compression artefacts). The module / trunk
-billboards are uploaded only with `Show piece library` (default off; they draw only there, in the preview grove; that
-tweak reloads too).
-Without it they are not even baked or loaded - except the modules' while the mid tier is on (its card atlas).
+4x less VRAM than RGBA8 (BC1 and BC4: 8x for their one or three channels). Off = the uncompressed chains (the A/B for
+compression artefacts).
 
 ### Bark texture
 
@@ -653,50 +625,52 @@ same height field (x along u, y along v — the tube's tangent / bitangent), eac
   curve and length, pinna count / angle / length, leaflet size, alternate pinnae, tint) - with jitter only the four
   read as copies.
 
-### Baked tree variants (what the grove places)
+### Baked tree variants (what a record expands to)
 
 The runtime does not composite pieces per tree: at load every species bakes `Bake Variants` (3) whole trees
 (`bakeTreeVariant`: the composite of a seed, all its pieces' bark merged into one mesh and all their leaves
 into another, PER LOD LEVEL, at scale 1; each level's error = the largest piece error × its placement scale).
-A variant is just one more "piece" (`Species::variants` / `variantMeshes`): a billboard (cache kind `tree`), the
-crossfade — all the piece machinery applies unchanged. The grove and the world place one variant per tree with a
-seeded variant, scale (`Scale`) and yaw. The pieces still exist (the bake input, the piece library rows).
+A variant is a `TreePiece` like the library's (`SpeciesLoad::variants` -> `Species::variantMeshes`), with its voxel
+grid and its shadow billboard ("Far representations"). The world places one variant per tree with a seeded variant,
+scale (`Scale` × `Size variation`: 2^±v, log-uniform, default 0.6 = ×0.66..1.52) and yaw. The library's pieces are the
+bake's input only: they are never uploaded, and the `.treemesh` cache holds the variants alone.
 
 **The WIND payload** (RendererVK "Tree wind", `tree_wind.inc.glsl` for the bit layout): `meshPiece` writes every bark
 and leaf vertex's `texCoords.z = 1 + payload / 2^22` (`windPayload`): the module weight along the module's root bone
 (a sub-branch's vertices take it at their bone's pivot), the level-1 sub-branch weight along its bone, the bone's phase,
 a leaf card's TIP flag (corners 2 / 3; a diamond's all but the stem) - a card's weights from its STEM, so all four
 corners share one phase. Trunk pieces: the wind bit only (the trunk bend). `bakeTreeVariant` ORs each module
-placement's phase (3 bits) into its vertices and keeps it in the placement (`windPhase`: the branch cards' phase). No
+placement's phase (3 bits) into its vertices (two placements of one module sway apart). No
 vertex grows: the magnitude of the tangent's w was free. The species' `Wind` scales ride its piece TYPES
 (`RenderTreeSet::Type::windTrunk / windBranch`, RendererVK "Tree wind"): the cedar (large, heavy limbs in the trunk
 piece) `Trunk 0.4`, `Branch 0.7`.
 
-### GPU expansion
+### The tree set
 
-With `Trees/GPU expansion` (default on), `spawnPreview` builds ONE RendererVK tree instance set
-(`RenderTreeSet::create`, held in `m_treeSet`; `destroyTreeSet` destroys it before the species' meshes): a piece TYPE per library piece (its bark, leaves, the derived fade-out materials and the
-billboard, plus the band), then every placed piece (transform, far centre + radius, type). The set is uploaded once to
-device-local memory, and the culls make the per-piece decision and build the records themselves, and the TLAS writer
-their RT instances (see RendererVK "BAKED TREE RECORDS"). **The pieces live in the TERRAIN CHUNKS:** `spawnPreview`
-sorts them by the terrain chunk under their base (`Globals::terrain.chunkSize()`; a chunk-size change respawns), one
-set chunk per terrain chunk, and hooks the set into the terrain (`TerrainStreamer::setVegetation`,
+Every tree draws through ONE RendererVK tree instance set (`RenderTreeSet::create`, held in `m_treeSet`, built by
+`spawnWorld`; `destroyTreeSet` destroys it before the species' meshes): a piece TYPE per baked variant
+(`buildGpuTypes`: its bark and leaves, their derived fade-out materials, its voxel box and the band, its shadow
+billboard; `farRing` off for a bush), then CHUNKS of
+placed pieces (transform, far centre + radius, type), added and removed as the camera moves ("World mode"). A chunk is
+uploaded once to device-local memory, and the culls make the per-piece decision and build the records themselves, and
+the TLAS writer their RT instances (see RendererVK "BAKED TREE RECORDS"). **The pieces live in the TERRAIN CHUNKS:**
+one set chunk per terrain chunk (`Globals::terrain.chunkSize()`; a chunk-size change respawns), and the set is hooked
+into the terrain (`hookTerrain` -> `TerrainStreamer::setVegetation`,
 [TerrainStreamer.md](TerrainStreamer.md)): the terrain's render walk lists the chunks it draws with their passes, and
 its sink calls `m_treeSet.render` with that list - so the culls only see the plants of the visible chunks (all
 passes) and of the shadow / GI sphere's chunks (shadow + GI). **The sink runs on the walk's worker: it reads the band
 settings through atomics.** `update` binds the set (`bind`, main) and submits EVERY chunk itself when
-the walk does not carry it (terrain off, or the respawn frame - the new hooks start with the next walk). Unhooking
-(`destroyTreeSet`) joins the walk.
+the walk does not carry it (no walk this frame, or the respawn frame - the new hooks start with the next walk).
+Unhooking (`destroyTreeSet`) joins the walk.
 
 Every baked variant also carries its FAR-TREE VOLUME grid (`bakeTreeDensity`, `TREE_DENSITY_RES` = 32³ extinction
-over its billboard box, from the LOD-0 LEAF triangles only; cluster leaves count half opaque. No bark: a trunk's whole
+over its box, from the LOD-0 LEAF triangles only; cluster leaves count half opaque. No bark: a trunk's whole
 area in one thin voxel column draws dashed vertical streaks through the far blobs - EXCEPT for a piece with no leaves at
 all (the succulents' bark blades), which splats its bark at a quarter of its surface) and the species leaf colour — the
 leaf texture's alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures upload as sRGB, so the
 raw `leafColor` taken as linear reads light yellow-green; a leafless species: its BARK texture's mean) — handed to the set as the type's density / albedo
-(RendererVK "Far-tree volume"). With billboards, the BILLBOARD is the piece's only shadow / GI / RT representation at
-every distance: the mesh draws in the MAIN pass only (both paths). Off, it keeps the CPU path ("The preview": one
-`RenderNode` per piece representation, pushed per frame). The set is destroyed on respawn / reload / disable.
+(RendererVK "Far-tree volume"). The SHADOW BILLBOARD is the piece's only shadow / GI / RT representation at
+every distance: the meshes and the voxels draw in the MAIN pass only. The set is destroyed on respawn / reload / disable.
 
 ### World records (`TreeWorld`, "Trees/World" tweaks)
 
@@ -705,7 +679,7 @@ on a `TREE_RECORD_STEPS` = 4096 lattice; the type 8 bits = its index in the NAME
 `.rock` list). No height (the terrain's), no variant / scale / yaw: `treeRecordSeed(seed, chunk, record)` hashes the
 chunk and the QUANTIZED position, never the record's index, so a change elsewhere in the chunk leaves a tree as it
 was. **Mirrored in `Assets/Shaders/Trees/tree_record.inc.glsl` - keep in step.** A member of TreeSystem, updated
-before its `Enabled` check: it runs with the preview off.
+before its `Enabled` check: it runs with "Trees/Enabled" off.
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), but **no farther than the far-tree volume
   draws** ("Trees/Far end", 15 km, + one chunk: a record past it serves nothing - the terrain's ring reaches ~33 km, ~7x
@@ -880,19 +854,21 @@ before its `Enabled` check: it runs with the preview off.
 
 ### World mode (TreeSystem)
 
-`Trees/Enabled` + `Trees/World/Enabled` + `GPU expansion` (+ terrain): the trees are TreeWorld's records, not the
-preview grove. Switching it, or a TreeWorld restart (its `generation()`), respawns.
+`Trees/Enabled` + `Trees/World/Enabled` + the terrain: the trees are TreeWorld's records. Without TreeWorld or the
+terrain there is no set and no tree draws (the species stay loaded). Switching it, a TreeWorld restart (its
+`generation()`) or the `Trees/Respawn` button builds the set again.
 
-* **One DYNAMIC set** (RendererVK `RenderTreeSet::createDynamic`: every piece type, a fixed `Trees/World/Set
+* **One set** (RendererVK `RenderTreeSet::create`: every piece type, a fixed `Trees/World/Set
   capacity (pieces)` of slots, 600 k; no growth, a full set refuses chunks and warns once), hooked into the terrain
-  like the preview (`hookTerrain`; chunk index capacity (2 x near + 3)² x 2).
+  (`hookTerrain`; chunk index capacity (2 x near + 3)² x 2).
 * **`Trees/World/Near radius (chunks)`** (3, Chebyshev): every chunk inside it that TreeWorld holds CPU records for
   (TreeWorld's keep radius is raised to near + 1: `requireKeepRadius`) is EXPANDED on a Low job, nearest ring first,
-  at most 4 in flight: per record its tree (`treeRecordSeed`: the preview's variant / scale / yaw rules, `Size
-  variation`) on the ground of ONE Full `sampleGrid` at 2 m (the terrain's LOD 0 spacing) over the chunk plus the
-  bushes' reach, plus its BUSHES (its species' `Undergrowth`, else `Bushes per tree` out to 0.75 x `Spacing`; the
-  bush species of its climate by `Weight` - the preview's rule; `ExpandSpecies::bushesPerTree` / `bushRadius`,
-  `bushUndergrowth`), none in WATER (at the grid's nearest point: under a river's / lake's surface or the sea, or a
+  at most 4 in flight: per record its tree (`treeRecordSeed`: the variant, the scale - the species' `Scale` range x
+  `Size variation` - and the yaw from the seed, `placeVariant`) on the ground of ONE Full `sampleGrid` at 2 m (the
+  terrain's LOD 0 spacing) over the chunk plus the bushes' reach, plus its BUSHES (its species' `Undergrowth`, else
+  `Bushes per tree` - default 4, the fraction by chance - out to 8.25 m; 1.5 m .. the radius out, area-uniform; the
+  bush species of its climate by `Weight`, with the same variant / scale / yaw rules; `ExpandSpecies::bushesPerTree` /
+  `bushRadius`, `bushUndergrowth`), none in WATER (at the grid's nearest point: under a river's / lake's surface or the sea, or a
   river bed past "Terrain/Rivers/Vegetation clear"; the far volume's GPU mirror has no water data and keeps them).
   **The job reads only an immutable `ExpandContext`** (types, scales, far centre / radius per variant, the record-type
   -> species map by name, the sampler) and a copy of the records.
@@ -915,16 +891,16 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   `g_bodyLifecycleMutex`: the terrain collider's update job may create its tiles at the same time. `destroyTreeSet`
   (a respawn, RockSystem's mesh-user hook) drops the bodies before the rock meshes.
 * **THE WORLD'S ROCKS**: `spawnWorld` appends RockSystem's loaded types (`Globals::rocks.worldTypes()`) to the set - a
-  GPU type per variant: ONE mesh, the LOD chain's level 0 in the `bark` slot on `LitRock`, no billboard (RendererVK:
+  GPU type per variant: ONE mesh, the LOD chain's level 0 in the `bark` slot on `LitRock`, no voxels and no shadow billboard (RendererVK:
   the culls pick its level, no wind) - and maps TreeWorld's rock record types to them by name. `expandChunk` turns a
   rock record into ONE piece (`placeRock`): variant and yaw from the seed as a tree's, the scale from
   `rockRecordScale`, laid ON THE GROUND by `RockSystem::groundTransform` (Rocks, "A rock on the ground"
   ([Rocks.md](Rocks.md)): it follows the ground's normal by `Align`). The set's types are fixed, so RockSystem's
   `worldGeneration()` (its meshes arrived, changed or went - it loads in the background) respawns the set; and
   **before RockSystem frees its meshes it calls TreeSystem's mesh-user hook (`setMeshUser`), which destroys the set.**
-  **ROCKS IN THE FAR VOLUME**: rock meshes hand over to the far-tree volume at its start as a tree's billboard
-  (RendererVK tree_cull.inc.glsl: a type without a billboard drops its mesh past `Far start` + `Far overlap` in the
-  main pass; it keeps casting its sun shadow). A rock GPU type carries its variant's OCCUPANCY grid
+  **ROCKS IN THE FAR VOLUME**: rock meshes hand over to the far-tree volume at its start as a tree's voxels
+  (RendererVK tree_cull.inc.glsl: every type drops out of the main pass past `Far start` + `Far overlap`; a rock keeps
+  casting its sun shadow). A rock GPU type carries its variant's OCCUPANCY grid
   (`RockVariant::density`: `ROCK_DENSITY_RES` = 16³ over its rock-local box, the field soft over one voxel; generated
   with the meshes) as the type's `density`, with `solid = true` and the SINK baked into the box (`densityMin/Max` -
   Sink x height; the volume stands a piece on the ground; the lean is left out). `spawnWorld` hands the renderer a
@@ -945,24 +921,9 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   (a warning past that). Without `Trees/Enabled` (no species meshes, so no density) the records are not in the
   volume. It re-bakes at most every 30 frames while record chunks change.
 
-### The preview
+### Loading and drawing
 
-`Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload) and spawns a
-`Grove size`² grove in front of the camera plus the piece library in rows behind it (`Show piece library`; reloads -
-off, the module / trunk billboards are not uploaded). In world mode the world's set replaces the grove. Bark draws with the species' bark texture on `LitOpaque`; leaves on `LitTree`
-(cluster cards) or a solid colour on `LitOpaque` (`Single`).
-
-* `Bushes per tree` (default 4; the fraction by chance) scatters the `Kind Bush` species around each grove tree
-  (1.5 m .. 0.75 × spacing out, area-uniform, a bush species by `Weight`, the same variant / scale / yaw rules) -
-  unless the tree's species has an `Undergrowth` block, which replaces both.
-* `Bush shadow distance (m)` (default 100, 0 = no limit; GPU path): bushes farther than this from the shadow
-  cascades' centre cast no sun shadow (`RenderTreeSet::Type::shadowDistance`).
-* `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name (default Oak) — the names
-  are a fixed list in Settings.Trees (`TREE_GROVE_TYPES`; a tweak enum registers before the species load), so a new
-  species needs its name added there; a missing one falls back to mixed with a warning.
-* Trees sit on a `Spacing (m)` grid (default 11; `Grove size` 1..512, default 1), each offset by a seeded random
-  `Position jitter` × spacing (default 0.8; 1 = anywhere in its cell - a small fixed jitter leaves the rows
-  visible), and scaled by the species' `Scale` range × `Size variation` (2^±v, log-uniform, default 0.6 =
-  ×0.66..1.52).
-* With `GPU expansion` the grove is one instance set ("GPU expansion"); off, one `RenderNode` per placed piece mesh,
-  pushed every frame.
+`Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload). Bark draws with
+the species' bark texture on `LitOpaque`; leaves on `LitTree` (cluster cards) or a solid colour on `LitOpaque`
+(`Single`). `Bush shadow distance (m)` (default 100, 0 = no limit): bushes farther than this from the shadow
+cascades' centre cast no sun shadow (`RenderTreeSet::Type::shadowDistance`).

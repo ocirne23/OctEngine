@@ -8,11 +8,10 @@
 // origin, the trunk's sway, the fades) is a TreeWind: once per tree in the main cull for a tree record, per vertex only
 // for a caller without one. Three layers:
 //   TRUNK  - the whole tree leans downwind and sways, the offset growing with (height / ref height)^2 and the tree
-//            dropping slightly so it keeps its length. From the mesh-local height alone, so the mesh, the merged branch
-//            cards and the whole-tree billboard bend alike (the crossfades stay aligned).
+//            dropping slightly so it keeps its length. From the mesh-local height alone, so the mesh, the voxel box and
+//            the shadow billboard bend alike (the crossfade and the shadow stay aligned).
 //   BRANCH - meshes: per-vertex weights + phases from the bake (Procedural TreeGenerator), each branch bending as one
-//            unit; faded out before the mid tier's cards ("Branch fade"). The mid tier's branch cards: the module bend
-//            only, with their module's phase, NOT faded (they stand beyond the fade).
+//            unit; faded out before the voxel tier ("Branch fade").
 //   LEAF   - leaf cards only: the card's tip flutters along its normal; faded out sooner ("Leaf fade").
 //
 // THE PAYLOAD rides the tangent's w MAGNITUDE (RenderMeshData: texCoords.z), its sign staying the handedness:
@@ -22,15 +21,11 @@
 //                      bits 7..12  the sub-branch weight (0 .. 63 along its level-1 bone)
 //                      bits 13..16 the sub-branch phase, bits 17..19 the module placement's phase
 //                      bit 20      a leaf card's TIP vertex (flutters), bit 21 = TREE_WIND_BIT (always set)
-//   |w| in [2, 3)    the tree billboards' strip code (lit FS): the trunk bend only
-//   |w| >= 3         the merged branch cards: 3 + the axis code (< 1, lit FS) + 4 x (weight | phase << 4) - the 4-bit
-//                    weight along the card's module (0 at its root), the module placement's 3-bit phase (Procedural
-//                    TreeSystem, TREE_CARD_WIND_STEP); decoded into the module weight + phase bits + TREE_WIND_CARD_BIT
+//   |w| >= 2         the voxel box (2.5, Procedural treeVoxelBoxMesh): the trunk bend only
 // Requires the UBO and mathutils.inc.glsl (shared.inc.glsl).
 
 #define TREE_WIND_BIT (1u << 21)
 #define TREE_WIND_TIP_BIT (1u << 20)
-#define TREE_WIND_CARD_BIT (1u << 22)
 #define TREE_WIND_TAU 6.2831853
 
 // False for a mesh without wind; payload 0 = the trunk bend only.
@@ -38,12 +33,6 @@ bool treeWindPayload(float tangentW, out uint payload)
 {
     const float m = abs(tangentW);
     payload = 0u;
-    if (m >= 3.0)
-    {
-        const uint card = uint(floor((m - 3.0) * 0.25));
-        payload = ((card & 15u) * 127u + 7u) / 15u | ((card >> 4) & 7u) << 17 | TREE_WIND_BIT | TREE_WIND_CARD_BIT;
-        return true;
-    }
     if (m >= 2.0)
         return true;
     if (m <= 1.0)
@@ -78,7 +67,7 @@ struct TreeWind
     vec2 wind;        // the wind vector at the tree (m/s, XZ)
     vec2 windDelta;   // last frame's minus this frame's
     float branchAmp;  // a branch tip's sway, m per m/s: "Branch sway" x the tree's scale x the species' x the trunk fade
-    float branchFade; // the mesh branches' fade with the distance (the branch cards stand beyond it and ignore it)
+    float branchFade; // the branches' fade with the distance ("Branch fade")
     float phase;      // the tree's own phase (rad)
 };
 
@@ -189,7 +178,7 @@ vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale,
         return offset;
 
     // BRANCH (treeWindBranch), this frame's and last frame's.
-    const float amplitude = (payload & TREE_WIND_CARD_BIT) != 0u ? tree.branchAmp : tree.branchAmp * tree.branchFade;
+    const float amplitude = tree.branchAmp * tree.branchFade;
     const vec2 prevWind = tree.wind + tree.windDelta;
     if (amplitude > 0.0)
     {
@@ -206,7 +195,7 @@ vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale,
     }
 
     // LEAF: the card's tip along its normal, a phase per card (its stem's payload). TREE_WIND_NO_FLUTTER: an includer
-    // whose meshes carry no TIP vertex (the billboards, the branch cards, the voxel box) compiles without it.
+    // whose meshes carry no TIP vertex (the voxel box) compiles without it.
 #ifndef TREE_WIND_NO_FLUTTER
     if ((payload & TREE_WIND_TIP_BIT) != 0u)
     {
@@ -230,38 +219,8 @@ vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale,
     return offset;
 }
 
-// THE BILLBOARD WAVES (instanced_indirect_foliage.fs.glsl): a whole-tree billboard cannot bend its branches, so its
-// texture lookup moves instead - two crossing waves over the card, growing toward the card's top (on the HORIZONTAL
-// card toward its rim) from a still base, x the wind (speed / 8 m/s, at most 1.5) and "Billboard waves" (a fraction of
-// the card), kept inside the card's own strip. Only the whole-tree billboards (the strip code: |tangent w| in [2, 3));
-// everything else keeps `uv`. Not in the motion vectors (a texture-space motion).
-vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 normal)
-{
-    const float code = abs(tangentW);
-    if (code < 2.0 || code >= 3.0)
-        return uv;
-    const float fade = treeWindTrunkFade(distance(instanceOrigin, u_views_viewPos[VIEW_CENTER].xyz));
-    if (fade <= 0.0)
-        return uv;
-    const float stripV = code - 2.0;
-    const float strip = floor(uv.y / stripV);
-    const vec2 local = vec2(uv.x, uv.y / stripV - strip); // v: 0 at the card's top, 1 at its bottom
-    const bool horizontal = abs(normal.y) > 0.7;
-    const float reach = horizontal ? clamp(length(local - 0.5) * 2.0, 0.0, 1.0) : 1.0 - local.y;
-
-    vec2 dir;
-    const float speed = vegetationWind(instanceOrigin.xz, u_timeSeconds, dir);
-    const float phase = treeWindTreeRand(instanceOrigin.xz) * TREE_WIND_TAU;
-    const float t = u_timeSeconds * TREE_WIND_TAU * u_foliage_windBranchHz;
-    const vec2 wave = vec2(sin(local.x * 9.0 + local.y * 5.0 - t + phase),
-                           0.6 * sin(local.x * 5.0 - local.y * 11.0 - t * 1.37 + phase * 1.7));
-    const vec2 offset = wave * (u_foliage_windBillboardWaves * reach * reach * min(speed * 0.125, 1.5) * fade);
-    return vec2(clamp(uv.x + offset.x, 0.0, 1.0),
-                clamp(uv.y + offset.y * stripV, strip * stripV, (strip + 1.0) * stripV - 1e-4));
-}
-
-// The whole wind for a vertex of a caller WITHOUT a record (the shadow casters, the far voxel trees: a few vertices a
-// tree; the CPU path's tree pieces): the tree's wind worked out here, per vertex.
+// The whole wind for a vertex of a caller WITHOUT a record (the far voxel trees: a few vertices a tree): the tree's wind
+// worked out here, per vertex.
 vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, vec2 scale, out vec3 outPrevDelta)
 {
     return treeWindVertex(treeWindOfTree(instPos, instScale, scale), localPos, instPos, instScale, worldNormal, payload, outPrevDelta);

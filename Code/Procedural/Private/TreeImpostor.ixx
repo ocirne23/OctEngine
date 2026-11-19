@@ -5,8 +5,8 @@ import Core.glm;
 
 import :TreeGenerator;
 
-// The far representations of tree PIECES baked on the CPU by a small software rasterizer: the billboard cards and the
-// far-tree volume's density grid.
+// What stands for a baked tree where its meshes do not, baked on the CPU: the shadow billboard's mask (a small software
+// rasterizer), the far-tree volume's density grid and the voxel tier's grid.
 export namespace Procedural
 {
 	// A level-0 RGBA8 image to sample while baking (the bark tiles; the leaf atlas is alpha-tested).
@@ -17,69 +17,44 @@ export namespace Procedural
 	};
 
 	// A hash of what the bake depends on, for cache file names: `source` (what the piece was generated from - TreeSystem:
-	// the species file's text, the piece's set and index) + BAKE_VERSION + two settings words. NOT the geometry's floats:
+	// the species file's text, the piece's kind and index) + BAKE_VERSION + two settings words. NOT the geometry's floats:
 	// those differ in their last bits between Debug and the optimized builds (/fp:fast), and a position on a rounding
 	// edge renamed the file at every switch - each build deleted the other's cache and baked it again.
 	uint32 treeBakeHash(uint32 source, uint32 a, uint32 b);
 
-	// --- Billboards: the branch module as two crossed cards along its axis (module +Y). ---
-	// The vertical card (normal +X) and the horizontal card (normal +Z, i.e. world-up after the composite), their
-	// views stacked as horizontal strips of a square image. `numViews` (Trees/Billboard views):
-	//   4 - each card FACE has its own strip, top to bottom: side from +X, side from -X, top, bottom;
-	//   2 - one strip per card (side from +X, top), its back face shows the front view through the card.
-	// Real geometry, so they cast alpha-tested shadows.
+	// A tree's box (tree space, +Y up): its LOD-0 bark + leaves. Every side > 0.
 	struct TreeBillboardBox
 	{
 		glm::vec3 min{ 0.0f };
 		glm::vec3 max{ 1e-3f };
 	};
-	// One card: its centre and basis (u along `right`, v down along -`up`, `normal` its front) and its half size.
-	struct TreeBillboardView
-	{
-		glm::vec3 centre;
-		glm::vec3 right;
-		glm::vec3 up;
-		glm::vec3 normal;
-		glm::vec2 halfExtent;
-	};
+	TreeBillboardBox billboardBox(const TreePiece& piece);
 
-	TreeBillboardBox billboardBox(const TreePiece& piece); // LOD-0 bark + leaves
-	void billboardViews(const TreeBillboardBox& box, TreeBillboardView& outSide, TreeBillboardView& outTop);
-	// `horizontal` (whole trees, whose +Y is up - both cards above stand vertical): a THIRD card, horizontal
-	// through the axis at `height` of the box (0.5 = mid height; `Billboard TopCardHeight`), seen from above - the
-	// top-down view (MATERIAL_FLAG_BILLBOARD_TOP_CARD tells the lit FS, which finds the card by its up-facing normal).
-	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box, float height);
-	// The strips stacked top to bottom (card by card, each card's faces in turn), each stripHeight rows - rounded
-	// so every strip boundary stays on a texel boundary down to the last of numMips mips (spare rows at the bottom).
+	// ---- The SHADOW BILLBOARD (RendererVK MATERIAL_FLAG_BILLBOARD) ----
+	// A baked tree as THREE crossed cards with a MASK: its sun-shadow caster and rain shelter at every distance, and what
+	// the rays see of it. Never in the main pass - it has no colour and no normals. Two vertical cards crossed on the trunk
+	// axis (seen along X and along Z) and a horizontal one at `topCardHeight` of the box (seen from above: the shadow under
+	// a high sun). Their views are stacked as three horizontal strips of one square image; a card's back face shows its
+	// strip through the card (a silhouette is the same from both sides).
+	// The strips are stripHeight rows each - rounded so every strip boundary stays on a texel boundary down to the last of
+	// numMips mips (spare rows at the bottom).
 	struct TreeBillboardLayout
 	{
-		uint32 numStrips = 2;
 		uint32 stripHeight = 1;
 		uint32 numMips = 1;
 	};
-	TreeBillboardLayout billboardLayout(uint32 size, uint32 numViews, bool horizontal);
-	// Bakes every card's views into level-0 albedo + normal images (size x size). The NORMAL image: RGB = the normal in
-	// the card's tangent space, sign kept (it may face away from the card's front, toward a sun behind the tree), A = the
-	// INTERIOR (0 = on the crown's surface .. 1 = about the crown's core depth; linear - the lit FS remaps it). Both come
-	// from the piece's own CROWN FIELD (its leaves splatted into a grid and blurred: a soft hull of whatever shape -
-	// round, cone, flat pad): the normals bent by `normalBend` (0..1) toward the hull's outward gradient at the texel's
-	// leaf, the interior the crown density along that gradient out of the hull.
-	void bakeBillboards(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 size, float normalBend,
-		uint32 numViews, bool horizontal, oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal);
-	// The cards (both faces), UVs into the strips of a `numViews` / `horizontal` bake. `axisInZ` (the merged branch
-	// cards): texCoords.z = TREE_CARD_AXIS_CODE + the texture v of the piece's axis (its +Y line through the origin) on
-	// that card - RenderMeshData puts it into the tangent's w magnitude, and the lit FS rebuilds the crown frame from
-	// it where the instance origin is not the card's piece. `topCardHeight`: the horizontal card's height (billboardHorizontalView).
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false,
-		float topCardHeight = 0.5f);
-	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect_foliage.fs.glsl's foliageCrownFrame
-	// The merged branch cards' WIND on top of the axis code: + this x (weight | phase << 4) - the vertex's 4-bit weight
-	// along its module (0 at the root, 15 at the tip) and its placement's 3-bit phase (tree_wind.inc.glsl treeWindPayload).
-	constexpr float TREE_CARD_WIND_STEP = 4.0f;
-	// Every other card: this + its strip height in texture v (< 1): the FS's crown ellipsoid needs the card's width.
-	constexpr float TREE_CARD_STRIP_CODE = 2.0f;
+	TreeBillboardLayout billboardLayout(uint32 size);
+	// THE MASK, one byte a texel, a level per mip (size x size, halving; numMips of the layout): 0 = empty, >= 128 = solid,
+	// and a solid texel's value says WHAT it is - `barkValue` (0.5..1, RendererVK TREE_CARD_BARK) = bark only .. 255 =
+	// leaves only (the leaf texture's alpha is tested). Every level keeps level 0's solid share (an alpha test at 0.5 covers
+	// as much at any distance); a level's leaf share is the cover-weighted mean of the texels under it.
+	void bakeBillboardMask(const TreePiece& piece, const TreeBakeImage& leaves, uint32 size, float barkValue, oc::vector<oc::vector<uint8>>& outMips);
+	// The cards (both faces), UVs into the strips. `topCardHeight`: the horizontal card's height in the box (0.5 = mid
+	// height; `Billboard TopCardHeight`). Every vertex's TANGENT = the crown shape's radii (the cards' half extents): a
+	// ray hit takes its normal from that shape, not from the flat card (RendererVK tree_card.inc.glsl).
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, float topCardHeight, TreeMesh& out);
 
-	// The FAR-TREE VOLUME's view of a piece (RendererVK TreeVolumePipeline): its EXTINCTION (1/m) over its billboard
+	// The FAR-TREE VOLUME's view of a piece (RendererVK TreeVolumePipeline): its EXTINCTION (1/m) over its
 	// box, res^3 voxels (x fastest, then y, then z), from the LOD-0 LEAF triangles - a leaf card blocks half its area on
 	// average (x `leafCoverage`, the texture's opaque fraction) - or, for a piece without leaves (a succulent's bark
 	// blades), its bark: a quarter of its surface (a convex body's mean projected area). Each spread over its voxels per
@@ -129,15 +104,15 @@ export namespace Procedural
 	};
 	uint32 treeVoxelLevels(uint32 res); // res down to TREE_VOXEL_MIN_RES
 	uint32 treeVoxelBricks(uint32 n);   // bricks per axis of a level of n voxels
-	// The grid's box: the billboard box with a voxel of margin on every side (the trilinear filter never cuts the crown).
+	// The grid's box: the tree's box with a voxel of margin on every side (the trilinear filter never cuts the crown).
 	TreeBillboardBox treeVoxelBox(const TreePiece& piece, uint32 res);
 	// From the LOD-0 leaves (their texture's alpha and colour) and bark (its texture's colour), both sampled per point. The
 	// bark's COLOUR is weighted by how much the voxel's own leaves leave of it (exp(-their optical depth)); its cover
-	// counts in full. `albedoScale` x the linear colour (`Billboard AlbedoScale`, as the whole-tree billboards).
+	// counts in full. `albedoScale` x the linear colour (`Billboard AlbedoScale`).
 	void bakeTreeVoxels(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 res, float albedoScale,
 		TreeVoxelBake& out);
 	// The box the FS marches from (its front faces): per corner the position, normal = its GRID coordinate (0 / 1 per
-	// axis), tangent = the box size (the VS rebuilds the box from both), texCoords.z = TREE_CARD_STRIP_CODE + 0.5 (the
-	// trunk bend of tree_wind.inc.glsl, as the billboards).
+	// axis), tangent = the box size (the VS rebuilds the box from both), texCoords.z = TREE_VOXEL_BOX_WIND_CODE.
 	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out);
+	constexpr float TREE_VOXEL_BOX_WIND_CODE = 2.5f; // rides the tangent's w: >= 2 = the trunk bend only (tree_wind.inc.glsl treeWindPayload)
 }

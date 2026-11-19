@@ -10,8 +10,7 @@
 
 // VARIANTS: ALPHA_MASK = LitMasked (the alpha discard). The trees have their own shaders, so their code never sets this
 // shader's register count: LitTree (instanced_indirect_tree.fs.glsl - this LitMasked path plus the distance fade and
-// the leaf terms) and LitFoliage (instanced_indirect_foliage.fs.glsl - LitTree's plus the billboard cards' frame, edge
-// fade, shadow, crown normal and interior). Keep the shared parts of the three main()s in step.
+// the leaf terms). Keep the shared parts of the two main()s in step.
 
 #include "shared.inc.glsl"
 

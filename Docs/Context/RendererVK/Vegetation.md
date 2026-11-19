@@ -218,6 +218,13 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   * The ambient has no depth term: the dark stripes stand in for the view down between the blades. (An ambient term by
     the mean visible depth was tried: the ambient is small next to the sun, and a grazing view sees mostly tops - it did
     nothing visible.)
+  * **AT A RAY HIT** (`grassRayAlbedo`; the ocean's and the river's reflection rays, their bed hook `waterBedAlbedo`):
+    the terrain a ray hits takes the far tier's colour too - the tip / dry colours, the dry-patch noise, the cold
+    darkening, x "Brightness" - by the VIEW'S COVER with the RAY for the view (`1 - exp(-tauV)`, N.V = |N . ray|). No
+    blade cover is left out (no blade is in the TLAS: the layer stands for all of them, at any distance) and there are
+    no stripes (a ray has no anchor and no pixel footprint). The colour only: the hit's light is `shadeHit`'s, with no
+    canopy term. Off with the far tier ("Thickness" 0). `grass.inc.glsl` is included there with `GRASS_NO_GROUND` (no
+    ground table, no terrain vertices).
   * **Kept off the register peak:** the weight is ONE more half across the splat; the colour and the normal are formed
     after it from live values (the position, the ground normal, the temperature); the colours are the
     lockable grass colours (folded when locked).
@@ -386,32 +393,22 @@ the CPU) and scales it.
 
 Vertex-shader sway of the procedural trees in THE wind (see "The wind" above). **No textures, no per-tree or
 per-vertex memory**: the gusts are `wind.inc.glsl`'s, and the per-vertex data rides the free MAGNITUDE of the
-tangent's w (RenderMeshData: texCoords.z in (1, 2) = a tree mesh vertex's payload; >= 2 = the billboard / card codes,
-which mean "tree" too; 1 = no wind). The layers:
+tangent's w (RenderMeshData: texCoords.z in (1, 2) = a tree mesh vertex's payload; >= 2 = the voxel box (2.5,
+Procedural `TREE_VOXEL_BOX_WIND_CODE`), which means "tree" too; 1 = no wind). The layers:
 
 * **Trunk** - lean ("Bend" x speed²) + sway, x (local height / "Reference height (m)")², the vertex dropping so the
-  tree keeps its length. From the mesh-local height alone, so the mesh, the merged branch cards and the whole-tree
-  billboard bend alike (crossfades stay aligned). The only layer of the whole-tree billboards and of the shadow pass.
-* **Branch** - meshes, faded out between "Branch fade start (m)" and "Branch fade end (m)" (40 / 70 m, before
-  the mid tier): the module bends with the placement's phase, the level-1 sub-branch on top with its own (both
-  weights 0 at their root: continuous joints). The mid tier's BRANCH CARDS get the module bend too, NOT faded (they
-  stand beyond the fade; without it the mid tier only leaned with the trunk): |tangent w| = 3 + the axis code (< 1) +
-  4 x (weight | phase << 4) - a 4-bit weight along the card's module (0 at its root) and the module placement's phase
-  (the mesh's own, so card and mesh sway alike), decoded by `treeWindPayload` into the module bits plus
-  `TREE_WIND_CARD_BIT`; the lit FS reads the axis code as `mod(|w| - 3, 4)`.
+  tree keeps its length. From the mesh-local height alone, so the mesh, the voxel box and the shadow billboard bend
+  alike (the crossfade stays aligned). The only layer of the voxel box and of the shadow pass.
+* **Branch** - meshes, faded out between "Branch fade start (m)" and "Branch fade end (m)" (40 / 70 m): the module
+  bends with the placement's phase, the level-1 sub-branch on top with its own (both weights 0 at their root:
+  continuous joints).
 * **Leaf** - the leaf cards' tip vertices along the card normal, a phase per card, faded out by "Leaf fade end (m)".
-* **Billboard waves** (instanced_indirect_foliage.fs.glsl, `treeWindBillboardUv`) - a whole-tree billboard (strip
-  code: |tangent w| in [2, 3)) cannot bend its branches, so its TEXTURE lookup moves: two crossing waves over the card,
-  growing toward the card's top (on the horizontal card toward its rim) from a still base, x the wind and "Billboard
-  waves" (0.012 of the card), clamped into the card's own strip. Albedo, alpha (the outline ripples too) and normal use
-  the moved coordinate (`texUv`); the card frame's derivatives and the crown math keep `uv`. Not in the shadow pass and
-  not in the motion vectors (a texture-space motion). The branch cards (axis code) get no texture waves (their vertices bend, above).
 
 **Per species** (`.tree` `Wind Trunk / Branch`): `TreeCullType::wind` holds the two scales (4.12 fixed point each,
 `treeCullWind`); the main cull multiplies them into the tree's wind (below). The shadow cull packs the trunk
-scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree BILLBOARD, for "Trees/Billboard shadow shift
-(m)"; the cascade mask is the low 7 bits). Both culls grow the wind
-reach by the larger scale above 1. The billboard waves and the leaf flutter keep the global settings.
+scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree's SHADOW BILLBOARD, for "Trees/Billboard shadow
+shift (m)"; the cascade mask is the low 7 bits). Both culls grow the wind
+reach by the larger scale above 1. The leaf flutter keeps the global settings.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
 offset minus this frame's (`u_foliage_windPrevTime`) to the motion vector. `shadow_depth.vs` applies the trunk layer
@@ -433,8 +430,7 @@ trees work from the wind VECTOR (the direction x the speed is the vector: no nor
   height)², and the drop from the vector's squared length) and adds its branch's sway (`treeWindBranch`, 3 sines a
   time) x the amplitude - no gust, no trunk sine, no distance and no fade per vertex. The leaf flutter (TIP vertices
   of the card species) is the one layer that still takes the tree's distance per vertex.
-* A node that is no record (the CPU path's pieces) and the far voxel trees (8 vertices a tree) call `treeWindOfTree`
-  per vertex (`treeWind`).
+* The far voxel trees (8 vertices a tree) and a node that is no record call `treeWindOfTree` per vertex (`treeWind`).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond
 "Trunk fade end (m)" (3 km, a 100 m band) the trunk vector and the amplitude are zero. **The TLAS stays static**: RT
 shadows / GI / reflections see unswayed trees.
@@ -442,11 +438,11 @@ shadows / GI / reflections see unswayed trees.
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 
 Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw the trees before it ([Scene.md](Scene.md)
-"THE FAR VOXEL TREES"; defaults in `FarTreeParams`). The FAR trees — beyond the billboards, "Far start (m)" to
+"THE FAR VOXEL TREES"; defaults in `FarTreeParams`). The FAR trees — beyond the voxel trees, "Far start (m)" to
 "Far end (m)" — as ONE marched volume.
 
 * **The volume:** camera-centred (snapped: re-baked once the camera leaves "Far rebake distance (m)" of the bake
-  centre, or a tree set / a geometry setting changes), **POLAR** (`tree_volume.inc.glsl`): image x = the angle around
+  centre, or the tree records / a geometry setting change), **POLAR** (`tree_volume.inc.glsl`): image x = the angle around
   the centre ("Far angular resolution"; it WRAPS — the sampler repeats u, and **every integer wrap goes through
   `tvWrapAngle`**: GLSL's `%` is UNDEFINED for a negative operand, and a `((x % n) + n) % n` wrap broke the columns just
   below 0 - streaks along world −X), image y = `log(r / rMin) / log(end / rMin)` ("Far radial resolution"), so nothing
@@ -499,22 +495,23 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   the relative steps are small (~2 % at the "Far blob shrink" cut, 0.75 / m); above the max it clamps (~1.6 / m after
   the shrink and the 0.5 scale: opaque within a few metres). Needs R8_SRGB with linear filtering (`volumeDensityR8`, optional in Vulkan);
   without it the density is R16F, decoded by the copy (`tvAccumDecode`). The march stays at 64 registers.
-* **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
-  (`RenderTreeSet::create` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types' float
+* **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per world tree record within the detail
+  distance (WORLD TREE RECORDS below), each of its plants splatted with its volume TYPE (`RenderTreeSet::create`
+  uploads `TreeVolumeTypeGpu` per type + the types' float
   extinction mip chains — `RenderTreeSet::Type::density`, box-filtered to 1³ on upload). Every texel the tree's box
   touches (+ one texel each way) samples the type volume at the mip matching the texel footprint, at the texel centre
   clamped into the box, × the tree's TENT weight horizontally (per polar axis, one cell wide each way, `tentWeight`)
   and the slice's box overlap vertically, and ADDS it. **The tent is load-bearing:** with the trilinear reconstruction
   it keeps a small tree's blob centred ON the tree whatever the grid's offset; a box-overlap splat put it at the cell
   centre, so every re-bake shifted every blob ("shaking" while flying). The splat ADDS with fixed-point
-  `imageAtomicAdd` (crowns overlap → extinction sums). Past 65535 trees the dispatch wraps into y. The colour column
+  `imageAtomicAdd` (crowns overlap → extinction sums). Past 65535 records the dispatch wraps into y. The colour column
   takes the tree type's albedo (last writer wins); a record's BUSHES add extinction but write no colour
   (`g_writeColour`: a small dark bush set the colour of the tall crown above it - far birches in their undergrowth's
   green). Neighbouring trees of two species still take turns at a stand's edge.
 * **WORLD TREE RECORDS** (`RecordSource`, TreeRecordPool "WORLD TREE RECORDS"): while record types are set
   (`setTreeRecordTypes(types, chunkSize, worldSeed, volumeSet)`, from TreeSystem's world spawn), EVERY tree of the
-  volume comes from the records, near and far, and the world's DYNAMIC set is never splatted (`recordFarTrees` skips
-  dynamic sets; their adds / removes do not re-bake). **One source**: a chunk entering or leaving the set changes
+  volume comes from the records, near and far. The world set's own pieces are never splatted (its chunk adds / removes
+  do not re-bake); without record types there is no volume. **One source**: a chunk entering or leaving the set changes
   nothing in the volume (splatting the set's own chunks plus records for the rest moved the blobs at the swap and
   doubled or dropped chunks for a frame). `TreeRecordTypeGpu` per record type (TreeWorld's name-sorted species, bushes
   too) mirrors `TreeSystem::expandChunk`: the variants as the world set's volume types (max 8), the Scale range,
@@ -522,7 +519,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   extinction integral at scale 1; the species' 32-bin height profile at the mean scale, crown radius (scale 1), leaf
   colour. Two regions by the chunk centre's distance from the bake centre against "Far record detail (m)" (a rebake
   setting):
-  * **Within it** the splat's `TREE_SPLAT_RECORDS` variants (all three passes; ONE WORKGROUP PER RECORD: the bake
+  * **Within it** the splat (all three passes; ONE WORKGROUP PER RECORD: the bake
     picks the detail chunks on the CPU from the table's CPU copy, `TreeRecordPool::tableCpu`, with each chunk's first
     workgroup, `m_bakeDetail`, and a workgroup finds its chunk by a binary search - a workgroup per chunk ran its
     plants in sequence, far too slow): each record EXPANDS exactly as the CPU does - variant, scale, yaw from
@@ -569,17 +566,17 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     clear and every tree write keep 1).
   * **The march**: by that fraction the sun term loses its phase ("Far forward scatter": a surface does not glow
     backlit), takes the full N.L ("Far normal strength" toward 1), and the interior darkening drops to a quarter.
-  * A rock mesh leaves the main pass at the same distance as a billboard (see "Hand-over" below).
+  * A rock mesh leaves the main pass at the same distance as a tree (see "Hand-over" below).
 * **THE BAKE IS SPREAD OVER FRAMES** ("Far bake frames"; in one frame the world records cost several ms of GPU per
-  bake): `startBake` SNAPSHOTS what it reads that can change before it ends - the static sets' list, the record table
+  bake): `startBake` SNAPSHOTS what it reads that can change before it ends - the record table
   and the chunk map (copied into the bake's own host-visible buffers), the detail chunks - and the record pool keeps
   every chunk it saw alive until NUM_FRAMES_IN_FLIGHT frames after it ends (`bakeHoldSince` ->
   `TreeRecordPool::update`). `stepBake` runs one share per frame, EVERY stage that grows with the resolution or the
   tree count spread over its part of "Far bake frames" (`setBakeBudgets`):
   * the CLEAR ~1/8: the 2D images whole at its first frame (small), the 3D accumulation a slice range per frame
     (`tree_volume_clear.cs` - `vkCmdClearColorImage` clears a 3D image whole);
-  * the three SPLAT passes (floor coverage, floor, splat) together ~1/2: each walks one range - the static sets'
-    pieces, then the detail records - within the frame's budget (`SplatPC::wgOffset` for both);
+  * the three SPLAT passes (floor coverage, floor, splat) together ~1/2: each walks the detail records within the
+    frame's budget (`SplatPush::wgOffset`);
   * the smoothing (2D, a frame); the RECORDS' MASS ~1/8 in chunk ranges (`RecordsPC::chunkOffset`); the FAR COLUMNS
     ~1/4 in radial-row ranges of whole 8-row groups (`FarPC::rowOffset`);
   * the RESOLVE ~1/8, IN PLACE: the column pass (the rock colour; it sums each column's fixed-point slices, so it runs
@@ -634,7 +631,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     destroyed, the record types or the pool replaced) drops it and a geometry setting change drops it too - **except
     during the hand-over / copy** (the march already shows part of it: it finishes, and the next bake follows).
   * **The volume lags the camera by the bake's length plus "Far swap time"**: no gap shows while speed x lag < 30 m +
-    "Far overlap" (the billboards cover the ring's hole up to there; "Far rebake distance" cancels out). The bake's part
+    "Far overlap" (the voxel trees cover the ring's hole up to there; "Far rebake distance" cancels out). The bake's part
     is in frames, so it grows in seconds at a low frame rate. **BAKE AHEAD** ("Far bake ahead", on) cancels it at a
     steady speed: `trackCamera` keeps the camera's horizontal velocity (real time, ~0.25 s smoothing; a jump past
     3000 m/s resets it), `bakeLead` = that x the LAST bake's real start -> swap time (`m_bakeDurationSec`), capped at
@@ -649,7 +646,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   height above the ground under it (`setCameraGround`, fed by TerrainStreamer from the terrain sampler; the baked sea
   level while unset) — the 3D distance of a ground tree at horizontal `start`. The tree cull's volume start
   (`u_present_treeVolumeStart`, + overlap) and the march's start both use it, so from the air the hand-over stays at
-  horizontal "Far start", where the ring begins (with the 3D `start` alone, the billboards vanished under a high camera
+  horizontal "Far start", where the ring begins (with the 3D `start` alone, the trees vanished under a high camera
   with no volume there). **Tried and dropped:** shrinking the RING with the height instead (`sqrt(start² − h²)`) - it
   spread the log mapping's radial texels and smeared the crowns into stripes, also with an asinh mapping.
 * **The ray** is `vol_apply`'s `fogRay`: `u_rayFromNdc`, from `u_mvp`'s x / y / w rows (**not `u_invMvp`**, whose
@@ -689,7 +686,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   * **THE TRANSMISSION** ("Far transmission" 0.6, "Far transmission focus" 0.6): ADDED to that - the sun × a
     forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
     the crown at `Foliage transmission self shadow`'s share of the optical depth (exp(-depth x that) - the sun taps'
-    depth kept, not pow(sunT, ...): one exp, no log; as the billboards'),
+    depth kept, not pow(sunT, ...): one exp, no log),
     × the terrain / cloud shadow and the interior, in the near leaves' deepened colour (`leafTransmitColor`,
     leaf_look.inc.glsl: "Foliage transmission saturation" / "warmth"); rocks take none. Only crowns between the camera
     and the sun glow: "Far forward scatter" reshapes the WHOLE sun term, so it also changed the trees beside and behind.
@@ -702,7 +699,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     split at the fade end ("Far start" + "Far overlap"), the band fades as a whole by its own weighted mean distance,
     and the segment behind it composites under it unfaded (an opaque band skips to the fade end unless it is already
     fully in). Fading each sample's DENSITY thinned a blob's front and a half-faded tree read too dark; ONE fade for
-    the whole ray let a band tree's blob fade out the far trees behind it (a sky-coloured outline along the billboard
+    the whole ray let a band tree's blob fade out the far trees behind it (a sky-coloured outline along the near trees'
     silhouettes).
   * Ends at transmittance 0.01. Out: in-scatter + transmittance (RGBA16F) and the transmittance-weighted mean distance
     (R16F, m); the temporal variant instead writes log2 distances in `cloud_temporal`'s format (RGBA16F: x = the first
@@ -799,12 +796,12 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   **FOG ON: the fog apply composites the trees itself** (`vol_apply.fs`, bindings 9 / 10; `u_foliage_farMarched` = it
   marched this frame — the fog apply is a cached secondary, so the flag rides the UBO), at the march's
   transmittance-weighted MEAN DISTANCE (`exp2` of the distances' y): fog laid over the finished trees fogged them at the
-  scene depth — the terrain BEHIND them — and they read much hazier than the billboards beside them. Trees and clouds
+  scene depth — the terrain BEHIND them — and they read much hazier than the voxel trees beside them. Trees and clouds
   are two layers composed front to back by distance (the cloud formula per layer). The force fields draw after
   every one of these applies (the last scene stages), so a far tree never covers a bubble.
 * **Hand-over:** the tree cull gets `u_present_treeVolumeStart` = `farTreesStart()` + "Far overlap": a tree whose CENTRE
-  lies past it drops its mesh AND its billboard from MAIN (the billboard stays the shadow caster). Over the overlap band
-  both draw while the volume fades in — an overlap, not a seam; the billboards switch off at its end (a dithered
-  billboard fade-out over the band was tried and removed). A type WITHOUT a billboard (a rock) drops its mesh at the
+  lies past it drops its mesh AND its voxels from MAIN (the shadow billboard stays the shadow caster). Over the overlap
+  band both draw while the volume fades in — an overlap, not a seam; the voxel trees switch off at its end (a dithered
+  fade-out over the band was tried and removed). A type WITHOUT a far representation (a rock) drops its mesh at the
   same distance (`treeCullMainPiece`); its mesh stays the shadow caster.
 * Open: per-tree species colour beyond "last writer wins".

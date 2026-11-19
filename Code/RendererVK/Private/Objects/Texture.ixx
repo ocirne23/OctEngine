@@ -27,7 +27,9 @@ public:
     // minG: a floor on the G channel of DECODED pixel data (the metal-roughness slot's roughness, which the lit
     // shaders read unguarded); a texture loaded from a DDS path keeps its stored values.
     bool initialize(const ITextureData& textureData, bool generateMips, bool sRGB = false, uint8 minG = 0);
-    bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName);
+    // redAsAlpha: the view shows the red channel in all four (a one-channel format as an alpha mask).
+    bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName,
+        bool redAsAlpha = false);
 
     vk::ImageView getImageView() const { return m_imageView; }
     vk::Image getImage() const { return m_image; }

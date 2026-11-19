@@ -83,7 +83,6 @@ TreeSpecies Birch
 		Patches 0.12
 		Sections 0.15
 	Billboard
-		NormalBend 0.0
 		TopCardHeight 0.55
 		AlbedoScale 0.9
 		FarAlbedoScale 1.1

@@ -60,7 +60,7 @@ export namespace Procedural
 		uint16 pieceIdx = 0;
 		bool trunk = false;
 		Transform local;
-		uint8 windPhase = 0; // a module's wind phase (0..7, bakeTreeVariant): its mesh and its branch cards sway alike
+		uint8 windPhase = 0; // a module's wind phase (0..7, bakeTreeVariant): two placements of one module sway apart
 	};
 
 	struct TreePiece
@@ -73,11 +73,6 @@ export namespace Procedural
 		float length = 1.0f;        // trunk height / nominal module length (m)
 		float baseRadius = 0.1f;    // root radius at the base (m, unscaled)
 		float pitch = 0.0f;         // modules: the root's angle from world-up (rad) it was grown for - its up / down
-		// Baked variants only: the composite it was merged from, and `bark` split in two - the trunk's, and the module
-		// branches' (the GPU mid tier keeps the trunk while the branches give way to the branch cards).
-		oc::vector<TreePiecePlacement> placements;
-		TreeMesh trunkBark[TREE_PIECE_LODS];
-		TreeMesh branchBark[TREE_PIECE_LODS];
 	};
 
 	struct TreeLibrary
@@ -92,8 +87,7 @@ export namespace Procedural
 	// A BAKED tree variant: the composite of `seed` merged into ONE piece - per LOD level all its pieces' bark
 	// into one mesh and all their leaves into another, at tree scale 1 (the instance scales). Each level's
 	// error is the largest of its pieces' (x their placement scale). Bones are dropped (0). The runtime draws
-	// these instead of compositing, so a tree costs one set of records, not one per piece. `out.placements` keeps
-	// the composite (the mid tier's branch cards stand at its module placements).
+	// these instead of compositing, so a tree costs one set of records, not one per piece.
 	void bakeTreeVariant(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed, TreePiece& out);
 
 	// The composite function: a unique tree from `seed`, tree-local (the caller adds the tree transform).

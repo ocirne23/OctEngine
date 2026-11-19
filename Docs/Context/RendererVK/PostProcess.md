@@ -21,7 +21,7 @@ instead of only the camera.
   this frame's position.
 * **Who writes it** (`GraphicsPipelineLayout::motionTarget` + `writeMotion` / `PipelineVariant::writeMotion`;
   otherwise the second blend state is write-masked): the variants that can draw moving meshes - LitOpaque,
-  UnlitOpaque, LitMasked, LitFoliage, LitTree - plus the grass and the clutter flowers (wind), and the rigid
+  UnlitOpaque, LitMasked, LitTree - plus the grass and the clutter flowers (wind), and the rigid
   clutter (static: only the NO-AO flag). Masked, and
   correct because static: terrain, rocks, sky, GI probe debug. Masked, keeping the opaque surface behind: the
   transparent family, the gizmos. **The ocean cannot write it**: dual-source blending allows one fragment

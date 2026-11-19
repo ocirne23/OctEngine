@@ -10,9 +10,9 @@ namespace
 {
 	using namespace Procedural;
 
-	constexpr uint32 SUPERSAMPLE = 2; // per axis; coverage alpha comes from the 2x2 subsamples
-	// Bump when the bake OR the tree generator's geometry changes: cached billboards re-bake (treeBakeHash names them
-	// by their inputs, not by the geometry).
+	constexpr uint32 SUPERSAMPLE = 2; // per axis; the cover comes from the 2x2 subsamples
+	// Bump when a bake OR the tree generator's geometry changes: the cached masks and voxel grids re-bake (treeBakeHash
+	// names them by their inputs, not by the geometry).
 	constexpr uint32 BAKE_VERSION = 27;
 
 	glm::vec3 sampleWrap(const TreeBakeImage& image, glm::vec2 uv, float& outAlpha)
@@ -26,22 +26,20 @@ namespace
 	}
 
 	// One orthographic view being baked (supersampled): `centre` + right/up/dir basis, `halfExtent` along
-	// right / up mapped onto the width / height.
+	// right / up mapped onto the width / height. Per subsample the nearest surface: its depth and whether it is a leaf.
 	struct FrameTarget
 	{
 		uint32 width = 0;
 		uint32 height = 0;
-		oc::vector<float> depth;
-		oc::vector<glm::vec3> color;
-		oc::vector<glm::vec3> normal;
+		oc::vector<float> depth; // -FLT_MAX = nothing
+		oc::vector<uint8> leaf;
 
 		void clear(uint32 w, uint32 h)
 		{
 			width = w;
 			height = h;
 			depth.assign((size_t)w * h, -FLT_MAX);
-			color.assign((size_t)w * h, glm::vec3(0.0f));
-			normal.assign((size_t)w * h, glm::vec3(0.0f));
+			leaf.assign((size_t)w * h, 0);
 		}
 	};
 
@@ -57,10 +55,11 @@ namespace
 	float edge(glm::vec2 a, glm::vec2 b, glm::vec2 p) { return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x); }
 
 	// Rasterizes one mesh into the view: back faces culled against the view direction (every piece mesh is
-	// closed or double-sided), z = distance toward the viewer (larger wins), alpha-tested when `alphaTest`.
-	void rasterMesh(FrameTarget& target, const TreeMesh& mesh, const ViewBasis& view, const TreeBakeImage& image, bool alphaTest)
+	// closed or double-sided), z = distance toward the viewer (larger wins). `leaves`: the mesh is the leaves - `image` is
+	// their atlas, its alpha tested; else the bark (opaque: no image read).
+	void rasterMesh(FrameTarget& target, const TreeMesh& mesh, const ViewBasis& view, const TreeBakeImage& image, bool leaves)
 	{
-		if (image.size == 0)
+		if (leaves && image.size == 0)
 			return;
 		const glm::vec3& centre = view.centre;
 		const glm::vec3& right = view.right;
@@ -107,14 +106,16 @@ namespace
 					const float depth = w0 * z[0] + w1 * z[1] + w2 * z[2];
 					if (depth <= target.depth[idx])
 						continue;
-					const glm::vec2 uv = glm::vec2(mesh.texCoords[i0]) * w0 + glm::vec2(mesh.texCoords[i1]) * w1 + glm::vec2(mesh.texCoords[i2]) * w2;
-					float alpha = 1.0f;
-					const glm::vec3 color = sampleWrap(image, uv, alpha);
-					if (alphaTest && alpha < 0.5f)
-						continue;
+					if (leaves)
+					{
+						const glm::vec2 uv = glm::vec2(mesh.texCoords[i0]) * w0 + glm::vec2(mesh.texCoords[i1]) * w1 + glm::vec2(mesh.texCoords[i2]) * w2;
+						float alpha = 1.0f;
+						sampleWrap(image, uv, alpha);
+						if (alpha < 0.5f)
+							continue;
+					}
 					target.depth[idx] = depth;
-					target.color[idx] = color;
-					target.normal[idx] = mesh.normals[i0] * w0 + mesh.normals[i1] * w1 + mesh.normals[i2] * w2;
+					target.leaf[idx] = leaves ? 1 : 0;
 				}
 			}
 		}
@@ -122,244 +123,47 @@ namespace
 
 	uint8 toByte(float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
 
-	// THE CROWN FIELD of a piece (bakeBillboards): its leaves (the bark without any) splatted into a grid of cubic cells
-	// (CROWN_RES along the longest axis), Gaussian-blurred and normalized to a peak of 1 - a SOFT HULL of whatever shape
-	// the leaves make: an oak's round crown, a pine's cone, an acacia's flat pad. The billboards take their shading
-	// from it instead of a fixed primitive: a sphere round the box centre gave a tall tree normals pointing up at its
-	// top and down at its bottom (a top-to-bottom gradient under a high sun), and an interior by the distance from
-	// mid-height, not the depth into the crown.
-	constexpr int CROWN_RES = 32;
-	constexpr float CROWN_BLUR_CELLS = 2.5f;  // the Gaussian's sigma (x the cell: ~8 % of the piece's longest side)
-
-	struct CrownField
+	// Resolves the supersampled view into rows [offsetY, offsetY + its height) of the mask's level 0 (`outWidth` texels
+	// wide): per texel its COVER (the share of its subsamples a surface covers) and the LEAF share of the covered ones.
+	void resolveView(const FrameTarget& target, oc::vector<float>& outCover, oc::vector<float>& outLeaf, uint32 outWidth, uint32 offsetY)
 	{
-		glm::vec3 origin{ 0.0f }; // the first cell's corner
-		float cell = 1.0f;
-		glm::ivec3 dims{ 0 };
-		oc::vector<float> values;
-		// The interior's unit: the optical depth from the field's PEAK out to the side (the mean over the 4 horizontal
-		// directions) - the crown's own core depth, so a narrow pine and a wide oak both reach ~1 at their core.
-		float coreDepth = 1.0f;
-
-		float at(int x, int y, int z) const
-		{
-			if (x < 0 || y < 0 || z < 0 || x >= dims.x || y >= dims.y || z >= dims.z)
-				return 0.0f;
-			return values[(size_t)x + (size_t)dims.x * ((size_t)y + (size_t)dims.y * (size_t)z)];
-		}
-		// Trilinear, 0 outside.
-		float sample(const glm::vec3& p) const
-		{
-			const glm::vec3 g = (p - origin) / cell - 0.5f;
-			const glm::ivec3 i = glm::ivec3(glm::floor(g));
-			const glm::vec3 f = g - glm::vec3(i);
-			float s = 0.0f;
-			for (int k = 0; k < 8; ++k)
-			{
-				const glm::ivec3 o((k & 1), (k >> 1) & 1, (k >> 2) & 1);
-				const float w = (o.x ? f.x : 1.0f - f.x) * (o.y ? f.y : 1.0f - f.y) * (o.z ? f.z : 1.0f - f.z);
-				s += w * at(i.x + o.x, i.y + o.y, i.z + o.z);
-			}
-			return s;
-		}
-		// The hull's outward direction at p: down the field's gradient (central differences over a cell); `fallback`
-		// where the field is flat (outside, or a uniform core).
-		glm::vec3 outward(const glm::vec3& p, const glm::vec3& fallback) const
-		{
-			const float h = cell;
-			const glm::vec3 g(sample(p + glm::vec3(h, 0, 0)) - sample(p - glm::vec3(h, 0, 0)),
-				sample(p + glm::vec3(0, h, 0)) - sample(p - glm::vec3(0, h, 0)),
-				sample(p + glm::vec3(0, 0, h)) - sample(p - glm::vec3(0, 0, h)));
-			const float len2 = glm::dot(g, g);
-			// Blended toward the fallback where the slope is small (no hard switch between neighbouring texels).
-			const float w = glm::smoothstep(1e-6f, 1e-3f, len2);
-			const glm::vec3 n = glm::mix(fallback, len2 > 0.0f ? -g * (1.0f / std::sqrt(len2)) : fallback, w);
-			return glm::dot(n, n) > 1e-12f ? glm::normalize(n) : fallback;
-		}
-		// The crown's optical depth (m x the normalized density) from p out along `dir` (the outward direction).
-		float opticalDepth(const glm::vec3& p, const glm::vec3& dir) const
-		{
-			const float step = 0.5f * cell;
-			const int maxSteps = 2 * (dims.x + dims.y + dims.z);
-			float depth = 0.0f;
-			glm::vec3 q = p + dir * (0.5f * step);
-			for (int s = 0; s < maxSteps; ++s, q += dir * step)
-			{
-				const glm::vec3 g = (q - origin) / cell;
-				if (g.x < 0.0f || g.y < 0.0f || g.z < 0.0f || g.x > (float)dims.x || g.y > (float)dims.y || g.z > (float)dims.z)
-					break;
-				depth += sample(q) * step;
-			}
-			return depth;
-		}
-		// The INTERIOR 0..1, linear (the lit FS remaps it with "Foliage interior depth start / end"): the optical depth
-		// out along `dir`, in units of the core depth.
-		float interior(const glm::vec3& p, const glm::vec3& dir) const
-		{
-			return glm::clamp(opticalDepth(p, dir) / coreDepth, 0.0f, 1.0f);
-		}
-	};
-
-	CrownField buildCrownField(const TreePiece& piece, const glm::vec3& boxMin, const glm::vec3& boxMax)
-	{
-		CrownField field;
-		const glm::vec3 size = glm::max(boxMax - boxMin, glm::vec3(1e-3f));
-		const float longest = glm::max(glm::max(size.x, size.y), size.z);
-		field.cell = longest / (float)CROWN_RES;
-		const int pad = (int)std::ceil(2.0f * CROWN_BLUR_CELLS) + 1; // the blur spreads past the leaves
-		field.dims = glm::ivec3(glm::ceil(size / field.cell)) + 2 * pad;
-		field.origin = boxMin - glm::vec3((float)pad * field.cell);
-		field.values.assign((size_t)field.dims.x * field.dims.y * field.dims.z, 0.0f);
-
-		// Leaves by area (a barycentric grid fine enough that every cell a triangle crosses gets some); the bark only
-		// when the piece has no leaves (a bare trunk).
-		const TreeMesh& mesh = !piece.leaves[0].indices.empty() ? piece.leaves[0] : piece.bark[0];
-		for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
-		{
-			const glm::vec3 a = mesh.positions[mesh.indices[t]];
-			const glm::vec3 b = mesh.positions[mesh.indices[t + 1]];
-			const glm::vec3 c = mesh.positions[mesh.indices[t + 2]];
-			const float area = 0.5f * glm::length(glm::cross(b - a, c - a));
-			if (area <= 0.0f)
-				continue;
-			const float longestEdge = glm::max(glm::max(glm::length(b - a), glm::length(c - b)), glm::length(a - c));
-			const uint32 n = glm::clamp((uint32)std::ceil(longestEdge / (0.5f * field.cell)), 1u, 32u);
-			const float share = area / (float)(n * (n + 1) / 2);
-			for (uint32 i = 0; i < n; ++i)
-				for (uint32 j = 0; i + j < n; ++j)
-				{
-					const float u = ((float)i + 1.0f / 3.0f) / (float)n, v = ((float)j + 1.0f / 3.0f) / (float)n;
-					const glm::ivec3 g = glm::clamp(glm::ivec3(glm::floor((a + (b - a) * u + (c - a) * v - field.origin) / field.cell)),
-						glm::ivec3(0), field.dims - 1);
-					field.values[(size_t)g.x + (size_t)field.dims.x * ((size_t)g.y + (size_t)field.dims.y * (size_t)g.z)] += share;
-				}
-		}
-
-		// Separable Gaussian, one axis at a time.
-		const int radius = (int)std::ceil(2.0f * CROWN_BLUR_CELLS);
-		oc::vector<float> kernel((size_t)(2 * radius + 1));
-		float kernelSum = 0.0f;
-		for (int k = -radius; k <= radius; ++k)
-			kernelSum += kernel[(size_t)(k + radius)] = std::exp(-0.5f * (float)(k * k) / (CROWN_BLUR_CELLS * CROWN_BLUR_CELLS));
-		for (float& k : kernel)
-			k /= kernelSum;
-		oc::vector<float> tmp(field.values.size());
-		const glm::ivec3 d = field.dims;
-		for (int axis = 0; axis < 3; ++axis)
-		{
-			const glm::ivec3 stepAxis(axis == 0, axis == 1, axis == 2);
-			for (int z = 0; z < d.z; ++z)
-			for (int y = 0; y < d.y; ++y)
-			for (int x = 0; x < d.x; ++x)
-			{
-				float s = 0.0f;
-				for (int k = -radius; k <= radius; ++k)
-				{
-					const glm::ivec3 q = glm::ivec3(x, y, z) + stepAxis * k;
-					s += kernel[(size_t)(k + radius)] * field.at(q.x, q.y, q.z);
-				}
-				tmp[(size_t)x + (size_t)d.x * ((size_t)y + (size_t)d.y * (size_t)z)] = s;
-			}
-			field.values.swap(tmp);
-		}
-		float peak = 0.0f;
-		size_t peakIdx = 0;
-		for (size_t i = 0; i < field.values.size(); ++i)
-			if (field.values[i] > peak)
-			{
-				peak = field.values[i];
-				peakIdx = i;
-			}
-		if (peak > 0.0f)
-			for (float& v : field.values)
-				v /= peak;
-		// The core depth: from the peak cell's centre out along +-x and +-z (the crown's side), the mean.
-		const glm::ivec3 pc((int)(peakIdx % (size_t)d.x), (int)((peakIdx / (size_t)d.x) % (size_t)d.y), (int)(peakIdx / ((size_t)d.x * d.y)));
-		const glm::vec3 peakPos = field.origin + (glm::vec3(pc) + 0.5f) * field.cell;
-		float core = 0.0f;
-		for (const glm::vec3 dir : { glm::vec3(1, 0, 0), glm::vec3(-1, 0, 0), glm::vec3(0, 0, 1), glm::vec3(0, 0, -1) })
-			core += field.opticalDepth(peakPos, dir);
-		field.coreDepth = glm::max(0.25f * core, 1e-3f);
-		return field;
-	}
-
-	// Resolves the supersampled view into the output images at (offsetX, offsetY) of an `outWidth`-wide RGBA8
-	// pair: coverage alpha, averaged colour / normal of the covered subsamples. Empty texels take the view's mean
-	// colour, so filtering never darkens the silhouette.
-	//
-	// The CROWN layout: each texel's normal is bent by `volumeBend` toward the crown field's outward direction at its
-	// leaf (the 3D point from the subsamples' depth; `crownCentre` where the field is flat), goes into the view's
-	// tangent space (x right, y up, z toward the viewer) and KEEPS ITS SIGN - normals may face away from the view,
-	// toward a sun behind the tree - so a flat card shades like the crown's own shape whatever side the sun is on;
-	// A = the INTERIOR at that leaf (linear, the lit FS remaps it).
-	void resolveView(const FrameTarget& target, const ViewBasis& view,
-		oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal, uint32 outWidth, uint32 offsetX, uint32 offsetY,
-		const CrownField& crown, const glm::vec3& crownCentre, float volumeBend)
-	{
-		glm::vec3 meanColor(0.0f);
-		uint32 meanCount = 0;
-		for (size_t k = 0; k < target.depth.size(); ++k)
-			if (target.depth[k] > -FLT_MAX)
-			{
-				meanColor += target.color[k];
-				++meanCount;
-			}
-		meanColor = meanCount > 0 ? meanColor / (float)meanCount : glm::vec3(0.3f);
-
 		const uint32 w = target.width / SUPERSAMPLE, h = target.height / SUPERSAMPLE;
 		for (uint32 y = 0; y < h; ++y)
-		{
 			for (uint32 x = 0; x < w; ++x)
 			{
-				glm::vec3 color(0.0f), normal(0.0f);
-				float depth = 0.0f;
-				uint32 covered = 0;
+				uint32 covered = 0, leaves = 0;
 				for (uint32 sy = 0; sy < SUPERSAMPLE; ++sy)
 					for (uint32 sx = 0; sx < SUPERSAMPLE; ++sx)
 					{
 						const size_t k = (size_t)(y * SUPERSAMPLE + sy) * target.width + (x * SUPERSAMPLE + sx);
 						if (target.depth[k] <= -FLT_MAX)
 							continue;
-						color += target.color[k];
-						normal += target.normal[k];
-						depth += target.depth[k];
 						++covered;
+						leaves += target.leaf[k];
 					}
-				const size_t out = (((size_t)offsetY + y) * outWidth + offsetX + x) * 4;
-				if (covered == 0)
-				{
-					outAlbedo[out + 0] = toByte(meanColor.x);
-					outAlbedo[out + 1] = toByte(meanColor.y);
-					outAlbedo[out + 2] = toByte(meanColor.z);
-					outAlbedo[out + 3] = 0;
-					outNormal[out + 0] = 128;
-					outNormal[out + 1] = 128;
-					outNormal[out + 2] = 255;
-					outNormal[out + 3] = 0; // interior 0 (the mips average it into the edges)
-					continue;
-				}
-				color /= (float)covered;
-				depth /= (float)covered;
-				glm::vec3 n = glm::dot(normal, normal) > 1e-12f ? glm::normalize(normal) : view.dir;
-				const glm::vec2 xy(((float)x + 0.5f) / (float)w * 2.0f - 1.0f, 1.0f - ((float)y + 0.5f) / (float)h * 2.0f);
-				const glm::vec3 p = view.centre + view.right * (xy.x * view.halfExtent.x) + view.up * (xy.y * view.halfExtent.y) + view.dir * depth;
-				const glm::vec3 fromCentre = p - crownCentre;
-				const glm::vec3 fallback = glm::dot(fromCentre, fromCentre) > 1e-8f ? glm::normalize(fromCentre) : view.dir;
-				const glm::vec3 outward = crown.outward(p, fallback);
-				const glm::vec3 bent = glm::mix(n, outward, volumeBend);
-				if (glm::dot(bent, bent) > 1e-8f)
-					n = glm::normalize(bent);
-				const float interior = crown.interior(p, outward);
-				const glm::vec3 nt(glm::dot(n, view.right), glm::dot(n, view.up), glm::dot(n, view.dir));
-				outAlbedo[out + 0] = toByte(color.x);
-				outAlbedo[out + 1] = toByte(color.y);
-				outAlbedo[out + 2] = toByte(color.z);
-				outAlbedo[out + 3] = toByte((float)covered / (float)(SUPERSAMPLE * SUPERSAMPLE));
-				outNormal[out + 0] = toByte(nt.x * 0.5f + 0.5f);
-				outNormal[out + 1] = toByte(nt.y * 0.5f + 0.5f);
-				outNormal[out + 2] = toByte(nt.z * 0.5f + 0.5f);
-				outNormal[out + 3] = toByte(interior);
+				const size_t out = ((size_t)offsetY + y) * outWidth + x;
+				outCover[out] = (float)covered / (float)(SUPERSAMPLE * SUPERSAMPLE);
+				outLeaf[out] = covered > 0 ? (float)leaves / (float)covered : 0.0f;
 			}
+	}
+
+	// The share of a mask level's texels that pass the alpha test (0.5) with their cover x `scale`.
+	float maskCoverage(const oc::vector<float>& cover, float scale)
+	{
+		size_t solid = 0;
+		for (const float c : cover)
+			solid += c * scale >= 0.5f ? 1 : 0;
+		return cover.empty() ? 0.0f : (float)solid / (float)cover.size();
+	}
+
+	// A mask level's bytes: an empty texel keeps its (scaled) cover below the test; a solid one says what it is.
+	void encodeMaskLevel(const oc::vector<float>& cover, const oc::vector<float>& leaf, float scale, float barkValue, oc::vector<uint8>& out)
+	{
+		out.resize(cover.size());
+		for (size_t i = 0; i < cover.size(); ++i)
+		{
+			const float a = cover[i] * scale;
+			out[i] = a < 0.5f ? (uint8)glm::min((int)(a * 255.0f), 127) : toByte(glm::mix(barkValue, 1.0f, leaf[i]));
 		}
 	}
 }
@@ -518,9 +322,8 @@ namespace Procedural
 
 		// Opacity over one crossing: tau = sigma x crossing = (projected area / volume) x crossing - leaves and bark alike.
 		// The COLOUR and the NORMAL weight the bark by how much of it the voxel's own leaves leave visible, exp(-their tau):
-		// the branches inside a crown add cover but little colour (by area alone they greyed the crown, where the billboard
-		// bake's depth test hides them). A voxel of bark only (the trunk under the crown) keeps the bark. Then x `Billboard
-		// AlbedoScale`, as the whole-tree billboards.
+		// the branches inside a crown add cover but little colour (by area alone they greyed the crown). A voxel of bark
+		// only (the trunk under the crown) keeps the bark. Then x `Billboard AlbedoScale`.
 		oc::vector<glm::vec3> colour(count, glm::vec3(0.0f)), normal(count, glm::vec3(0.0f));
 		oc::vector<float> opacity(count, 0.0f), tau(count, 0.0f), interior(count, 0.0f);
 		// THE LEAF SHARE of a voxel's seen surface (1 = leaves only, 0 = bark only: the trunk): the shader's leaf-only terms
@@ -887,7 +690,7 @@ namespace Procedural
 			out.normals.push_back(grid);
 			out.tangents.push_back(size);
 			out.bitangents.push_back(glm::vec3(0.0f, 0.0f, 1.0f));
-			out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_CARD_STRIP_CODE + 0.5f));
+			out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_VOXEL_BOX_WIND_CODE));
 			out.bones.push_back(0);
 		}
 		// Corner k = x | y << 1 | z << 2. Counter-clockwise seen from outside (the engine's front faces).
@@ -919,42 +722,14 @@ namespace Procedural
 		return { mn, glm::max(mx, mn + 1e-3f) };
 	}
 
-	void billboardViews(const TreeBillboardBox& box, TreeBillboardView& outSide, TreeBillboardView& outTop)
+	TreeBillboardLayout billboardLayout(uint32 size)
 	{
-		const glm::vec3 centre = (box.min + box.max) * 0.5f;
-		const glm::vec3 half = (box.max - box.min) * 0.5f;
-		// Both card PLANES pass through the branch axis (module x = 0 / z = 0, where the root attaches to the
-		// trunk) - not through the box centre, which the leaf spread pushes off the branch (the branch image
-		// then floated beside its attach point). In-plane they still cover the whole box. The bake projects
-		// orthographically along the card normal, so the plane offset never changes the image.
-		// Side: the vertical card, seen from +X; u along the branch (+Y), v up (+Z).
-		outSide = { glm::vec3(0.0f, centre.y, centre.z), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f),
-			glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(half.y, half.z) };
-		// Top: the horizontal card, seen from +Z (above); u along the branch (+Y). Its up is -X so that
-		// cross(normal, tangent) = up, the bitangent the lit FS rebuilds.
-		outTop = { glm::vec3(centre.x, centre.y, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f),
-			glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(half.y, half.x) };
-	}
-
-	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box, float height)
-	{
-		const float halfY = (box.max.y - box.min.y) * 0.5f;
-		const float maxX = glm::max(-box.min.x, box.max.x), maxZ = glm::max(-box.min.z, box.max.z);
-		// Centred ON the axis (x = z = 0) at `height` of the box (0.5 = mid height), seen from +Y (above). u (right) along
-		// +Z, v (up) along +X: cross(normal, right) = up and cross(right, up) = normal, the frames the lit FS rebuilds. u
-		// spans at least the tree's height, so half its length - the lit FS's crown radius - matches the vertical cards'.
-		return { glm::vec3(0.0f, glm::mix(box.min.y, box.max.y, height), 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f),
-			glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(glm::max(halfY, maxZ), maxX) };
-	}
-
-	TreeBillboardLayout billboardLayout(uint32 size, uint32 numViews, bool horizontal)
-	{
+		constexpr uint32 NUM_STRIPS = 3;
 		TreeBillboardLayout layout;
-		layout.numStrips = (horizontal ? 3u : 2u) * (numViews >= 4 ? 2u : 1u);
 		// The strip height a multiple of the largest power of two p that leaves >= 4 px per strip at mip log2(p): every
-		// strip boundary then falls on a texel boundary at every mip the material gets, so no mip mixes two cards.
-		// 512 / 3 strips: p = 32, 160 rows each (32 spare rows at the bottom).
-		const uint32 raw = size / layout.numStrips;
+		// strip boundary then falls on a texel boundary at every mip the material gets, so no mip mixes two cards (and a
+		// BC block never spans two). 512 / 3 strips: p = 32, 160 rows each (32 spare rows at the bottom).
+		const uint32 raw = size / NUM_STRIPS;
 		uint32 p = 1;
 		while (raw / (p * 2) >= 4)
 			p *= 2;
@@ -965,53 +740,62 @@ namespace Procedural
 		return layout;
 	}
 
-	// The cards in strip order: side, top, then (horizontal) the horizontal card.
-	static uint32 billboardCards(const TreeBillboardBox& box, bool horizontal, float topCardHeight, TreeBillboardView (&views)[3])
+	// One card: its centre and basis (image u along `right`, v down along -`up`, `normal` its front) and its half size.
+	struct CardView
 	{
-		billboardViews(box, views[0], views[1]);
-		if (!horizontal)
-			return 2;
-		views[2] = billboardHorizontalView(box, topCardHeight);
-		return 3;
+		glm::vec3 centre;
+		glm::vec3 right;
+		glm::vec3 up;
+		glm::vec3 normal;
+		glm::vec2 halfExtent;
+	};
+
+	// The three cards in strip order. The vertical ones' PLANES pass through the trunk axis (x = 0 / z = 0), not through
+	// the box centre, which the crown's spread pushes off the trunk; in-plane they cover the whole box. The bake projects
+	// orthographically along the card normal, so a plane's offset never changes its image.
+	static void billboardCards(const TreeBillboardBox& box, float topCardHeight, CardView (&views)[3])
+	{
+		const glm::vec3 centre = (box.min + box.max) * 0.5f;
+		const glm::vec3 half = (box.max - box.min) * 0.5f;
+		// Seen along X: image u along the trunk (+Y), v along +Z.
+		views[0] = { glm::vec3(0.0f, centre.y, centre.z), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f),
+			glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(half.y, half.z) };
+		// Seen along Z: image u along the trunk (+Y), v along -X.
+		views[1] = { glm::vec3(centre.x, centre.y, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f),
+			glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(half.y, half.x) };
+		// The horizontal card, centred ON the axis at `topCardHeight` of the box, seen from above: u along +Z, v along +X.
+		const float maxX = glm::max(-box.min.x, box.max.x), maxZ = glm::max(-box.min.z, box.max.z);
+		views[2] = { glm::vec3(0.0f, glm::mix(box.min.y, box.max.y, topCardHeight), 0.0f), glm::vec3(0.0f, 0.0f, 1.0f),
+			glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(maxZ, maxX) };
 	}
 
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ,
-		float topCardHeight)
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, float topCardHeight, TreeMesh& out)
 	{
-		const bool backViews = numViews >= 4;
-		TreeBillboardView views[3];
-		const uint32 numCards = billboardCards(box, horizontal, topCardHeight, views);
-		const float stripV = (float)billboardLayout(size, numViews, horizontal).stripHeight / (float)size; // one strip in v
-		for (uint32 v = 0; v < numCards; ++v)
+		CardView views[3];
+		billboardCards(box, topCardHeight, views);
+		const float stripV = (float)billboardLayout(size).stripHeight / (float)size; // one strip in v
+		// THE CROWN SHAPE for a ray hit's normal (tree_card.inc.glsl): its radii = the cards' half extents, in every
+		// vertex's tangent (a card has no normal map). Its centre = the cards' bound centre, on the trunk axis.
+		const glm::vec3 crownRadii(glm::max(-box.min.x, box.max.x), (box.max.y - box.min.y) * 0.5f, glm::max(-box.min.z, box.max.z));
+		for (uint32 v = 0; v < 3; ++v)
 		{
-			const TreeBillboardView& view = views[v];
+			const CardView& view = views[v];
 			const glm::vec3 r = view.right * view.halfExtent.x;
 			const glm::vec3 u = view.up * view.halfExtent.y;
 			const glm::vec3 corners[4] = { view.centre - r - u, view.centre + r - u, view.centre + r + u, view.centre - r + u };
-			// Image u along right; image v down from the card's top, into this face's strip of the texture.
+			// Image u along right; image v down from the card's top, into this card's strip of the texture.
 			const glm::vec2 uvs[4] = { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
+			// Both faces read the card's strip with the same u along `right`: the back face shows it through the card.
 			for (int face = 0; face < 2; ++face)
 			{
 				const uint32 base = out.numVertices();
-				// 4 views: a strip per face. 2 views: a strip per card, the back face reading the front's strip
-				// through the card (the same u along `right`).
-				const float strip = backViews ? (float)(v * 2 + (uint32)face) : (float)v;
-				// The piece's axis (along `right` = +Y, through the origin) on this card: image v = 0.5 - its offset along
-				// `up` from the centre / the card height (v runs down from the top), into this face's strip.
-				const float axisV = (0.5f + glm::dot(view.centre, view.up) / (2.0f * view.halfExtent.y) + strip) * stripV;
-				// texCoords.z rides the tangent's w magnitude to the lit FS (RenderMeshData): the merged branch cards' axis
-				// code (>= 3), else TREE_CARD_STRIP_CODE + the card's strip height in texture v (< 1) - the FS's crown
-				// ellipsoid takes the card's real width from it (d(pos)/dv spans only the strip: ~3x the width).
-				const float axisZ = axisInZ && v < 2 ? TREE_CARD_AXIS_CODE + axisV : TREE_CARD_STRIP_CODE + stripV;
 				for (int k = 0; k < 4; ++k)
 				{
 					out.positions.push_back(corners[k]);
 					out.normals.push_back(face == 0 ? view.normal : -view.normal);
-					out.tangents.push_back(view.right);
-					// Same tangent and bitangent on the back face: its handedness flips, which is exactly the TBN
-					// its own view was baked in (right / up kept, direction negated - see bakeBillboards).
+					out.tangents.push_back(crownRadii);
 					out.bitangents.push_back(view.up);
-					out.texCoords.push_back(glm::vec3(uvs[k].x, (uvs[k].y + strip) * stripV, axisZ));
+					out.texCoords.push_back(glm::vec3(uvs[k].x, (uvs[k].y + (float)v) * stripV, 0.0f)); // z 0: a plain mesh (no wind payload)
 					out.bones.push_back(0);
 				}
 				if (face == 0)
@@ -1022,46 +806,58 @@ namespace Procedural
 		}
 	}
 
-	void bakeBillboards(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 size, float normalBend,
-		uint32 numViews, bool horizontal, oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal)
+	void bakeBillboardMask(const TreePiece& piece, const TreeBakeImage& leaves, uint32 size, float barkValue, oc::vector<oc::vector<uint8>>& outMips)
 	{
-		const uint32 facesPerCard = numViews >= 4 ? 2u : 1u;
-		outAlbedo.assign((size_t)size * size * 4, 0);
-		outNormal.assign((size_t)size * size * 4, 0);
-		// The spare rows below the last strip keep a neutral normal, interior 0.
-		for (size_t t = 0; t < (size_t)size * size; ++t)
-		{
-			outNormal[t * 4 + 0] = 128;
-			outNormal[t * 4 + 1] = 128;
-			outNormal[t * 4 + 2] = 255;
-			outNormal[t * 4 + 3] = 0;
-		}
-		const TreeBillboardBox box = billboardBox(piece);
-		const glm::vec3 volumeCentre = (box.min + box.max) * 0.5f; // the fallback where the crown field is flat
-		const CrownField crown = buildCrownField(piece, box.min, box.max);
-		// The horizontal card at mid height: its view is orthographic from above, so the image is the same at any card
-		// height (billboardMesh places it - Billboard TopCardHeight - with no re-bake).
-		TreeBillboardView views[3];
-		const uint32 numCards = billboardCards(box, horizontal, 0.5f, views);
-		const uint32 stripHeight = billboardLayout(size, numViews, horizontal).stripHeight;
+		const TreeBillboardLayout layout = billboardLayout(size);
+		// LEVEL 0: each card's view into its strip (the spare rows below the last strip stay empty). The horizontal card's
+		// view is the same at any card height (orthographic from above): billboardMesh places it with no re-bake.
+		oc::vector<float> cover((size_t)size * size, 0.0f), leaf((size_t)size * size, 0.0f);
+		CardView views[3];
+		billboardCards(billboardBox(piece), 0.5f, views);
 		FrameTarget target;
-		for (uint32 v = 0; v < numCards; ++v)
+		for (uint32 v = 0; v < 3; ++v)
 		{
-			const TreeBillboardView& bv = views[v];
-			for (uint32 face = 0; face < facesPerCard; ++face)
+			const ViewBasis view{ views[v].centre, views[v].right, views[v].up, views[v].normal, views[v].halfExtent };
+			target.clear(size * SUPERSAMPLE, layout.stripHeight * SUPERSAMPLE);
+			rasterMesh(target, piece.bark[0], view, leaves, false);
+			rasterMesh(target, piece.leaves[0], view, leaves, true);
+			resolveView(target, cover, leaf, size, v * layout.stripHeight);
+		}
+
+		// THE LEVELS: the cover averaged (unscaled: it feeds the next level), the leaf share by the cover. A level's test
+		// then runs on its cover x a scale that keeps level 0's solid share (binary search), as the leaf clusters' mips.
+		outMips.clear();
+		outMips.resize(layout.numMips);
+		const float targetCoverage = maskCoverage(cover, 1.0f);
+		encodeMaskLevel(cover, leaf, 1.0f, barkValue, outMips[0]);
+		uint32 levelSize = size;
+		for (uint32 k = 1; k < layout.numMips; ++k)
+		{
+			const uint32 half = levelSize / 2;
+			oc::vector<float> coverNext((size_t)half * half), leafNext((size_t)half * half);
+			for (uint32 y = 0; y < half; ++y)
+				for (uint32 x = 0; x < half; ++x)
+				{
+					float c = 0.0f, l = 0.0f;
+					for (uint32 s = 0; s < 4; ++s)
+					{
+						const size_t src = (size_t)(y * 2 + (s >> 1)) * levelSize + (x * 2 + (s & 1));
+						c += cover[src];
+						l += cover[src] * leaf[src];
+					}
+					coverNext[(size_t)y * half + x] = c * 0.25f;
+					leafNext[(size_t)y * half + x] = c > 0.0f ? l / c : 0.0f;
+				}
+			cover = oc::move(coverNext);
+			leaf = oc::move(leafNext);
+			levelSize = half;
+			float lo = 0.0f, hi = 8.0f;
+			for (int i = 0; i < 16; ++i)
 			{
-				// The back face's view looks from the other side (direction negated) but keeps the card's
-				// right / up: the image is stored as seen THROUGH the card, so the back face - which samples it with
-				// the same u along `right` - shows it the right way round, and its baked tangent-space normals match
-				// the back face's TBN (same tangent and bitangent, normal negated).
-				const ViewBasis view{ bv.centre, bv.right, bv.up, face == 0 ? bv.normal : -bv.normal, bv.halfExtent };
-				target.clear(size * SUPERSAMPLE, stripHeight * SUPERSAMPLE);
-				rasterMesh(target, piece.bark[0], view, bark, false);
-				rasterMesh(target, piece.leaves[0], view, leaves, true);
-				// The normal alpha holds the INTERIOR (the crown layout), the same on both faces.
-				resolveView(target, view, outAlbedo, outNormal, size, 0,
-					(v * facesPerCard + face) * stripHeight, crown, volumeCentre, normalBend);
+				const float mid = (lo + hi) * 0.5f;
+				(maskCoverage(cover, mid) < targetCoverage ? lo : hi) = mid;
 			}
+			encodeMaskLevel(cover, leaf, hi, barkValue, outMips[k]);
 		}
 	}
 }

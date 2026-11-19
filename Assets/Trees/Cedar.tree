@@ -89,7 +89,6 @@ TreeSpecies Cedar
 		Relief 1.3
 		Lichen 0.2
 	Billboard
-		NormalBend 0.0
 		AlbedoScale 1.2
 		TopCardHeight 0.65
 	Color

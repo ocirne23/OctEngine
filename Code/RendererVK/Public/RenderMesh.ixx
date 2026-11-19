@@ -21,9 +21,9 @@ export struct RenderMeshData
     Sphere bounds; // mesh-local, the AABB's centre + half diagonal
 
     // Null tangents / bitangents / texCoords default like ISceneData::createMeshScene's (the tangent handedness is ObjectContainer's formula), so the shading
-    // matches the container path exactly. texCoords.z >= 2 rides the tangent's w as its MAGNITUDE (the sign stays the handedness): the tree billboard cards'
-    // strip code (2 + the strip height, < 3) or the merged branch cards' axis code (>= 3) (Procedural billboardMesh, read by the lit FS's foliageCrownFrame).
-    // texCoords.z in (1, 2) does too: a tree mesh vertex's WIND payload (Procedural TreeGenerator, read by tree_wind.inc.glsl). Every other mesh: |w| = 1.
+    // matches the container path exactly. texCoords.z > 1 rides the tangent's w as its MAGNITUDE (the sign stays the handedness): in (1, 2) a tree mesh
+    // vertex's WIND payload (Procedural TreeGenerator, read by tree_wind.inc.glsl), 2.5 the trees' voxel box (Procedural treeVoxelBoxMesh). Every other
+    // mesh: |w| = 1.
     void build(const MeshGeometryDesc& geometry);
 };
 

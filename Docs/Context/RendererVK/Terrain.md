@@ -128,11 +128,17 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
     `_uvec2` in every shader); `pc_terrainRay` in the rain occlusion, which binds no frame UBO (`#define TERRAIN_RAY_TABLE`).
     The table holds the vertex mega-buffer's address, and reads through it are not bounds-checked: the march clamps every index.
   * **The node grid is baked**: `u_terrain_rayChunkSize`, `u_terrain_rayLod0Res`, `u_terrain_rayLod0Quad` (lockable UBO values), so
-    the march's sizes fold and do not stay live across its loop (this took the tessellated ground and the foliage FS from 72 to 64
+    the march's sizes fold and do not stay live across its loop (this took the tessellated ground FS from 72 to 64
     registers). The rain occlusion has no frame UBO and reads the same values from the table.
   * **A hit's normal** = `terrainRayNormal(hitPos)`, the interpolated vertex normals (a second lookup after the march, so
-    the march keeps nothing but t). **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
-    mirror, `waterBedAlbedo` (the splat) in `traceScene`.
+    the march keeps nothing but t); `terrainRayRiver(hitPos)` reads the vertices' river influence the same way. **A hit's albedo**: `TERRAIN_RAY_ALBEDO` (the material's white fallback) in the GI and the film's
+    mirror, `waterBedAlbedo` (the splat) in `traceScene`. **Land above the water takes THE GRASS over that splat**
+    (`grassRayAlbedo`, grass.inc.glsl - [Vegetation.md](Vegetation.md) "THE FAR TIER"): no blade is in the TLAS, so a
+    reflected meadow was bare soil. The ocean's hook tests the hit against its column's calm level; the river's knows a
+    mirror ray by its missing column, and gives such a hit **the river value of its own vertices** (`terrainRayRiver`,
+    terrain_ray.inc.glsl: `terrainRayNormal`'s lookup on the data word) and no wet darkening - so a bank's and a lake
+    shore's sand, the floodplain's thinning grass and the dry soil reflect as the terrain draws them. A body ray keeps
+    river = 1 (the bed) and the full darkening.
   * **The RT sun shadow marches once per pixel** (`traceSunVisibility`), on its first ray: the rays are nearly parallel, and a march costs up to 256 steps
     at low sun. A hit shadows the whole pixel; the terrain's penumbra is that ray's jitter over the frames. The other rays trace the TLAS only.
   * **The step view**: "Shadows/Debug mode" = Terrain march steps (`terrainMarchDebugColor`, baked as `SHADOW_DEBUG` 5) marches once toward
@@ -661,7 +667,7 @@ the sand, so the two can never disagree.
 * Per texel, two ray queries from the near plane straight down against THIS frame's TLAS: SOLID (CullNoOpaque) - the
   closest opaque hit's ortho depth (t / range, standard Z; a miss = 1); FOLIAGE (CullOpaque, up to that hit, candidates
   never confirmed) - the alpha-masked instances' top depth and layer count, each layer stopping "Particles/Rain
-  occlusion foliage block" (0.7) of the rain (no texture alpha test; in the TLAS a tree is its whole-tree billboard).
+  occlusion foliage block" (0.7) of the rain (no texture alpha test; in the TLAS a tree is its shadow billboard).
   Packed: bits 0..15 solid depth, 16..27 top foliage depth (1 = none), 28..31 the pass fraction ×15.
 * The sim (`rainSheltered`, usampler2D, nearest, its own bounds check = open sky outside) shelters a drop below the
   solid surface, and one below the foliage top whose FIXED draw (a hash of its seed, which changes only at a restart -

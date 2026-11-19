@@ -639,7 +639,7 @@ namespace
 		}
 	}
 
-	// The LOD levels meshPiece builds: LEVEL 0 ONLY - the trees switch through their own tiers (mid tier, billboard, far
+	// The LOD levels meshPiece builds: LEVEL 0 ONLY - the trees switch through their own tiers (the voxel tier, the far
 	// volume) and upload no mesh LOD chains (TreeSystem uploadLevelZero). Levels 1.. stay empty; PIECE_LODS keeps their
 	// specs should mesh LODs come back.
 	constexpr uint32 MESHED_LODS = 1;
@@ -1502,7 +1502,6 @@ namespace Procedural
 			for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
 			{
 				append(out.bark[lod], piece.bark[lod], placement.local, windPhase);
-				append(placement.trunk ? out.trunkBark[lod] : out.branchBark[lod], piece.bark[lod], placement.local, windPhase);
 				append(out.leaves[lod], piece.leaves[lod], placement.local, windPhase);
 				out.lodError[lod] = glm::max(out.lodError[lod], piece.lodError[lod] * placement.local.scale);
 			}
@@ -1513,7 +1512,6 @@ namespace Procedural
 			}
 		}
 		out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, out.length });
-		out.placements = oc::move(placements);
 	}
 
 	void compositeTree(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed,

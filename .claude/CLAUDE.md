@@ -601,7 +601,7 @@ Checked-in inputs for repeatable runs:
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, the SPIR-V cache (`ShaderCache/`, see
 [`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md)), compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` / `Rocks/Textures/` / `Clutter/Textures/` (the
-generated tree, billboard, dead-wood and flower textures as uploaded, `.tex`), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/`
+generated tree, shadow-mask, voxel, dead-wood and flower textures as uploaded, `.tex`), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/`
 (the generated meshes - both "The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
 splats, the `Diffusion/<seed>/` tile cache, `Sounds/game.snd` (the game's synthesized sounds, see The sound cache in
 [`Docs/Context/Game/Sound.md`](../Docs/Context/Game/Sound.md)), `gamesave.txt` and `profile.txt`. **No `imgui.ini` and no Streamline log

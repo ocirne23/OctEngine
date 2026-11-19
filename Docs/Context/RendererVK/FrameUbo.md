@@ -134,9 +134,8 @@ temporal / upsample). The others are still hand-written blocks with mirrored C++
 
 * **A handle struct per block IS the layout**: `PushValue<T>` members that bind themselves where they are declared
   (`PushGroup`): `PushValue<float> radius = g("radius");`, a buffer reference
-  `PushValue<uint64> pieces = g("pieces", "PieceList");` (an address names its GLSL type), a nested group with a prefix
-  (`TvVolPush vol{ { g.block, "vol_" } };` -> `pc_vol_*`). Scalar layout, explicit offsets, 128 bytes at most. A
-  variant can bind other names (`SplatPush::recordsVariant`: `pc_pieces` / `pc_map`).
+  `PushValue<uint64> types = g("types", "TypeList");` (an address names its GLSL type), a nested group with a prefix
+  (`TvVolPush vol{ { g.block, "vol_" } };` -> `pc_vol_*`). Scalar layout, explicit offsets, 128 bytes at most.
 * **The GLSL is generated per pipeline**: the layout carries `block.declaration()` as its `pushDeclaration`, and the
   shader writes `#include "push.generated.glsl"` where its block was (the includer serves that compile's text; the
   preamble enables `GL_EXT_scalar_block_layout` for every shader). An instance-less block of `pc_<name>` members; a

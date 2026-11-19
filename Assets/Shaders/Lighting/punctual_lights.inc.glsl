@@ -454,7 +454,7 @@ vec3 doLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCo
 	return doPointLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
 }
 
-// DIFFUSE ONLY (the lit core's LIT_LIGHTS_DIFFUSE: the trees' billboards and voxels - rough surfaces seen from tens of
+// DIFFUSE ONLY (the lit core's LIT_LIGHTS_DIFFUSE: the trees' voxels - rough surfaces seen from tens of
 // metres, on which a local light's highlight is nothing): doLight's diffuse halves alone - the same radiance, falloff,
 // cone, one-sided test and horizon fade per light kind, with no view vector, no Fresnel and no GGX. The view vector, the
 // specular colour and the roughness are then not live across the light loop (its shadow ray is the register peak).

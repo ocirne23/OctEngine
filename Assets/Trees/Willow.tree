@@ -91,7 +91,6 @@ TreeSpecies Willow
 		Relief 1.2
 		Lichen 0.25
 	Billboard
-		NormalBend 0.0
 		TopCardHeight 0.6
 	Color
 		Bark 0.30 0.25 0.19

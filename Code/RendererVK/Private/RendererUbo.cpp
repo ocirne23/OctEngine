@@ -1745,7 +1745,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clutter_contactHeight", [&] { return glm::max(c.contactHeight, 0.001f); }, c.contactHeight);
     }
     {
-        // ---- Trees ("Trees": the foliage cards, the tree wind, the far-tree volume's march shading - the bake's
+        // ---- Trees ("Trees": the leaves and the voxel tier, the tree wind, the far-tree volume's march shading - the bake's
         // geometry rides its push block: the march reads the BAKED volume, not this frame's settings)
         const FoliageParams& f = Globals::settings.foliage;
         const FarTreeParams& s = Globals::settings.farTree;
@@ -1764,25 +1764,17 @@ void RendererState::registerUboValues(UboBlock& list)
                     + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f);
             }, UboLive);
         list.add("foliage_rtRange", f.rtRange);
-        list.add("foliage_crownNormal", f.crownNormal);
         list.add("foliage_shadowLength", [&] { return glm::max(f.shadowLength, 0.05f); }, f.shadowLength); // the tweak min
         list.add("foliage_leafShadowLength", [&] { return glm::max(f.leafShadowLength, 0.0f); }, f.leafShadowLength);
         list.add("foliage_interiorShadow", f.interiorShadow);
         list.add("foliage_interiorStart", [&] { return glm::clamp(f.interiorStart, 0.0f, 1.0f); }, f.interiorStart);
         list.add("foliage_interiorEnd", [&] { return glm::max(glm::clamp(f.interiorEnd, 0.0f, 1.0f), glm::clamp(f.interiorStart, 0.0f, 1.0f) + 1e-3f); },
             f.interiorEnd, f.interiorStart);
-        list.add("foliage_interiorTopCardScale", [&] { return glm::max(f.interiorTopCardScale, 0.01f); }, f.interiorTopCardScale); // an exponent: pow(0, 0) is undefined
-        list.add("foliage_interiorViewFade", [&] { return glm::clamp(f.interiorViewFade, 0.0f, 1.0f); }, f.interiorViewFade);
-        list.add("foliage_edgeFadeStart", f.edgeFadeStart);
-        list.add("foliage_edgeFadeEnd", f.edgeFadeEnd);
-        list.add("foliage_edgeFadeCentreScale", f.edgeFadeCentreScale);
-        list.add("foliage_edgeFadeTopCardScale", f.edgeFadeTopCardScale);
         list.add("foliage_transmission", [&] { return glm::max(f.transmission, 0.01f); }, f.transmission); // the tweak min
         list.add("foliage_transmissionFocus", f.transmissionFocus);
         list.add("foliage_transmissionGlow", f.transmissionGlow);
         list.add("foliage_transmissionShadow", f.transmissionShadow);
         list.add("foliage_transmissionSelfShadow", [&] { return glm::clamp(f.transmissionSelfShadow, 0.0f, 1.0f); }, f.transmissionSelfShadow);
-        list.add("foliage_selfShadow", [&] { return glm::max(f.selfShadow, 0.0f); }, f.selfShadow);
         list.add("foliage_minNoV", [&] { return glm::clamp(f.minNoV, 0.0f, 0.9f); }, f.minNoV);
         list.add("foliage_leafNormalStrength", [&] { return glm::clamp(f.leafNormalStrength, 0.0f, 4.0f); }, f.leafNormalStrength);
         list.add("foliage_leafSpecCurve", [&] { return glm::clamp(f.leafSpecCurve, 0.0f, 8.0f); }, f.leafSpecCurve);
@@ -1825,7 +1817,6 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_windLeafFadeStart", f.windLeafFadeStart);
         list.add("foliage_windLeafFadeEnd", [&] { return glm::max(f.windLeafFadeEnd, f.windLeafFadeStart + 0.01f); }, f.windLeafFadeEnd, f.windLeafFadeStart);
         list.add("foliage_windTrunkFadeEnd", [&] { return glm::max(f.windTrunkFadeEnd, 100.0f); }, f.windTrunkFadeEnd); // the tweak min: the 100 m fade band
-        list.add("foliage_windBillboardWaves", [&] { return glm::max(f.windBillboardWaves, 0.0005f); }, f.windBillboardWaves); // the tweak min
         list.add("foliage_farStepScale", [&] { return glm::max(s.stepScale, 0.05f); }, s.stepScale);
         list.add("foliage_farLayerSamples", [&] { return glm::clamp(s.layerSamples, 1.0f, 32.0f); }, s.layerSamples);
         list.add("foliage_farStepExponent", [&] { return glm::clamp(s.stepExponent, 0.0f, 2.0f); }, s.stepExponent);

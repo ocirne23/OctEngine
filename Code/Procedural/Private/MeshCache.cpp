@@ -140,13 +140,10 @@ namespace
 		{
 			writeMesh(w, p.bark[k]);
 			writeMesh(w, p.leaves[k]);
-			writeMesh(w, p.trunkBark[k]);
-			writeMesh(w, p.branchBark[k]);
 			w.pod(p.lodError[k]);
 		}
 		w.vec(p.bones);
 		w.vec(p.slots);
-		w.vec(p.placements);
 		w.pod(p.length);
 		w.pod(p.baseRadius);
 		w.pod(p.pitch);
@@ -154,10 +151,9 @@ namespace
 	bool readPiece(Reader& r, TreePiece& p)
 	{
 		for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
-			if (!readMesh(r, p.bark[k]) || !readMesh(r, p.leaves[k]) || !readMesh(r, p.trunkBark[k]) || !readMesh(r, p.branchBark[k])
-				|| !r.pod(p.lodError[k]))
+			if (!readMesh(r, p.bark[k]) || !readMesh(r, p.leaves[k]) || !r.pod(p.lodError[k]))
 				return false;
-		return r.vec(p.bones) && r.vec(p.slots) && r.vec(p.placements) && r.pod(p.length) && r.pod(p.baseRadius) && r.pod(p.pitch);
+		return r.vec(p.bones) && r.vec(p.slots) && r.pod(p.length) && r.pod(p.baseRadius) && r.pod(p.pitch);
 	}
 
 	void writePieces(Writer& w, const oc::vector<TreePiece>& pieces)
@@ -208,14 +204,13 @@ namespace Procedural
 		return hash;
 	}
 
-	bool loadTreeMeshes(const oc::string& path, uint64 hash, TreeLibrary& library, oc::vector<TreePiece>& variants,
-		oc::vector<TreeDensityGrid>& density)
+	bool loadTreeMeshes(const oc::string& path, uint64 hash, oc::vector<TreePiece>& variants, oc::vector<TreeDensityGrid>& density)
 	{
 		oc::vector<uint8> raw;
 		if (!readCacheFile(path, MeshCacheTree, TREE_MESH_CACHE_VERSION, hash, raw))
 			return false;
 		Reader r{ raw };
-		if (!readPieces(r, library.trunks) || !readPieces(r, library.modules) || !readPieces(r, variants))
+		if (!readPieces(r, variants))
 			return false;
 		uint32 n = 0;
 		if (!r.pod(n) || n != variants.size())
@@ -227,12 +222,9 @@ namespace Procedural
 		return r.cursor == raw.size();
 	}
 
-	void saveTreeMeshes(const oc::string& path, uint64 hash, const TreeLibrary& library, const oc::vector<TreePiece>& variants,
-		const oc::vector<TreeDensityGrid>& density)
+	void saveTreeMeshes(const oc::string& path, uint64 hash, const oc::vector<TreePiece>& variants, const oc::vector<TreeDensityGrid>& density)
 	{
 		Writer w;
-		writePieces(w, library.trunks);
-		writePieces(w, library.modules);
 		writePieces(w, variants);
 		w.pod((uint32)density.size());
 		for (const TreeDensityGrid& grid : density)

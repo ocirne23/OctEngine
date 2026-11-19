@@ -21,7 +21,8 @@ public:
     // for content whose mips a box blit would get wrong, e.g. alpha-coverage-preserving foliage.
     uint16 uploadRgba8Mips(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, bool sRGB, const char* debugName);
     // The same with any format, e.g. BC blocks compressed at runtime (each level `format`'s bytes for its size).
-    uint16 uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
+    // redAsAlpha: a one-channel format read as a mask - its channel in all four (Texture::initialize).
+    uint16 uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName, bool redAsAlpha = false);
     // Takes a texture out of its slot (ObjectContainer teardown) and recycles the slot for a later upload; unregisters
     // from the TextureStreamer and queues a fallback rewrite of the slot's bindless descriptor entries. Returns the
     // image: a frame in flight may still sample it, so the caller destroys it once those frames are done

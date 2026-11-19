@@ -185,12 +185,8 @@ void TreeVolumePipeline::registerPushFields(const FarTreeParams& s)
 {
     // The bake passes: the live settings (a running bake with others is dropped; recordBake).
     const auto live = [&s]() -> const FarTreeParams& { return s; };
-    for (SplatPush* splat : { &m_splatPush, &m_recordSplatPush })
-    {
-        PushBlock& block = splat->g.block;
-        addVolLockables(block, splat->vol, s, live);
-        block.lockable(splat->rockExtinction, s.rockExtinction);
-    }
+    addVolLockables(m_splatBlock, m_splatPush.vol, s, live);
+    m_splatBlock.lockable(m_splatPush.rockExtinction, s.rockExtinction);
     addVolLockables(m_resolveBlock, m_resolvePush.vol, s, live);
     addVolLockables(m_farBlock, m_farPush.vol, s, live);
     addVolLockables(m_recordsBlock, m_recordsPush.vol, s, live);
@@ -212,18 +208,15 @@ const FarTreeParams& TreeVolumePipeline::marchSettings() const
     return m_job.active && m_job.stage == EBakeStage::Copy && !m_job.crossFade ? *m_job.settings : *m_bakedSettings;
 }
 
-// floorPass: 0 = the splat, 1 = the floor's coverage pass, 2 = the floor pass (TREE_FLOOR_PASS). records: the trees
-// come from the world tree records (TREE_SPLAT_RECORDS).
-void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records)
+// floorPass: 0 = the splat, 1 = the floor's coverage pass, 2 = the floor pass (TREE_FLOOR_PASS).
+void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass)
 {
     layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_splat.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    const PushBlock& block = records ? m_recordSplatBlock : m_splatBlock;
+    const PushBlock& block = m_splatBlock;
     layout.pushDeclaration = block.declaration();
     if (floorPass != 0)
         layout.defines.push_back(ShaderDefine{ "TREE_FLOOR_PASS", floorPass == 1 ? "1" : "2" });
-    if (records)
-        layout.defines.push_back(ShaderDefine{ "TREE_SPLAT_RECORDS", "1" });
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
     b.push_back(binding(1, vk::DescriptorType::eCombinedImageSampler)); // terrain data (the records' ground)
@@ -449,7 +442,7 @@ void TreeVolumePipeline::prepare(const FarTreeParams& settings)
             changed |= block->isDirty() && block->update(); // every dirty block updates: no short-circuit past one
         return changed;
     };
-    const bool bakeChanged = updateBlocks({ &m_splatBlock, &m_recordSplatBlock, &m_resolveBlock, &m_floorSmoothBlock, &m_recordsBlock, &m_farBlock });
+    const bool bakeChanged = updateBlocks({ &m_splatBlock, &m_resolveBlock, &m_floorSmoothBlock, &m_recordsBlock, &m_farBlock });
     const bool marchChanged = updateBlocks({ &m_marchBlock, &m_temporalBlock, &m_upsampleBlock });
     if (bakeChanged || marchChanged)
     {
@@ -775,14 +768,11 @@ TreeVolumePipeline::~TreeVolumePipeline()
 
 void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass sceneRenderPass)
 {
-    ComputePipelineLayout coverLayout;   buildSplatLayout(coverLayout, 1, false);  m_floorCoverPipeline.initialize(coverLayout);
-    ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2, false);  m_floorPipeline.initialize(floorLayout);
-    ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0, false);  m_splatPipeline.initialize(splatLayout);
     for (uint32 pass = 0; pass < 3; ++pass)
     {
-        ComputePipelineLayout recordLayout; buildSplatLayout(recordLayout, pass, true); m_recordSplatPipelines[pass].initialize(recordLayout);
+        ComputePipelineLayout splatLayout; buildSplatLayout(splatLayout, pass); m_splatPipelines[pass].initialize(splatLayout);
         for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
-            m_recordSplatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + f].initialize(m_recordSplatPipelines[pass].getDescriptorSetLayout(), "TreeVolume.recordSplat");
+            m_splatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + f].initialize(m_splatPipelines[pass].getDescriptorSetLayout(), "TreeVolume.splat");
     }
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout); m_resolvePipeline.initialize(resolveLayout);
     ComputePipelineLayout clearLayout;   buildClearLayout(clearLayout);     m_clearPipeline.initialize(clearLayout);
@@ -810,9 +800,6 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);     m_applyPipeline.initialize(sceneRenderPass, applyLayout);
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
-        m_floorCoverSets[f].initialize(m_floorCoverPipeline.getDescriptorSetLayout(), "TreeVolume.floorCover");
-        m_floorSets[f].initialize(m_floorPipeline.getDescriptorSetLayout(), "TreeVolume.floor");
-        m_splatSets[f].initialize(m_splatPipeline.getDescriptorSetLayout(), "TreeVolume.splat");
         m_resolveSets[f].initialize(m_resolvePipeline.getDescriptorSetLayout(), "TreeVolume.resolve");
         m_marchSets[f].initialize(m_marchPipeline.getDescriptorSetLayout(), "TreeVolume.march");
         m_applySets[f].initialize(m_applyPipeline.getDescriptorSetLayout(), "TreeVolume.apply");
@@ -845,14 +832,11 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
 
 void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 {
-    ComputePipelineLayout coverLayout;   buildSplatLayout(coverLayout, 1, false);
-    ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2, false);
-    ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0, false);
-    bool recordsOk = true;
+    bool ok = true;
     for (uint32 pass = 0; pass < 3; ++pass)
     {
-        ComputePipelineLayout recordLayout; buildSplatLayout(recordLayout, pass, true);
-        recordsOk = m_recordSplatPipelines[pass].reloadShaders(recordLayout) && recordsOk;
+        ComputePipelineLayout splatLayout; buildSplatLayout(splatLayout, pass);
+        ok = m_splatPipelines[pass].reloadShaders(splatLayout) && ok;
     }
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout);
     ComputePipelineLayout clearLayout;   buildClearLayout(clearLayout);
@@ -863,13 +847,11 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);
     ComputePipelineLayout maxLayout;     buildFloorMaxLayout(maxLayout, false);
     ComputePipelineLayout dilateLayout;  buildFloorMaxLayout(dilateLayout, true);
-    bool ok = m_floorCoverPipeline.reloadShaders(coverLayout) && recordsOk;
     ok = m_floorMaxPipeline.reloadShaders(maxLayout) && ok;
     ok = m_floorDilatePipeline.reloadShaders(dilateLayout) && ok;
     ok = m_recordsPipeline.reloadShaders(recordsLayout) && ok;
     ok = m_farPipeline.reloadShaders(farLayout) && ok;
     ok = m_floorSmoothPipeline.reloadShaders(smoothLayout) && ok;
-    ok = m_floorPipeline.reloadShaders(floorLayout) && ok;
     if (m_temporalPipeline.getPipeline()) // compiled at its first use (prepare)
     {
         ComputePipelineLayout temporalLayout;      buildTemporalLayout(temporalLayout, m_temporalBakedScale, m_temporalBakedChecker);
@@ -878,7 +860,6 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         ComputePipelineLayout upsampleLayout;      buildUpsampleLayout(upsampleLayout);
         ok = m_upsamplePipeline.reloadShaders(upsampleLayout) && ok;
     }
-    ok = m_splatPipeline.reloadShaders(splatLayout) && ok;
     ok = m_resolvePipeline.reloadShaders(resolveLayout) && ok;
     ok = m_clearPipeline.reloadShaders(clearLayout) && ok;
     ok = m_copyPipeline.reloadShaders(copyLayout) && ok;
@@ -891,20 +872,15 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 
 void TreeVolumePipeline::reloadBakePasses()
 {
-    ComputePipelineLayout coverLayout;   buildSplatLayout(coverLayout, 1, false);
-    ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2, false);
-    ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0, false);
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout);
     ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout);
     ComputePipelineLayout recordsLayout; buildRecordsLayout(recordsLayout);
     ComputePipelineLayout farLayout;     buildFarLayout(farLayout);
-    bool ok = m_floorCoverPipeline.reloadShaders(coverLayout);
-    ok = m_floorPipeline.reloadShaders(floorLayout) && ok;
-    ok = m_splatPipeline.reloadShaders(splatLayout) && ok;
+    bool ok = true;
     for (uint32 pass = 0; pass < 3; ++pass)
     {
-        ComputePipelineLayout recordLayout; buildSplatLayout(recordLayout, pass, true);
-        ok = m_recordSplatPipelines[pass].reloadShaders(recordLayout) && ok;
+        ComputePipelineLayout splatLayout; buildSplatLayout(splatLayout, pass);
+        ok = m_splatPipelines[pass].reloadShaders(splatLayout) && ok;
     }
     ok = m_resolvePipeline.reloadShaders(resolveLayout) && ok;
     ok = m_floorSmoothPipeline.reloadShaders(smoothLayout) && ok;
@@ -929,9 +905,9 @@ void TreeVolumePipeline::reloadMarchPasses()
         printf("TreeVolumePipeline: march pass rebuild failed, keeping previous pipeline(s)\n");
 }
 
-// The bake's start: everything it reads that may change before it ends is SNAPSHOT here - the static sets' list, the
-// record table and the chunk map (copied into the bake's own buffers; the record pool keeps the chunks they name alive
-// until the bake ends: bakeHoldSince), and the detail chunks.
+// The bake's start: everything it reads that may change before it ends is SNAPSHOT here - the record table and the chunk
+// map (copied into the bake's own buffers; the record pool keeps the chunks they name alive until the bake ends:
+// bakeHoldSince), and the detail chunks.
 void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumber, glm::vec2 centre)
 {
     const FarTreeParams& s = params.settings;
@@ -943,7 +919,6 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     job.startSec = Globals::time.getElapsedSec();
     job.centre = centre;
     *job.settings = s;
-    job.sources.assign(params.sources.begin(), params.sources.end());
     job.records = params.records;
     // The far type rides in the colour map's alpha byte, 255 = none (tree_volume.inc.glsl TV_TYPE_NONE): types past 254
     // are skipped (the records pass ignores a type >= its count).
@@ -971,9 +946,6 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
         }
         buffer.upload(bytes, data);
     };
-    job.staticPieces = 0;
-    for (const Source& source : job.sources)
-        job.staticPieces += source.numPieces;
     if (params.records.numTypes == 0 || params.records.chunksCpu.empty() || params.records.mapCpu.empty())
         job.records.numTypes = 0; // no records this bake
     else
@@ -1023,7 +995,7 @@ void TreeVolumePipeline::setBakeBudgets()
     auto share = [&](uint32 total, uint32 stageFrames) { return oc::max(1u, (total + stageFrames - 1u) / stageFrames); };
     // The clear, the resolve and the copy walk the accumulation's texel layers (four slices each).
     job.clearPerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
-    job.perFrame = oc::max(256u, share(3u * (job.staticPieces + job.detailRecords), oc::max(1u, frames / 2u)));
+    job.perFrame = oc::max(256u, share(3u * job.detailRecords, oc::max(1u, frames / 2u)));
     job.massPerFrame = share(job.records.numTypes > 0 ? job.records.numChunks : 1u, oc::max(1u, frames / 8u));
     job.rowsPerFrame = (share(m_radialRes, oc::max(1u, frames / 4u)) + 7u) & ~7u; // whole 8-row groups: no overlap
     job.resolvePerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
@@ -1137,14 +1109,16 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     }
 
     // The two FLOOR passes (the coverage per column, then the dominant tree's base), then the splat: the same shader,
-    // the same per-tree dispatches. A pass walks ONE range - the static sets' pieces, then the detail records - within
-    // this frame's budget. True when the pass is done.
-    // pass: 0 = the splat, 1 = the floor coverage, 2 = the floor (the record variants' index).
-    auto splat = [&](ComputePipeline& pipeline, DescriptorSet& descriptorSet, uint32 pass)
+    // the same dispatches - one workgroup per detail record (past 65535 the rows wrap into y), this frame's budget of
+    // them. True when the pass is done.
+    // pass: 0 = the splat, 1 = the floor coverage, 2 = the floor (m_splatPipelines' index).
+    auto splat = [&](uint32 pass)
     {
-        auto bindSplat = [&](ComputePipeline& bound, DescriptorSet& boundSet)
+        const uint32 count = oc::min(budget, job.detailRecords - job.progress);
+        if (count > 0)
         {
-            const vk::DescriptorSet set = boundSet.getDescriptorSet();
+            ComputePipeline& pipeline = m_splatPipelines[pass];
+            const vk::DescriptorSet set = m_splatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + frameIdx].getDescriptorSet();
             oc::array<DescriptorSetUpdateInfo, 7> updates{
                 DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
                     .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
@@ -1157,53 +1131,15 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
                 DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
             };
             writeSet(set, updates);
-            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, bound.getPipeline());
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, bound.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        };
-        // The static sets: this frame's slice of each, one workgroup per tree (past 65535 the rows wrap into y).
-        bool staticBound = false;
-        uint32 setStart = 0;
-        for (const Source& source : job.sources)
-        {
-            const uint32 setEnd = setStart + source.numPieces;
-            if (budget > 0 && job.progress < setEnd && job.progress >= setStart)
-            {
-                const uint32 first = job.progress - setStart;
-                const uint32 count = oc::min(budget, source.numPieces - first);
-                if (!staticBound)
-                {
-                    bindSplat(pipeline, descriptorSet);
-                    staticBound = true;
-                }
-                const SplatPush& h = m_splatPush;
-                PushData pc(m_splatBlock);
-                pc.set(h.source, source.pieces);
-                pc.set(h.types, source.types);
-                pc.set(h.data, source.data);
-                pc.set(h.numPieces, count);
-                pc.set(h.vol.centre, job.centre);
-                pc.set(h.wgOffset, first);
-                cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
-                cmd.dispatch(oc::min(count, 65535u), (count + 65534u) / 65535u, 1);
-                job.progress += count;
-                budget -= count;
-            }
-            setStart = setEnd;
-        }
-        // Then the detail chunks' records, one workgroup each.
-        const uint32 recordsDone = job.progress - oc::min(job.progress, job.staticPieces);
-        const uint32 count = job.progress >= job.staticPieces ? oc::min(budget, job.detailRecords - recordsDone) : 0u;
-        if (count > 0)
-        {
-            ComputePipeline& recordPipeline = m_recordSplatPipelines[pass];
-            bindSplat(recordPipeline, m_recordSplatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + frameIdx]);
-            const SplatPush& h = m_recordSplatPush;
-            PushData pc(m_recordSplatBlock);
-            pc.set(h.source, job.records.map);
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getPipeline());
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+            const SplatPush& h = m_splatPush;
+            PushData pc(m_splatBlock);
+            pc.set(h.map, job.records.map);
             pc.set(h.mapSize, job.records.mapSize);
             pc.set(h.types, job.records.volumeTypes);
             pc.set(h.data, job.records.volumeData);
-            pc.set(h.numPieces, count);
+            pc.set(h.numRecords, count);
             pc.set(h.vol.centre, job.centre);
             pc.set(h.records, job.records.records);
             pc.set(h.detailChunks, m_bakeDetail.getDeviceAddress());
@@ -1212,13 +1148,13 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             pc.set(h.worldSeed, job.records.worldSeed);
             pc.set(h.numDetailChunks, job.numDetailChunks);
             pc.set(h.numRecordTypes, job.records.numTypes);
-            pc.set(h.wgOffset, recordsDone);
-            cmd.pushConstants(recordPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
+            pc.set(h.wgOffset, job.progress);
+            cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
             cmd.dispatch(oc::min(count, 65535u), (count + 65534u) / 65535u, 1);
             job.progress += count;
             budget -= count;
         }
-        if (job.progress < job.staticPieces + job.detailRecords)
+        if (job.progress < job.detailRecords)
             return false;
         job.progress = 0;
         return true;
@@ -1229,12 +1165,12 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
     };
-    if (job.stage == EBakeStage::FloorCover && splat(m_floorCoverPipeline, m_floorCoverSets[frameIdx], 1))
+    if (job.stage == EBakeStage::FloorCover && splat(1))
     {
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // coverage -> floor
         job.stage = EBakeStage::Floor;
     }
-    if (job.stage == EBakeStage::Floor && budget > 0 && splat(m_floorPipeline, m_floorSets[frameIdx], 2))
+    if (job.stage == EBakeStage::Floor && budget > 0 && splat(2))
     {
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // floor -> smooth / splat
         job.stage = EBakeStage::Smooth;
@@ -1263,7 +1199,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             }
         }
     }
-    if (job.stage == EBakeStage::Splat && budget > 0 && splat(m_splatPipeline, m_splatSets[frameIdx], 0))
+    if (job.stage == EBakeStage::Splat && budget > 0 && splat(0))
     {
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // the splat's colour writes
         job.stage = records ? EBakeStage::RecordMass : EBakeStage::Resolve;

@@ -196,8 +196,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.dualSourceAlpha = true,
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
-	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant (and
-	// LitFoliage, 12) carries a discard, so the LitOpaque variant keeps early depth writes.
+	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant (and the
+	// tree variants) carries a discard, so the LitOpaque variant keeps early depth writes.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = graphicsPipelineLayout.vertexShader.text,
@@ -238,24 +238,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.depthWrite = false,
 		.depthGreaterOrEqual = true,
 	});
-	// Variant 12 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (card frame, edge
-	// fade, foliage shadow, crown normal + interior) - its own fragment shader, instanced_indirect_foliage.fs.glsl. Its
-	// VS (FOLIAGE) adds the instance origin (the crown normal). Split out of LitMasked: a shader's register count is the
-	// maximum over all its paths, so every alpha-tested mesh paid for the cards'.
-	const oc::string foliageVariantPath = "Shaders/Mesh/instanced_indirect_foliage.fs.glsl";
-	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
-		.vertexShader = ShaderSource{
-			.text = graphicsPipelineLayout.vertexShader.text,
-			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
-			.defines = { { "ALPHA_MASK", "1" }, { "FOLIAGE", "1" } },
-		},
-		.fragmentShader = ShaderSource{
-			.text = FileSystem::readFileStr(foliageVariantPath),
-			.debugFilePath = foliageVariantPath,
-		},
-		.writeMotion = true,
-	});
-	// Variant 13 (EPipelineIndex::LitRock): the procedural rocks. The lit core again, with the surface from the
+	// Variant 12 (EPipelineIndex::LitRock): the procedural rocks. The lit core again, with the surface from the
 	// CLIMATE: the terrain splat's bedrock entries in world-space biplanar projection, the terrain's snow, a ground
 	// cover and a contact band (instanced_indirect_rock.fs.glsl; RockParams). Its own VS passes position + normal
 	// and evaluates the ground height and the climate per vertex, as the terrain's. Opaque, back-face culled,
@@ -272,7 +255,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.debugFilePath = rockVariantPath,
 		},
 	});
-	// Variant 14 (EPipelineIndex::River): river ribbons and lake surfaces (Procedural RiverSystem). Its own shaders,
+	// Variant 13 (EPipelineIndex::River): river ribbons and lake surfaces (Procedural RiverSystem). Its own shaders,
 	// the ocean's shading without the waves (Fresnel, the RT mirror + RT refraction under the ocean's "RT" toggles - the
 	// same defines, minus its debug views - Beer-Lambert to the bed, flow-mapped ripples). Composited DUAL-SOURCE like
 	// the ocean (it fades out at its edges over the ground), so the cull routes it into the transparent sequence after
@@ -298,7 +281,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.dualSourceAlpha = true,
 		.cullMode = vk::CullModeFlagBits::eNone,
 	});
-	// Variant 15 (EPipelineIndex::LitTree): the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the
+	// Variant 14 (EPipelineIndex::LitTree): the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the
 	// bark / leaf crossfade copies) - LitMasked plus the tree terms (the distance fade, the leaf shadow / N.V bend /
 	// transmission), in its own fragment shader so they never set LitMasked's register count. The VS is LitMasked's plus
 	// TREE_ORIGIN (the instance origin: the distance fade is per tree).
@@ -315,10 +298,10 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.writeMotion = true,
 	});
-	// Variant 16 (EPipelineIndex::LitTreeVoxel): the procedural trees' VOXEL tier (Procedural TreeSystem). The VS
+	// Variant 15 (EPipelineIndex::LitTreeVoxel): the procedural trees' VOXEL tier (Procedural TreeSystem). The VS
 	// (TREE_VOXEL) passes the box's grid coordinate, the camera in grid space and the instance frame; the FS marches the
 	// tree's voxel atlases from the box's front face and writes the hit's depth (conservatively farther: early depth
-	// still rejects a hidden box), then lights it with the billboards' foliage terms. Back faces culled: the camera never
+	// still rejects a hidden box), then lights it with the foliage terms. Back faces culled: the camera never
 	// stands inside a tree at the tier's distances.
 	const oc::string voxelVariantPath = "Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
@@ -337,8 +320,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
 	const auto isLitCoreFragment = [&](const PipelineVariant& variant) {
 		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath
-			|| variant.fragmentShader.debugFilePath == foliageVariantPath || variant.fragmentShader.debugFilePath == treeVariantPath
-			|| variant.fragmentShader.debugFilePath == voxelVariantPath;
+			|| variant.fragmentShader.debugFilePath == treeVariantPath || variant.fragmentShader.debugFilePath == voxelVariantPath;
 	};
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and

@@ -97,16 +97,16 @@ export namespace Procedural
 		oc::string path;
 		uint32 seed = 1;
 		glm::vec2 scale{ 0.85f, 1.15f }; // uniform tree scale range
-		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
+		bool bush = false;               // `Kind Bush`: grows around the trees of its climate (and on its own with a `Placement` block)
 		oc::string climate;              // `Climate <name>`: a bush grows around the trees of its climate only
 		int weight = 1;                  // `Weight n` (bushes, 1..8): how often its climate picks it - n entries in each tree's bush list
 		float wood = 1.0f;               // `Wood x`: x the wood a lumberyard counts for one of its trees (after the size: TreeWorld::surveyHarvest)
 		// `Undergrowth` block (trees): the bushes around each of its trees - `Bushes` per tree (the fraction by chance) out
-		// to `Radius` m from it. < 0 = "Trees/Bushes per tree" / 0.75 x "Trees/Spacing (m)".
+		// to `Radius` m from it. < 0 = "Trees/Bushes per tree" / 8.25 m (TreeSystem's bushUndergrowth).
 		float undergrowthBushes = -1.0f;
 		float undergrowthRadius = -1.0f;
 		// `Wind` block: x the trunk bend (`Trunk`: the whole tree's lean and sway, its shadow too) and x the branch sway
-		// (`Branch`: the module bend of the meshes and the branch cards), 0..4. A large tree with heavy limbs: < 1.
+		// (`Branch`: the module bend of the meshes), 0..4. A large tree with heavy limbs: < 1.
 		float windTrunk = 1.0f;
 		float windBranch = 1.0f;
 		TreePlacementDesc placement;
@@ -250,15 +250,14 @@ export namespace Procedural
 		// is multiplied by this. > 1 switches to coarser levels nearer the camera.
 		float lodErrorScale = 1.0f;
 
-		// Branch-module billboards (the far representation, Trees/Far mode): beyond
-		// `billboardDistance` (m, 0 = never) a module draws as two crossed cards baked into one
-		// billboardSize-square texture: one strip per view (Trees/Billboard views: 2 or 4).
+		// The `Billboard` block: what stands for a baked variant where its meshes do not. Beyond `billboardDistance` (m; 0 =
+		// the meshes at every distance, casting their own shadow) the main pass draws its VOXEL grid; its SHADOW BILLBOARD -
+		// three crossed cards with a mask baked into one billboardSize-square texture - casts its shadow at every distance.
 		float billboardDistance = 50.0f;
 		int billboardSize = 512;
-		float billboardNormalBend = 0.0f; // baked normals bent toward "out of the clump" (0..1): shades like a volume
-		float billboardFadeWidth = 10.0f; // m: the mesh <-> billboard crossfade band, centred on billboardDistance
-		float billboardAlbedoScale = 1.0f; // x the WHOLE-TREE billboards' colour (linear; applied at load, not baked)
-		float billboardTopCardHeight = 0.5f; // the whole tree's horizontal card, as a fraction of its height (0 = bottom, 1 = top)
+		float billboardFadeWidth = 10.0f; // m: the mesh <-> voxels crossfade band, centred on billboardDistance
+		float billboardAlbedoScale = 1.0f; // x the voxel grid's colour and the shadow billboard's leaf colour for the rays (linear)
+		float billboardTopCardHeight = 0.5f; // the shadow billboard's horizontal card, as a fraction of the tree's height (0 = bottom, 1 = top)
 		glm::vec3 barkColor{ 0.32f, 0.24f, 0.17f };
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
 		glm::vec3 twigColor{ -1.0f }; // `Color Twig`: the twigs drawn in the leaf texture (< 0 = barkColor)

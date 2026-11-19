@@ -77,7 +77,6 @@ TreeSpecies Bramble
 	Billboard
 		Distance 30
 		Resolution 256
-		NormalBend 0.0
 		FadeWidth 7
 	Bark
 		Plates 12 4
