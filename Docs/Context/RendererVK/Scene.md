@@ -318,6 +318,28 @@ billboard card paths. **`LitTreeVoxel`** (variant 16, `instanced_indirect_tree_v
     under the last voxel centre (`voxelCentreCoord`) - no clamp after them. `VOXEL_BRICK_ORIGIN` (this shader's define):
     the march's brick holds its place in the atlas, worked out once per brick. The hit lies on the pixel's own view
     ray, so ONE view vector serves the position and the lighting.
+    **TWO STEPS A WAIT** (the view march and the sun march): the tier's cost is its chain of fetches, each one waited for
+    before the next sample is known. Where the next step's sample lies in the same stored brick (`voxelInBrick`), both
+    first taps go out together (`voxelOpacityPair`) and are taken in turn - the same samples, the same result as one a
+    step (the opaque pass 5.2 -> 4.7 ms in a forest view). A march builds its step from `voxelSampleBrick` /
+    `voxelSliceUv`; the hit's place is formed from `t` after the loop, not held in it. **The marches are bound by their
+    step count and their per-step math, not by what stands before them** (measured: the setup before the loop ~0, the
+    jumps over the empty bricks before a crown 0.13 ms of the view march's 1.6 ms, the sun march 0.7 ms; a fifth less
+    math per step = a tenth less time). So the ray is held as the voxel CENTRE coordinate (`voxelCentreClamp`), and the
+    end is one compare of the transmittance. **Three quarters of the view march are samples that find NOTHING**: the air
+    between the leaves INSIDE the stored bricks, before the first cover (1.2 ms; the march through the cover itself is
+    0.36 ms). That air lies within a voxel or two of cover, so no skip structure removes it (the two tried below); only
+    a coarser level does: "Voxel LOD bias" 0.5 = 0.25 ms less, 1.0 = 0.6 ms less. The level's pixel is the OUTPUT pixel
+    (`u_mipPixelScale` is the viewport's, not the render rect's): with DLSS Quality a bias of 0.58 is one voxel per
+    RENDERED pixel.
+    Tried, each dropped: FOUR samples a wait (slower than two, about as slow as one: the taps past a hit are wasted);
+    the material + the grid's header read in the vertex shader and handed over flat (no gain); a HALF-BRICK mask in the
+    index's alpha so a march jumps the empty halves of stored bricks (+0.2 ms: the test per sample and the jump steps
+    cost more than the zero samples they save); a PROBE on the next coarser level before the fine march (+0.2 ms: the
+    coarse level finds cover almost at once, and the fine march then walks the same air); STRIDES of two voxels with the
+    opacity corrected for the length (-0.44 ms, but half the rays miss a feature one voxel thick - a trunk goes half
+    transparent - where the LOD bias gives the same saving from prefiltered data); the near set's chunks listed nearest first for early depth (no gain: the
+    boxes of neighbouring trees pass through each other, so a far tree's face is rarely behind a near tree's hit).
     The grid is SPARSE BRICKS over three one-level textures ([Trees.md](../Procedural/Trees.md) "SPARSE BRICKS"): the
     material's albedo slot = the opacity atlas, whose header names the index texture (`voxelGrid`: the resolution, the
     levels and the atlas columns from the index's header texel); its normal slot = the surface atlas. A step reads the
@@ -334,10 +356,16 @@ billboard card paths. **`LitTreeVoxel`** (variant 16, `instanced_indirect_tree_v
   * Shading: the voxel's mean leaf normal, toward the crown's outward direction where it is short ("Trees/Voxel normal
     hull"); the INTERIOR (the surface atlas's colour A) as the ambient's AO through the "Foliage interior ..." remap; the sun's
     SELF-SHADOW marched through the tree's own voxels one level coarser ("Trees/Voxel self shadow"; the transmission
-    takes "Foliage transmission self shadow" of it); the cascades' shadow looked up where that sun path LEAVES the box,
+    takes "Foliage transmission self shadow" of it; "Voxel self shadow coarser levels", 2, = how many levels coarser
+    than the view march, 1..3: about half the march's steps per level. Against 1, 2 takes 0.3 ms off the opaque pass of
+    a forest view and 3 0.4 ms; the picture at 2 is that of 1, at 3 the crowns are a little brighter); the cascades' shadow looked up where that sun path LEAVES the box,
     past "Billboard shadow shift" when the billboard casts - the tree's own caster lies in the box and would shadow it
     twice. With "Voxel self shadow" 0 there is no march and the cascades are read at the hit itself: the tree takes its
-    own caster's shadow (its billboard, shifted, or its voxel caster) as a billboard tree does. The transmission's BACK
+    own caster's shadow (its billboard, shifted, or its voxel caster) as a billboard tree does. **That cascade lookup is
+    ONE hardware-PCF tap** (`LIT_SUN_SHADOW_HARD`, `sampleSunShadowHard`: no blocker search, no penumbra, no foliage
+    shadow length; the cascade cross-fade dithered) - a voxel pixel is noise that TAA / DLSS resolves anyway. With it the
+    FS is 56 registers / 32 B (64 / 0 with the PCSS search). At NIGHT (`u_sunLit` 0, see [Shaders.md](Shaders.md)) neither the sun march nor
+    the lookup runs. The transmission's BACK
     term follows the voxel's leaves, not its normal alone: blended by the mean normal's length from the average of
     two-sided leaves facing every way, `0.25 x (1 - V.L)`, to `-N.L` (after the edge-on bend N faces the viewer: no
     flip to the seen side) - from the outward mean normal alone only the crown's underside glowed under a high sun. The length is trusted by the hit voxel's cover
@@ -380,7 +408,12 @@ billboard card paths. **`LitTreeVoxel`** (variant 16, `instanced_indirect_tree_v
       2^19), the CULL with `FAR_SHADOW`: per tree its type's billboard bucket (`FarTypeGpu::shadowBucket`, one per
       billboard mesh, `TreeInstanceSet::farShadowBuckets`) and alpha mask (`shadowTex`), the cascade mask of the shadow
       cull's tree rule (`farCascadeMask`: each cascade's planes + its split + the margin, the sphere grown by the
-      billboard shift) instead of the view's tests. Inline in the primary BEFORE the shadow cull ("Far tree shadows");
+      billboard shift) instead of the view's distance test. **ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF**: the
+      cascades lie all around the scene focus, so most of the ring's trees stand beside or behind the camera. A caster is
+      kept inside the VIEW FRUSTUM grown by its shadow's length (2 x its radius x the sun's cotangent, at most
+      `FAR_SHADOW_MAX_LENGTH` 400 m) - the shadow draw 1.09 -> 0.72 ms and this cull 0.10 -> 0.06 ms in a forest view.
+      The main shadow cull does the same for every other caster ("Sun shadow draw cost" in [Lighting.md](Lighting.md)).
+      Inline in the primary BEFORE the shadow cull ("Far tree shadows");
       `ShadowMapGraphicsPipeline`'s FAR pipeline (`shadow_depth.vs.glsl` with `TREE_FAR_SHADOW`: the record instance-rate at
       binding 1 builds the packed word the shadow cull writes - a billboard, swaying, its trunk bend - the main alpha-test FS)
       draws them with `drawIndexedIndirect` over the 64 buckets after the voxel casters. Billboards also with "Voxel shadows"

@@ -61,7 +61,7 @@ void main()
     if (noV < u_foliage_minNoV)
         N = normalize(N + V * (u_foliage_minNoV - noV));
     const vec3 litN = dot(N, L) >= 0.0 ? N : -N; // thin: the sun-facing side takes the shadow
-    g_sunShadowFirst = sunShadowVisibility(in_pos, litN);
+    g_sunShadowFirst = u_sunLit > 0.5 ? sunShadowVisibility(in_pos, litN) : 0.0; // no search at night
     float nearWeight;
     const float nearSun = grassNearShadow(in_pos, litN, nearWeight);
     g_sunShadowFirst *= mix(1.0, nearSun, nearWeight);

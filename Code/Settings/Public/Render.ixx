@@ -476,6 +476,9 @@ export struct FoliageParams
                                     // shadow casters) - a crown fuller than its mesh thinned to match
     float voxelSelfShadow = 0.9f;   // the sun through the tree's own voxels toward the sun ^ this. 0 = no march: the tree
                                     // reads the cascades at its hit instead and takes its own caster's shadow from them
+    int voxelSelfShadowLevels = 2;  // 1..3: the grid levels that sun march runs above the view march's (voxels twice as
+                                    // large per level: about half its steps, a softer self-shadow). 2: the picture of 1
+                                    // at 0.3 ms less in a forest view
     // The voxel colour's saturation (linear, about its luminance): 1 = as baked, > 1 more vivid. The bake averages every
     // surface in a voxel - the twigs drawn in the leaf texture, the branches of a sparse voxel - so it reads greyer than the
     // mesh leaves, which keep each texel's own colour.

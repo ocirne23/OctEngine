@@ -105,8 +105,20 @@ See [RendererVK](Context/RendererVK/CONTEXT.md).
 
 **Performance ideas not yet tried**
 
-* Sun shadow pass is vertex-bound (~0.37 ms, nearly all terrain): a coarser terrain shadow LOD, or
-  cache the static casters' cascades.
+* Sun shadow pass is vertex-bound (0.47 ms over a forest with its casters culled to the view): a
+  coarser terrain shadow LOD, or cache the static casters' cascades.
+* Voxel trees (the largest cost of a forest view, ~2.3 ms): 3/4 of the view march is air between
+  leaves, next to cover - no skip structure helps (tried three). "Voxel LOD bias" 0.5 = one voxel per
+  RENDERED pixel at DLSS Quality, -0.25 ms, same still picture: a default change to decide.
+* Near tree meshes: leaf overdraw (the lit shading of a view inside the crowns is 0.63 ms). A depth
+  prepass for the alpha-tested tree meshes only, or a front-to-back order per tree.
+* Grass + ground clutter under a closed canopy seen from above cost ~0.55 ms hidden (clutter cull
+  0.19, its draws 0.17, grass 0.2). Needs a Hi-Z of last frame's depth (a floor-map test did not
+  work: tall trees hide the floor at an angle).
+* Skinned BLASes are REBUILT every frame (0.32 ms "BLAS builds" in a co-op base): refit from the
+  other slot, with a rebuild every N frames.
+* Light shadow rays cost 0.9 ms in a co-op base at night (0.4 in the GI trace, 0.4 forward).
+  "GI/Rays Per Probe" 17 -> 12 takes 0.33 ms off the trace there (9: 0.55 ms).
 * Overlap small chains (the ocean sim's mip blits).
 * Lit FS is occupancy-bound; only one try was made (reverted).
 * Register peaks: split a peak into its own pass, or a thread-per-ray trace. Shadowless film

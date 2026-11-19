@@ -56,7 +56,7 @@ void sunShadowFirstTree(vec3 pos, bool leaf)
 	const vec3 geoN = normalize(in_normalV.xyz);
 	const bool facing = dot(geoN, u_sunDirection.xyz) > 0.0;
 	g_shadowLeafLength = leaf ? u_foliage_leafShadowLength : 0.0; // "Trees/Leaf shadow length (m)"
-	g_sunShadowFirst = leaf || facing ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0;
+	g_sunShadowFirst = (leaf || facing) && u_sunLit > 0.5 ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0; // no search at night
 }
 
 void main()

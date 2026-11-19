@@ -42,6 +42,7 @@ layout (depth_less) out float gl_FragDepth;
 
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST    // instanced_indirect_lit.inc.glsl: the sun's shadow before the material
+#define LIT_SUN_SHADOW_HARD // instanced_indirect_lit.inc.glsl: one shadow tap (a voxel pixel is noise that TAA / DLSS resolves)
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage's constant depth bias
 #define LIT_NO_RTAO         // instanced_indirect_lit.inc.glsl: no RTAO read (the depth is a point inside a crown; the interior is its AO)
 #define LIT_NO_UNDERWATER   // instanced_indirect_lit.inc.glsl: a tree's crown is never under the water
@@ -120,35 +121,52 @@ void main()
 	const vec3 faceC = in_voxelGrid * n;
 	const vec3 dirC = dirG * n;
 	const float exitT = voxelBoxExit(level, faceC, dirC); // the march ends where the ray leaves the box
+	// TWO STEPS A WAIT: where the next step's sample lies in the same brick, both are fetched together (voxelOpacityPair) and
+	// taken in turn - the same samples as one a step. `t` stops at the hit: the hit's place is formed from it after the loop.
+	// The loop's math is the tier's other cost (a fifth less of it was a tenth less time): the ray is held as the voxel
+	// CENTRE coordinate (c - 0.5, once), and the end is one compare of the transmittance against 1 - the threshold.
 	float t = stepWorld * voxelNoise(vec2(83.0, 7.0));
 	float transmit = 1.0;
 	bool hit = false;
-	vec3 hitC = vec3(0.0);
 	float hitOpacity = 0.0;
 	const int maxSteps = int(n * 1.75) + 2;
+	const vec3 faceU = faceC - 0.5;
+	const float transmitEnd = 1.0 - threshold;
 	VoxelBrick marchBrick = voxelBrickNone();
+// One step's sample: its opacity onto the ray, and the march ends where the coverage passes the pixel's threshold.
+#define VOXEL_VIEW_STEP(opacity) \
+		transmit *= 1.0 - voxelThin(opacity); \
+		if (transmit <= transmitEnd) \
+		{ \
+			hit = true; \
+			hitOpacity = voxelThin(opacity); \
+			break; \
+		}
 	for (int i = 0; i < maxSteps && t <= exitT; ++i)
 	{
-		const vec3 c = faceC + dirC * t;
-		float skip;
-		const float a = voxelThin(voxelOpacity(grid, level, c, dirC, stepWorld, marchBrick, skip));
-		if (skip > 0.0)
+		const vec3 centre = faceU + dirC * t;
+		const vec3 u = voxelCentreClamp(level, centre);
+		if (!voxelSampleBrick(grid, level, u, marchBrick))
 		{
-			t += skip;
+			t += voxelBrickSkip(level, centre + 0.5, dirC, marchBrick.coord) + 0.03 * stepWorld;
 			continue;
 		}
-		transmit *= 1.0 - a;
-		if (1.0 - transmit >= threshold)
-		{
-			hit = true;
-			hitC = c;
-			hitOpacity = a;
-			break;
-		}
+		const float tNext = t + stepWorld;
+		const vec3 uNext = voxelCentreClamp(level, faceU + dirC * tNext);
+		const bool pair = tNext <= exitT && i + 1 < maxSteps && voxelInBrick(uNext, marchBrick);
+		const vec2 a = voxelOpacityPair(grid, marchBrick, u, pair ? uNext : u);
+		VOXEL_VIEW_STEP(a.x)
+		t = tNext;
+		if (!pair)
+			continue;
+		VOXEL_VIEW_STEP(a.y)
 		t += stepWorld;
+		++i;
 	}
+#undef VOXEL_VIEW_STEP
 	if (!hit)
 		discard;
+	const vec3 hitC = faceC + dirC * t;
 
 	// The hit lies on the pixel's own view ray: ONE view vector for the position and the lighting, formed after the march.
 	const vec3 V = normalize(u_viewPos - in_posU.xyz);
@@ -180,14 +198,16 @@ void main()
 	const vec3 sunG = in_voxelSunLod.xyz;
 	const float exitDist = voxelBoxExit(level, hitC, sunG * n);
 	float sunTransmit = 1.0;
-	if (u_foliage_voxelSelfShadow > 0.0)
+	if (u_foliage_voxelSelfShadow > 0.0 && u_sunLit > 0.5) // at night the march's result scales a light of 0
 	{
+		// "Trees/Voxel self shadow coarser levels" above the view march's level (a constant while its row is locked: the
+		// loop unrolls), inside the grid's levels.
 		VoxelLevel sunLevel = level;
-		if (lod < maxLod)
-			sunLevel = voxelLevelCoarser(level);
+		for (float k = 0.0; k < u_foliage_voxelSelfShadowLevels && lod + k < maxLod; k += 1.0)
+			sunLevel = voxelLevelCoarser(sunLevel);
 		const float sunN = sunLevel.n;
 		const float sunStep = in_voxelWorldSize.w / sunN;
-		const vec3 sunC = hitG * sunN;
+		const vec3 sunU = hitG * sunN - 0.5; // the voxel centre coordinate, as the view march
 		const vec3 sunDirC = sunG * sunN;
 		// Empty bricks are jumped: the path out of the crown often crosses the box's empty corners.
 		const int sunSteps = min(int(exitDist / sunStep) + 1, 64);
@@ -195,15 +215,26 @@ void main()
 		VoxelBrick sunBrick = voxelBrickNone();
 		for (int i = 0; i < sunSteps && sunTransmit > 0.01 && d <= exitDist; ++i)
 		{
-			float skip;
-			const float a = voxelOpacity(grid, sunLevel, sunC + sunDirC * d, sunDirC, sunStep, sunBrick, skip);
-			if (skip > 0.0)
+			const vec3 centre = sunU + sunDirC * d;
+			const vec3 u = voxelCentreClamp(sunLevel, centre);
+			if (!voxelSampleBrick(grid, sunLevel, u, sunBrick))
 			{
-				d += skip;
+				d += voxelBrickSkip(sunLevel, centre + 0.5, sunDirC, sunBrick.coord) + 0.03 * sunStep;
 				continue;
 			}
-			sunTransmit *= 1.0 - voxelThin(a);
-			d += sunStep;
+			// Two steps a wait, as the view march.
+			const float dNext = d + sunStep;
+			const vec3 uNext = voxelCentreClamp(sunLevel, sunU + sunDirC * dNext);
+			const bool pair = dNext <= exitDist && i + 1 < sunSteps && voxelInBrick(uNext, sunBrick);
+			const vec2 a = voxelOpacityPair(grid, sunBrick, u, pair ? uNext : u);
+			sunTransmit *= 1.0 - voxelThin(a.x);
+			d = dNext;
+			if (pair && sunTransmit > 0.01)
+			{
+				sunTransmit *= 1.0 - voxelThin(a.y);
+				d += sunStep;
+				++i;
+			}
 		}
 	}
 
@@ -264,7 +295,7 @@ void main()
 	const float casterShift = u_foliage_voxelShadows > 0.5 ? 0.0 : max(u_foliage_billboardShadowShift, 0.0);
 	const vec3 shadowPos = u_foliage_voxelSelfShadow > 0.0 ? pos + L * (exitDist + casterShift + 0.5) : pos;
 	g_shadowFoliage = true;
-	g_sunShadowFirst = sunShadowVisibility(shadowPos, L);
+	g_sunShadowFirst = u_sunLit > 0.5 ? sunShadowVisibility(shadowPos, L) : 0.0; // no search at night
 	g_shadowFoliage = false;
 	// The self-shadow's two strengths are two powers of the sun march's result: ONE logarithm for both.
 	const float sunLog = log2(max(sunTransmit, 1e-4)) * u_foliage_voxelSelfShadow;

@@ -141,16 +141,17 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         const ivec3 gridMin = getGridMin(gridIdx);
         if (gridMin == gridPos)
         {
-            const uint numLargeLights = getLargeLightCount(gridIdx);
-            // The counts are written capped; the mins stay as the loops' compile-time bound: without them gi_probe_trace
-            // (which inlines this loop) needs 125 instead of 96 registers.
-            for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-                E += giLightIrradianceShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], pos, N);
-
+            // ONE loop over the grid's large lights, then the cell's: the body inlines the light's shapes and its shadow
+            // ray query, and two loops carried two copies of it. The counts are written capped; the mins stay as the
+            // loop's compile-time bound (without them gi_probe_trace, which inlines this loop, needs more registers).
+            const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
             const uint cellOffset = calcCellOffset(gridIdx, gridMin, pos);
-            const uint numLights  = getNumLightsForCell(cellOffset);
-            for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                E += giLightIrradianceShadowed(in_lightInfos[getLightId(cellOffset, i)], pos, N);
+            const uint numLights = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+            for (uint i = 0; i < min(numLights, MAX_LARGE_LIGHTS_PER_GRID + MAX_LIGHTCELL_LIGHTS); ++i)
+            {
+                const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
+                E += giLightIrradianceShadowed(in_lightInfos[lightId], pos, N);
+            }
             break;
         }
         tableIdx = getNextTableIdx(tableIdx);

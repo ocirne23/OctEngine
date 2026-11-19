@@ -775,6 +775,13 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("sunTransmittance", [&s] { return sunTransmittance(s); }, UboLive);
         // Solar eclipse: the moon-covered sun fraction, so every sun consumer dims consistently.
         list.add("sunVisible", [&s] { return skySunVisible(s); }, UboLive);
+        // 1 while the sun's radiance at the ground is above 0; 0 below the horizon (sunTransmittance is 0 there) and in a
+        // full eclipse. A shader path whose only result is a factor on the sun's light tests this (the trees' shadow search).
+        list.add("sunLit", [&s]
+            {
+                const glm::vec3 radiance = sunTransmittance(s) * s.sunColor * (s.sunIntensity * skySunVisible(s));
+                return glm::max(glm::max(radiance.x, radiance.y), radiance.z) > 0.0f ? 1.0f : 0.0f;
+            }, UboLive);
         list.add("skyUp", [&s] { return skyUpAxis(s); }, UboLive); // unit
         // The below-horizon ground's direct sun (atmosphere.inc.glsl skyGroundSun, constant over directions).
         list.add("sky_groundSun", [&s]
@@ -1792,6 +1799,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_voxelSharpen", [&] { return 1.0f / (1.0f - glm::clamp(f.voxelSharpness, 0.0f, 0.95f)); }, f.voxelSharpness);
         list.add("foliage_voxelDensity", [&] { return 1.0f - glm::clamp(f.voxelThinning, 0.0f, 0.95f); }, f.voxelThinning);
         list.add("foliage_voxelSelfShadow", [&] { return glm::max(f.voxelSelfShadow, 0.0f); }, f.voxelSelfShadow);
+        list.add("foliage_voxelSelfShadowLevels", [&] { return (float)glm::clamp(f.voxelSelfShadowLevels, 1, 3); }, f.voxelSelfShadowLevels);
         list.add("foliage_voxelNormalHull", [&] { return glm::clamp(f.voxelNormalHull, 0.0f, 1.0f); }, f.voxelNormalHull);
         list.add("foliage_voxelSaturation", [&] { return glm::max(f.voxelSaturation, 0.0f); }, f.voxelSaturation);
         list.add("foliage_voxelBrightness", [&] { return glm::max(f.voxelBrightness, 0.0f); }, f.voxelBrightness);

@@ -469,9 +469,15 @@ change → re-measure without looking at the screen.** It always overrides `Time
 
 * **GPU work: `-Fullscreen`** (App `--fullscreen`: a borderless desktop-size window, the editor panels hidden) -
   the user's display is 1440p, and the default 1920x1080 window with docked panels renders a far smaller viewport.
-  **Sandbox GPU timings: `-Fullscreen -After 60`** - in fullscreen the terrain + tree streaming is still running at
-  30 s (TreeWorld::placeChunk, terrainUpload, ~2 ms of BLAS builds). Rendering work is the sandbox (no `-Game`;
-  `-Game` is PvP).
+  **Sandbox GPU timings: `-Fullscreen -After 20`** - the terrain + tree streaming has settled by then (a forest view
+  reads the same at 20 s and at 45 s). Rendering work is the sandbox (`--sandbox` in `-AppArgs`: with no mode flag
+  App opens the main menu; `-Game` is PvP).
+* **PIN THE SUN for a GPU comparison:** `-Tweak "Sky/Sun cycle/Paused=1","Sky/Sun cycle/Time of day (h)=13"` (an array
+  works when the script is called directly, not through `powershell -File`). The cycle starts before sunrise (5.40 h),
+  where the sun moves fast: the shadow draw and every shadow lookup then cost a different amount in each run. Pinned,
+  three runs of one build agree within ~0.03 ms on "Static meshes". `--camera x y z dx dy dz` (in `-AppArgs`, with
+  `--sandbox`) puts the view where a HUD line reported it. **Nothing else may run meanwhile** (no build, no other tool
+  window): a run that shares the machine reads up to 40 % slower in single passes ("Shadow draw" 0.97 against 0.68 ms).
 * **Run-to-run noise is large:** some runs are ~10-40 % slower in EVERY pass (GPU clock state), and the
   tree-related passes (Static meshes, Far trees, Shadow draw) vary by ~15 % on their own between runs. Run each case
   twice and compare the minimum; for terrain / sky work `-Tweak "Trees/Enabled=0"` removes the tree noise. Only ONE

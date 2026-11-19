@@ -22,6 +22,9 @@
 layout (local_size_x = 64) in;
 
 const uint FAR_MAX_BUCKETS = 64u; // TreeVoxelFarPipeline::MAX_BUCKETS - keep in step
+// FAR_SHADOW: the longest shadow (m) a caster outside the view is kept for. At a sun this low the shadow of a tree past
+// the near set is a faint smear over many cascade texels.
+const float FAR_SHADOW_MAX_LENGTH = 400.0;
 
 // Mirrors TreeRecordTypeGpu (RendererVK TreeRecords.ixx).
 struct RecordType
@@ -125,9 +128,17 @@ void main()
 #if FAR_PASS == 0
     if (gl_WorkGroupID.x >= pc.numChunks)
         return;
+#ifdef FAR_SHADOW
+    if (u_sunLit < 0.5) // no sun light: nothing casts (instanced_indirect_shadow.cs.glsl)
+        return;
+#endif
     const FarChunk chunk = pc.chunks.c[gl_WorkGroupID.x];
     const vec3 eye = u_views_viewPos[VIEW_CENTER].xyz;
     const float windReach = u_foliage_windReach;
+#ifdef FAR_SHADOW
+    // A shadow's length per metre of caster height (the sun's cotangent over the horizon plane, y up).
+    const float sunCot = sqrt(max(1.0 - u_sunDirection.y * u_sunDirection.y, 0.0)) / max(u_sunDirection.y, 1e-3);
+#endif
     for (uint i = gl_LocalInvocationID.x; i < chunk.count; i += 64u)
     {
         const uint record = pc.records.w[chunk.first + i];
@@ -165,7 +176,13 @@ void main()
         const float radius = farType.radius * scale + windReach * max(farType.wind, 1.0);
 #ifdef FAR_SHADOW
         // The billboard casts shifted toward the sun ("Billboard shadow shift"): its sphere grows by the shift.
-        const uint cascades = farCascadeMask(centre, radius + abs(u_foliage_billboardShadowShift));
+        const float casterRadius = radius + abs(u_foliage_billboardShadowShift);
+        // ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF: the cascades lie all around the scene focus, so most of the far
+        // ring's trees stand beside or behind the camera - and a far tree's shadow reaches its own length, no more. Kept:
+        // inside the view frustum grown by that length (the box's height <= 2 x its radius, x the sun's cotangent).
+        if (!farInFrustum(centre, casterRadius + min(2.0 * radius * sunCot, FAR_SHADOW_MAX_LENGTH)))
+            continue;
+        const uint cascades = farCascadeMask(centre, casterRadius);
         if (cascades == 0u)
             continue;
         const uint data = farType.shadowTex | cascades << 16u;

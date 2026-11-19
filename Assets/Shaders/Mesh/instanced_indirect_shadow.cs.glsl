@@ -73,6 +73,38 @@ uint casterClaim(uint list, uint meshIdx)
     return 0u;
 }
 
+// ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF. The cascades lie all around the scene focus, but only what the view
+// draws reads them (the lit pixels, the fog's froxels, the water; the GI's sun is ray traced, gi_probe_trace.cs.glsl): a
+// caster beside or behind the camera whose shadow does not reach into the view frustum casts for nobody.
+// Its shadow volume = its sphere swept along the light's travel for `reach` metres; outside one frustum plane with
+// BOTH ends = no visible point lies in it.
+bool casterShadowInView(vec3 centre, float radius, float reach)
+{
+    const vec3 end = centre - u_sunDirection.xyz * reach;
+    for (uint p = 0u; p < 6u; ++p)
+    {
+        const vec4 pl = u_frustumPlanes[p];
+        if (max(dot(pl.xyz, centre), dot(pl.xyz, end)) + pl.w < -radius)
+            return false;
+    }
+    return true;
+}
+
+// How far a caster's shadow can travel before it lands (m along the light): down to the lowest ground a shadow can be
+// seen on - SHADOW_LOW_GROUND below the sea level (or below the camera, where that is lower) - capped at three times
+// the cascades' range. `onGround` (a tree: it stands on the ground it shades): at most a few of its own shadow's
+// lengths on level ground (2 x radius x the sun's cotangent; x 3 for a slope that falls away from the sun).
+const float SHADOW_LOW_GROUND = 200.0;
+float casterShadowReach(vec3 centre, float radius, bool onGround)
+{
+    const float sunSin = max(u_sunDirection.y, 0.02);
+    const float lowest = min(u_terrain_seaLevel, u_views_viewPos[VIEW_CENTER].y) - SHADOW_LOW_GROUND;
+    float reach = min(max(centre.y + radius - lowest, 0.0) / sunSin, 3.0 * u_cascadeViewProj[NUM_SHADOW_CASCADES - 1][0][3]);
+    if (onGround)
+        reach = min(reach, 6.0 * radius * sqrt(max(1.0 - sunSin * sunSin, 0.0)) / sunSin + 20.0);
+    return reach;
+}
+
 // `windTrunk`: a tree's trunk-bend scale (treeCullWind), into bits 8..14 of the packed word (shadow_depth.vs.glsl).
 void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool isTree, float windTrunk)
 {
@@ -90,6 +122,8 @@ void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool 
                               + (sways ? u_foliage_windReach * max(windTrunk, 1.0) + abs(u_foliage_billboardShadowShift) : 0.0);
     const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
+    if (!casterShadowInView(centerPos, radius, casterShadowReach(centerPos, radius, isTree)))
+        return;
     uint cascadeMask = cascadeOverlapMask(centerPos, radius);
     // A cascade's box reaches far up-sun and takes in distant trees: keep a tree only within the cascade's split
     // (u_cascadeViewProj[c][0][3]) + the margin, from the scene focus.
@@ -184,7 +218,9 @@ layout (local_size_x = 64) in; // one thread per stream instance, and one per tr
 void main()
 {
     const uint gid = gl_GlobalInvocationID.x;
-    if (gid >= u_present_treeThreads)
+    // NO SUN LIGHT (night, a full eclipse: u_sunLit): every reader multiplies the cascades by the sun's radiance, so
+    // nothing casts - the pass only clears its maps.
+    if (gid >= u_present_treeThreads || u_sunLit < 0.5)
         return;
     bool isTree;
     uint pieceIdx, passBits;

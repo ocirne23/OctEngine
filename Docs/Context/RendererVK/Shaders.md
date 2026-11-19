@@ -115,6 +115,19 @@ calls `reloadShaders()`.
   * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided
     test and horizon fade per light kind; no view vector, no Fresnel, no GGX): the tree billboards and voxels, rough
     surfaces seen from tens of metres. The sun keeps the full BRDF. Voxel FS 64/32 -> 64/16.
+  * `LIT_SUN_SHADOW_HARD` - the sun's cascade shadow as ONE hardware-PCF tap (`sampleSunShadowHard`, the ocean's form;
+    not on the RT sun path): the tree voxels, whose pixels are stochastic coverage. Voxel FS 64/0 -> 56/32, 10 KB less
+    code; the gain in time is small (~0.1 ms of a forest view: the PCSS search is not what a voxel pixel pays for).
+* **`u_sunLit`** (a live UBO value, `registerUboValues`): 1 while the sun's radiance at the ground is above 0, 0 below
+  the horizon (`u_sunTransmittance` is 0 there) and in a full eclipse - worked out once per frame on the CPU. Every
+  reader of `sunShadowVisibility` multiplies it by that radiance, so the shaders that take their shadow with NO facing
+  test gate the search by `u_sunLit > 0.5` at their call site: the tree leaves, the foliage cards, the voxels (and the
+  voxels' sun march), the flowers. At night each of their pixels paid the whole search for a light of 0. **Not inside
+  `sunShadowVisibility`**: there the grass FS went from 56 / 32 B to 64 / 0, and every lit binary changed; **not at the
+  grass's own call either** (56 / 32 B -> 64 / 16 B). The two SHADOW CULLS (instanced_indirect_shadow.cs.glsl, the far
+  casters' tree_voxel_far.cs.glsl) emit no caster while it is 0: the shadow pass still runs and clears its maps (their
+  layouts stay valid for the shaders that sample them x a radiance of 0), at 0.03 ms. A forest view at night: the GPU
+  frame 9.8 -> 7.4 ms with all of it.
 * **The tree fragment shaders hold nothing for the output across the lit core**: LitTree / LitFoliage write alpha 1 (no
   blending: the texture's alpha and the material's opacity were two values live to the end, across the light loop),
   and the voxel FS forms its depth and motion vector AFTER the lighting, from the position.
@@ -136,6 +149,16 @@ calls `reloadShaders()`.
   across it. The voxel shadow caster (`shadow_depth.fs.glsl`, 40 registers) scales `in_voxelGrid + in_voxelDirG * t` to
   voxel coordinates inside the loop and tests the box on the sample; held as start + direction + exit distance it took
   48. Where another part sets the count (the main voxel FS: its light loop), hold them - fewer instructions a step.
+* **Do not factor shared terms out by hand.** The driver's compiler already shares a subexpression across inlined
+  calls. Tried on the atmosphere (a march step's density and its two optical depths use the same two exponentials, the
+  same radius and the same two square roots - one `AtmosPoint` struct for all three): the binaries shrank 2 %, the time
+  did not, and holding the struct across the step RAISED the register counts (sky FS 56 -> 64, cloud_sky 64 -> 72) and
+  slowed the cloud march 0.33 -> 0.36 ms. What pays is less WORK: an earlier test (the clutter cull's climate fit), a
+  cull by what the view can see (the far shadow casters), fewer waits (the next rule).
+* **A march that waits for each fetch takes TWO samples a wait.** Where the next sample's place does not depend on this
+  one's result (only the march's END does), both taps go out together and are taken in turn: the same samples, about
+  half the waits. The tree voxels' view and sun marches (`voxelOpacityPair`, tree_voxel.inc.glsl; "TWO STEPS A WAIT" in
+  [Scene.md](Scene.md)). Four a wait was slower than two (about as slow as one): every tap past the end is wasted, and a march ends often.
 * **The default static-mesh VS packs its interpolants into 4 locations**: `posU` (xyz + uv.x), `normalV` (xyz + uv.y),
   `tangent` (xyz + bitangent sign), flat `meshIdxMaterialIdx` at 3. The fragment shader rebuilds the bitangent. Every
   FS paired with that VS (lit, unlit, the gizmos, sky) uses this layout; the terrain, rock, ocean and river VS have
@@ -238,7 +261,7 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 `float16_t -> float` widening).
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0), tree FS 64/16
-(its VS 40/0), foliage FS 56/48 (its VS 39/0), voxel tree FS 64/0 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
+(its VS 40/0), foliage FS 56/48 (its VS 39/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
 shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
 cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
@@ -270,7 +293,8 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
     depth is per pixel, so it keeps the full `oceanBubbleRadiance`).
   * **One light loop per shader** (large + cell lights in one loop): every `doLightShadowed` call inlines all light
     types plus the shadow ray query. Merging a double loop cut 36-40 KB of code each in the ocean and the film, and
-    vol_scatter's single loop (`volLightScatter` inlines a ray query) cut its registers.
+    vol_scatter's single loop (`volLightScatter` inlines a ray query) cut its registers. The GI trace's
+    `giGatherDirect` (lighting.inc.glsl) likewise: 104 -> 89 KB, its 128 registers and its time as before.
   * **Write a dual-source OUTPUT at each return, never as an up-front default.** An `out_factor = vec4(0)` at the top
     of main kept the output live through the whole shader once one store became dynamic (+16 B on the ocean).
   * **Keep the accumulators few across a ray query:** fold the result into one accumulator before the loop / trace,

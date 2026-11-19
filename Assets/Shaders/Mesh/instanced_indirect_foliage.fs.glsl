@@ -54,7 +54,7 @@ void sunShadowFirstFoliage(vec3 pos)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
 	g_shadowFoliage = true; // the constant depth bias only (shadows.inc.glsl)
-	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+	g_sunShadowFirst = u_sunLit > 0.5 ? sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN) : 0.0; // no search at night
 	g_shadowFoliage = false;
 }
 

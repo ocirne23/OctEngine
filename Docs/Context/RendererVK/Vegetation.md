@@ -280,7 +280,12 @@ the clutter frame's header. Desktop only (as the grass).
   fade` - the grass's ranked prefix: a thinning density removes objects evenly, and one near the threshold shrinks
   into the ground over "Grow band" (no pops). Types are INDEPENDENT lists (no type swaps for another as the camera
   moves; two can overlap). A rank past the type's bound (`ClutterTypeGpu::bound.x`: every term at its largest) never
-  tests.
+  tests. **The CLIMATE fit is tested FIRST**, against that same bound x the fit: it needs two of the grid's measures,
+  and a type outside its climate keeps almost no rank - those candidates take no other grid value, no floor-map fetch
+  and no clump noise (the cull 0.18 -> 0.17 ms in a temperate forest). **The patch's setup is in two stages**: the
+  grid's 25 HEIGHTS first (`clutterCornerHeight`), the patch's view test on their box, and only for a patch that passes
+  the grid's terrain measures (`clutterCorner`: the climate walk of `terrainLayers`) - most of the grid around the
+  camera is outside the view. The whole cull is ~0.19 ms; with trees over it, the clutter's draws are 0.17 ms more.
 * **THE DENSITY** of a type at a point = Density x the climate fit (1 inside the ideal box, a Gaussian outside, as a
   tree's) x per term `mix(a, b, measure)`:
   * the terrain's GRASS cover, CRAG (bedrock), BEACH - a 5 x 5 grid over the patch (every 1 m at 4 m patches)

@@ -77,13 +77,19 @@ bool clutterGroundAt(vec2 xz, out GrassGround g)
     return true;
 }
 
-// One grid sample's terrain measures (as the grass cull feeds the splat). No texture set or height map: no cover, a mild
-// climate.
-void clutterCorner(uint i, vec2 xz, GrassGround g)
+// One grid sample's GROUND HEIGHT: all the patch's view test needs. The measures below come after that test, so a patch
+// outside the view (most of the grid around the camera) pays for no climate walk.
+void clutterCornerHeight(uint i, vec2 xz, GrassGround g)
 {
     vec3 facetN;
-    const float h = grassGroundHeight(g, xz, facetN);
-    s_height[i] = h;
+    s_height[i] = grassGroundHeight(g, xz, facetN);
+}
+
+// One grid sample's terrain measures (as the grass cull feeds the splat), at the height clutterCornerHeight stored. No
+// texture set or height map: no cover, a mild climate.
+void clutterCorner(uint i, vec2 xz, GrassGround g)
+{
+    const float h = s_height[i];
     s_water[i] = -1e9;
     s_temperature[i] = 12.5;
     s_humidity[i] = 0.5;
@@ -214,8 +220,9 @@ void main()
         return;
 
     const float gridStep = P / float(CLUTTER_GRID - 1u);
+    const vec2 cornerXZ = origin + vec2(float(k % CLUTTER_GRID), float(k / CLUTTER_GRID)) * gridStep;
     if (k < CLUTTER_GRID_SAMPLES)
-        clutterCorner(k, origin + vec2(float(k % CLUTTER_GRID), float(k / CLUTTER_GRID)) * gridStep, patchGround);
+        clutterCornerHeight(k, cornerXZ, patchGround);
     barrier();
 
     // The patch's box (its grid + the tallest clutter) against the view, or within the near grass cascade's caster reach
@@ -241,6 +248,11 @@ void main()
     const bool patchNear = u_grass_nearRange > 0.0 && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= nearReach;
     if (!patchVisible && !patchNear)
         return;
+
+    // The grid's measures, for a patch that passed (still uniform over the workgroup).
+    if (k < CLUTTER_GRID_SAMPLES)
+        clutterCorner(k, cornerXZ, patchGround);
+    barrier();
 
     const uint patchHash = grassHash2(ivec2(floor(origin / P + 0.5)));
     const float countScale = u_clutter_densityScale * P * P; // density (per m^2) -> objects in the patch
@@ -270,28 +282,36 @@ void main()
             continue;
         const float rangeFade = 1.0 - smoothstep(range * (1.0 - u_clutter_rangeFade), range, horizontal);
 
-        // The terrain's measures (bilinear in the patch's grid) and the forest floor.
+        // The terrain's measures (bilinear in the patch's grid).
         const vec2 gp = uv * float(CLUTTER_GRID - 1u);
         const uvec2 c0 = min(uvec2(gp), uvec2(CLUTTER_GRID - 2u));
         const vec2 f = gp - vec2(c0);
         const uint i00 = c0.y * CLUTTER_GRID + c0.x, i10 = i00 + 1u, i01 = i00 + CLUTTER_GRID, i11 = i01 + 1u;
         const vec4 w = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
-        const vec4 cover = s_cover[i00] * w.x + s_cover[i10] * w.y + s_cover[i01] * w.z + s_cover[i11] * w.w;
         const float temperature = dot(vec4(s_temperature[i00], s_temperature[i10], s_temperature[i01], s_temperature[i11]), w);
         const float humidity = dot(vec4(s_humidity[i00], s_humidity[i10], s_humidity[i01], s_humidity[i11]), w);
-        const float water = dot(vec4(s_water[i00], s_water[i10], s_water[i01], s_water[i11]), w);
-        const vec3 river = s_river[i00] * w.x + s_river[i10] * w.y + s_river[i01] * w.z + s_river[i11] * w.w;
-        const vec4 floorMap = clutterFloorAt(xz);
-        // THE GRASS AS DRAWN (the `Grass` term's measure): cover x the blades' clumps x the canopy thinning, as grass_cull
-        // keeps them - so no flower stands in a bare spot between the clumps.
-        const float grass = cover.x * grassClump(xz) * (1.0 - u_grass_canopyThinning * floorMap.x);
 
         // The climate fit: 1 inside the ideal box, a Gaussian of the distance outside it (as a tree species').
         // Temperature -25 .. 50 C -> 0 .. 1.
         const vec2 climate = vec2(clamp(temperature * (1.0 / 75.0) + (25.0 / 75.0), 0.0, 1.0), humidity);
         const vec2 outside = max(type.climate.xz - climate, vec2(0.0)) + max(climate - type.climate.yw, vec2(0.0));
         const vec2 scaled = outside * type.placement.y;
-        float density = type.placement.x * exp(-0.5 * dot(scaled, scaled));
+        const float climateFit = exp(-0.5 * dot(scaled, scaled));
+        // THE CLIMATE FIRST: it needs two of the measures, and a type outside its climate keeps almost no rank. The most
+        // the type can still keep = its bound (Density x every term at its largest) x the fit; a rank past it never passes,
+        // and takes none of the measures below (the other grid values, the floor map's fetch, the clump noise).
+        if (rank >= type.bound.x * climateFit * (countScale * rangeFade * 1.0001)) // + a rounding margin
+            continue;
+
+        const vec4 cover = s_cover[i00] * w.x + s_cover[i10] * w.y + s_cover[i01] * w.z + s_cover[i11] * w.w;
+        const float water = dot(vec4(s_water[i00], s_water[i10], s_water[i01], s_water[i11]), w);
+        const vec3 river = s_river[i00] * w.x + s_river[i10] * w.y + s_river[i01] * w.z + s_river[i11] * w.w;
+        const vec4 floorMap = clutterFloorAt(xz); // the forest floor
+        // THE GRASS AS DRAWN (the `Grass` term's measure): cover x the blades' clumps x the canopy thinning, as grass_cull
+        // keeps them - so no flower stands in a bare spot between the clumps.
+        const float grass = cover.x * grassClump(xz) * (1.0 - u_grass_canopyThinning * floorMap.x);
+
+        float density = type.placement.x * climateFit;
         density *= mix(type.terms0.x, type.terms0.y, grass) * mix(type.terms0.z, type.terms0.w, cover.y)
                  * mix(type.terms1.x, type.terms1.y, cover.z) * mix(type.terms1.z, type.terms1.w, floorMap.x)
                  * mix(type.terms2.x, type.terms2.y, floorMap.y) * mix(type.terms2.z, type.terms2.w, floorMap.z)

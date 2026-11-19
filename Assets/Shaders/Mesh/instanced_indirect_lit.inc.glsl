@@ -146,7 +146,6 @@ vec3 sunSurfaceRadiance()
 {
 	return u_sunTransmittance * u_sunColor.rgb * float(g_sunVisSurface);
 }
-
 // Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data), resolved by
 // doSunLight for every pixel - the test that gates the caustics/absorption, published so the terrain's water film can
 // gate on it too (ground under the live surface is the ocean's to draw).
@@ -202,6 +201,10 @@ vec3 terrainMarchDebugColor(vec3 worldPos, vec3 N)
 
 // The sun's visibility at worldPos: the shadow (PCSS or the RT ray), the long-range terrain march, the eclipse and
 // the clouds. N = the normal the shadow's offset follows.
+// Every reader multiplies the result by the sun's radiance, so an includer that takes its shadow with NO facing test
+// (the tree leaves, cards and voxels) calls this only while u_sunLit is set: at night each of their pixels paid the
+// whole search for a light of 0. The test is the includer's, not in here: in here it moved the grass FS from 56
+// registers / 32 B to 64 / 0.
 float sunShadowVisibility(vec3 worldPos, vec3 N)
 {
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU
@@ -209,6 +212,10 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 	// search and the ray-query loop, not for the larger one.
 #if LIT_RT_SUN_SHADOW
 	float visibility = traceSunVisibility(worldPos, N);
+#elif defined(LIT_SUN_SHADOW_HARD)
+	// The includer's surface is noise that TAA / DLSS resolves anyway (the voxel tier's stochastic coverage): ONE
+	// hardware-PCF tap, the cascade cross-fade dithered - no blocker search, no penumbra, no foliage shadow length.
+	float visibility = sampleSunShadowHard(worldPos, N);
 #else
 	float visibility = sampleSunShadow(worldPos, N);
 #endif

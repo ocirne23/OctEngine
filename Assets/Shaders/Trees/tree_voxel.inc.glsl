@@ -121,6 +121,12 @@ vec3 voxelCentreCoord(VoxelLevel level, vec3 c)
 	return clamp(c - 0.5, vec3(0.0), vec3(level.n - 1.001));
 }
 
+// voxelCentreCoord for a march that holds its start as c - 0.5 already (one subtraction a ray, not three a sample).
+vec3 voxelCentreClamp(VoxelLevel level, vec3 centre)
+{
+	return clamp(centre, vec3(0.0), vec3(level.n - 1.001));
+}
+
 // A brick from the index: its slot in the atlases, 0 = EMPTY (nothing stored).
 VoxelBrick voxelBrickFetch(VoxelGrid grid, VoxelLevel level, vec3 brick)
 {
@@ -157,34 +163,51 @@ vec3 voxelSharpen(vec3 f)
 	return clamp(f * u_foliage_voxelSharpen + (0.5 - 0.5 * u_foliage_voxelSharpen), vec3(0.0), vec3(1.0));
 }
 
-// THE OPACITY at c (voxel coordinates) on a level: bilinear in the brick's slice, linear between two slices. `skip`: > 0
-// when c's brick is EMPTY - the distance along the ray (dirC as voxelBrickSkip's) to its far side + 3 % of the march's
-// step `stepWorld` (m), so the next sample lies inside the next brick - and the opacity is 0.
-// `last` = the march's brick on this level (VoxelBrick): the index is fetched only when the sample enters another brick.
-float voxelOpacity(VoxelGrid grid, VoxelLevel level, vec3 c, vec3 dirC, float stepWorld, inout VoxelBrick last, out float skip)
+// THE OPACITY, IN STEPS A MARCH PUTS TOGETHER ITSELF (the main pass's view and sun marches): a march's cost is its chain of
+// fetches, each one waited for before the next sample is known - so a march fetches TWO samples of a brick before it waits
+// for either (voxelOpacityPair). u = a sample in voxelCentreCoord's form.
+// voxelSampleBrick: the sample's brick into `last` (the march's brick on this level: the index is fetched only when the
+// sample enters another brick). False = that brick is EMPTY: the march jumps it (voxelBrickSkip, + 3 % of its step so the
+// next sample lies inside the next brick).
+bool voxelSampleBrick(VoxelGrid grid, VoxelLevel level, vec3 u, inout VoxelBrick last)
 {
-	const vec3 u = voxelCentreCoord(level, c);
 	const vec3 brick = floor(u * (1.0 / VOXEL_BRICK));
 	if (any(notEqual(brick, last.coord)))
 		last = voxelBrickFetch(grid, level, brick);
-	if (voxelBrickEmpty(last))
-	{
-		skip = voxelBrickSkip(level, c, dirC, brick) + 0.03 * stepWorld;
-		return 0.0;
-	}
-	skip = 0.0;
-	// Inside the brick: 0 .. VOXEL_BRICK between its first and last stored voxel centres.
-	const vec3 voxel = floor(u);
-	const vec3 local = (voxel - brick * VOXEL_BRICK) + voxelSharpen(u - voxel);
-	const float s0 = min(floor(local.z), VOXEL_BRICK - 1.0);
-	const float w = local.z - s0; // the blend to the next slice: exactly 0 on most samples once the filter is sharpened
-	const vec2 uv = (voxelBrickOrigin(grid, last) + vec2(s0 * VOXEL_BRICK_TEXELS + local.x, local.y)) * grid.invSize;
-	float a = textureLod(u_textures[grid.opacityTex], uv, 0.0).r;
-	if (w > 0.0) // the second slice only where it weighs in
-		a = mix(a, textureLod(u_textures[grid.opacityTex], uv + vec2(VOXEL_BRICK_TEXELS * grid.invSize.x, 0.0), 0.0).r, w);
-	return a;
+	return !voxelBrickEmpty(last);
 }
 
+bool voxelInBrick(vec3 u, VoxelBrick brick)
+{
+	return all(equal(floor(u * (1.0 / VOXEL_BRICK)), brick.coord));
+}
+
+// A sample's place in its STORED brick: xy = its uv in the opacity atlas on its nearer z slice (bilinear inside the slice),
+// z = the blend to the next slice - exactly 0 on most samples once the filter is sharpened.
+vec3 voxelSliceUv(VoxelGrid grid, VoxelBrick brick, vec3 u)
+{
+	// Inside the brick: 0 .. VOXEL_BRICK between its first and last stored voxel centres.
+	const vec3 voxel = floor(u);
+	const vec3 local = (voxel - brick.coord * VOXEL_BRICK) + voxelSharpen(u - voxel);
+	const float s0 = min(floor(local.z), VOXEL_BRICK - 1.0);
+	return vec3((voxelBrickOrigin(grid, brick) + vec2(s0 * VOXEL_BRICK_TEXELS + local.x, local.y)) * grid.invSize, local.z - s0);
+}
+
+// The opacities at u0 and u1, both in the stored brick `brick`: linear between two slices, the second slice fetched only
+// where it weighs in. The two first taps go out TOGETHER - one wait for two steps of the march. A march with one sample
+// left in the brick passes it twice (the same texel: no second wait).
+vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
+{
+	const vec3 s0 = voxelSliceUv(grid, brick, u0);
+	const vec3 s1 = voxelSliceUv(grid, brick, u1);
+	vec2 a = vec2(textureLod(u_textures[grid.opacityTex], s0.xy, 0.0).r, textureLod(u_textures[grid.opacityTex], s1.xy, 0.0).r);
+	const vec2 nextSlice = vec2(VOXEL_BRICK_TEXELS * grid.invSize.x, 0.0);
+	if (s0.z > 0.0)
+		a.x = mix(a.x, textureLod(u_textures[grid.opacityTex], s0.xy + nextSlice, 0.0).r, s0.z);
+	if (s1.z > 0.0)
+		a.y = mix(a.y, textureLod(u_textures[grid.opacityTex], s1.xy + nextSlice, 0.0).r, s1.z);
+	return a;
+}
 // voxelOpacity with ONE fetch: the nearest slice, bilinear inside it (the shadow casters: a binary threshold, where the
 // blend between two slices changed little and cost a second fetch per step).
 float voxelOpacityNearest(VoxelGrid grid, VoxelLevel level, vec3 c, vec3 dirC, float stepWorld, inout VoxelBrick last, out float skip)
