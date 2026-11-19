@@ -144,11 +144,11 @@ export void installFileHooks()
 export class Session
 {
     // The free-fly camera's start.
-    static inline const glm::vec3 START_POS{ -3642.3f, 18.4f, -11091.0f };
-    static inline const glm::vec3 START_DIR{ 0.89f, 0.07f, 0.46f };
+    static inline const glm::vec3 START_POS{ 8319.5f, 72.7f, 1801.4f };
+    static inline const glm::vec3 START_DIR{ -0.74f, -0.20f, -0.64f };
     // The co-op game's start in the sandbox world: the player's spawn, and the Base site is found around it.
-    static inline const glm::vec3 COOP_START_POS{ -3498.4f, 8.0f, -10873.1f };
-    static inline const glm::vec3 COOP_START_DIR{ 0.45f, -0.07f, 0.89f };
+    static inline const glm::vec3 COOP_START_POS{ 8319.5f, 72.7f, 1801.4f };
+    static inline const glm::vec3 COOP_START_DIR{ -0.74f, -0.20f, -0.64f };
 
 public:
     Session(const LaunchOptions& options)
@@ -259,7 +259,21 @@ public:
             // to the origin.
             TweakRegistry::get().setOverride("Terrain/Enabled=1");
             TweakRegistry::get().setOverride("Ocean/Enabled=1");
-            const glm::vec3 start = m_options.cameraStart ? m_options.cameraStart->first : COOP_START_POS;
+            // A SCENARIO starts at the save's own spot (its PlayerPos): the load puts the player and the Base back where
+            // they stood, which can be kilometres from the co-op start - that land must be the one that streams in.
+            glm::vec3 start = COOP_START_POS;
+            if (m_options.cameraStart)
+                start = m_options.cameraStart->first;
+            else if (!m_scenarioToStart.empty())
+            {
+                AssetNode save;
+                oc::string error;
+                if (loadAssetFile(m_scenarioToStart == "default" ? oc::string("Local/gamesave.txt") : m_scenarioToStart, save, error))
+                {
+                    if (const AssetNode* spot = save.find("PlayerPos"))
+                        start = spot->asVec3(start);
+                }
+            }
             const glm::vec3 dir = m_options.cameraStart ? m_options.cameraStart->second : COOP_START_DIR;
             m_game->setWorldAnchor(m_worldSeeded ? glm::vec3(0.0f, 30.0f, 0.0f) : start, dir);
             // The game's coarse ground: the terrain-data bake's CPU copy (8 m texels, kilometres around the camera) - for
@@ -313,7 +327,10 @@ public:
             return false;
         if (m_options.gameMode && m_options.launchMode == ELaunchMode::Server)
             m_lobby.markStarted(m_options.coopMode);
+        if (m_options.scenario)
+            m_scenarioToStart = m_options.scenarioSave;
         startWorldAndGame(m_options.gameMode, m_options.coopMode);
+        m_scenarioToStart.clear();
         return true;
     }
 
@@ -521,7 +538,9 @@ private:
         {
             if (!startNetworkFor(ELaunchMode::Single, true, oc::string()))
                 return;
+            m_scenarioToStart = action.scenarioPath;
             startWorldAndGame(true, true);
+            m_scenarioToStart.clear();
             Globals::ui.setMainMenuActive(false);
             if (m_game)
                 m_game->runScenario(action.scenarioPath);
@@ -759,6 +778,7 @@ private:
     bool m_worldSeeded = false;
     glm::vec2 m_worldSeededPick = glm::vec2(0.5f);
     int m_ringRadiusBeforeSeed = 32; // "Terrain/Range (chunks)" before seeding sized the ring
+    oc::string m_scenarioToStart;         // the scenario save the next startWorldAndGame starts at ("" = none; its PlayerPos is the co-op start)
     glm::vec2 m_originBeforeSeed{ 0.0f }; // "Terrain/Origin X / Z (m)" before seeding moved the origin to the pick
     int m_seedBeforeSeed = 0;             // "Terrain/Seed" before seeding
 };

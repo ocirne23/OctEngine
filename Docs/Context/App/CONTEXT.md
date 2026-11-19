@@ -132,7 +132,10 @@ terrain as background — and nothing mode-specific starts until a selection arr
 Contents: co-op / PvP / sandbox buttons; a **"Load scenario (co-op)" button** with its save path field (default
 `Scenarios/coop-base.txt`: `MainMenuAction::StartScenario` - offline co-op as the co-op button, then
 `GameMatch::runScenario(path)`, which waits for the Base site by itself: the menu's `--game --coop --scenario <path>`; the
-multiplayer fields do not apply to it); a **"Host a server" checkbox** or an address field
+multiplayer fields do not apply to it). **A scenario starts at the save's own spot**: `Session::startWorldAndGame`
+takes the save's `PlayerPos` as the co-op start (`m_scenarioToStart`, from the button or from `--scenario`; `--camera`
+still wins), not `COOP_START_POS` - the load puts the player and the Base back where they stood, which can be
+kilometres from the co-op start, and that land must be the one that streams in; a **"Host a server" checkbox** or an address field
 (`ip[:port]`, empty = offline); Quit; and a **SETTINGS page built from the tweak registry** — curated
 per-section category-prefix tables in MainMenu.cpp, with dev branches (any category containing Debug /
 Stress / Stats / Cheats / Emitter / V3, plus Time/Paused) filtered out, rows drawn by `drawTweakVar`

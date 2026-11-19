@@ -1,0 +1,5892 @@
+WaveIndex 56
+WaveTimer 20.028843
+NightIndex 4
+Night false
+TimeOfDay 8.89362
+NightWave 0
+WaveScale 1.2954497
+MatchTime 5874.1787
+WaveTrickle
+	Pending 0
+	Origin 8169.789 38.343456 1535.7699
+	Dest 8195.051 37.080566 1609.3253
+	Radius 30.398218
+	LastArchetype 10
+	Mix 3 0.323829
+	Mix 4 0.620521
+	Mix 9 0.017024
+PlayerPos 8153.293 32.446877 1690.7542
+RallyPos 8111.066 30.277946 1664.9238
+ShipPos 8204 38.343456 1648
+ShipYaw 3.1415927
+ShipLanded true
+ShipTurns 2
+ShipHome 8204 38.343456 1648
+ShipHomeTurns 2
+Structure
+	Id 1
+	Type 13
+	Position 8203 41.343456 1649
+	Ship true
+	Local 1 0 -1
+	Charge 1405.8744
+	Minerals 214.96118
+	OutputFrac 1
+Structure
+	Id 2
+	Type 30
+	Position 8205 38.843456 1675
+	Ship true
+	Local -1 0 -27
+Structure
+	Id 3
+	Type 30
+	Position 8203 38.843456 1675
+	Ship true
+	Local 1 0 -27
+Structure
+	Id 4
+	Type 30
+	Position 8201 38.843456 1675
+	Ship true
+	Local 3 0 -27
+Structure
+	Id 5
+	Type 30
+	Position 8207 38.843456 1673
+	Ship true
+	Local -3 0 -25
+Structure
+	Id 6
+	Type 30
+	Position 8199 38.843456 1673
+	Ship true
+	Local 5 0 -25
+Structure
+	Id 7
+	Type 30
+	Position 8207 38.843456 1671
+	Ship true
+	Local -3 0 -23
+Structure
+	Id 8
+	Type 30
+	Position 8199 38.843456 1671
+	Ship true
+	Local 5 0 -23
+Structure
+	Id 9
+	Type 30
+	Position 8209 38.843456 1669
+	Ship true
+	Local -5 0 -21
+Structure
+	Id 10
+	Type 30
+	Position 8197 38.843456 1669
+	Ship true
+	Local 7 0 -21
+Structure
+	Id 11
+	Type 30
+	Position 8209 38.843456 1667
+	Ship true
+	Local -5 0 -19
+Structure
+	Id 12
+	Type 30
+	Position 8197 38.843456 1667
+	Ship true
+	Local 7 0 -19
+Structure
+	Id 13
+	Type 30
+	Position 8211 38.843456 1665
+	Ship true
+	Local -7 0 -17
+Structure
+	Id 14
+	Type 30
+	Position 8195 38.843456 1665
+	Ship true
+	Local 9 0 -17
+Structure
+	Id 15
+	Type 30
+	Position 8211 38.843456 1661
+	Ship true
+	Local -7 0 -13
+Structure
+	Id 16
+	Type 30
+	Position 8195 38.843456 1661
+	Ship true
+	Local 9 0 -13
+Structure
+	Id 17
+	Type 30
+	Position 8213 38.843456 1659
+	Ship true
+	Local -9 0 -11
+Structure
+	Id 18
+	Type 30
+	Position 8193 38.843456 1659
+	Ship true
+	Local 11 0 -11
+Structure
+	Id 19
+	Type 30
+	Position 8213 38.843456 1657
+	Ship true
+	Local -9 0 -9
+Structure
+	Id 20
+	Type 30
+	Position 8193 38.843456 1657
+	Ship true
+	Local 11 0 -9
+Structure
+	Id 21
+	Type 30
+	Position 8213 38.843456 1655
+	Ship true
+	Local -9 0 -7
+Structure
+	Id 22
+	Type 30
+	Position 8193 38.843456 1655
+	Ship true
+	Local 11 0 -7
+Structure
+	Id 23
+	Type 30
+	Position 8213 38.843456 1653
+	Ship true
+	Local -9 0 -5
+Structure
+	Id 24
+	Type 30
+	Position 8193 38.843456 1653
+	Ship true
+	Local 11 0 -5
+Structure
+	Id 25
+	Type 30
+	Position 8213 38.843456 1651
+	Ship true
+	Local -9 0 -3
+Structure
+	Id 26
+	Type 30
+	Position 8193 38.843456 1651
+	Ship true
+	Local 11 0 -3
+Structure
+	Id 27
+	Type 30
+	Position 8213 38.843456 1649
+	Ship true
+	Local -9 0 -1
+Structure
+	Id 28
+	Type 30
+	Position 8193 38.843456 1649
+	Ship true
+	Local 11 0 -1
+Structure
+	Id 29
+	Type 30
+	Position 8213 38.843456 1647
+	Ship true
+	Local -9 0 1
+Structure
+	Id 30
+	Type 30
+	Position 8193 38.843456 1647
+	Ship true
+	Local 11 0 1
+Structure
+	Id 31
+	Type 30
+	Position 8213 38.843456 1645
+	Ship true
+	Local -9 0 3
+Structure
+	Id 32
+	Type 30
+	Position 8193 38.843456 1645
+	Ship true
+	Local 11 0 3
+Structure
+	Id 33
+	Type 30
+	Position 8213 38.843456 1639
+	Ship true
+	Local -9 0 9
+Structure
+	Id 34
+	Type 30
+	Position 8193 38.843456 1639
+	Ship true
+	Local 11 0 9
+Structure
+	Id 35
+	Type 30
+	Position 8213 38.843456 1637
+	Ship true
+	Local -9 0 11
+Structure
+	Id 36
+	Type 30
+	Position 8193 38.843456 1637
+	Ship true
+	Local 11 0 11
+Structure
+	Id 37
+	Type 30
+	Position 8211 38.843456 1635
+	Ship true
+	Local -7 0 13
+Structure
+	Id 38
+	Type 30
+	Position 8195 38.843456 1635
+	Ship true
+	Local 9 0 13
+Structure
+	Id 39
+	Type 30
+	Position 8211 38.843456 1633
+	Ship true
+	Local -7 0 15
+Structure
+	Id 40
+	Type 30
+	Position 8195 38.843456 1633
+	Ship true
+	Local 9 0 15
+Structure
+	Id 41
+	Type 30
+	Position 8211 38.843456 1631
+	Ship true
+	Local -7 0 17
+Structure
+	Id 42
+	Type 30
+	Position 8195 38.843456 1631
+	Ship true
+	Local 9 0 17
+Structure
+	Id 43
+	Type 30
+	Position 8211 38.843456 1629
+	Ship true
+	Local -7 0 19
+Structure
+	Id 44
+	Type 30
+	Position 8195 38.843456 1629
+	Ship true
+	Local 9 0 19
+Structure
+	Id 45
+	Type 30
+	Position 8211 38.843456 1627
+	Ship true
+	Local -7 0 21
+Structure
+	Id 46
+	Type 30
+	Position 8195 38.843456 1627
+	Ship true
+	Local 9 0 21
+Structure
+	Id 47
+	Type 30
+	Position 8211 38.843456 1625
+	Ship true
+	Local -7 0 23
+Structure
+	Id 48
+	Type 30
+	Position 8195 38.843456 1625
+	Ship true
+	Local 9 0 23
+Structure
+	Id 49
+	Type 30
+	Position 8209 38.843456 1623
+	Ship true
+	Local -5 0 25
+Structure
+	Id 50
+	Type 30
+	Position 8197 38.843456 1623
+	Ship true
+	Local 7 0 25
+Structure
+	Id 51
+	Type 30
+	Position 8209 38.843456 1621
+	Ship true
+	Local -5 0 27
+Structure
+	Id 52
+	Type 30
+	Position 8207 38.843456 1621
+	Ship true
+	Local -3 0 27
+Structure
+	Id 53
+	Type 30
+	Position 8205 38.843456 1621
+	Ship true
+	Local -1 0 27
+Structure
+	Id 54
+	Type 30
+	Position 8201 38.843456 1621
+	Ship true
+	Local 3 0 27
+Structure
+	Id 55
+	Type 30
+	Position 8199 38.843456 1621
+	Ship true
+	Local 5 0 27
+Structure
+	Id 56
+	Type 30
+	Position 8197 38.843456 1621
+	Ship true
+	Local 7 0 27
+Structure
+	Id 57
+	Type 22
+	Position 8186 34.80957 1638
+	Minerals 7.292749
+Structure
+	Id 58
+	Type 22
+	Position 8186 35.373047 1634
+	Minerals 3.4072545
+Structure
+	Id 59
+	Type 16
+	Position 8183 33.79297 1635
+Structure
+	Id 60
+	Type 16
+	Position 8183 33.568848 1637
+Structure
+	Id 61
+	Type 16
+	Position 8183 33.33545 1639
+Structure
+	Id 62
+	Type 16
+	Position 8183 33.06299 1641
+Structure
+	Id 63
+	Type 11
+	Position 8188 35.268066 1646
+	Fuel 3.5787659
+	Minerals 826.8061
+Structure
+	Id 64
+	Type 16
+	Position 8183 32.78955 1643
+Structure
+	Id 65
+	Type 16
+	Position 8183 32.603027 1645
+Structure
+	Id 66
+	Type 16
+	Position 8185 32.628418 1645
+Structure
+	Id 67
+	Type 16
+	Position 8185 32.520996 1647
+Structure
+	Id 68
+	Type 22
+	Position 8176 35.393066 1676
+	Minerals 5.8105345
+Structure
+	Id 69
+	Type 16
+	Position 8179 34.03076 1675
+Structure
+	Id 70
+	Type 16
+	Position 8181 34.12451 1675
+Structure
+	Id 71
+	Type 16
+	Position 8183 34.17871 1675
+Structure
+	Id 73
+	Type 16
+	Position 8183 33.427246 1671
+Structure
+	Id 74
+	Type 16
+	Position 8183 32.961426 1669
+Structure
+	Id 75
+	Type 16
+	Position 8183 32.853027 1667
+Structure
+	Id 76
+	Type 16
+	Position 8183 32.831055 1665
+Structure
+	Id 77
+	Type 16
+	Position 8183 32.83008 1663
+Structure
+	Id 78
+	Type 16
+	Position 8183 32.879395 1661
+Structure
+	Id 79
+	Type 16
+	Position 8183 32.929688 1659
+Structure
+	Id 80
+	Type 16
+	Position 8183 32.816406 1657
+Structure
+	Id 81
+	Type 16
+	Position 8183 32.663086 1655
+Structure
+	Id 82
+	Type 16
+	Position 8183 32.529297 1653
+Structure
+	Id 83
+	Type 16
+	Position 8183 32.438477 1651
+Structure
+	Id 84
+	Type 16
+	Position 8183 32.348145 1649
+Structure
+	Id 85
+	Type 16
+	Position 8183 32.450195 1647
+Structure
+	Id 86
+	Type 22
+	Position 8216 35.891113 1646
+	Minerals 1.9392011
+Structure
+	Id 87
+	Type 16
+	Position 8219 34.561523 1645
+Structure
+	Id 88
+	Type 22
+	Position 8216 36.072754 1650
+	Yield 0.7008805
+	Minerals 2.7356727
+Structure
+	Id 89
+	Type 16
+	Position 8219 34.53125 1649
+Structure
+	Id 90
+	Type 16
+	Position 8219 34.495605 1647
+Structure
+	Id 91
+	Type 20
+	Position 8208 39.843456 1626
+	Ship true
+	Local -4 0 22
+Structure
+	Id 92
+	Type 12
+	Position 8207 40.093456 1623
+	Ship true
+	Local -3 0 25
+	Minerals 24.666252
+Structure
+	Id 93
+	Type 20
+	Position 8208 39.843456 1630
+	Ship true
+	Local -4 0 18
+Structure
+	Id 94
+	Type 20
+	Position 8208 39.843456 1634
+	Ship true
+	Local -4 0 14
+Structure
+	Id 95
+	Type 20
+	Position 8198 39.843456 1626
+	Ship true
+	Local 6 0 22
+Structure
+	Id 96
+	Type 20
+	Position 8198 39.843456 1630
+	Ship true
+	Local 6 0 18
+Structure
+	Id 97
+	Type 20
+	Position 8198 39.843456 1634
+	Ship true
+	Local 6 0 14
+Structure
+	Id 99
+	Type 20
+	Position 8202 39.843456 1630
+	Ship true
+	Local 2 0 18
+Structure
+	Id 100
+	Type 20
+	Position 8202 39.843456 1634
+	Ship true
+	Local 2 0 14
+Structure
+	Id 101
+	Type 2
+	Position 8196 32.72998 1712
+	Fuel 0.5515202
+Structure
+	Id 102
+	Type 2
+	Position 8200 33.209473 1714
+	Fuel 1.6975673
+Structure
+	Id 103
+	Type 16
+	Position 8199 31.763672 1711
+Structure
+	Id 104
+	Type 16
+	Position 8199 31.816895 1709
+Structure
+	Id 105
+	Type 16
+	Position 8197 31.47754 1709
+Structure
+	Id 106
+	Type 16
+	Position 8195 31.239258 1709
+Structure
+	Id 107
+	Type 16
+	Position 8193 31.003906 1709
+Structure
+	Id 108
+	Type 2
+	Position 8190 31.751953 1722
+	Yield 0.61850923
+	Fuel 7.789741
+Structure
+	Id 109
+	Type 16
+	Position 8193 30.93457 1711
+Structure
+	Id 110
+	Type 16
+	Position 8193 30.865234 1713
+Structure
+	Id 111
+	Type 16
+	Position 8193 30.828125 1715
+Structure
+	Id 112
+	Type 16
+	Position 8193 30.805176 1717
+Structure
+	Id 115
+	Type 11
+	Position 8190 33.129883 1710
+	Fuel 128.68298
+	Minerals 751.00525
+Structure
+	Id 116
+	Type 16
+	Position 8193 31.126465 1707
+Structure
+	Id 117
+	Type 16
+	Position 8193 31.260742 1705
+Structure
+	Id 118
+	Type 16
+	Position 8193 31.373535 1703
+Structure
+	Id 119
+	Type 16
+	Position 8193 31.434082 1701
+Structure
+	Id 120
+	Type 16
+	Position 8191 31.167969 1701
+Structure
+	Id 125
+	Type 16
+	Position 8183 34.382812 1677
+Structure
+	Id 126
+	Type 16
+	Position 8183 34.45459 1679
+Structure
+	Id 127
+	Type 16
+	Position 8183 34.051758 1681
+Structure
+	Id 128
+	Type 16
+	Position 8183 33.648926 1683
+Structure
+	Id 129
+	Type 16
+	Position 8183 33.14795 1685
+Structure
+	Id 131
+	Type 16
+	Position 8183 32.051758 1689
+Structure
+	Id 132
+	Type 16
+	Position 8183 31.652344 1691
+Structure
+	Id 133
+	Type 16
+	Position 8183 31.248047 1693
+Structure
+	Id 134
+	Type 16
+	Position 8185 31.26123 1693
+Structure
+	Id 135
+	Type 16
+	Position 8187 31.250488 1693
+Structure
+	Id 136
+	Type 16
+	Position 8189 31.323242 1693
+Structure
+	Id 137
+	Type 0
+	Position 8195 32.29834 1701
+	Charge 50
+	OutputFrac 1
+Structure
+	Id 138
+	Type 25
+	Position 8195 35.800293 1677
+	Charge 36.715942
+Structure
+	Id 139
+	Type 3
+	Position 8190 34.37451 1650
+	Charge 1374.5203
+Structure
+	Id 140
+	Type 12
+	Position 8185 34.438965 1669
+	Minerals 28.04169
+Structure
+	Id 141
+	Type 12
+	Position 8181 35.087402 1635
+	Minerals 25.607662
+Structure
+	Id 142
+	Type 1
+	Position 8186 34.17285 1650
+	Fuel 18.802452
+Structure
+	Id 143
+	Type 1
+	Position 8186 34.279297 1654
+	Fuel 21.288364
+Structure
+	Id 144
+	Type 1
+	Position 8186 34.534668 1658
+	Fuel 14.202593
+Structure
+	Id 145
+	Type 1
+	Position 8180 33.9458 1650
+	Fuel 21.513168
+Structure
+	Id 146
+	Type 1
+	Position 8180 34.09424 1654
+	Fuel 12.279428
+Structure
+	Id 147
+	Type 1
+	Position 8180 34.27002 1658
+	Fuel 11.850928
+Structure
+	Id 148
+	Type 3
+	Position 8190 34.480957 1654
+	Charge 1374.5203
+Structure
+	Id 150
+	Type 9
+	Position 8201 38.32129 1615
+Structure
+	Id 151
+	Type 9
+	Position 8199 38.45508 1615
+Structure
+	Id 152
+	Type 9
+	Position 8197 38.580566 1615
+Structure
+	Id 153
+	Type 9
+	Position 8195 38.226074 1617
+Structure
+	Id 154
+	Type 9
+	Position 8193 38.16748 1617
+Structure
+	Id 155
+	Type 9
+	Position 8191 38.039062 1617
+Structure
+	Id 156
+	Type 9
+	Position 8189 37.61133 1619
+Structure
+	Id 157
+	Type 9
+	Position 8187 37.481445 1619
+Structure
+	Id 158
+	Type 9
+	Position 8185 36.993652 1621
+Structure
+	Id 159
+	Type 9
+	Position 8183 36.807617 1621
+Structure
+	Id 160
+	Type 9
+	Position 8181 36.379395 1623
+Structure
+	Id 161
+	Type 9
+	Position 8179 36.024414 1625
+Structure
+	Id 162
+	Type 9
+	Position 8177 35.67041 1627
+Structure
+	Id 163
+	Type 9
+	Position 8175 35.37744 1629
+Structure
+	Id 164
+	Type 9
+	Position 8173 35.007812 1631
+Structure
+	Id 165
+	Type 9
+	Position 8173 34.594727 1633
+Structure
+	Id 166
+	Type 9
+	Position 8173 34.288574 1635
+Structure
+	Id 167
+	Type 9
+	Position 8171 33.802246 1637
+Structure
+	Id 170
+	Type 9
+	Position 8169 33.063477 1641
+Structure
+	Id 172
+	Type 9
+	Position 8169 32.80664 1645
+Structure
+	Id 173
+	Type 9
+	Position 8169 32.756836 1647
+Structure
+	Id 174
+	Type 9
+	Position 8169 32.75586 1649
+Structure
+	Id 175
+	Type 9
+	Position 8169 32.825684 1651
+Structure
+	Id 176
+	Type 9
+	Position 8169 32.943848 1653
+Structure
+	Id 177
+	Type 9
+	Position 8169 33.039062 1655
+Structure
+	Id 178
+	Type 9
+	Position 8169 33.05713 1657
+Structure
+	Id 180
+	Type 9
+	Position 8171 33.293457 1659
+Structure
+	Id 181
+	Type 9
+	Position 8175 33.615723 1667
+Structure
+	Id 182
+	Type 9
+	Position 8175 33.71826 1669
+Structure
+	Id 188
+	Type 9
+	Position 8185 34.964355 1673
+Structure
+	Id 189
+	Type 9
+	Position 8185 35.353027 1675
+Structure
+	Id 190
+	Type 9
+	Position 8185 35.530273 1677
+Structure
+	Id 191
+	Type 9
+	Position 8185 35.375977 1679
+Structure
+	Id 193
+	Type 16
+	Position 8185 33.527344 1671
+Structure
+	Id 199
+	Type 9
+	Position 8185 34.913086 1681
+Structure
+	Id 200
+	Type 9
+	Position 8185 34.44873 1683
+Structure
+	Id 201
+	Type 9
+	Position 8185 33.942383 1685
+Structure
+	Id 212
+	Type 9
+	Position 8175 32.765625 1691
+Structure
+	Id 213
+	Type 9
+	Position 8175 32.3208 1693
+Structure
+	Id 214
+	Type 9
+	Position 8175 33.73877 1687
+Structure
+	Id 215
+	Type 9
+	Position 8175 34.358887 1685
+Structure
+	Id 216
+	Type 9
+	Position 8175 34.972656 1683
+Structure
+	Id 217
+	Type 9
+	Position 8173 35.253418 1681
+Structure
+	Id 220
+	Type 9
+	Position 8173 34.01758 1671
+Structure
+	Id 221
+	Type 9
+	Position 8171 34.3042 1673
+Structure
+	Id 223
+	Type 9
+	Position 8171 34.63623 1675
+Structure
+	Id 224
+	Type 9
+	Position 8171 34.856934 1677
+Structure
+	Id 225
+	Type 9
+	Position 8171 35.075195 1679
+Structure
+	Id 226
+	Type 16
+	Position 8183 32.585938 1687
+Structure
+	Id 227
+	Type 9
+	Position 8173 32.049316 1695
+Structure
+	Id 228
+	Type 9
+	Position 8173 31.682617 1697
+Structure
+	Id 229
+	Type 9
+	Position 8173 31.438477 1699
+Structure
+	Id 230
+	Type 9
+	Position 8173 31.225586 1701
+Structure
+	Id 231
+	Type 9
+	Position 8173 31.060059 1703
+Structure
+	Id 232
+	Type 9
+	Position 8173 31.048828 1705
+Structure
+	Id 233
+	Type 9
+	Position 8173 31.03955 1707
+Structure
+	Id 234
+	Type 9
+	Position 8175 31.077148 1709
+Structure
+	Id 235
+	Type 9
+	Position 8175 31.08252 1711
+Structure
+	Id 236
+	Type 9
+	Position 8177 31.091797 1713
+Structure
+	Id 237
+	Type 9
+	Position 8177 31.003418 1715
+Structure
+	Id 238
+	Type 9
+	Position 8179 30.944824 1717
+Structure
+	Id 239
+	Type 9
+	Position 8181 30.907227 1719
+Structure
+	Id 240
+	Type 9
+	Position 8183 30.85498 1721
+Structure
+	Id 241
+	Type 9
+	Position 8185 30.924805 1723
+Structure
+	Id 242
+	Type 9
+	Position 8187 31.046875 1725
+Structure
+	Id 243
+	Type 9
+	Position 8189 31.198242 1725
+Structure
+	Id 244
+	Type 9
+	Position 8191 31.353516 1725
+Structure
+	Id 245
+	Type 9
+	Position 8193 31.509766 1725
+Structure
+	Id 246
+	Type 9
+	Position 8195 31.68164 1725
+Structure
+	Id 247
+	Type 9
+	Position 8197 31.855469 1725
+Structure
+	Id 248
+	Type 9
+	Position 8199 32.04297 1725
+Structure
+	Id 249
+	Type 9
+	Position 8201 32.41797 1723
+Structure
+	Id 250
+	Type 9
+	Position 8203 32.628906 1723
+Structure
+	Id 251
+	Type 9
+	Position 8205 33.06543 1721
+Structure
+	Id 252
+	Type 9
+	Position 8207 33.503418 1719
+Structure
+	Id 253
+	Type 9
+	Position 8209 34.051758 1717
+Structure
+	Id 254
+	Type 9
+	Position 8211 34.787598 1715
+Structure
+	Id 255
+	Type 9
+	Position 8213 35.572754 1713
+Structure
+	Id 256
+	Type 9
+	Position 8215 36.50293 1711
+Structure
+	Id 257
+	Type 9
+	Position 8217 37.442383 1709
+Structure
+	Id 258
+	Type 9
+	Position 8217 37.839355 1707
+Structure
+	Id 259
+	Type 9
+	Position 8217 38.271484 1705
+Structure
+	Id 260
+	Type 9
+	Position 8217 38.726562 1703
+Structure
+	Id 261
+	Type 9
+	Position 8217 39.061035 1701
+Structure
+	Id 262
+	Type 9
+	Position 8217 39.371094 1699
+Structure
+	Id 263
+	Type 9
+	Position 8217 39.45166 1697
+Structure
+	Id 264
+	Type 9
+	Position 8217 39.341797 1695
+Structure
+	Id 265
+	Type 9
+	Position 8215 38.249023 1693
+Structure
+	Id 266
+	Type 9
+	Position 8215 37.7417 1691
+Structure
+	Id 267
+	Type 9
+	Position 8213 36.85547 1689
+Structure
+	Id 268
+	Type 9
+	Position 8213 36.853027 1687
+Structure
+	Id 269
+	Type 9
+	Position 8211 36.459473 1685
+Structure
+	Id 271
+	Type 9
+	Position 8213 37.524414 1681
+Structure
+	Id 272
+	Type 9
+	Position 8215 37.817383 1681
+Structure
+	Id 273
+	Type 9
+	Position 8217 38.516113 1679
+Structure
+	Id 274
+	Type 9
+	Position 8219 39.01758 1677
+Structure
+	Id 275
+	Type 9
+	Position 8221 39.3125 1675
+Structure
+	Id 276
+	Type 9
+	Position 8223 39.458984 1673
+Structure
+	Id 277
+	Type 9
+	Position 8225 39.663086 1673
+Structure
+	Id 278
+	Type 9
+	Position 8225 40.004395 1671
+Structure
+	Id 279
+	Type 9
+	Position 8227 40.183594 1671
+Structure
+	Id 280
+	Type 9
+	Position 8229 40.67334 1669
+Structure
+	Id 281
+	Type 9
+	Position 8231 40.376465 1667
+Structure
+	Id 282
+	Type 9
+	Position 8233 39.73828 1665
+Structure
+	Id 283
+	Type 9
+	Position 8233 39.166992 1663
+Structure
+	Id 284
+	Type 9
+	Position 8235 38.348633 1661
+Structure
+	Id 285
+	Type 9
+	Position 8235 37.873535 1659
+Structure
+	Id 286
+	Type 9
+	Position 8235 37.535156 1657
+Structure
+	Id 287
+	Type 9
+	Position 8235 37.125977 1655
+Structure
+	Id 288
+	Type 9
+	Position 8237 37.1709 1653
+Structure
+	Id 289
+	Type 9
+	Position 8237 37.245605 1651
+Structure
+	Id 290
+	Type 9
+	Position 8237 37.38672 1649
+Structure
+	Id 291
+	Type 9
+	Position 8237 37.6084 1647
+Structure
+	Id 292
+	Type 9
+	Position 8235 37.711914 1645
+Structure
+	Id 293
+	Type 9
+	Position 8235 38.089355 1643
+Structure
+	Id 294
+	Type 9
+	Position 8235 38.19287 1641
+Structure
+	Id 295
+	Type 9
+	Position 8233 37.825684 1639
+Structure
+	Id 296
+	Type 9
+	Position 8233 37.311523 1637
+Structure
+	Id 297
+	Type 9
+	Position 8233 36.791992 1635
+Structure
+	Id 298
+	Type 9
+	Position 8231 36.36035 1633
+Structure
+	Id 299
+	Type 9
+	Position 8231 36.08838 1631
+Structure
+	Id 300
+	Type 9
+	Position 8229 35.881348 1629
+Structure
+	Id 301
+	Type 9
+	Position 8227 35.85742 1627
+Structure
+	Id 302
+	Type 9
+	Position 8225 36.10547 1625
+Structure
+	Id 303
+	Type 9
+	Position 8223 36.40918 1623
+Structure
+	Id 304
+	Type 9
+	Position 8221 36.867188 1621
+Structure
+	Id 305
+	Type 9
+	Position 8219 37.291504 1619
+Structure
+	Id 306
+	Type 9
+	Position 8217 37.655273 1617
+Structure
+	Id 307
+	Type 9
+	Position 8215 37.4458 1617
+Structure
+	Id 308
+	Type 9
+	Position 8213 37.234863 1617
+Structure
+	Id 309
+	Type 9
+	Position 8211 37.21924 1617
+Structure
+	Id 310
+	Type 9
+	Position 8209 37.532715 1615
+Structure
+	Id 311
+	Type 9
+	Position 8207 37.518066 1615
+Structure
+	Id 312
+	Type 9
+	Position 8205 37.67285 1615
+Structure
+	Id 313
+	Type 12
+	Position 8221 36.01465 1649
+	Minerals 27.721664
+Structure
+	Id 314
+	Type 12
+	Position 8221 36.015625 1647
+	Minerals 21.989132
+Structure
+	Id 315
+	Type 12
+	Position 8195 32.956055 1703
+	Minerals 29.459568
+Structure
+	Id 316
+	Type 12
+	Position 8191 32.467773 1703
+	Minerals 23.599968
+Structure
+	Id 317
+	Type 26
+	Position 8218 35.77002 1630
+	Charge 30
+Structure
+	Id 318
+	Type 26
+	Position 8192 37.15918 1624
+	Charge 30
+Structure
+	Id 319
+	Type 16
+	Position 8183 33.89258 1673
+Structure
+	Id 320
+	Type 26
+	Position 8176 33.89258 1654
+	Charge 30
+Structure
+	Id 321
+	Type 26
+	Position 8182 31.91504 1700
+	Charge 30
+Structure
+	Id 323
+	Type 26
+	Position 8196 32.666992 1716
+	Charge 30
+Structure
+	Id 324
+	Type 26
+	Position 8208 35.14453 1708
+	Charge 30
+Structure
+	Id 325
+	Type 25
+	Position 8197 33.068848 1701
+	Charge 36.73682
+Structure
+	Id 326
+	Type 26
+	Position 8222 39.438477 1662
+	Charge 30
+Structure
+	Id 333
+	Type 16
+	Position 8187 33.335938 1683
+Structure
+	Id 334
+	Type 16
+	Position 8187 32.858887 1685
+Structure
+	Id 335
+	Type 16
+	Position 8187 32.38672 1687
+Structure
+	Id 336
+	Type 16
+	Position 8185 32.47461 1687
+Structure
+	Id 337
+	Type 11
+	Position 8180 34.952637 1646
+	Fuel 7.5744095
+	Minerals 874.5111
+Structure
+	Id 339
+	Type 27
+	Position 8177 34.322166 1667
+Structure
+	Id 340
+	Type 27
+	Position 8177 34.463768 1669
+Structure
+	Id 341
+	Type 27
+	Position 8177 34.94326 1671
+Structure
+	Id 342
+	Type 27
+	Position 8175 34.888084 1671
+Structure
+	Id 343
+	Type 27
+	Position 8175 35.339256 1673
+Structure
+	Id 344
+	Type 27
+	Position 8173 35.25918 1673
+Structure
+	Id 348
+	Type 27
+	Position 8175 36.16543 1679
+Structure
+	Id 349
+	Type 27
+	Position 8175 35.96865 1681
+Structure
+	Id 350
+	Type 27
+	Position 8177 36.02285 1681
+Structure
+	Id 351
+	Type 27
+	Position 8177 35.742577 1683
+Structure
+	Id 352
+	Type 27
+	Position 8177 35.211327 1685
+Structure
+	Id 353
+	Type 27
+	Position 8179 35.154198 1685
+Structure
+	Id 355
+	Type 27
+	Position 8179 35.678123 1683
+Structure
+	Id 356
+	Type 26
+	Position 8180 35.895996 1678
+	Charge 30
+Structure
+	Id 357
+	Type 27
+	Position 8177 36.302635 1679
+Structure
+	Id 358
+	Type 36
+	Position 8175 31.495117 1701
+	Charge 200
+Structure
+	Id 359
+	Type 36
+	Position 8171 33.09375 1649
+	Charge 200
+Structure
+	Id 360
+	Type 36
+	Position 8187 37.438965 1621
+	Charge 200
+Structure
+	Id 361
+	Type 36
+	Position 8217 37.47119 1619
+	Charge 200
+Structure
+	Id 362
+	Type 36
+	Position 8233 37.995117 1643
+	Charge 200
+Structure
+	Id 363
+	Type 36
+	Position 8223 40.07422 1671
+	Charge 200
+Structure
+	Id 364
+	Type 36
+	Position 8173 35.04834 1675
+	Charge 200
+Structure
+	Id 365
+	Type 36
+	Position 8193 31.87793 1723
+	Charge 200
+Structure
+	Id 366
+	Type 36
+	Position 8215 38.36377 1703
+	Charge 200
+Structure
+	Id 367
+	Type 8
+	Position 8209 41.343456 1639
+	Ship true
+	Local -5 0 9
+	Charge 5
+Structure
+	Id 368
+	Type 25
+	Position 8213 34.91748 1635
+	Charge 36.681145
+Structure
+	Id 369
+	Type 28
+	Position 8180 34.606934 1640
+Structure
+	Id 370
+	Type 27
+	Position 8171 33.884666 1643
+Structure
+	Id 371
+	Type 27
+	Position 8171 34.112694 1641
+Structure
+	Id 372
+	Type 27
+	Position 8171 33.714256 1645
+Structure
+	Id 373
+	Type 27
+	Position 8173 34.115623 1643
+Structure
+	Id 374
+	Type 27
+	Position 8175 34.33584 1643
+Structure
+	Id 375
+	Type 27
+	Position 8173 34.34365 1641
+Structure
+	Id 376
+	Type 27
+	Position 8173 34.567772 1639
+Structure
+	Id 377
+	Type 27
+	Position 8173 34.822166 1637
+Structure
+	Id 378
+	Type 27
+	Position 8175 35.02041 1637
+Structure
+	Id 379
+	Type 27
+	Position 8175 35.206932 1635
+Structure
+	Id 380
+	Type 27
+	Position 8175 35.44619 1633
+Structure
+	Id 381
+	Type 27
+	Position 8175 35.80654 1631
+Structure
+	Id 382
+	Type 27
+	Position 8177 35.806053 1631
+Structure
+	Id 383
+	Type 27
+	Position 8177 36.114647 1629
+Structure
+	Id 384
+	Type 27
+	Position 8179 36.294334 1629
+Structure
+	Id 385
+	Type 27
+	Position 8179 36.555565 1627
+Structure
+	Id 386
+	Type 27
+	Position 8181 36.70498 1627
+Structure
+	Id 388
+	Type 16
+	Position 8181 32.779297 1643
+Structure
+	Id 389
+	Type 16
+	Position 8179 32.73633 1643
+Structure
+	Id 391
+	Type 27
+	Position 8175 34.824608 1639
+Structure
+	Id 392
+	Type 27
+	Position 8175 34.580467 1641
+Structure
+	Id 393
+	Type 27
+	Position 8177 34.54531 1643
+Structure
+	Id 394
+	Type 29
+	Position 8176 33.6416 1646
+Structure
+	Id 395
+	Type 27
+	Position 8171 33.56289 1647
+Structure
+	Id 396
+	Type 27
+	Position 8173 33.916405 1645
+Structure
+	Id 397
+	Type 27
+	Position 8173 33.72988 1647
+Structure
+	Id 398
+	Type 27
+	Position 8173 33.618065 1649
+Structure
+	Id 399
+	Type 27
+	Position 8173 33.822166 1651
+Structure
+	Id 402
+	Type 27
+	Position 8173 34.026268 1653
+Structure
+	Id 403
+	Type 27
+	Position 8171 33.963768 1655
+Structure
+	Id 404
+	Type 27
+	Position 8173 34.111717 1655
+Structure
+	Id 405
+	Type 27
+	Position 8171 33.99404 1657
+Structure
+	Id 406
+	Type 27
+	Position 8173 34.14785 1657
+Structure
+	Id 408
+	Type 20
+	Position 8196 39.843456 1638
+	Ship true
+	Local 8 0 10
+Structure
+	Id 409
+	Type 20
+	Position 8200 39.843456 1638
+	Ship true
+	Local 4 0 10
+Structure
+	Id 410
+	Type 33
+	Position 8203 39.093456 1637
+	Ship true
+	Local 1 0 11
+	Munitions 49.226562
+Structure
+	Id 411
+	Type 33
+	Position 8203 39.093456 1639
+	Ship true
+	Local 1 0 9
+	Munitions 49.868164
+Structure
+	Id 412
+	Type 20
+	Position 8210 39.843456 1646
+	Ship true
+	Local -6 0 2
+Structure
+	Id 413
+	Type 20
+	Position 8210 39.843456 1650
+	Ship true
+	Local -6 0 -2
+Structure
+	Id 414
+	Type 20
+	Position 8210 39.843456 1654
+	Ship true
+	Local -6 0 -6
+Structure
+	Id 415
+	Type 20
+	Position 8210 39.843456 1658
+	Ship true
+	Local -6 0 -10
+Structure
+	Id 418
+	Type 27
+	Position 8199 32.988182 1723
+Structure
+	Id 419
+	Type 27
+	Position 8193 32.61367 1719
+Structure
+	Id 420
+	Type 27
+	Position 8193 32.495506 1721
+Structure
+	Id 422
+	Type 27
+	Position 8189 32.175194 1719
+Structure
+	Id 423
+	Type 27
+	Position 8187 31.873438 1721
+Structure
+	Id 424
+	Type 27
+	Position 8187 31.785547 1723
+Structure
+	Id 425
+	Type 27
+	Position 8187 31.96084 1719
+Structure
+	Id 426
+	Type 27
+	Position 8185 31.72207 1721
+Structure
+	Id 427
+	Type 27
+	Position 8185 31.81338 1719
+Structure
+	Id 428
+	Type 27
+	Position 8183 31.670313 1719
+Structure
+	Id 429
+	Type 27
+	Position 8195 32.71035 1721
+Structure
+	Id 430
+	Type 27
+	Position 8197 32.925194 1721
+Structure
+	Id 431
+	Type 27
+	Position 8199 33.13662 1721
+Structure
+	Id 432
+	Type 27
+	Position 8201 33.34951 1721
+Structure
+	Id 433
+	Type 27
+	Position 8203 33.599022 1721
+Structure
+	Id 434
+	Type 16
+	Position 8191 30.57666 1717
+Structure
+	Id 435
+	Type 16
+	Position 8191 30.540527 1719
+Structure
+	Id 436
+	Type 27
+	Position 8173 34.168358 1659
+Structure
+	Id 437
+	Type 27
+	Position 8175 34.265038 1659
+Structure
+	Id 438
+	Type 27
+	Position 8177 34.30117 1661
+Structure
+	Id 439
+	Type 27
+	Position 8177 34.236717 1663
+Structure
+	Id 440
+	Type 27
+	Position 8177 34.260643 1665
+Structure
+	Id 441
+	Type 27
+	Position 8177 34.365623 1659
+Structure
+	Id 442
+	Type 27
+	Position 8175 34.243065 1657
+Structure
+	Id 443
+	Type 27
+	Position 8177 34.342674 1657
+Structure
+	Id 444
+	Type 27
+	Position 8179 34.459373 1661
+Structure
+	Id 445
+	Type 27
+	Position 8179 34.402245 1663
+Structure
+	Id 446
+	Type 27
+	Position 8179 34.412987 1665
+Structure
+	Id 447
+	Type 27
+	Position 8179 34.451073 1667
+Structure
+	Id 448
+	Type 27
+	Position 8179 34.575096 1669
+Structure
+	Id 449
+	Type 27
+	Position 8179 35.056053 1671
+Structure
+	Id 450
+	Type 27
+	Position 8181 34.564354 1665
+Structure
+	Id 451
+	Type 27
+	Position 8181 36.910545 1625
+Structure
+	Id 452
+	Type 27
+	Position 8183 37.072166 1625
+Structure
+	Id 455
+	Type 27
+	Position 8187 37.725975 1623
+Structure
+	Id 456
+	Type 27
+	Position 8189 37.82705 1623
+Structure
+	Id 457
+	Type 27
+	Position 8189 38.120018 1621
+Structure
+	Id 458
+	Type 27
+	Position 8191 38.54873 1619
+Structure
+	Id 459
+	Type 27
+	Position 8191 38.23867 1621
+Structure
+	Id 460
+	Type 27
+	Position 8193 38.63125 1619
+Structure
+	Id 461
+	Type 27
+	Position 8193 38.28945 1621
+Structure
+	Id 462
+	Type 27
+	Position 8195 38.674706 1619
+Structure
+	Id 463
+	Type 27
+	Position 8197 39.06289 1617
+Structure
+	Id 464
+	Type 27
+	Position 8197 38.70791 1619
+Structure
+	Id 465
+	Type 27
+	Position 8199 38.939354 1617
+Structure
+	Id 466
+	Type 27
+	Position 8199 38.583885 1619
+Structure
+	Id 467
+	Type 27
+	Position 8201 38.81533 1617
+Structure
+	Id 468
+	Type 27
+	Position 8201 38.458885 1619
+Structure
+	Id 470
+	Type 27
+	Position 8205 38.26406 1617
+Structure
+	Id 471
+	Type 27
+	Position 8205 37.933495 1619
+Structure
+	Id 472
+	Type 27
+	Position 8207 37.96035 1617
+Structure
+	Id 473
+	Type 27
+	Position 8207 37.64541 1619
+Structure
+	Id 474
+	Type 27
+	Position 8209 37.973534 1617
+Structure
+	Id 475
+	Type 27
+	Position 8209 37.63662 1619
+Structure
+	Id 476
+	Type 27
+	Position 8211 37.632225 1619
+Structure
+	Id 479
+	Type 27
+	Position 8215 37.51748 1621
+Structure
+	Id 480
+	Type 27
+	Position 8217 37.65664 1621
+Structure
+	Id 481
+	Type 27
+	Position 8219 37.665916 1621
+Structure
+	Id 482
+	Type 27
+	Position 8213 37.36123 1621
+Structure
+	Id 483
+	Type 27
+	Position 8211 37.28115 1621
+Structure
+	Id 484
+	Type 27
+	Position 8219 37.22988 1623
+Structure
+	Id 485
+	Type 27
+	Position 8221 37.23916 1623
+Structure
+	Id 486
+	Type 27
+	Position 8221 36.858788 1625
+Structure
+	Id 487
+	Type 27
+	Position 8223 36.85781 1625
+Structure
+	Id 488
+	Type 27
+	Position 8223 36.5375 1627
+Structure
+	Id 489
+	Type 27
+	Position 8225 36.561424 1627
+Structure
+	Id 490
+	Type 27
+	Position 8225 36.37832 1629
+Structure
+	Id 491
+	Type 27
+	Position 8227 36.44863 1629
+Structure
+	Id 492
+	Type 27
+	Position 8227 36.697166 1631
+Structure
+	Id 493
+	Type 27
+	Position 8229 36.776268 1631
+Structure
+	Id 494
+	Type 27
+	Position 8229 37.04043 1633
+Structure
+	Id 495
+	Type 27
+	Position 8229 37.448143 1635
+Structure
+	Id 496
+	Type 27
+	Position 8231 37.5707 1635
+Structure
+	Id 497
+	Type 27
+	Position 8231 38.46865 1639
+Structure
+	Id 498
+	Type 27
+	Position 8231 38.07705 1637
+Structure
+	Id 499
+	Type 27
+	Position 8231 38.3749 1641
+Structure
+	Id 502
+	Type 27
+	Position 8235 38.250877 1647
+Structure
+	Id 503
+	Type 27
+	Position 8235 37.921776 1649
+Structure
+	Id 504
+	Type 27
+	Position 8235 37.70986 1653
+Structure
+	Id 505
+	Type 27
+	Position 8235 37.817284 1651
+Structure
+	Id 506
+	Type 27
+	Position 8233 37.966698 1647
+Structure
+	Id 507
+	Type 27
+	Position 8233 37.675194 1649
+Structure
+	Id 508
+	Type 27
+	Position 8233 37.635643 1651
+Structure
+	Id 509
+	Type 27
+	Position 8233 37.595116 1653
+Structure
+	Id 510
+	Type 27
+	Position 8233 39.543846 1661
+Structure
+	Id 511
+	Type 27
+	Position 8233 38.887108 1659
+Structure
+	Id 512
+	Type 27
+	Position 8233 38.36953 1657
+Structure
+	Id 513
+	Type 27
+	Position 8233 37.905174 1655
+Structure
+	Id 514
+	Type 27
+	Position 8231 40.865135 1665
+Structure
+	Id 515
+	Type 27
+	Position 8231 40.439842 1663
+Structure
+	Id 516
+	Type 27
+	Position 8231 39.747948 1661
+Structure
+	Id 517
+	Type 27
+	Position 8229 41.26992 1667
+Structure
+	Id 518
+	Type 27
+	Position 8229 41.027245 1665
+Structure
+	Id 519
+	Type 27
+	Position 8229 40.640038 1663
+Structure
+	Id 520
+	Type 27
+	Position 8227 41.43496 1669
+Structure
+	Id 521
+	Type 27
+	Position 8227 41.373436 1667
+Structure
+	Id 522
+	Type 27
+	Position 8225 41.282127 1669
+Structure
+	Id 523
+	Type 27
+	Position 8223 41.120018 1669
+Structure
+	Id 524
+	Type 27
+	Position 8221 41.032127 1669
+Structure
+	Id 525
+	Type 27
+	Position 8221 40.65078 1671
+Structure
+	Id 527
+	Type 27
+	Position 8219 40.444725 1673
+Structure
+	Id 529
+	Type 27
+	Position 8217 40.243065 1675
+Structure
+	Id 530
+	Type 27
+	Position 8217 39.794334 1677
+Structure
+	Id 531
+	Type 27
+	Position 8215 39.776268 1677
+Structure
+	Id 532
+	Type 27
+	Position 8215 39.25576 1679
+Structure
+	Id 533
+	Type 27
+	Position 8213 39.17666 1679
+Structure
+	Id 534
+	Type 27
+	Position 8211 39.072655 1679
+Structure
+	Id 535
+	Type 27
+	Position 8211 38.313866 1681
+Structure
+	Id 536
+	Type 27
+	Position 8209 38.07412 1681
+Structure
+	Id 538
+	Type 27
+	Position 8209 36.928123 1685
+Structure
+	Id 539
+	Type 27
+	Position 8209 36.751854 1687
+Structure
+	Id 540
+	Type 27
+	Position 8211 37.222557 1687
+Structure
+	Id 541
+	Type 27
+	Position 8211 37.237694 1689
+Structure
+	Id 542
+	Type 27
+	Position 8211 37.63418 1691
+Structure
+	Id 543
+	Type 27
+	Position 8213 38.262596 1691
+Structure
+	Id 544
+	Type 27
+	Position 8213 38.733788 1693
+Structure
+	Id 545
+	Type 27
+	Position 8213 38.88955 1695
+Structure
+	Id 546
+	Type 27
+	Position 8215 39.609276 1695
+Structure
+	Id 547
+	Type 27
+	Position 8215 39.711815 1697
+Structure
+	Id 550
+	Type 27
+	Position 8215 38.77285 1705
+Structure
+	Id 551
+	Type 27
+	Position 8215 38.338768 1707
+Structure
+	Id 552
+	Type 27
+	Position 8215 37.95205 1709
+Structure
+	Id 553
+	Type 27
+	Position 8213 37.413475 1709
+Structure
+	Id 554
+	Type 27
+	Position 8213 37.009666 1711
+Structure
+	Id 555
+	Type 27
+	Position 8211 36.11367 1713
+Structure
+	Id 556
+	Type 27
+	Position 8211 36.48037 1711
+Structure
+	Id 557
+	Type 27
+	Position 8209 35.640038 1713
+Structure
+	Id 558
+	Type 27
+	Position 8209 35.324608 1715
+Structure
+	Id 559
+	Type 27
+	Position 8207 34.590233 1717
+Structure
+	Id 560
+	Type 27
+	Position 8207 34.8832 1715
+Structure
+	Id 561
+	Type 27
+	Position 8205 34.036034 1719
+Structure
+	Id 562
+	Type 27
+	Position 8205 34.260155 1717
+Structure
+	Id 563
+	Type 27
+	Position 8203 33.759666 1719
+Structure
+	Id 564
+	Type 12
+	Position 8211 39.549316 1667
+	Minerals 24.436583
+Structure
+	Id 565
+	Type 16
+	Position 8215 37.92334 1663
+Structure
+	Id 566
+	Type 16
+	Position 8215 38.39258 1665
+Structure
+	Id 567
+	Type 16
+	Position 8213 38.202637 1665
+Structure
+	Id 568
+	Type 16
+	Position 8213 38.72461 1667
+Structure
+	Id 569
+	Type 27
+	Position 8231 38.283104 1643
+Structure
+	Id 570
+	Type 27
+	Position 8231 38.019432 1645
+Structure
+	Id 571
+	Type 27
+	Position 8231 37.694237 1647
+Structure
+	Id 572
+	Type 27
+	Position 8231 37.43496 1649
+Structure
+	Id 573
+	Type 27
+	Position 8229 38.00869 1643
+Structure
+	Id 574
+	Type 16
+	Position 8227 35.88379 1643
+Structure
+	Id 575
+	Type 16
+	Position 8225 35.558105 1643
+Structure
+	Id 576
+	Type 16
+	Position 8223 35.22705 1643
+Structure
+	Id 577
+	Type 16
+	Position 8221 34.921387 1643
+Structure
+	Id 578
+	Type 27
+	Position 8231 39.03408 1659
+Structure
+	Id 579
+	Type 27
+	Position 8231 38.42861 1657
+Structure
+	Id 580
+	Type 27
+	Position 8231 37.88662 1655
+Structure
+	Id 581
+	Type 27
+	Position 8231 37.497948 1653
+Structure
+	Id 582
+	Type 27
+	Position 8231 37.46621 1651
+Structure
+	Id 583
+	Type 27
+	Position 8229 39.908104 1661
+Structure
+	Id 584
+	Type 27
+	Position 8227 41.197166 1665
+Structure
+	Id 585
+	Type 27
+	Position 8225 41.252342 1667
+Structure
+	Id 586
+	Type 27
+	Position 8219 40.739647 1671
+Structure
+	Id 587
+	Type 27
+	Position 8217 40.61953 1673
+Structure
+	Id 588
+	Type 27
+	Position 8215 40.30117 1675
+Structure
+	Id 589
+	Type 27
+	Position 8213 39.76699 1677
+Structure
+	Id 590
+	Type 27
+	Position 8209 38.902245 1679
+Structure
+	Id 594
+	Type 27
+	Position 8209 36.6791 1689
+Structure
+	Id 595
+	Type 27
+	Position 8211 38.03408 1693
+Structure
+	Id 596
+	Type 27
+	Position 8213 38.95986 1697
+Structure
+	Id 597
+	Type 27
+	Position 8213 38.99209 1699
+Structure
+	Id 598
+	Type 27
+	Position 8213 38.757713 1701
+Structure
+	Id 599
+	Type 27
+	Position 8213 38.520897 1703
+Structure
+	Id 600
+	Type 27
+	Position 8213 38.1625 1705
+Structure
+	Id 601
+	Type 27
+	Position 8213 37.77578 1707
+Structure
+	Id 602
+	Type 27
+	Position 8211 36.848045 1709
+Structure
+	Id 604
+	Type 16
+	Position 8203 34.52881 1683
+Structure
+	Id 605
+	Type 16
+	Position 8201 34.181152 1683
+Structure
+	Id 606
+	Type 16
+	Position 8199 33.848145 1683
+Structure
+	Id 607
+	Type 16
+	Position 8197 33.512207 1683
+Structure
+	Id 608
+	Type 16
+	Position 8195 33.1958 1683
+Structure
+	Id 612
+	Type 16
+	Position 8191 32.854004 1683
+Structure
+	Id 613
+	Type 16
+	Position 8193 32.910645 1683
+Structure
+	Id 614
+	Type 16
+	Position 8189 33.09424 1683
+Structure
+	Id 615
+	Type 16
+	Position 8217 38.600586 1665
+Structure
+	Id 616
+	Type 16
+	Position 8219 38.80078 1665
+Structure
+	Id 617
+	Type 16
+	Position 8219 39.04541 1667
+Structure
+	Id 618
+	Type 27
+	Position 8219 41.03457 1669
+Structure
+	Id 619
+	Type 16
+	Position 8201 32.09375 1711
+Structure
+	Id 620
+	Type 16
+	Position 8203 32.510254 1711
+Structure
+	Id 621
+	Type 16
+	Position 8205 33.019043 1711
+Structure
+	Id 622
+	Type 27
+	Position 8209 35.93447 1711
+Structure
+	Id 623
+	Type 16
+	Position 8207 33.52295 1711
+Structure
+	Id 624
+	Type 28
+	Position 8204 33.76172 1714
+Structure
+	Id 625
+	Type 27
+	Position 8183 31.745996 1717
+Structure
+	Id 626
+	Type 27
+	Position 8181 31.654688 1717
+Structure
+	Id 627
+	Type 27
+	Position 8181 31.73623 1715
+Structure
+	Id 628
+	Type 27
+	Position 8179 31.69375 1715
+Structure
+	Id 629
+	Type 27
+	Position 8179 31.761133 1713
+Structure
+	Id 630
+	Type 27
+	Position 8179 31.785547 1711
+Structure
+	Id 631
+	Type 27
+	Position 8177 31.725977 1711
+Structure
+	Id 632
+	Type 27
+	Position 8177 31.734278 1709
+Structure
+	Id 633
+	Type 27
+	Position 8177 31.73672 1707
+Structure
+	Id 634
+	Type 27
+	Position 8175 31.697657 1707
+Structure
+	Id 637
+	Type 27
+	Position 8175 32.129295 1699
+Structure
+	Id 638
+	Type 27
+	Position 8175 32.43496 1697
+Structure
+	Id 639
+	Type 27
+	Position 8175 32.78164 1695
+Structure
+	Id 640
+	Type 27
+	Position 8177 32.711327 1695
+Structure
+	Id 641
+	Type 27
+	Position 8177 33.079002 1693
+Structure
+	Id 642
+	Type 27
+	Position 8177 33.538475 1691
+Structure
+	Id 644
+	Type 27
+	Position 8177 34.581444 1687
+Structure
+	Id 646
+	Type 27
+	Position 8179 33.53994 1691
+Structure
+	Id 647
+	Type 27
+	Position 8179 33.08828 1693
+Structure
+	Id 648
+	Type 27
+	Position 8179 32.737206 1695
+Structure
+	Id 649
+	Type 27
+	Position 8179 32.453026 1697
+Structure
+	Id 650
+	Type 27
+	Position 8177 32.402245 1697
+Structure
+	Id 651
+	Type 27
+	Position 8177 32.125877 1699
+Structure
+	Id 652
+	Type 27
+	Position 8177 31.95791 1701
+Structure
+	Id 653
+	Type 27
+	Position 8177 31.788477 1703
+Structure
+	Id 654
+	Type 27
+	Position 8177 31.737696 1705
+Structure
+	Id 655
+	Type 27
+	Position 8179 31.822168 1707
+Structure
+	Id 656
+	Type 27
+	Position 8179 31.809961 1709
+Structure
+	Id 657
+	Type 27
+	Position 8181 31.845118 1711
+Structure
+	Id 658
+	Type 27
+	Position 8181 31.805079 1713
+Structure
+	Id 659
+	Type 27
+	Position 8183 31.816309 1715
+Structure
+	Id 660
+	Type 27
+	Position 8185 31.874903 1717
+Structure
+	Id 661
+	Type 27
+	Position 8181 33.095604 1693
+Structure
+	Id 662
+	Type 28
+	Position 8182 32.253418 1696
+Structure
+	Id 663
+	Type 12
+	Position 8181 32.96826 1691
+	Minerals 30
+Structure
+	Id 664
+	Type 28
+	Position 8190 32.03418 1714
+Structure
+	Id 665
+	Type 28
+	Position 8204 35.157715 1686
+Structure
+	Id 666
+	Type 28
+	Position 8228 36.82617 1646
+Structure
+	Id 667
+	Type 28
+	Position 8222 40.563965 1666
+Structure
+	Id 668
+	Type 16
+	Position 8203 36.733887 1617
+Structure
+	Id 669
+	Type 28
+	Position 8202 40.343456 1626
+	Ship true
+	Local 2 0 22
+Structure
+	Id 670
+	Type 33
+	Position 8199 39.093456 1623
+	Ship true
+	Local 5 0 25
+	Munitions 49.453125
+Structure
+	Id 671
+	Type 33
+	Position 8201 39.093456 1623
+	Ship true
+	Local 3 0 25
+	Munitions 49.373047
+Structure
+	Id 672
+	Type 24
+	Position 8203 37.999023 1615
+Structure
+	Id 673
+	Type 34
+	Position 8233 38.118652 1641
+	Charge 200
+Structure
+	Id 674
+	Type 35
+	Position 8233 37.65869 1645
+	Charge 200
+Structure
+	Id 675
+	Type 34
+	Position 8215 37.296875 1619
+	Charge 200
+Structure
+	Id 676
+	Type 35
+	Position 8213 37.12451 1619
+	Charge 200
+Structure
+	Id 677
+	Type 34
+	Position 8183 36.725098 1623
+	Charge 200
+Structure
+	Id 678
+	Type 35
+	Position 8185 36.9375 1623
+	Charge 200
+Structure
+	Id 679
+	Type 27
+	Position 8185 37.27529 1625
+Structure
+	Id 680
+	Type 27
+	Position 8183 36.8749 1627
+Structure
+	Id 681
+	Type 27
+	Position 8181 36.473045 1629
+Structure
+	Id 682
+	Type 27
+	Position 8179 35.97158 1631
+Structure
+	Id 683
+	Type 27
+	Position 8177 35.495506 1633
+Structure
+	Id 684
+	Type 27
+	Position 8177 35.32168 1635
+Structure
+	Id 685
+	Type 27
+	Position 8177 35.21035 1637
+Structure
+	Id 686
+	Type 34
+	Position 8171 33.185547 1651
+	Charge 200
+Structure
+	Id 687
+	Type 35
+	Position 8171 33.359375 1653
+	Charge 199.99371
+Structure
+	Id 688
+	Type 34
+	Position 8173 35.547363 1679
+	Charge 200
+Structure
+	Id 689
+	Type 35
+	Position 8173 35.29883 1677
+	Charge 200
+Structure
+	Id 690
+	Type 34
+	Position 8175 31.341309 1703
+	Charge 200
+Structure
+	Id 691
+	Type 35
+	Position 8175 31.333008 1705
+	Charge 200
+Structure
+	Id 692
+	Type 34
+	Position 8197 32.26709 1723
+	Charge 200
+Structure
+	Id 693
+	Type 35
+	Position 8195 32.071777 1723
+	Charge 200
+Structure
+	Id 694
+	Type 34
+	Position 8215 38.652832 1701
+	Charge 200
+Structure
+	Id 695
+	Type 35
+	Position 8215 38.911133 1699
+	Charge 200
+Structure
+	Id 696
+	Type 34
+	Position 8221 39.70752 1673
+	Charge 200
+Structure
+	Id 697
+	Type 35
+	Position 8219 39.60254 1675
+	Charge 200
+Structure
+	Id 698
+	Type 5
+	Position 8188 33.53418 1680
+Structure
+	Id 699
+	Type 5
+	Position 8188 34.39502 1676
+Structure
+	Id 700
+	Type 5
+	Position 8188 33.635254 1672
+Structure
+	Id 701
+	Type 5
+	Position 8188 33.25049 1668
+Structure
+	Id 702
+	Type 5
+	Position 8192 33.768555 1668
+Structure
+	Id 703
+	Type 5
+	Position 8192 34.09961 1672
+Structure
+	Id 704
+	Type 5
+	Position 8196 34.966797 1672
+Structure
+	Id 705
+	Type 5
+	Position 8192 34.47754 1676
+Structure
+	Id 706
+	Type 5
+	Position 8192 33.35498 1680
+Structure
+	Id 707
+	Type 5
+	Position 8196 33.64795 1680
+Structure
+	Id 708
+	Type 5
+	Position 8198 35.11133 1676
+Structure
+	Id 709
+	Type 5
+	Position 8200 34.287598 1680
+Structure
+	Id 710
+	Type 5
+	Position 8204 35.010254 1680
+Structure
+	Id 711
+	Type 5
+	Position 8200 33.009766 1686
+Structure
+	Id 712
+	Type 5
+	Position 8196 32.441406 1686
+Structure
+	Id 713
+	Type 5
+	Position 8192 32.177734 1686
+Structure
+	Id 714
+	Type 5
+	Position 8188 31.69043 1690
+Structure
+	Id 715
+	Type 5
+	Position 8192 31.740234 1690
+Structure
+	Id 716
+	Type 5
+	Position 8196 32.087402 1690
+Structure
+	Id 717
+	Type 5
+	Position 8200 32.731445 1690
+Structure
+	Id 718
+	Type 5
+	Position 8204 33.524414 1690
+Structure
+	Id 720
+	Type 16
+	Position 8183 34.06006 1633
+Structure
+	Id 721
+	Type 16
+	Position 8183 34.430176 1631
+Structure
+	Id 722
+	Type 16
+	Position 8185 34.550293 1631
+Structure
+	Id 723
+	Type 16
+	Position 8187 34.664062 1631
+Structure
+	Id 724
+	Type 16
+	Position 8189 34.529785 1631
+Structure
+	Id 725
+	Type 32
+	Position 8190 34.65869 1634
+	Charge 30
+	Minerals 38.99987
+	Munitions 50
+Structure
+	Id 726
+	Type 32
+	Position 8192 35.28662 1630
+	Charge 30
+	Minerals 37.999863
+	Munitions 50
+Structure
+	Id 727
+	Type 27
+	Position 8183 36.64492 1629
+Structure
+	Id 728
+	Type 5
+	Position 8208 34.586914 1694
+Structure
+	Id 729
+	Type 5
+	Position 8204 33.49707 1694
+Structure
+	Id 730
+	Type 5
+	Position 8200 32.65576 1694
+Structure
+	Id 731
+	Type 5
+	Position 8196 31.95166 1694
+Structure
+	Id 732
+	Type 16
+	Position 8189 31.174805 1695
+Structure
+	Id 733
+	Type 16
+	Position 8189 31.089355 1697
+Structure
+	Id 734
+	Type 5
+	Position 8192 31.464844 1694
+Structure
+	Id 735
+	Type 16
+	Position 8189 31.004883 1699
+Structure
+	Id 736
+	Type 16
+	Position 8189 30.939453 1701
+Structure
+	Id 737
+	Type 5
+	Position 8192 31.338379 1698
+Structure
+	Id 738
+	Type 5
+	Position 8196 31.878906 1698
+Structure
+	Id 739
+	Type 5
+	Position 8200 32.54004 1698
+Structure
+	Id 740
+	Type 27
+	Position 8229 37.92373 1637
+Structure
+	Id 741
+	Type 27
+	Position 8229 38.144432 1641
+Structure
+	Id 742
+	Type 27
+	Position 8229 38.285057 1639
+Structure
+	Id 743
+	Type 27
+	Position 8227 36.94668 1633
+Structure
+	Id 744
+	Type 27
+	Position 8227 37.327538 1635
+Structure
+	Id 745
+	Type 11
+	Position 8202 41.343456 1642
+	Ship true
+	Local 2 0 6
+	Fuel 136.02872
+	Minerals 869.40936
+Structure
+	Id 746
+	Type 11
+	Position 8198 41.343456 1642
+	Ship true
+	Local 6 0 6
+	Fuel 28.748322
+	Minerals 783.1359
+Structure
+	Id 747
+	Type 33
+	Position 8227 36.32617 1641
+	Munitions 49.3125
+Structure
+	Id 748
+	Type 33
+	Position 8219 38.550293 1663
+	Munitions 49.36328
+Structure
+	Id 749
+	Type 33
+	Position 8207 33.4834 1713
+	Munitions 49.868164
+Structure
+	Id 750
+	Type 33
+	Position 8189 30.751953 1717
+	Munitions 49.91992
+Structure
+	Id 751
+	Type 33
+	Position 8195 31.324219 1719
+	Munitions 49.98242
+Structure
+	Id 752
+	Type 33
+	Position 8185 31.942383 1691
+	Munitions 49.226562
+Structure
+	Id 753
+	Type 33
+	Position 8185 32.288574 1689
+	Munitions 49.25
+Structure
+	Id 754
+	Type 33
+	Position 8181 33.15576 1667
+	Munitions 49.98242
+Structure
+	Id 755
+	Type 33
+	Position 8181 34.551758 1631
+	Munitions 49.527344
+Structure
+	Id 756
+	Type 33
+	Position 8181 33.928223 1637
+	Munitions 49.91992
+Structure
+	Id 757
+	Type 27
+	Position 8217 37.223045 1623
+Structure
+	Id 758
+	Type 27
+	Position 8219 36.83242 1625
+Structure
+	Id 759
+	Type 27
+	Position 8221 36.4999 1627
+Structure
+	Id 760
+	Type 27
+	Position 8223 36.307518 1629
+Structure
+	Id 761
+	Type 27
+	Position 8225 36.55117 1631
+Structure
+	Id 762
+	Type 27
+	Position 8215 37.1166 1623
+Structure
+	Id 763
+	Type 27
+	Position 8213 36.996483 1623
+Structure
+	Id 764
+	Type 27
+	Position 8211 36.930565 1623
+Structure
+	Id 765
+	Type 27
+	Position 8195 38.285545 1621
+Structure
+	Id 766
+	Type 12
+	Position 8181 35.249023 1633
+	Minerals 29.751133
+Structure
+	Id 767
+	Type 3
+	Position 8190 34.74951 1658
+	Charge 1374.5238
+Structure
+	Id 768
+	Type 5
+	Position 8186 30.93457 1696
+Structure
+	Id 769
+	Type 5
+	Position 8186 30.67334 1700
+Structure
+	Id 770
+	Type 5
+	Position 8206 33.958496 1698
+Structure
+	Id 771
+	Type 5
+	Position 8210 35.321777 1698
+Structure
+	Id 772
+	Type 5
+	Position 8200 32.239258 1702
+Structure
+	Id 773
+	Type 5
+	Position 8204 32.9292 1702
+Structure
+	Id 774
+	Type 5
+	Position 8208 34.200684 1702
+Structure
+	Id 775
+	Type 5
+	Position 8196 31.43457 1706
+Structure
+	Id 776
+	Type 5
+	Position 8200 31.96045 1706
+Structure
+	Id 777
+	Type 5
+	Position 8204 32.665527 1706
+Structure
+	Id 778
+	Type 5
+	Position 8208 37.253418 1676
+Structure
+	Id 779
+	Type 5
+	Position 8210 38.657227 1672
+Structure
+	Id 780
+	Type 5
+	Position 8214 38.925293 1672
+Structure
+	Id 781
+	Type 5
+	Position 8214 34.467773 1626
+Structure
+	Id 782
+	Type 5
+	Position 8214 34.04785 1630
+Structure
+	Id 783
+	Type 5
+	Position 8216 34.225098 1638
+Structure
+	Id 784
+	Type 5
+	Position 8216 34.069824 1634
+Structure
+	Id 785
+	Type 5
+	Position 8220 34.682617 1638
+Structure
+	Id 786
+	Type 5
+	Position 8220 34.41211 1634
+Structure
+	Id 787
+	Type 5
+	Position 8224 35.2417 1638
+Structure
+	Id 788
+	Type 5
+	Position 8224 34.75879 1634
+Structure
+	Id 789
+	Type 20
+	Position 8206 39.843456 1654
+	Ship true
+	Local -2 0 -6
+Structure
+	Id 790
+	Type 20
+	Position 8202 39.843456 1654
+	Ship true
+	Local 2 0 -6
+Structure
+	Id 792
+	Type 20
+	Position 8198 39.843456 1658
+	Ship true
+	Local 6 0 -10
+Structure
+	Id 793
+	Type 20
+	Position 8202 39.843456 1658
+	Ship true
+	Local 2 0 -10
+Structure
+	Id 794
+	Type 20
+	Position 8206 39.843456 1658
+	Ship true
+	Local -2 0 -10
+Structure
+	Id 795
+	Type 20
+	Position 8208 39.843456 1664
+	Ship true
+	Local -4 0 -16
+Structure
+	Id 796
+	Type 20
+	Position 8204 39.843456 1664
+	Ship true
+	Local 0 0 -16
+Structure
+	Id 797
+	Type 20
+	Position 8200 39.843456 1664
+	Ship true
+	Local 4 0 -16
+Structure
+	Id 798
+	Type 20
+	Position 8206 39.843456 1668
+	Ship true
+	Local -2 0 -20
+Structure
+	Id 799
+	Type 20
+	Position 8202 39.843456 1668
+	Ship true
+	Local 2 0 -20
+Structure
+	Id 800
+	Type 20
+	Position 8196 39.843456 1648
+	Ship true
+	Local 8 0 0
+Structure
+	Id 801
+	Type 20
+	Position 8196 39.843456 1652
+	Ship true
+	Local 8 0 -4
+Structure
+	Id 802
+	Type 27
+	Position 8179 34.54287 1687
+Structure
+	Id 803
+	Type 27
+	Position 8177 35.42324 1673
+Structure
+	Id 804
+	Type 27
+	Position 8179 35.53945 1673
+Structure
+	Id 805
+	Type 9
+	Position 8171 35.134766 1681
+Structure
+	Id 806
+	Type 9
+	Position 8171 33.938477 1671
+Structure
+	Id 807
+	Type 31
+	Position 8171 35.116806 1641
+	Facing -0.99958193 0 -0.00041133165
+	Munitions 10
+Structure
+	Id 808
+	Type 31
+	Position 8171 35.036377 1657
+	Facing -0.999706 0 -0.00029468536
+	Munitions 10
+Structure
+	Id 809
+	Type 31
+	Position 8177 37.09899 1629
+	Facing -0.70654565 0 -0.7073401
+	Munitions 10
+Structure
+	Id 810
+	Type 31
+	Position 8189 39.03359 1621
+	Facing 1.0718567e-06 0 -1
+	Munitions 10
+Structure
+	Id 811
+	Type 31
+	Position 8219 38.613476 1621
+	Facing -2.753577e-07 0 -1
+	Munitions 10
+Structure
+	Id 812
+	Type 31
+	Position 8231 38.62336 1635
+	Facing 0.7067837 0 -0.7072389
+	Munitions 10
+Structure
+	Id 813
+	Type 31
+	Position 8235 38.71385 1653
+	Facing 0.99947774 0 -0.00052040815
+	Munitions 10
+Structure
+	Id 814
+	Type 31
+	Position 8227 42.430183 1669
+	Facing 0.70708746 0 0.7070615
+	Munitions 10
+Structure
+	Id 815
+	Type 31
+	Position 8211 39.430374 1681
+	Facing 0.99992657 0 -7.200241e-05
+	Munitions 10
+Structure
+	Id 816
+	Type 31
+	Position 8215 40.38689 1697
+	Facing 0.99999994 0 -5.9604645e-08
+	Munitions 10
+Structure
+	Id 817
+	Type 31
+	Position 8207 35.602386 1717
+	Facing 0.7069136 0 0.7066344
+	Munitions 10
+Structure
+	Id 818
+	Type 31
+	Position 8187 32.774574 1723
+	Facing -7.887324e-07 0 0.9969604
+	Munitions 10
+Structure
+	Id 819
+	Type 31
+	Position 8175 32.690865 1707
+	Facing -0.70637095 0 0.705322
+	Munitions 10
+Structure
+	Id 820
+	Type 31
+	Position 8175 33.720596 1695
+	Facing -0.9995204 0 -0.00048094988
+	Munitions 10
+Structure
+	Id 821
+	Type 31
+	Position 8175 36.98578 1681
+	Facing -0.99976987 0 -0.00023281574
+	Munitions 10
+Structure
+	Id 822
+	Type 16
+	Position 8181 32.108887 1689
+Structure
+	Id 823
+	Type 16
+	Position 8179 32.128418 1689
+Structure
+	Id 824
+	Type 16
+	Position 8177 32.140625 1689
+Structure
+	Id 825
+	Type 24
+	Position 8175 33.222656 1689
+Structure
+	Id 826
+	Type 24
+	Position 8211 36.60254 1683
+Structure
+	Id 827
+	Type 16
+	Position 8205 34.822266 1683
+Structure
+	Id 828
+	Type 16
+	Position 8207 35.152832 1683
+Structure
+	Id 829
+	Type 16
+	Position 8209 35.45703 1683
+Structure
+	Id 830
+	Type 20
+	Position 8216 39.802246 1668
+Structure
+	Id 831
+	Type 20
+	Position 8224 35.86963 1646
+Structure
+	Id 832
+	Type 20
+	Position 8228 36.316406 1650
+Structure
+	Id 833
+	Type 20
+	Position 8224 35.86621 1650
+Structure
+	Id 834
+	Type 16
+	Position 8219 34.976074 1651
+Structure
+	Id 835
+	Type 16
+	Position 8219 35.418457 1653
+Structure
+	Id 836
+	Type 16
+	Position 8221 35.447754 1653
+Structure
+	Id 837
+	Type 16
+	Position 8223 35.46924 1653
+Structure
+	Id 838
+	Type 16
+	Position 8225 35.484375 1653
+Structure
+	Id 839
+	Type 16
+	Position 8227 35.501953 1653
+Structure
+	Id 840
+	Type 20
+	Position 8228 36.958496 1656
+Structure
+	Id 841
+	Type 20
+	Position 8224 36.959473 1656
+Structure
+	Id 842
+	Type 20
+	Position 8216 36.21924 1654
+Structure
+	Id 843
+	Type 20
+	Position 8216 37.097656 1658
+Structure
+	Id 844
+	Type 16
+	Position 8219 35.993164 1655
+Structure
+	Id 845
+	Type 16
+	Position 8219 36.638184 1657
+Structure
+	Id 846
+	Type 16
+	Position 8219 37.271973 1659
+Structure
+	Id 847
+	Type 16
+	Position 8219 37.856445 1661
+Structure
+	Id 848
+	Type 16
+	Position 8217 37.635742 1661
+Structure
+	Id 849
+	Type 16
+	Position 8215 37.351562 1661
+Structure
+	Id 850
+	Type 20
+	Position 8188 35.95752 1628
+Structure
+	Id 851
+	Type 31
+	Position 8201 39.443455 1621
+	Ship true
+	Local 3 0 27
+	ShipTurn 4
+	Facing -3.3116132e-07 0 -1
+	Munitions 10
+Structure
+	Id 852
+	Type 33
+	Position 8177 33.234375 1641
+	Munitions 50
+Structure
+	Id 853
+	Type 0
+	Position 8197 32.444336 1703
+	Charge 50
+	OutputFrac 1
+Structure
+	Id 854
+	Type 11
+	Position 8226 39.77881 1660
+	Fuel 66.09375
+	Minerals 857.9359
+Structure
+	Id 855
+	Type 16
+	Position 8221 37.461426 1659
+Structure
+	Id 856
+	Type 16
+	Position 8223 37.537598 1659
+Structure
+	Id 857
+	Type 33
+	Position 8221 36.208496 1655
+	Munitions 50
+Structure
+	Id 858
+	Type 33
+	Position 8221 36.878418 1657
+	Munitions 49.726562
+Structure
+	Id 859
+	Type 11
+	Position 8190 33.277344 1706
+	Fuel 81.570045
+	Minerals 735.75696
+Structure
+	Id 860
+	Type 16
+	Position 8189 30.874512 1703
+Structure
+	Id 861
+	Type 16
+	Position 8187 30.627441 1703
+Structure
+	Id 862
+	Type 16
+	Position 8185 30.447754 1703
+Structure
+	Id 863
+	Type 16
+	Position 8183 30.270996 1703
+Structure
+	Id 864
+	Type 16
+	Position 8183 30.208984 1705
+Structure
+	Id 865
+	Type 16
+	Position 8183 30.173828 1707
+Structure
+	Id 866
+	Type 16
+	Position 8183 30.135254 1709
+Structure
+	Id 867
+	Type 16
+	Position 8183 30.083496 1711
+Structure
+	Id 868
+	Type 29
+	Position 8186 31.975098 1706
+Structure
+	Id 869
+	Type 28
+	Position 8186 31.865234 1710
+Structure
+	Id 870
+	Type 5
+	Position 8180 30.18457 1704
+Structure
+	Id 871
+	Type 27
+	Position 8201 33.504784 1719
+Structure
+	Id 872
+	Type 27
+	Position 8199 33.28408 1719
+Structure
+	Id 873
+	Type 27
+	Position 8197 33.06582 1719
+Structure
+	Id 874
+	Type 27
+	Position 8203 33.936913 1717
+Structure
+	Id 875
+	Type 31
+	Position 8215 38.911484 1709
+	Facing 0.7068241 0 0.7064147
+	Munitions 10
+Structure
+	Id 876
+	Type 7
+	Position 8138 32.442383 1664
+	Charge 150
+	OutputFrac 1
+Structure
+	Id 877
+	Type 16
+	Position 8173 32.38379 1689
+Structure
+	Id 880
+	Type 16
+	Position 8173 32.93799 1687
+Structure
+	Id 881
+	Type 16
+	Position 8171 33.02295 1687
+Structure
+	Id 882
+	Type 16
+	Position 8169 33.07617 1687
+Structure
+	Id 883
+	Type 16
+	Position 8167 33.129395 1687
+Structure
+	Id 884
+	Type 16
+	Position 8165 33.104492 1687
+Structure
+	Id 885
+	Type 16
+	Position 8163 33.075684 1687
+Structure
+	Id 886
+	Type 16
+	Position 8161 32.975098 1687
+Structure
+	Id 890
+	Type 25
+	Position 8163 32.58008 1667
+	Charge 36.695065
+Structure
+	Id 891
+	Type 3
+	Position 8164 32.74756 1664
+	Charge 1374.5142
+Structure
+	Id 892
+	Type 9
+	Position 8173 32.875977 1691
+Structure
+	Id 893
+	Type 9
+	Position 8171 32.984375 1691
+Structure
+	Id 894
+	Type 9
+	Position 8169 33.098633 1691
+Structure
+	Id 895
+	Type 9
+	Position 8167 33.214844 1691
+Structure
+	Id 896
+	Type 9
+	Position 8165 32.84961 1693
+Structure
+	Id 897
+	Type 9
+	Position 8163 32.589355 1695
+Structure
+	Id 898
+	Type 9
+	Position 8161 32.393066 1697
+Structure
+	Id 899
+	Type 9
+	Position 8159 32.478516 1697
+Structure
+	Id 900
+	Type 9
+	Position 8157 32.231445 1699
+Structure
+	Id 901
+	Type 9
+	Position 8155 32.291504 1699
+Structure
+	Id 902
+	Type 9
+	Position 8153 32.06543 1701
+Structure
+	Id 903
+	Type 9
+	Position 8151 32.058594 1701
+Structure
+	Id 904
+	Type 9
+	Position 8149 31.965332 1701
+Structure
+	Id 905
+	Type 9
+	Position 8147 31.710938 1703
+Structure
+	Id 906
+	Type 9
+	Position 8145 31.521973 1703
+Structure
+	Id 907
+	Type 9
+	Position 8143 31.333008 1703
+Structure
+	Id 908
+	Type 9
+	Position 8141 31.117676 1703
+Structure
+	Id 911
+	Type 9
+	Position 8135 30.512207 1703
+Structure
+	Id 912
+	Type 9
+	Position 8133 30.330566 1703
+Structure
+	Id 913
+	Type 9
+	Position 8131 30.211914 1703
+Structure
+	Id 914
+	Type 9
+	Position 8129 30.091797 1703
+Structure
+	Id 915
+	Type 9
+	Position 8127 30.039062 1701
+Structure
+	Id 916
+	Type 9
+	Position 8125 30.015625 1701
+Structure
+	Id 917
+	Type 9
+	Position 8123 30.08496 1699
+Structure
+	Id 919
+	Type 9
+	Position 8119 30.151367 1699
+Structure
+	Id 920
+	Type 9
+	Position 8117 30.28955 1697
+Structure
+	Id 921
+	Type 9
+	Position 8115 30.370605 1697
+Structure
+	Id 922
+	Type 9
+	Position 8113 30.483887 1695
+Structure
+	Id 923
+	Type 9
+	Position 8111 30.56543 1693
+Structure
+	Id 924
+	Type 9
+	Position 8109 30.736816 1691
+Structure
+	Id 925
+	Type 9
+	Position 8107 31 1689
+Structure
+	Id 926
+	Type 9
+	Position 8105 31.256836 1687
+Structure
+	Id 927
+	Type 9
+	Position 8103 31.447266 1685
+Structure
+	Id 928
+	Type 9
+	Position 8103 31.581543 1683
+Structure
+	Id 929
+	Type 9
+	Position 8103 31.614258 1681
+Structure
+	Id 930
+	Type 9
+	Position 8101 31.631836 1679
+Structure
+	Id 931
+	Type 9
+	Position 8101 31.654785 1677
+Structure
+	Id 932
+	Type 9
+	Position 8101 31.694824 1675
+Structure
+	Id 933
+	Type 9
+	Position 8099 31.736816 1673
+Structure
+	Id 934
+	Type 9
+	Position 8097 31.85498 1671
+Structure
+	Id 935
+	Type 9
+	Position 8097 32.01465 1669
+Structure
+	Id 936
+	Type 9
+	Position 8097 32.15332 1667
+Structure
+	Id 937
+	Type 9
+	Position 8097 32.286133 1665
+Structure
+	Id 938
+	Type 9
+	Position 8097 32.419434 1663
+Structure
+	Id 939
+	Type 9
+	Position 8097 32.62744 1661
+Structure
+	Id 940
+	Type 9
+	Position 8097 32.851562 1659
+Structure
+	Id 941
+	Type 9
+	Position 8097 33.023926 1657
+Structure
+	Id 942
+	Type 9
+	Position 8099 32.972656 1655
+Structure
+	Id 943
+	Type 9
+	Position 8099 33.067383 1653
+Structure
+	Id 944
+	Type 9
+	Position 8099 33.095215 1651
+Structure
+	Id 945
+	Type 9
+	Position 8099 33.106934 1649
+Structure
+	Id 946
+	Type 9
+	Position 8101 33.080566 1647
+Structure
+	Id 947
+	Type 9
+	Position 8103 33.05957 1645
+Structure
+	Id 948
+	Type 9
+	Position 8103 33.097656 1643
+Structure
+	Id 949
+	Type 9
+	Position 8105 33.118164 1643
+Structure
+	Id 950
+	Type 9
+	Position 8105 33.176758 1641
+Structure
+	Id 951
+	Type 9
+	Position 8107 33.17334 1639
+Structure
+	Id 952
+	Type 9
+	Position 8107 33.209473 1637
+Structure
+	Id 953
+	Type 9
+	Position 8109 32.998535 1635
+Structure
+	Id 954
+	Type 9
+	Position 8111 32.82959 1633
+Structure
+	Id 955
+	Type 9
+	Position 8113 32.726562 1633
+Structure
+	Id 956
+	Type 9
+	Position 8115 32.855957 1631
+Structure
+	Id 957
+	Type 9
+	Position 8117 32.76758 1631
+Structure
+	Id 958
+	Type 9
+	Position 8119 32.88916 1629
+Structure
+	Id 959
+	Type 9
+	Position 8121 32.961914 1627
+Structure
+	Id 960
+	Type 9
+	Position 8123 32.884277 1627
+Structure
+	Id 962
+	Type 9
+	Position 8127 32.850098 1625
+Structure
+	Id 963
+	Type 9
+	Position 8129 32.86035 1625
+Structure
+	Id 964
+	Type 9
+	Position 8131 32.881348 1625
+Structure
+	Id 965
+	Type 9
+	Position 8133 32.916992 1625
+Structure
+	Id 966
+	Type 9
+	Position 8135 33.16162 1625
+Structure
+	Id 967
+	Type 9
+	Position 8137 33.487793 1623
+Structure
+	Id 968
+	Type 9
+	Position 8139 33.78955 1623
+Structure
+	Id 969
+	Type 9
+	Position 8141 34.118164 1623
+Structure
+	Id 970
+	Type 9
+	Position 8143 34.4209 1623
+Structure
+	Id 971
+	Type 9
+	Position 8145 34.28076 1625
+Structure
+	Id 972
+	Type 9
+	Position 8147 34.148926 1625
+Structure
+	Id 973
+	Type 9
+	Position 8149 33.7583 1627
+Structure
+	Id 974
+	Type 9
+	Position 8151 33.537598 1627
+Structure
+	Id 975
+	Type 9
+	Position 8153 33.538086 1627
+Structure
+	Id 976
+	Type 9
+	Position 8155 33.756348 1629
+Structure
+	Id 977
+	Type 9
+	Position 8157 34.03076 1629
+Structure
+	Id 978
+	Type 9
+	Position 8159 34.399414 1629
+Structure
+	Id 979
+	Type 9
+	Position 8159 34.253418 1631
+Structure
+	Id 980
+	Type 9
+	Position 8161 34.26123 1633
+Structure
+	Id 981
+	Type 9
+	Position 8163 34.424805 1633
+Structure
+	Id 982
+	Type 9
+	Position 8163 33.993652 1635
+Structure
+	Id 983
+	Type 9
+	Position 8165 33.526367 1637
+Structure
+	Id 984
+	Type 9
+	Position 8167 33.52588 1637
+Structure
+	Id 985
+	Type 12
+	Position 8147 32.87256 1641
+	Minerals 19.475082
+Structure
+	Id 986
+	Type 12
+	Position 8155 33.539062 1689
+	Minerals 21.833908
+Structure
+	Id 987
+	Type 16
+	Position 8159 32.807617 1687
+Structure
+	Id 988
+	Type 16
+	Position 8157 32.640137 1687
+Structure
+	Id 989
+	Type 16
+	Position 8155 32.243652 1687
+Structure
+	Id 990
+	Type 12
+	Position 8119 30.924805 1681
+	Minerals 29.74726
+Structure
+	Id 991
+	Type 12
+	Position 8115 32.26758 1649
+	Minerals 17.216486
+Structure
+	Id 992
+	Type 16
+	Position 8121 29.605469 1681
+Structure
+	Id 1008
+	Type 16
+	Position 8153 31.298828 1681
+Structure
+	Id 1010
+	Type 16
+	Position 8155 32.16797 1685
+Structure
+	Id 1011
+	Type 16
+	Position 8155 32.04492 1683
+Structure
+	Id 1012
+	Type 16
+	Position 8121 29.765625 1679
+Structure
+	Id 1013
+	Type 16
+	Position 8121 29.86377 1677
+Structure
+	Id 1014
+	Type 16
+	Position 8121 29.94629 1675
+Structure
+	Id 1015
+	Type 16
+	Position 8121 29.999512 1673
+Structure
+	Id 1016
+	Type 16
+	Position 8121 29.98877 1671
+Structure
+	Id 1017
+	Type 16
+	Position 8121 29.97754 1669
+Structure
+	Id 1018
+	Type 16
+	Position 8121 30.003906 1667
+Structure
+	Id 1019
+	Type 16
+	Position 8121 30.04004 1665
+Structure
+	Id 1020
+	Type 16
+	Position 8121 30.08545 1663
+Structure
+	Id 1021
+	Type 16
+	Position 8121 30.155273 1661
+Structure
+	Id 1022
+	Type 16
+	Position 8121 30.22461 1659
+Structure
+	Id 1023
+	Type 16
+	Position 8121 30.29834 1657
+Structure
+	Id 1024
+	Type 16
+	Position 8121 30.373535 1655
+Structure
+	Id 1025
+	Type 16
+	Position 8121 30.440918 1653
+Structure
+	Id 1026
+	Type 16
+	Position 8121 30.48877 1651
+Structure
+	Id 1027
+	Type 16
+	Position 8121 30.53711 1649
+Structure
+	Id 1028
+	Type 16
+	Position 8121 30.56836 1647
+Structure
+	Id 1029
+	Type 16
+	Position 8117 30.770996 1649
+Structure
+	Id 1030
+	Type 16
+	Position 8119 30.654297 1649
+Structure
+	Id 1031
+	Type 16
+	Position 8147 31.325684 1643
+Structure
+	Id 1032
+	Type 16
+	Position 8145 31.328613 1643
+Structure
+	Id 1033
+	Type 16
+	Position 8143 31.33496 1643
+Structure
+	Id 1034
+	Type 16
+	Position 8141 31.335938 1643
+Structure
+	Id 1035
+	Type 16
+	Position 8139 31.331055 1643
+Structure
+	Id 1036
+	Type 16
+	Position 8137 31.325684 1643
+Structure
+	Id 1037
+	Type 16
+	Position 8135 31.1958 1643
+Structure
+	Id 1038
+	Type 16
+	Position 8133 31.05957 1643
+Structure
+	Id 1039
+	Type 16
+	Position 8131 30.922852 1643
+Structure
+	Id 1040
+	Type 16
+	Position 8129 30.78418 1643
+Structure
+	Id 1041
+	Type 16
+	Position 8127 30.645996 1643
+Structure
+	Id 1042
+	Type 16
+	Position 8125 30.599121 1643
+Structure
+	Id 1043
+	Type 16
+	Position 8123 30.556152 1643
+Structure
+	Id 1045
+	Type 16
+	Position 8121 30.625488 1643
+Structure
+	Id 1046
+	Type 16
+	Position 8121 30.591797 1645
+Structure
+	Id 1047
+	Type 16
+	Position 8149 31.374023 1643
+Structure
+	Id 1048
+	Type 16
+	Position 8151 31.422363 1643
+Structure
+	Id 1049
+	Type 16
+	Position 8153 31.495605 1643
+Structure
+	Id 1070
+	Type 11
+	Position 8158 34.922363 1684
+	Fuel 79.89476
+	Minerals 796.0392
+Structure
+	Id 1071
+	Type 11
+	Position 8118 33.376953 1646
+	Fuel 79.04205
+	Minerals 754.87085
+Structure
+	Id 1072
+	Type 5
+	Position 8172 33.447266 1684
+Structure
+	Id 1073
+	Type 5
+	Position 8168 33.5542 1684
+Structure
+	Id 1074
+	Type 5
+	Position 8168 33.604004 1680
+Structure
+	Id 1075
+	Type 5
+	Position 8168 33.268555 1676
+Structure
+	Id 1076
+	Type 5
+	Position 8168 32.691895 1672
+Structure
+	Id 1077
+	Type 5
+	Position 8172 32.45752 1668
+Structure
+	Id 1078
+	Type 5
+	Position 8168 32.16211 1668
+Structure
+	Id 1079
+	Type 5
+	Position 8168 31.85254 1664
+Structure
+	Id 1080
+	Type 5
+	Position 8168 31.822266 1660
+Structure
+	Id 1081
+	Type 5
+	Position 8164 33.412598 1684
+Structure
+	Id 1082
+	Type 5
+	Position 8164 33.172363 1680
+Structure
+	Id 1083
+	Type 5
+	Position 8164 32.76953 1676
+Structure
+	Id 1084
+	Type 5
+	Position 8164 32.140137 1672
+Structure
+	Id 1085
+	Type 5
+	Position 8164 31.226074 1660
+Structure
+	Id 1086
+	Type 5
+	Position 8160 32.30078 1680
+Structure
+	Id 1087
+	Type 5
+	Position 8160 31.816406 1676
+Structure
+	Id 1088
+	Type 5
+	Position 8160 31.409668 1672
+Structure
+	Id 1089
+	Type 5
+	Position 8160 31.09375 1668
+Structure
+	Id 1090
+	Type 5
+	Position 8160 30.93164 1664
+Structure
+	Id 1091
+	Type 5
+	Position 8160 30.931152 1660
+Structure
+	Id 1092
+	Type 16
+	Position 8153 31.538574 1683
+Structure
+	Id 1093
+	Type 16
+	Position 8153 31.061523 1679
+Structure
+	Id 1094
+	Type 16
+	Position 8153 30.896484 1677
+Structure
+	Id 1095
+	Type 16
+	Position 8153 30.75 1675
+Structure
+	Id 1096
+	Type 16
+	Position 8153 30.625488 1673
+Structure
+	Id 1097
+	Type 16
+	Position 8153 30.550781 1671
+Structure
+	Id 1098
+	Type 16
+	Position 8153 30.475586 1669
+Structure
+	Id 1099
+	Type 16
+	Position 8153 30.44629 1667
+Structure
+	Id 1100
+	Type 16
+	Position 8153 30.428223 1665
+Structure
+	Id 1101
+	Type 16
+	Position 8153 30.439453 1663
+Structure
+	Id 1102
+	Type 16
+	Position 8153 30.523926 1661
+Structure
+	Id 1103
+	Type 16
+	Position 8153 30.608887 1659
+Structure
+	Id 1104
+	Type 16
+	Position 8153 30.781738 1657
+Structure
+	Id 1105
+	Type 16
+	Position 8153 30.976074 1655
+Structure
+	Id 1106
+	Type 16
+	Position 8153 31.144043 1653
+Structure
+	Id 1107
+	Type 16
+	Position 8153 31.248047 1651
+Structure
+	Id 1108
+	Type 16
+	Position 8153 31.35205 1649
+Structure
+	Id 1109
+	Type 16
+	Position 8153 31.396484 1647
+Structure
+	Id 1110
+	Type 16
+	Position 8153 31.426758 1645
+Structure
+	Id 1111
+	Type 5
+	Position 8156 31.449219 1680
+Structure
+	Id 1112
+	Type 5
+	Position 8156 31.09375 1676
+Structure
+	Id 1113
+	Type 5
+	Position 8156 30.881836 1672
+Structure
+	Id 1114
+	Type 5
+	Position 8156 30.759277 1668
+Structure
+	Id 1115
+	Type 5
+	Position 8156 30.717773 1664
+Structure
+	Id 1116
+	Type 5
+	Position 8156 30.762207 1660
+Structure
+	Id 1117
+	Type 25
+	Position 8119 30.777344 1679
+	Charge 36.632393
+Structure
+	Id 1118
+	Type 25
+	Position 8145 32.618652 1641
+	Charge 36.611473
+Structure
+	Id 1121
+	Type 16
+	Position 8151 31.1167 1683
+Structure
+	Id 1122
+	Type 16
+	Position 8149 30.783203 1683
+Structure
+	Id 1123
+	Type 16
+	Position 8147 30.450195 1683
+Structure
+	Id 1124
+	Type 16
+	Position 8145 30.26416 1683
+Structure
+	Id 1125
+	Type 16
+	Position 8143 30.08545 1683
+Structure
+	Id 1126
+	Type 16
+	Position 8141 29.912598 1683
+Structure
+	Id 1127
+	Type 16
+	Position 8139 29.746582 1683
+Structure
+	Id 1128
+	Type 16
+	Position 8137 29.580078 1683
+Structure
+	Id 1129
+	Type 16
+	Position 8135 29.532715 1683
+Structure
+	Id 1130
+	Type 16
+	Position 8133 29.49121 1683
+Structure
+	Id 1131
+	Type 16
+	Position 8131 29.47461 1683
+Structure
+	Id 1132
+	Type 16
+	Position 8129 29.487305 1683
+Structure
+	Id 1133
+	Type 16
+	Position 8127 29.5 1683
+Structure
+	Id 1134
+	Type 16
+	Position 8125 29.488281 1683
+Structure
+	Id 1135
+	Type 16
+	Position 8123 29.475098 1683
+Structure
+	Id 1136
+	Type 16
+	Position 8121 29.444824 1683
+Structure
+	Id 1137
+	Type 3
+	Position 8150 31.969727 1680
+	Charge 1374.4886
+Structure
+	Id 1138
+	Type 3
+	Position 8150 31.948242 1676
+	Charge 1374.5027
+Structure
+	Id 1139
+	Type 3
+	Position 8150 31.948242 1672
+	Charge 1374.5027
+Structure
+	Id 1140
+	Type 3
+	Position 8150 32.007324 1668
+	Charge 1374.5027
+Structure
+	Id 1141
+	Type 27
+	Position 8171 34.356834 1689
+Structure
+	Id 1142
+	Type 27
+	Position 8169 34.464745 1689
+Structure
+	Id 1143
+	Type 27
+	Position 8167 34.57168 1689
+Structure
+	Id 1144
+	Type 27
+	Position 8165 34.61416 1689
+Structure
+	Id 1145
+	Type 27
+	Position 8165 34.152733 1691
+Structure
+	Id 1146
+	Type 27
+	Position 8163 34.206444 1691
+Structure
+	Id 1147
+	Type 27
+	Position 8163 33.760643 1693
+Structure
+	Id 1148
+	Type 27
+	Position 8161 33.826073 1693
+Structure
+	Id 1149
+	Type 27
+	Position 8161 33.49111 1695
+Structure
+	Id 1150
+	Type 27
+	Position 8159 33.56533 1695
+Structure
+	Id 1151
+	Type 27
+	Position 8157 33.637108 1695
+Structure
+	Id 1152
+	Type 27
+	Position 8157 33.33486 1697
+Structure
+	Id 1153
+	Type 27
+	Position 8155 33.299217 1697
+Structure
+	Id 1154
+	Type 27
+	Position 8153 33.256737 1697
+Structure
+	Id 1158
+	Type 27
+	Position 8147 32.69326 1699
+Structure
+	Id 1159
+	Type 27
+	Position 8147 32.573143 1701
+Structure
+	Id 1160
+	Type 27
+	Position 8145 32.35 1701
+Structure
+	Id 1161
+	Type 27
+	Position 8143 32.123436 1701
+Structure
+	Id 1162
+	Type 27
+	Position 8141 31.885157 1701
+Structure
+	Id 1163
+	Type 27
+	Position 8139 31.632715 1701
+Structure
+	Id 1165
+	Type 27
+	Position 8135 31.198145 1701
+Structure
+	Id 1166
+	Type 27
+	Position 8133 31.016504 1701
+Structure
+	Id 1167
+	Type 27
+	Position 8131 30.871973 1701
+Structure
+	Id 1168
+	Type 27
+	Position 8129 30.771875 1701
+Structure
+	Id 1169
+	Type 27
+	Position 8127 30.708399 1699
+Structure
+	Id 1170
+	Type 27
+	Position 8129 30.792871 1699
+Structure
+	Id 1171
+	Type 27
+	Position 8125 30.714258 1699
+Structure
+	Id 1172
+	Type 27
+	Position 8125 30.812891 1697
+Structure
+	Id 1176
+	Type 27
+	Position 8119 30.948145 1695
+Structure
+	Id 1177
+	Type 27
+	Position 8117 30.942774 1695
+Structure
+	Id 1178
+	Type 27
+	Position 8115 31.034082 1695
+Structure
+	Id 1179
+	Type 27
+	Position 8115 31.031641 1693
+Structure
+	Id 1180
+	Type 27
+	Position 8113 31.123438 1693
+Structure
+	Id 1181
+	Type 27
+	Position 8113 31.104395 1691
+Structure
+	Id 1182
+	Type 27
+	Position 8111 31.249903 1691
+Structure
+	Id 1183
+	Type 27
+	Position 8111 31.260157 1689
+Structure
+	Id 1184
+	Type 27
+	Position 8109 31.511133 1689
+Structure
+	Id 1185
+	Type 27
+	Position 8109 31.613184 1687
+Structure
+	Id 1186
+	Type 27
+	Position 8107 31.871485 1687
+Structure
+	Id 1187
+	Type 27
+	Position 8107 31.979395 1685
+Structure
+	Id 1188
+	Type 27
+	Position 8105 32.06875 1685
+Structure
+	Id 1189
+	Type 27
+	Position 8105 32.160545 1683
+Structure
+	Id 1190
+	Type 27
+	Position 8105 32.17373 1681
+Structure
+	Id 1191
+	Type 27
+	Position 8105 32.186424 1679
+Structure
+	Id 1192
+	Type 27
+	Position 8105 32.206444 1677
+Structure
+	Id 1193
+	Type 27
+	Position 8105 32.228416 1675
+Structure
+	Id 1195
+	Type 27
+	Position 8103 32.314842 1673
+Structure
+	Id 1197
+	Type 27
+	Position 8101 32.430565 1671
+Structure
+	Id 1198
+	Type 27
+	Position 8101 32.50332 1669
+Structure
+	Id 1199
+	Type 27
+	Position 8099 32.621483 1669
+Structure
+	Id 1201
+	Type 27
+	Position 8099 32.743065 1667
+Structure
+	Id 1202
+	Type 27
+	Position 8099 32.867577 1665
+Structure
+	Id 1203
+	Type 27
+	Position 8099 33.02285 1663
+Structure
+	Id 1204
+	Type 27
+	Position 8099 33.248924 1661
+Structure
+	Id 1205
+	Type 27
+	Position 8099 33.475 1659
+Structure
+	Id 1206
+	Type 27
+	Position 8099 33.58584 1657
+Structure
+	Id 1207
+	Type 27
+	Position 8101 33.45156 1657
+Structure
+	Id 1208
+	Type 27
+	Position 8101 33.563866 1655
+Structure
+	Id 1209
+	Type 27
+	Position 8101 33.648827 1653
+Structure
+	Id 1210
+	Type 27
+	Position 8101 33.6708 1651
+Structure
+	Id 1211
+	Type 27
+	Position 8101 33.692772 1649
+Structure
+	Id 1212
+	Type 27
+	Position 8103 33.61611 1649
+Structure
+	Id 1215
+	Type 27
+	Position 8105 33.600487 1647
+Structure
+	Id 1216
+	Type 27
+	Position 8107 33.67031 1645
+Structure
+	Id 1218
+	Type 27
+	Position 8107 33.84658 1641
+Structure
+	Id 1219
+	Type 27
+	Position 8109 33.62783 1641
+Structure
+	Id 1220
+	Type 27
+	Position 8109 33.6791 1639
+Structure
+	Id 1221
+	Type 27
+	Position 8109 33.695213 1637
+Structure
+	Id 1222
+	Type 27
+	Position 8111 33.475 1637
+Structure
+	Id 1223
+	Type 27
+	Position 8111 33.4999 1635
+Structure
+	Id 1224
+	Type 27
+	Position 8113 33.34707 1635
+Structure
+	Id 1225
+	Type 27
+	Position 8115 33.23037 1635
+Structure
+	Id 1226
+	Type 27
+	Position 8115 33.357323 1633
+Structure
+	Id 1227
+	Type 27
+	Position 8117 33.27822 1633
+Structure
+	Id 1228
+	Type 27
+	Position 8119 33.16494 1633
+Structure
+	Id 1229
+	Type 27
+	Position 8119 33.42373 1631
+Structure
+	Id 1230
+	Type 27
+	Position 8121 33.286034 1631
+Structure
+	Id 1231
+	Type 27
+	Position 8121 33.52041 1629
+Structure
+	Id 1232
+	Type 27
+	Position 8123 33.41201 1629
+Structure
+	Id 1233
+	Type 27
+	Position 8125 33.351463 1629
+Structure
+	Id 1237
+	Type 27
+	Position 8131 33.450584 1627
+Structure
+	Id 1238
+	Type 27
+	Position 8133 33.593163 1627
+Structure
+	Id 1239
+	Type 27
+	Position 8135 33.834373 1627
+Structure
+	Id 1240
+	Type 27
+	Position 8137 34.08242 1627
+Structure
+	Id 1241
+	Type 27
+	Position 8137 34.169823 1625
+Structure
+	Id 1242
+	Type 27
+	Position 8139 34.48916 1625
+Structure
+	Id 1243
+	Type 27
+	Position 8141 34.806053 1625
+Structure
+	Id 1244
+	Type 27
+	Position 8143 34.949608 1625
+Structure
+	Id 1245
+	Type 27
+	Position 8143 34.800682 1627
+Structure
+	Id 1246
+	Type 27
+	Position 8145 34.802147 1627
+Structure
+	Id 1247
+	Type 27
+	Position 8147 34.79043 1627
+Structure
+	Id 1248
+	Type 27
+	Position 8147 34.608788 1629
+Structure
+	Id 1249
+	Type 27
+	Position 8149 34.39541 1629
+Structure
+	Id 1252
+	Type 27
+	Position 8153 34.189354 1631
+Structure
+	Id 1254
+	Type 27
+	Position 8157 34.728905 1631
+Structure
+	Id 1255
+	Type 27
+	Position 8157 34.655663 1633
+Structure
+	Id 1256
+	Type 27
+	Position 8159 34.882713 1633
+Structure
+	Id 1257
+	Type 27
+	Position 8159 34.6 1635
+Structure
+	Id 1258
+	Type 27
+	Position 8161 34.736717 1635
+Structure
+	Id 1259
+	Type 27
+	Position 8161 34.33828 1637
+Structure
+	Id 1260
+	Type 27
+	Position 8163 34.368065 1637
+Structure
+	Id 1261
+	Type 27
+	Position 8163 33.95449 1639
+Structure
+	Id 1262
+	Type 27
+	Position 8165 33.92959 1639
+Structure
+	Id 1263
+	Type 27
+	Position 8167 33.91494 1639
+Structure
+	Id 1264
+	Type 27
+	Position 8169 34.123436 1639
+Structure
+	Id 1265
+	Type 27
+	Position 8153 34.145897 1633
+Structure
+	Id 1266
+	Type 27
+	Position 8153 34.010643 1635
+Structure
+	Id 1267
+	Type 16
+	Position 8153 31.654785 1641
+Structure
+	Id 1268
+	Type 16
+	Position 8153 31.814453 1639
+Structure
+	Id 1269
+	Type 16
+	Position 8153 31.98584 1637
+Structure
+	Id 1270
+	Type 16
+	Position 8119 30.825684 1643
+Structure
+	Id 1271
+	Type 16
+	Position 8117 31.024414 1643
+Structure
+	Id 1272
+	Type 16
+	Position 8115 31.1875 1643
+Structure
+	Id 1273
+	Type 16
+	Position 8113 31.345703 1643
+Structure
+	Id 1274
+	Type 27
+	Position 8109 33.57656 1643
+Structure
+	Id 1275
+	Type 27
+	Position 8111 33.37197 1643
+Structure
+	Id 1276
+	Type 16
+	Position 8121 29.30127 1685
+Structure
+	Id 1277
+	Type 16
+	Position 8121 29.16504 1687
+Structure
+	Id 1278
+	Type 16
+	Position 8121 29.064941 1689
+Structure
+	Id 1279
+	Type 16
+	Position 8121 29.11084 1691
+Structure
+	Id 1281
+	Type 27
+	Position 8121 31.006739 1693
+Structure
+	Id 1282
+	Type 27
+	Position 8121 30.95254 1695
+Structure
+	Id 1283
+	Type 27
+	Position 8107 32.060936 1683
+Structure
+	Id 1284
+	Type 27
+	Position 8109 31.811426 1683
+Structure
+	Id 1285
+	Type 16
+	Position 8119 29.394043 1683
+Structure
+	Id 1286
+	Type 16
+	Position 8117 29.343262 1683
+Structure
+	Id 1287
+	Type 16
+	Position 8115 29.438965 1683
+Structure
+	Id 1288
+	Type 16
+	Position 8113 29.541504 1683
+Structure
+	Id 1289
+	Type 16
+	Position 8111 29.711426 1683
+Structure
+	Id 1290
+	Type 16
+	Position 8121 30.688477 1641
+Structure
+	Id 1291
+	Type 16
+	Position 8121 30.751465 1639
+Structure
+	Id 1292
+	Type 16
+	Position 8121 30.882812 1637
+Structure
+	Id 1293
+	Type 16
+	Position 8121 31.02832 1635
+Structure
+	Id 1294
+	Type 27
+	Position 8121 33.053123 1633
+Structure
+	Id 1295
+	Type 27
+	Position 8155 34.402245 1633
+Structure
+	Id 1296
+	Type 3
+	Position 8150 32.081055 1664
+	Charge 1374.5027
+Structure
+	Id 1297
+	Type 3
+	Position 8150 32.206055 1660
+	Charge 1374.5027
+Structure
+	Id 1298
+	Type 28
+	Position 8118 30.812012 1686
+Structure
+	Id 1299
+	Type 28
+	Position 8118 32.507812 1640
+Structure
+	Id 1300
+	Type 28
+	Position 8156 33.387207 1640
+Structure
+	Id 1301
+	Type 28
+	Position 8150 32.46289 1686
+Structure
+	Id 1302
+	Type 16
+	Position 8153 31.698242 1685
+Structure
+	Id 1303
+	Type 16
+	Position 8153 31.826172 1687
+Structure
+	Id 1304
+	Type 16
+	Position 8153 31.91748 1689
+Structure
+	Id 1305
+	Type 16
+	Position 8153 31.839355 1691
+Structure
+	Id 1307
+	Type 27
+	Position 8153 33.458397 1695
+Structure
+	Id 1308
+	Type 27
+	Position 8153 33.614647 1693
+Structure
+	Id 1309
+	Type 20
+	Position 8146 31.499512 1686
+Structure
+	Id 1310
+	Type 20
+	Position 8142 31.122559 1686
+Structure
+	Id 1311
+	Type 20
+	Position 8138 30.806152 1686
+Structure
+	Id 1312
+	Type 20
+	Position 8134 30.583984 1686
+Structure
+	Id 1313
+	Type 20
+	Position 8130 30.487793 1686
+Structure
+	Id 1314
+	Type 20
+	Position 8126 30.404785 1686
+Structure
+	Id 1315
+	Type 36
+	Position 8153 33.731934 1629
+	Charge 200
+Structure
+	Id 1316
+	Type 27
+	Position 8151 34.098534 1631
+Structure
+	Id 1317
+	Type 36
+	Position 8127 33.001953 1627
+	Charge 200
+Structure
+	Id 1318
+	Type 27
+	Position 8127 33.290916 1629
+Structure
+	Id 1319
+	Type 27
+	Position 8129 33.32998 1629
+Structure
+	Id 1320
+	Type 9
+	Position 8139 30.896484 1703
+Structure
+	Id 1321
+	Type 24
+	Position 8137 30.692383 1703
+Structure
+	Id 1322
+	Type 16
+	Position 8137 29.531738 1701
+Structure
+	Id 1323
+	Type 26
+	Position 8132 30.844238 1694
+	Charge 30
+Structure
+	Id 1324
+	Type 26
+	Position 8114 30.85254 1686
+	Charge 30
+Structure
+	Id 1325
+	Type 26
+	Position 8106 32.251953 1664
+	Charge 30
+Structure
+	Id 1326
+	Type 26
+	Position 8114 32.87451 1640
+	Charge 30
+Structure
+	Id 1327
+	Type 26
+	Position 8150 33.40674 1636
+	Charge 30
+Structure
+	Id 1328
+	Type 25
+	Position 8115 32.140625 1647
+	Charge 36.632393
+Structure
+	Id 1329
+	Type 25
+	Position 8123 30.502441 1685
+	Charge 36.632393
+Structure
+	Id 1330
+	Type 36
+	Position 8105 33.280273 1645
+	Charge 200
+Structure
+	Id 1331
+	Type 27
+	Position 8107 33.538963 1647
+Structure
+	Id 1332
+	Type 36
+	Position 8101 31.978027 1673
+	Charge 200
+Structure
+	Id 1333
+	Type 36
+	Position 8151 32.483887 1699
+	Charge 200
+Structure
+	Id 1334
+	Type 27
+	Position 8151 33.152733 1697
+Structure
+	Id 1335
+	Type 27
+	Position 8149 32.973045 1697
+Structure
+	Id 1336
+	Type 27
+	Position 8111 33.44668 1639
+Structure
+	Id 1337
+	Type 27
+	Position 8111 33.40957 1641
+Structure
+	Id 1338
+	Type 27
+	Position 8113 33.297752 1637
+Structure
+	Id 1339
+	Type 27
+	Position 8115 33.15371 1637
+Structure
+	Id 1340
+	Type 27
+	Position 8117 33.114647 1635
+Structure
+	Id 1341
+	Type 27
+	Position 8123 33.20791 1631
+Structure
+	Id 1342
+	Type 27
+	Position 8125 33.181053 1631
+Structure
+	Id 1343
+	Type 27
+	Position 8127 33.15371 1631
+Structure
+	Id 1344
+	Type 27
+	Position 8129 33.214745 1631
+Structure
+	Id 1345
+	Type 27
+	Position 8131 33.368553 1629
+Structure
+	Id 1346
+	Type 27
+	Position 8133 33.513084 1629
+Structure
+	Id 1347
+	Type 27
+	Position 8135 33.746483 1629
+Structure
+	Id 1348
+	Type 27
+	Position 8139 34.377342 1627
+Structure
+	Id 1349
+	Type 27
+	Position 8141 34.669334 1627
+Structure
+	Id 1350
+	Type 27
+	Position 8101 32.603416 1667
+Structure
+	Id 1351
+	Type 27
+	Position 8101 32.712303 1665
+Structure
+	Id 1352
+	Type 27
+	Position 8101 32.85781 1663
+Structure
+	Id 1353
+	Type 27
+	Position 8101 33.086815 1661
+Structure
+	Id 1354
+	Type 27
+	Position 8101 33.31582 1659
+Structure
+	Id 1355
+	Type 27
+	Position 8103 33.552147 1651
+Structure
+	Id 1356
+	Type 27
+	Position 8103 33.487694 1653
+Structure
+	Id 1357
+	Type 27
+	Position 8103 33.379295 1655
+Structure
+	Id 1358
+	Type 27
+	Position 8103 33.2499 1657
+Structure
+	Id 1359
+	Type 27
+	Position 8105 33.50869 1649
+Structure
+	Id 1360
+	Type 27
+	Position 8107 33.398827 1649
+Structure
+	Id 1361
+	Type 27
+	Position 8103 32.361717 1671
+Structure
+	Id 1362
+	Type 27
+	Position 8105 32.293846 1671
+Structure
+	Id 1363
+	Type 27
+	Position 8105 32.255272 1673
+Structure
+	Id 1364
+	Type 27
+	Position 8107 32.162987 1675
+Structure
+	Id 1365
+	Type 27
+	Position 8107 32.132225 1677
+Structure
+	Id 1366
+	Type 27
+	Position 8107 32.103416 1679
+Structure
+	Id 1367
+	Type 27
+	Position 8107 32.081932 1681
+Structure
+	Id 1368
+	Type 28
+	Position 8116 31.17041 1680
+Structure
+	Id 1369
+	Type 28
+	Position 8124 32.32373 1640
+Structure
+	Id 1370
+	Type 28
+	Position 8150 33.157227 1640
+Structure
+	Id 1371
+	Type 28
+	Position 8158 33.870117 1690
+Structure
+	Id 1372
+	Type 36
+	Position 8121 30.436523 1697
+	Charge 200
+Structure
+	Id 1373
+	Type 9
+	Position 8121 30.086914 1699
+Structure
+	Id 1374
+	Type 34
+	Position 8153 32.57129 1699
+	Charge 200
+Structure
+	Id 1375
+	Type 35
+	Position 8149 32.354004 1699
+	Charge 14.621983
+Structure
+	Id 1376
+	Type 34
+	Position 8123 30.419922 1697
+	Charge 200
+Structure
+	Id 1377
+	Type 35
+	Position 8119 30.487305 1697
+	Charge 51.98361
+Structure
+	Id 1378
+	Type 27
+	Position 8123 30.942774 1695
+Structure
+	Id 1379
+	Type 27
+	Position 8125 30.920801 1695
+Structure
+	Id 1380
+	Type 34
+	Position 8103 31.901855 1675
+	Charge 200
+Structure
+	Id 1381
+	Type 35
+	Position 8099 32.071777 1671
+	Charge 25.71556
+Structure
+	Id 1382
+	Type 34
+	Position 8103 33.251953 1647
+	Charge 200
+Structure
+	Id 1383
+	Type 35
+	Position 8107 33.29297 1643
+	Charge 122.542244
+Structure
+	Id 1384
+	Type 27
+	Position 8109 33.46914 1645
+Structure
+	Id 1385
+	Type 34
+	Position 8125 33.04883 1627
+	Charge 200
+Structure
+	Id 1386
+	Type 9
+	Position 8125 32.916016 1625
+Structure
+	Id 1387
+	Type 35
+	Position 8129 33.018066 1627
+	Charge 17.340363
+Structure
+	Id 1388
+	Type 34
+	Position 8151 33.728516 1629
+	Charge 200
+Structure
+	Id 1389
+	Type 35
+	Position 8155 33.956543 1631
+	Charge 169.03818
+Structure
+	Id 1390
+	Type 27
+	Position 8149 34.217186 1631
+Structure
+	Id 1391
+	Type 27
+	Position 8145 34.620995 1629
+Structure
+	Id 1392
+	Type 27
+	Position 8143 34.622948 1629
+Structure
+	Id 1393
+	Type 27
+	Position 8137 33.98281 1629
+Structure
+	Id 1394
+	Type 27
+	Position 8145 32.450584 1699
+Structure
+	Id 1395
+	Type 27
+	Position 8143 32.203026 1699
+Structure
+	Id 1396
+	Type 27
+	Position 8141 31.941309 1699
+Structure
+	Id 1397
+	Type 27
+	Position 8131 30.876856 1699
+Structure
+	Id 1398
+	Type 27
+	Position 8133 31.014551 1699
+Structure
+	Id 1399
+	Type 27
+	Position 8135 31.197168 1699
+Structure
+	Id 1400
+	Type 27
+	Position 8139 31.6625 1699
+Structure
+	Id 1401
+	Type 20
+	Position 8146 31.153809 1680
+Structure
+	Id 1402
+	Type 20
+	Position 8142 30.97705 1680
+Structure
+	Id 1403
+	Type 20
+	Position 8138 30.8125 1680
+Structure
+	Id 1404
+	Type 20
+	Position 8134 30.76709 1680
+Structure
+	Id 1405
+	Type 20
+	Position 8130 30.767578 1680
+Structure
+	Id 1406
+	Type 20
+	Position 8126 30.82129 1680
+Structure
+	Id 1407
+	Type 12
+	Position 8123 31.062012 1681
+	Minerals 29.841667
+Structure
+	Id 1408
+	Type 12
+	Position 8123 30.614746 1687
+	Minerals 30
+Structure
+	Id 1409
+	Type 11
+	Position 8118 32.353027 1676
+	Fuel 79.89476
+	Minerals 753.38446
+Structure
+	Id 1410
+	Type 11
+	Position 8156 34.089844 1646
+	Fuel 83.7872
+	Minerals 727.70844
+Structure
+	Id 1411
+	Type 16
+	Position 8155 31.589844 1643
+Structure
+	Id 1412
+	Type 16
+	Position 8157 31.67871 1643
+Structure
+	Id 1413
+	Type 16
+	Position 8159 31.6333 1643
+Structure
+	Id 1414
+	Type 16
+	Position 8161 31.58789 1643
+Structure
+	Id 1415
+	Type 16
+	Position 8163 31.566406 1643
+Structure
+	Id 1416
+	Type 16
+	Position 8165 31.55957 1643
+Structure
+	Id 1417
+	Type 9
+	Position 8169 33.61621 1637
+Structure
+	Id 1418
+	Type 27
+	Position 8171 34.33535 1639
+Structure
+	Id 1419
+	Type 16
+	Position 8167 31.561035 1643
+Structure
+	Id 1421
+	Type 24
+	Position 8169 32.858887 1643
+Unit
+	Type 0
+	Team 0
+	Position 8117.1914 30.465052 1667.7172
+	Health 272
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.0596 30.724648 1667.1421
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.7817 30.613592 1662.0946
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8108.847 30.79077 1664.7719
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8115.2295 30.57654 1660.6641
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.417 30.693893 1668.2214
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.052 30.7818 1659.2981
+	Health 58
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8115.6646 30.567083 1664.9883
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.384 30.515217 1666.3823
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.93 30.59753 1658.4799
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.1963 30.633348 1657.753
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.1567 30.520704 1671.0205
+	Health 255
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.5923 30.561665 1669.5847
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.6714 30.750048 1660.1046
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.981 30.596565 1665.7538
+	Health 292
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.4956 30.820383 1662.1309
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.334 30.617157 1661.1266
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.7856 30.687363 1668.5189
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.293 30.833712 1659.9362
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.1865 30.790682 1661.0947
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.7075 30.683308 1664.6741
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.0337 30.706354 1659.1412
+	Health 182
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8115.5 30.474936 1669.7546
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.2017 30.83385 1660.9275
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.832 30.698751 1668.2449
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.641 30.64221 1659.7814
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.977 30.790161 1664.3046
+	Health 252
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.119 30.670973 1668.931
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8115.2 30.365234 1671.9161
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.4785 30.671871 1661.8888
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8107.7163 30.9171 1660.3843
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.492 30.792261 1662.0438
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.529 30.81869 1663.1686
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.8877 30.748856 1666.1687
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8115.509 30.558233 1659.6959
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.3247 30.720383 1667.3959
+	Health 288
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8108.5 30.816725 1663.8331
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.7144 30.51967 1661.9984
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.7446 30.6764 1667.8522
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8109.329 30.647434 1669.5143
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8108.55 30.851204 1661.752
+	Health 242
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.4824 30.632362 1669.2157
+	Health 51
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.0225 30.548838 1661.2784
+	Health 292
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.0054 30.604822 1668.2955
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.7114 30.557377 1670.1842
+	Health 205.9628
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.4316 30.766836 1658.3661
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.975 30.612926 1658.7266
+	Health 230
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.7812 30.62688 1663.0903
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.654 30.687487 1659.9307
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.6323 30.546402 1669.1362
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.131 30.370398 1671.2815
+	Health 275.99872
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.037 30.607386 1670.2238
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.9844 30.799751 1664.2377
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.689 30.50581 1665.4036
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.225 30.6632 1663.8462
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.705 30.57145 1659.1052
+	Health 43.759277
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8107.093 30.639486 1670.4385
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8105.9536 30.691988 1669.504
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.5664 30.806719 1663.0563
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8103.4995 30.923227 1665.8975
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8104.979 30.732538 1669.2853
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.169 30.641207 1658.0209
+	Health 178
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.4062 30.713167 1661.5825
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8110.798 30.559599 1670.8936
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.572 30.749023 1662.9209
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8112.015 30.63064 1659.0009
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.051 30.455013 1671.5513
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.2314 30.744644 1661.1005
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8108.517 30.837074 1662.755
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8116.361 30.532875 1664.2812
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8217.6 34.76747 1642.0198
+	Source 367
+	Order 8116.235 0 1666.803
+Unit
+	Type 0
+	Team 0
+	Position 8111.0493 30.651495 1669.3037
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8217.679 34.707874 1643.4974
+	Source 367
+	Order 8108.9595 0 1667.7189
+Unit
+	Type 0
+	Team 0
+	Position 8115.2075 30.421324 1670.9174
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.587 30.489212 1670.1359
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8113.6016 30.608368 1659.5072
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.716 30.79032 1663.3691
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.6836 30.62509 1664.8088
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8111.5054 30.762236 1662.0613
+	Source 367
+Unit
+	Type 0
+	Team 0
+	Position 8114.428 30.594572 1660.069
+	Source 367
