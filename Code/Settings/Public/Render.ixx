@@ -249,7 +249,7 @@ export struct CloudParams
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeedScale = 3.5f;       // x "Sky/Wind/Speed" (the layer's wind; its direction is the shared one)
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
-    int   seed = 2836;                 // the cloud LAYOUT: a fixed offset into the noise fields (0 = none); the drifts add to it
+    int   seed = 5770;                 // the cloud LAYOUT: a fixed offset into the noise fields (0 = none); the drifts add to it
     // Lighting
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
     float forwardPeakLimit = 0.95f;    // cap on the fit's HG g (0.995 at 20 um: a ~0.3 degree diffraction lobe that
