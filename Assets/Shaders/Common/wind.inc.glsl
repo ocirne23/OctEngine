@@ -7,8 +7,9 @@
 // second skewed). A 2D vector, not a signed gust along the mean, so the flurries TURN the wind rather than cancel it (a
 // gust stronger than the mean wind would stop the trees dead). Analytic, a few ALU per call. Requires the UBO.
 
-// The wind at `xz` at `time`: its speed (m/s) and direction (unit, XZ).
-float vegetationWind(vec2 xz, float time, out vec2 dir)
+// The wind at `xz` at `time` as ONE vector (m/s, XZ). The trees work from the vector itself (tree_wind.inc.glsl: the
+// direction x the speed is the vector, so they never take it apart).
+vec2 vegetationWindVector(vec2 xz, float time)
 {
     const vec2 meanDir = u_weather_windDirection;
     const float along = dot(xz, meanDir);
@@ -18,9 +19,15 @@ float vegetationWind(vec2 xz, float time, out vec2 dir)
     const float k2 = 13.66 * u_weather_invGustSize;  // 2 pi / (0.46 x the gust size)
     const vec2 gust = vec2(0.6 * sin((along - travel) * k1) + 0.4 * sin((along * 0.8 + across * 0.6 - travel) * k2),
                            0.6 * sin((along - travel) * k1 + 2.1) + 0.4 * sin((along * 0.7 - across * 0.7 - travel) * k2 * 0.85 + 4.2));
-    const vec2 wind = u_weather_windVelocity.xz + gust * u_weather_gustStrength;
+    return u_weather_windVelocity.xz + gust * u_weather_gustStrength;
+}
+
+// The same wind as its speed (m/s) and direction (unit, XZ).
+float vegetationWind(vec2 xz, float time, out vec2 dir)
+{
+    const vec2 wind = vegetationWindVector(xz, time);
     const float speed = length(wind);
-    dir = speed > 1e-3 ? wind / speed : meanDir;
+    dir = speed > 1e-3 ? wind / speed : u_weather_windDirection;
     return speed;
 }
 

@@ -479,9 +479,10 @@ void StructureSystem::solveWalkwayDecks()
         const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
         for (int a = 0; a < 4; ++a)
         {
-            // A built WARD's top is at a deck's height (the ward tower, wardResist.pre): a hard edge, like a stairs' top.
+            // A built TOWER's top (a ward, the Watch post) is at a deck's height (wardResist.pre, watchPost.pre): a hard edge,
+            // like a stairs' top.
             if (const auto it = m_cells.find(cellKey(cx + c_walkDirs[a].x, cz + c_walkDirs[a].y)); it != m_cells.end())
-                if (const int ward = structureIndexById(it->second.id); ward >= 0 && isWardType(m_frame[ward].type) && !m_frame[ward].state->blueprint)
+                if (const int ward = structureIndexById(it->second.id); ward >= 0 && isTowerTopType(m_frame[ward].type) && !m_frame[ward].state->blueprint)
                 {
                     const float top = wardTopY(m_frame[ward]); // its ground + a deck origin's height
                     if (glm::abs(top - d.h) <= c_walkMaxStep)
@@ -595,12 +596,21 @@ void StructureSystem::updateArms(const Ref& s)
 {
     if (s.type == EStructureType::Walkway)
         updateWalkway(s);
+    static constexpr glm::ivec2 dirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ
+    const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
+    const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
+    // THE WATCH POST'S RAILINGS: a side's railing shows unless a road piece is next to it (roadAt: a road, a walkway, a
+    // ward's top, ...) - there the walkers come and go. A blueprint or rubble shows none.
+    if (s.type == EStructureType::WatchPost)
+    {
+        for (int a = 0; a < 4; ++a)
+            if (float y = 0.0f; s.arms[a])
+                s.arms[a]->setEnabled(!s.state->rubble && !s.state->blueprint && !roadAt(cx + dirs[a].x, cz + dirs[a].y, y));
+        return;
+    }
     if (!isCableType(s.type))
         return;
     const int medium = cableMediumOf(s.type);
-    const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
-    const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
-    static constexpr glm::ivec2 dirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ
     for (int a = 0; a < 4; ++a)
     {
         if (!s.arms[a])

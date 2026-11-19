@@ -103,7 +103,9 @@ public:
         bool sendReady = false; // it has a load to send now (a storage: and a consumer on its road wants it)
         bool buildReady = false; // it holds stone, and a blueprint on its road wants it (the ~1 s pass): work for a walker with no other
         bool repairReady = false; // the same for a damaged structure on its road, and only while the team has no build work
-        bool transportReady = false; // a storage: another storage on its road is much emptier (a cart trip), and it has no other work
+        bool transportReady = false; // a storage: another storage on its road is much emptier (a cart trip)
+        bool transportUrgent = false; // ... by "Cart urgent fill gap" or more: the cart goes before the loads at the pickup
+        bool ammoReachable = false;  // an alarmed Cannon: it holds a munition (or one is on its way), or a source of them is on its road (the ~1 s pass)
         float goodsIncoming[GameStructureComponent::NumStores] = {}; // per store index: the goods the walkers carry toward it now (counted fresh every tickCarriers)
         float cannonReload = 0.0f; // a Cannon: seconds to its next shot (tickCannons, authority)
         // A Cannon's GUN TURN: its aim from the placed facing (radians about +Y, within the arc). The entity's rotation is
@@ -386,8 +388,9 @@ public:
     // the App's source. The flat maps: a resource node of its kind in the radius is a full yield.
     // The source answers what stands in a circle: wood = trees, stone = the rocks' summed size (m). false = it does not
     // know (the place is too far from this instance's camera, or its world is not generated yet).
-    // It VISITS each tree and rock once, with its world position (the same in every survey), its wood and its stone.
-    using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone);
+    // It VISITS each tree and rock once, with its world position (the same in every survey), its wood and its stone, and a
+    // weight (x its amount after the size exponent: a tree species' `Wood`, else 1).
+    using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone, float weight);
     using HarvestSource = bool (*)(float x, float z, float radius, HarvestVisitor visit, void* user);
     void setHarvestSource(HarvestSource source) { m_harvestSource = source; }
     float harvestRadius() const { return m_settings.harvestRadius; }
@@ -480,6 +483,7 @@ public:
         switch (t)
         {
         case EStructureType::Cannon:    return m_settings.cannonAmmoCapacity;
+        case EStructureType::Ballista:  return m_settings.ballistaAmmoCapacity;
         case EStructureType::AmmoWorks: return m_settings.ammoWorksBuffer;
         case EStructureType::AmmoStore: return m_settings.ammoStoreCapacity;
         default:                        return 0.0f;
@@ -637,19 +641,21 @@ public:
     // top, with its tilt: walkwayDeckY).
     bool walkwayDeckTop(const glm::vec3& pos, float& outY) const;
     // The guards' shots of this tick (tickCarriers): the match draws one line each and clears the list.
-    struct GuardShot { glm::vec3 from, to; };
+    struct GuardShot { glm::vec3 from, to; float arc; }; // arc: the arrow's height over the straight line at its middle (m)
     oc::vector<GuardShot>& guardShots() { return m_guardShots; }
     // THE CANNONS (tickCannons, authority, after production): a built Cannon with a munition and its reload done fires
     // at the nearest solid enemy unit in its arc ("Arc (deg)" around its facing) between "Min range" and "Range". A
     // shot is a launch (the muzzle, the ballistic velocity): the match spawns the shell (NpcSystem::fireCannonShell)
-    // and clears the list. The shell does the damage (cannonShell.pre: its splash).
-    struct CannonShot { glm::vec3 from, velocity; uint8 team; };
+    // and clears the list. The shell does the damage (cannonShell.pre: its splash). A BALLISTA's shot is a bolt (bolt:
+    // ballistaBolt.pre, NpcSystem::fireBallistaBolt); a MAGE's (tickCarriers) a fireball (mageFireball.pre).
+    enum class EShotKind : uint8 { Shell, Bolt, Fireball };
+    struct CannonShot { glm::vec3 from, velocity; uint8 team; EShotKind kind = EShotKind::Shell; };
     oc::vector<CannonShot>& cannonShots() { return m_cannonShots; }
     void tickCannons(float deltaSec);
-    // A Cannon's placed facing: its entity's rotation without the gun's turn (Ref::cannonAim; identity turn elsewhere).
+    // A gun's placed facing: its entity's rotation without the gun's turn (Ref::cannonAim; identity turn elsewhere).
     static glm::quat cannonFacingRot(const Ref& r)
     {
-        return r.type == EStructureType::Cannon ? r.entity->rot * glm::angleAxis(-r.cannonAim, glm::vec3(0.0f, 1.0f, 0.0f)) : r.entity->rot;
+        return isGunType(r.type) ? r.entity->rot * glm::angleAxis(-r.cannonAim, glm::vec3(0.0f, 1.0f, 0.0f)) : r.entity->rot;
     }
     // Turns the gun toward Ref::cannonAimGoal at "Turn rate (deg/s)": the entity's rotation follows. Authority and mirror.
     void turnCannon(Ref& r, float deltaSec) const
@@ -889,9 +895,7 @@ private:
         bool dismissed = false;      // its worker is needed elsewhere: it walks home when it is next idle
         bool guard = false;          // its entity is guard.pre / mage.pre (it is armed): setGuardLook
         bool mage = false;           // its job is a Mage tower: armed with a staff, not a bow
-        bool lit = false;            // a mage at its post with a target: its cone shines (publishSearchlights)
         uint8 team = 0;              // its house's team
-        float yaw = 0.0f;            // a mage's cone direction on the map (atan2 z, x)
     };
     oc::vector<Walker> m_walkers;
     // THE ARMORY'S GUARDS: walkers too. While an enemy unit is in an Armory's range (Ref::alarm), free workers walk to
@@ -899,12 +903,46 @@ private:
     // Armory's range, else a road cell, nearest to the threat - and shoot from there. Nothing hurts them. See
     // "The Armory" in Docs/Context/Game/Economy.md.
     GameUnitComponent* nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
-        const glm::vec3* sightFrom = nullptr) const;
+        const glm::vec3* sightFrom = nullptr, Entity** outEntity = nullptr) const;
+    // THE GUARDS' ARROWS in flight (authority): the hit is a hitscan, but it LANDS when the drawn arrow arrives (the
+    // flight time: the distance / "Arrow speed (m/s)"). The victim is held, so a dead or removed one is simply skipped.
+    struct ArrowHit { EntityPtr victim; float damage; uint8 team; float timeLeft; };
+    oc::vector<ArrowHit> m_arrowHits;
+    void tickArrowHits(float deltaSec);
+    float arrowArc(const glm::vec3& from, const glm::vec3& to) const; // the arrow's drawn arc: over a wall in the way
+public:
+    // An arrow's flight time from -> to on its arc (arrowArc: the height over the straight line at the middle): the
+    // length of the drawn parabola (8 chords) / "Arrow speed (m/s)", and at least the time GRAVITY takes over that arc -
+    // a body thrown up and falling back rises arc = g T^2 / 8, so T = sqrt(8 arc / g) - so a high arc flies like a lob
+    // (the drawing is linear in time along the chord plus that parabola: a ballistic flight). The gravity is x "Arrow arc
+    // gravity (x)": the real one made a high arc too slow. The SAME on every role (NpcSystem draws the arrow for that
+    // long; the authority lands the hit after it).
+    static float arrowFlightTime(const glm::vec3& from, const glm::vec3& to, float arc = 0.0f)
+    {
+        constexpr int c_chords = 8;
+        const glm::vec3 span = to - from;
+        float length = 0.0f;
+        glm::vec3 prev = from;
+        for (int s = 1; s <= c_chords; ++s)
+        {
+            const float t = (float)s / (float)c_chords;
+            const glm::vec3 next = from + span * t + glm::vec3(0.0f, 4.0f * arc * t * (1.0f - t), 0.0f);
+            length += glm::distance(prev, next);
+            prev = next;
+        }
+        const float gravity = glm::max(-Globals::settings.physics.gravity.y * Globals::settings.game.structures.guardArrowGravity, 0.1f);
+        return glm::max(glm::max(length / glm::max(Globals::settings.game.structures.guardArrowSpeed, 1.0f),
+                                 std::sqrt(8.0f * glm::max(arc, 0.0f) / gravity)), 0.05f);
+    }
+private:
     bool walkwayDeckAt(int cx, int cz) const;
     bool guardDeckAt(int cx, int cz) const; // a Walkway deck, a built ward's top, or a built rail tile of the landed ship: no clear line needed
-    bool wardAt(int cx, int cz) const; // a built ward: its top is road (roadAt), a high place for guards
+    bool wardAt(int cx, int cz) const; // a built walkable tower (a ward, the Watch post): its top is road (roadAt), a high place for guards
+    bool watchPostAt(int cx, int cz) const; // a built Watch post: the guards' first post, and a longer reach from it
     // A ward's top in roadAt's terms (a deck origin's height: 0.1 over the top, which is at a deck's height).
-    float wardTopY(const Ref& w) const { return w.entity->pos.y - spawnHeightOf(w.type) + spawnHeightOf(EStructureType::Walkway); }
+    // A walkable tower's top as a deck ORIGIN height (0.1 over the walk surface): every tower's top is 0.25 over its origin
+    // (a ward: 2 m over the ground, a deck's height; the Watch post: 4 m).
+    float wardTopY(const Ref& w) const { return w.entity->pos.y + 0.25f + (spawnHeightOf(EStructureType::Walkway) - WalkwayDeckHeight); }
     bool railEdgeBetween(int ax, int az, int bx, int bz) const; // a landed ship's rail piece between two neighbour cells
     bool guardWanted(int index, uint8 team) const;
     // THE CANNON'S CREW: walkers too. While an enemy unit is within "Crew call range" of a Cannon (Ref::alarm), free
@@ -912,7 +950,7 @@ private:
     // Ammo works for munitions while another one stays at the gun (a lone one goes when the gun is empty). See "The
     // Cannon and munitions" in Docs/Context/Game/Economy.md.
     bool crewWanted(int index, uint8 team) const;
-    int crewAmmoSource(glm::ivec2 fromCell, uint8 team, oc::vector<glm::vec3>& outPath) const;
+    int crewAmmoSource(int fromStructure, glm::ivec2 fromCell, uint8 team, oc::vector<glm::vec3>& outPath) const;
     bool guardPost(glm::ivec2 fromCell, int armoryIdx, size_t self, oc::vector<glm::vec3>& outPath) const;
     void setGuardLook(Walker& w, bool guard);
     int m_carrierCount[GameMaxTeams] = {}; // walkers on the road per team (the HUD)
@@ -941,12 +979,19 @@ private:
     // cell. goal(roster index) of every building a visited cell touches: 2 = take it (the search ends), 1 = keep the
     // first such as the fallback, 0 = no. Returns the roster index (-1 = none) and the walking path to its road cell.
     int roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const;
+    // The same search, but it takes the building of the LOWEST cost: cost(roster index, road steps to it) >= the steps, or
+    // < 0 = no. It stops once the steps alone pass the best cost (and at maxSteps).
+    int roadSearchBest(int fromStructure, glm::ivec2 fromCell, const oc::function<float(int, int)>& cost, oc::vector<glm::vec3>& outPath,
+        int maxSteps = INT_MAX) const;
     // Where a load of `good` from sourceIdx goes: the NEAREST taker by road, a consumer or a storage alike.
     int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, int work,
         oc::vector<glm::vec3>& outPath) const;
+    // Another storage of the team that holds a load of `good` within maxSteps of the consumer by road (findRoadTarget).
+    bool nearerStorage(int consumerIdx, int sourceIdx, int good, int maxSteps) const;
     bool carrierSendGood(int index, int good, bool& consumersOnly) const; // does it have a load of `good` to send?
     bool carrierHoldsStone(int index) const;                              // stone a walker can take to a blueprint
-    int carrierJobTier(int index, uint8 team) const;                      // roadSearch goal: 2 = a load waits for a walker, 1 = a producer with no walker, or stone for a blueprint
+    // THE JOB PICK: the building as a walker's job, as road cells added to the walk there (-1 = no job for a walker).
+    float carrierJobCost(int index, uint8 team) const;
 
     // ---- CELL OCCUPANCY + DERIVED LINKS ----
     // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a

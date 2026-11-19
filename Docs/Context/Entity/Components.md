@@ -335,9 +335,14 @@ the impact** through a spatial query — the lobber shell) / SplashEdge (the spl
 the full damage at the centre; default 1 = flat) / HitsShadows (its unit damage hurts a shadow too) / ImpactPuff
 (its impact bursts in `params.impactPuff` + `impactFlash`, puff streams the game makes; on every role, in `destroy`; and
 it lights up: `destroy` records the impact in a 32-slot ring under a mutex, and the game calls the static
-`drawImpactLights` every frame, a point light that fades out in 0.3 s) /
+`drawImpactLights` every frame, a point light that fades out in 0.3 s) / FireImpact (the same burst in FIRE: two puffs of
+`params.fireImpactPuff` + one `fireImpactFlash`, and a smaller orange impact light - the mage's fireball) /
 MuzzleFlash (its launch flashes where it starts: `params.muzzlePuff` (three puffs), `impactFlash` and `muzzleSmoke` in `spawn`, and a point light for its
-first 0.15 s in `update`, on every role - `update` counts `age` on a client too, before the client early-out).
+first 0.15 s in `update`, on every role - `update` counts `age` on a client too, before the client early-out) /
+Pierce (up to `MaxPierce` 8: the shot flies THROUGH units - its body must not collide with them, e.g. `CollidesWith
+Terrain` - and `update` (authority) hurts each enemy unit the segment since the last tick passes, planar within the body
+radius + 0.35 m and within its height, once each, up to that many; then it is spent. Without HitsShadows a shadow is
+passed and not counted. The Ballista's bolt).
 
 All three are skipped headless.
 

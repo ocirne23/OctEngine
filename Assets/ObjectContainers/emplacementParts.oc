@@ -1,0 +1,4 @@
+# Thin pieces of the defence buildings (Models/emplacementParts.obj): `WatchRailX` / `WatchRailZ` (the Watch post's
+# railings, watchPost.pre), `BallistaShaft` (the loaded bolt, ballista.pre) and `Arrow` (a guard's arrow, arrow.pre).
+ObjectContainer emplacementParts
+	Path "Models/emplacementParts.obj"

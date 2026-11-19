@@ -36,12 +36,19 @@ void Settings::registerTrees(TreeSettings& s)
 	static constexpr oc::string_view BILLBOARD_VIEWS[] = { "2 (side + top)", "4 (+ other side + bottom)" };
 	Tweak::enumVar("Trees", "Billboard views", &s.billboardViews, BILLBOARD_VIEWS, reload);
 	Tweak::floatVar("Trees", "Far distance scale", &s.farDistanceScale, 0.0f, 10.0f, 0.01f);
+	// x every species' `Billboard FadeWidth` (m): how wide the mesh <-> voxels / billboard blend is. The GPU set keeps the
+	// width per piece type, so a change respawns.
+	Tweak::floatVar("Trees", "Fade width scale", &s.fadeWidthScale, 0.1f, 20.0f, 0.01f, respawn);
+	// Where the TREES' mesh -> voxels / billboard blend starts (m; bushes keep their own); 0 = each species' Billboard
+	// Distance x "Far distance scale". The GPU set keeps the distance per piece type, so a change respawns.
+	Tweak::floatVar("Trees", "Voxel start (m)", &s.voxelStart, 0.0f, 4000.0f, 1.0f, respawn);
 	// The MID tier: from this fraction of each species' billboard distance the leaves mesh gives way to one billboard
-	// card per branch module (the bark mesh stays). 0 = off.
-	Tweak::floatVar("Trees", "Branch card distance", &s.branchCardDistance, 0.0f, 1.0f, 0.01f, respawn);
+	// card per branch module (the bark mesh stays). 0 = off: the species load bakes / loads no module billboards, no card
+	// atlas and no card meshes, so a change reloads.
+	Tweak::floatVar("Trees", "Branch card distance", &s.branchCardDistance, 0.0f, 1.0f, 0.01f, reload);
 	// The VOXEL tier: the whole-tree billboard's place in the main pass taken by the variant's marched voxel grid.
 	Tweak::boolean("Trees", "Voxel impostors", &s.voxelImpostors, reload);
-	static constexpr oc::string_view VOXEL_RESOLUTIONS[] = { "32", "64", "128" };
+	static constexpr oc::string_view VOXEL_RESOLUTIONS[] = { "32", "64", "128", "256" };
 	Tweak::enumVar("Trees", "Voxel resolution", &s.voxelResolution, VOXEL_RESOLUTIONS, reload);
 	Tweak::boolean("Trees", "Force far", &s.forceFar);
 	Tweak::boolean("Trees", "GPU expansion", &s.gpuExpansion, respawn);

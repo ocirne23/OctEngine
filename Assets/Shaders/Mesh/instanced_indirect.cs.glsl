@@ -8,6 +8,7 @@
 
 #include "shared.inc.glsl"
 #include "instance_cull.inc.glsl"
+#include "tree_wind.inc.glsl" // a tree record's wind (treeWindOfTree, treeWindPack)
 
 // Matches RendererVKLayout::OutMeshInstance. Written at its DRAW SLOT (firstInstance + its index in the bucket): the scene
 // vertex shaders read it by gl_InstanceIndex, with no index buffer in between.
@@ -140,15 +141,15 @@ bool frustumCheck(vec3 pos, float radius)
     return true;
 }
 
-// `treeWind`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1).
-void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWind)
+// `treeWindScale`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1).
+void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWindScale)
 {
     uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo = in_meshInfos[meshIdx];
     const vec3 centerOffset   = quat_transform(meshInfo.center * instancePosScale.w, quat);
     const bool isRock         = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK; // tree-set rocks: LOD chain, no wind
     const float radius        = meshInfo.radius * instancePosScale.w
-                              + (isTree && !isRock ? u_foliage_windReach * max(max(treeWind.x, treeWind.y), 1.0) : 0.0);
+                              + (isTree && !isRock ? u_foliage_windReach * max(max(treeWindScale.x, treeWindScale.y), 1.0) : 0.0);
     const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     // The ocean mesh is undisplaced: pad by the measured wave displacement. Frustum test only.
@@ -251,17 +252,32 @@ void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uin
             }
         }
 
-        // Trees never move: w = 0, and xyz carries the wind scales + a flag (instanced_indirect.vs.glsl).
-        vec4 prevPosScale = isTree ? vec4(treeWind, 1.0, 0.0) : vec4(0.0);
-        uvec2 prevQuat = uvec2(0u);
-        if (!isTree)
-            prevInstanceTransform(instance, prevPosScale, prevQuat);
+        // Trees never move and are never skinned: a tree piece's three "last frame" fields carry its WIND instead
+        // (tree_wind.inc.glsl treeWindPack: the gusts at its origin now and last frame, the trunk's sway, the fades - what
+        // every vertex of the tree worked out for itself). A rock of the tree set: "did not move", no wind.
+        // Worked out HERE, per drawn record, not once per tree before the record loop: held across the loop it took this
+        // shader from 51 to 60 registers.
+        // The fields that are ready go out first: the wind is then worked out with only the slot held.
         const uint slot = firstInstance + idx; // the draw slot: gl_InstanceIndex in the vertex shaders
         out_meshInstances[slot].posScale           = instancePosScale;
         out_meshInstances[slot].quat               = quat;
-        out_meshInstances[slot].prevPosScale       = prevPosScale;
         out_meshInstances[slot].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
-        out_meshInstances[slot].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: all levels share it
+        vec4 prevPosScale = vec4(0.0);
+        uvec2 prevQuat = uvec2(0u);
+        uint prevVertexDelta;
+        if (isTree && !isRock)
+        {
+            treeWindPack(treeWindOfTree(instancePosScale.xyz, instancePosScale.w, treeWindScale), prevPosScale, prevQuat, prevVertexDelta);
+        }
+        else
+        {
+            // Read here (all the levels of a LOD chain share it), not from `meshInfo`: that one would be held across the wind.
+            prevVertexDelta = in_meshInfos[meshIdx].prevVertexDelta;
+            if (!isTree)
+                prevInstanceTransform(instance, prevPosScale, prevQuat);
+        }
+        out_meshInstances[slot].prevPosScale       = prevPosScale;
+        out_meshInstances[slot].prevVertexDelta    = prevVertexDelta;
         out_meshInstances[slot].prevQuat           = prevQuat;
     }
 }
@@ -280,7 +296,7 @@ void main()
     // One loop for trees and plain instances (k = 0), so cullInstance is inlined once.
     TreeCullPiecePick pick;
     InMeshInstance instance;
-    vec2 treeWind = vec2(1.0);
+    vec2 treeWindScale = vec2(1.0);
     if (isTree)
     {
         if ((passBits & PASS_MAIN) == 0u)
@@ -289,7 +305,7 @@ void main()
             return;
         if (!treeCullMainPiece(pieceIdx, pick))
             return;
-        treeWind = treeCullWind(pick.typeIdx);
+        treeWindScale = treeCullWind(pick.typeIdx);
     }
     else
     {
@@ -312,6 +328,6 @@ void main()
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        cullInstance(instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWind);
+        cullInstance(instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWindScale);
     }
 }

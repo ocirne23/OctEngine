@@ -1,0 +1,37 @@
+# MAGE fireball: a small ball of fire lobbed by a mage (a walker of a Mage tower; StructureSystem::tickCarriers aims it,
+# NpcSystem::fireMageFireball sets its team and launch velocity). On ANY contact it damages EVERY enemy-team unit within
+# SplashRadius of the impact (GameProjectileComponent::onContact), then despawns. SplashEdge: the full UnitDamage at the
+# centre, falling linearly to 40 % of it at the edge. HitsShadows: a SHADOW (a demon that is not solid) takes its damage
+# too. FireImpact: the impact bursts in embers (Effects/fire_blast.pfx + fire_flash.pfx, made by GameMatch) with a short
+# orange light, on every role. The ball glows far over the bloom threshold, and carries a small orange point light.
+# Replicated (Component Network).
+Prefab gameMageFireball
+	Component Render
+		ObjectContainer gemsGlow
+		Node Diamond
+		Type StaticMesh
+		Color 1 0.45 0.1
+		Emissive 10
+		Scale 0.16
+	Component Physics
+		Body Dynamic
+		Layer Projectile
+		Shape Sphere
+		Radius 0.2
+		Density 120
+		Restitution 0.1
+		ContactEvents true
+	Component Light
+		Light Point
+			Color 1 0.5 0.15
+			Intensity 20
+			Range 5
+	Component Network
+	Component GameProjectile
+		UnitDamage 15
+		StructureDamage 0
+		Lifetime 6
+		SplashRadius 2
+		SplashEdge 0.4
+		HitsShadows true
+		FireImpact true

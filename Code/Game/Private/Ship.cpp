@@ -342,8 +342,12 @@ void GameShip::tick(float deltaSec, const Input& input, const GroundFn& ground)
     }
 
     // ---- the lever and the rudder ----
-    const float leverTarget = !input.piloted ? 0.0f : input.throttle > 0.0f ? 1.0f : input.throttle < 0.0f ? -0.35f : m_throttle;
-    m_throttle = moveTowards(m_throttle, leverTarget, s.throttleRate * dt * (input.piloted ? 1.0f : 2.0f));
+    // THE BRAKE (X): the lever goes to stop 4x as fast as W / S move it, and the hull brakes at "Brake (m/s2)" (below)
+    // until it stands.
+    const bool braking = input.piloted && input.brake;
+    const float leverTarget = !input.piloted || braking ? 0.0f
+        : input.throttle > 0.0f ? 1.0f : input.throttle < 0.0f ? -0.35f : m_throttle;
+    m_throttle = moveTowards(m_throttle, leverTarget, s.throttleRate * dt * (braking ? 4.0f : input.piloted ? 1.0f : 2.0f));
     const float cap = glm::max(s.maxSpeed * (m_sailing ? s.seaSpeedMult : 1.0f), 0.5f);
     const float thrust = s.thrust * (m_throttle >= 0.0f ? m_throttle : m_throttle * (1.0f / 3.0f) / 0.35f);
     float vf = glm::dot(glm::vec3(m_vel.x, 0.0f, m_vel.y), fwd);
@@ -356,6 +360,8 @@ void GameShip::tick(float deltaSec, const Input& input, const GroundFn& ground)
     if (wall > 6.0f && vf > 0.0f)
         accForward -= glm::min(wall - 6.0f, 6.0f) * 0.6f * vf;
     vf += accForward * dt;
+    if (braking) // never past zero: it stops, it does not back up
+        vf = vf > 0.0f ? glm::max(vf - s.brake * dt, 0.0f) : glm::min(vf + s.brake * dt, 0.0f);
     vs *= std::exp(-s.sideDrag * dt);
     const float speedFactor = 0.35f + 0.65f * glm::clamp(glm::abs(vf) / cap, 0.0f, 1.0f);
     const float turnTarget = input.piloted ? glm::clamp(input.turn, -1.0f, 1.0f) * s.turnRate * speedFactor : 0.0f;

@@ -147,6 +147,8 @@ namespace Procedural
 				out.climate += (i > 0 ? " " : "") + n->asString(i);
 		readInt(*species, "Weight", out.weight);
 		out.weight = glm::clamp(out.weight, 1, 8);
+		readFloat(*species, "Wood", out.wood);
+		out.wood = glm::max(out.wood, 0.0f);
 		if (const AssetNode* undergrowth = species->find("Undergrowth"))
 		{
 			readFloat(*undergrowth, "Bushes", out.undergrowthBushes);

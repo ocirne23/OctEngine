@@ -10,7 +10,7 @@ export namespace Procedural
 	// keys (RockPlacementDesc) mean.
 	struct RockWorldDesc
 	{
-		float densityScale = 1.0f;
+		float densityScale = 1.2f;
 		// PLAINS / RUGGED: the steepest ground within ~20 m of the rock (rise / run) - at or below .x plains, at or
 		// above .y fully rugged.
 		glm::vec2 ruggedSlope{ 0.08f, 0.4f };

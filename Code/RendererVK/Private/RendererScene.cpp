@@ -359,6 +359,8 @@ namespace
         case ETextureEncoding::BC1: return sRGB ? vk::Format::eBc1RgbaSrgbBlock : vk::Format::eBc1RgbaUnormBlock;
         case ETextureEncoding::BC3: return sRGB ? vk::Format::eBc3SrgbBlock : vk::Format::eBc3UnormBlock;
         case ETextureEncoding::BC5: return vk::Format::eBc5UnormBlock;
+        case ETextureEncoding::BC4: return vk::Format::eBc4UnormBlock;
+        case ETextureEncoding::R8:  return vk::Format::eR8Unorm;
         default:                    return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
         }
     }
@@ -375,8 +377,8 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
     material.flags = desc.extraFlags;
     material.diffuseTexIdx = texIdx;
     material.normalTexIdx = desc.normalMips
-        ? Globals::textureManager.uploadMips(desc.width, desc.height, toFormat(desc.normalEncoding, false), *desc.normalMips,
-            oc::format("{}/normal", desc.debugName).c_str())
+        ? Globals::textureManager.uploadMips(desc.normalWidth ? desc.normalWidth : desc.width, desc.normalHeight ? desc.normalHeight : desc.height,
+            toFormat(desc.normalEncoding, false), *desc.normalMips, oc::format("{}/normal", desc.debugName).c_str())
         : RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
     material.metalRoughnessTexIdx = UINT16_MAX;
     if (desc.alphaCutoff > 0.0f)
@@ -397,10 +399,10 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
 }
 
 uint16 RendererState::addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
-                                 RenderMaterial::ETextureEncoding encoding)
+                                 RenderMaterial::ETextureEncoding encoding, bool sRGB)
 {
     // No re-record: the upload queued its bindless write (as addTextureMaterial's).
-    return Globals::textureManager.uploadMips(width, height, toFormat(encoding, true), mips, debugName);
+    return Globals::textureManager.uploadMips(width, height, toFormat(encoding, sRGB), mips, debugName);
 }
 
 void RendererState::releaseTexture(uint16 texIdx)
@@ -637,10 +639,10 @@ uint32 RenderMaterial::getFlags() const { return Globals::rendererVK.getMaterial
 void RenderMaterial::setFlags(uint32 flags) { Globals::rendererVK.setMaterialFlags(m_index, flags); }
 
 RenderTexture RenderTexture::create(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
-                                    RenderMaterial::ETextureEncoding encoding)
+                                    RenderMaterial::ETextureEncoding encoding, bool sRGB)
 {
     RenderTexture texture;
-    texture.m_index = Globals::rendererVK.addTexture(width, height, mips, debugName, encoding);
+    texture.m_index = Globals::rendererVK.addTexture(width, height, mips, debugName, encoding, sRGB);
     return texture;
 }
 

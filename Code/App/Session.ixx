@@ -271,7 +271,7 @@ public:
                 });
             // The harvest: the trees and the rocks a lumberyard / quarry would work (the tree world's records; main.cpp
             // calls GameMatch::surveyHarvest where they are readable).
-            m_game->setHarvestSource([](float x, float z, float radius, void (*visit)(void* user, float x, float z, float wood, float stone), void* user)
+            m_game->setHarvestSource([](float x, float z, float radius, void (*visit)(void* user, float x, float z, float wood, float stone, float weight), void* user)
                 {
                     return Globals::trees.surveyHarvest(glm::vec2(x, z), radius, visit, user);
                 });
@@ -515,6 +515,18 @@ private:
         }
         if (action.type == MainMenuAction::EType::None)
             return;
+        // LOAD SCENARIO: offline co-op, as the co-op button, then the save loads (GameMatch::runScenario waits for the
+        // Base site by itself) - the menu's --game --coop --scenario <path>.
+        if (action.type == MainMenuAction::EType::StartScenario)
+        {
+            if (!startNetworkFor(ELaunchMode::Single, true, oc::string()))
+                return;
+            startWorldAndGame(true, true);
+            Globals::ui.setMainMenuActive(false);
+            if (m_game)
+                m_game->runScenario(action.scenarioPath);
+            return;
+        }
         const ELaunchMode mode = action.host ? ELaunchMode::Server
             : !action.connectAddress.empty() ? ELaunchMode::Client : ELaunchMode::Single;
         const bool startGame = action.type != MainMenuAction::EType::StartSandbox;

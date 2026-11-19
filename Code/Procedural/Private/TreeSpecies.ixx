@@ -100,6 +100,7 @@ export namespace Procedural
 		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
 		oc::string climate;              // `Climate <name>`: a bush grows around the trees of its climate only
 		int weight = 1;                  // `Weight n` (bushes, 1..8): how often its climate picks it - n entries in each tree's bush list
+		float wood = 1.0f;               // `Wood x`: x the wood a lumberyard counts for one of its trees (after the size: TreeWorld::surveyHarvest)
 		// `Undergrowth` block (trees): the bushes around each of its trees - `Bushes` per tree (the fraction by chance) out
 		// to `Radius` m from it. < 0 = "Trees/Bushes per tree" / 0.75 x "Trees/Spacing (m)".
 		float undergrowthBushes = -1.0f;
@@ -243,7 +244,7 @@ export namespace Procedural
 		glm::vec3 sectionColor{ 0.45f, 0.33f, 0.24f };
 
 		// Baked tree variants (bakeTreeVariant): the runtime draws whole merged trees, not composited pieces.
-		int variantCount = 4;
+		int variantCount = 3;
 
 		// Piece mesh LODs: the per-level error (a fraction of the piece length, TreeGenerator's PIECE_LODS)
 		// is multiplied by this. > 1 switches to coarser levels nearer the camera.

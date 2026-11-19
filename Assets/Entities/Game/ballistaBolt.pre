@@ -1,0 +1,33 @@
+# BALLISTA bolt: a fast bolt of light shot by a Ballista (NpcSystem::fireBallistaBolt sets its team and velocity). Its
+# body collides with the TERRAIN only (CollidesWith Terrain): it flies over the own walls and THROUGH the units, and stops
+# in the ground (or runs out: Lifetime). Pierce: it hurts every enemy unit its flight passes, up to that many
+# (GameProjectileComponent::update's swept test). HitsShadows: it is light, so a SHADOW (a demon that is not solid) takes
+# its damage too. A small point light of its own. Replicated (Component Network).
+Prefab gameBallistaBolt
+	Component Render
+		ObjectContainer gemsGlow
+		Node Diamond
+		Type StaticMesh
+		Color 0.6 0.95 1
+		Emissive 8
+		Scale 0.16
+	Component Physics
+		Body Dynamic
+		Layer Projectile
+		CollidesWith Terrain
+		Shape Sphere
+		Radius 0.15
+		Density 100
+		ContactEvents true
+	Component Light
+		Light Point
+			Color 0.6 0.95 1
+			Intensity 15
+			Range 5
+	Component Network
+	Component GameProjectile
+		UnitDamage 45
+		StructureDamage 0
+		Lifetime 1.5
+		Pierce 4
+		HitsShadows true

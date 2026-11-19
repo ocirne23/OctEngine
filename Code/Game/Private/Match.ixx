@@ -599,6 +599,11 @@ private:
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: the wave's spawns on a per-frame budget
+    // THE RAIDERS (authority, ~1 s): an idle demon whose nearest building is past its target search gets a new march order
+    // to it, so a wave eats its way through the base instead of standing at the first building it broke.
+    void tickRaiders(float deltaSec);
+    float m_raiderTimer = 0.0f;
+    oc::vector<glm::vec3> m_raiderTargets; // scratch: the attackable buildings' ground points
     // COMPOSITION recipes, sampled per spawned unit. The wave's is rolled once per wave in queueWave: an ARCHETYPE
     // (single-type rush, screened siege, combined arms, ... - gated by the night so early nights stay simple) with its
     // weights jittered. Authority-only (clients never spawn).
@@ -756,7 +761,7 @@ inline constexpr oc::string_view c_buildBarKeyLabels[12] = { "1", "2", "3", "4",
 inline constexpr const char* c_structureShortNames[] = { "LNTN", "HRTH", "LMBR", "CRYS",
     "WOOD", "MIRR", "STNW", "GLNT", "BRK", "WALL", "TOWR", "STOR",
     "BUIL", "BEACN", "LIGHT", "TR-W", "ROAD", "CRS-L", "CRS-W", "CRS-R", "HOUS", "HEAL", "QRRY", "BRDG", "GATE", "LENS", "SRCH", "WALK", "ARMR", "MAGE", "RAIL", "CANN", "AMMO", "AMST",
-    "WRES", "WABS", "WRET" };
+    "WRES", "WABS", "WRET", "WTCH", "BLST" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",

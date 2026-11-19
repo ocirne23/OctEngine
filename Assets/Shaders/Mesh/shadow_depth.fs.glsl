@@ -19,8 +19,8 @@ layout (location = 1) in flat uint in_alphaTexIdx;
 
 #ifdef TREE_VOXEL
 layout (location = 2) in vec3 in_voxelGrid;
-layout (location = 3) in flat vec3 in_voxelDirG;    // grid units per metre along the light's travel
-layout (location = 4) in flat vec4 in_voxelSizeLod; // xyz = the box in world metres, w = log2(texel / the box volume's cube root)
+layout (location = 3) in flat vec3 in_voxelDirG;    // grid units per metre along the light's travel, no zero component
+layout (location = 4) in flat vec2 in_voxelStepLod; // x = the cube root of the box's volume (world metres), y = log2(texel / x) + the LOD bias
 layout (location = 5) in flat vec2 in_voxelDepth;   // x = depth per metre along the light, y = the coverage that casts
 // Standard Z (shadow maps): the hit lies at or behind the face, so the written depth is never smaller - early depth still
 // rejects a face behind another caster.
@@ -34,38 +34,34 @@ const float VOXEL_SHADOW_BIAS = 0.15;
 void main()
 {
 #ifdef TREE_VOXEL
-	const uint tex = in_alphaTexIdx;
-	const float res = voxelGridRes(tex);
-	const float tilesX = res / TREE_VOXEL_TILES_Y;
-	const float maxLod = float(textureQueryLevels(u_textures[tex]) - 1);
-	// A voxel about a cascade texel (+ "Voxel LOD bias"); the shadow sampler has no mip bias.
-	const float lod = clamp(floor(in_voxelSizeLod.w + log2(res)), 0.0, maxLod);
-	const float n = res * exp2(-lod);
-	const float stepWorld = pow(in_voxelSizeLod.x * in_voxelSizeLod.y * in_voxelSizeLod.z, 1.0 / 3.0) / res * exp2(lod);
-	// Empty space is skipped two levels coarser (voxelSkip), tested only while the last sample was empty.
-	const vec3 dirG = mix(vec3(1e-6), in_voxelDirG, greaterThan(abs(in_voxelDirG), vec3(1e-6)));
-	const float skipLod = min(lod + 2.0, maxLod);
+	// The alpha index is the grid's opacity atlas: its header names the index texture.
+	const VoxelGrid grid = voxelGrid(in_alphaTexIdx);
+	// A voxel about a cascade texel (+ "Voxel LOD bias").
+	const float lod = clamp(floor(in_voxelStepLod.y + log2(grid.res)), 0.0, grid.levels - 1.0);
+	const VoxelLevel level = voxelLevel(grid, lod);
+	const float n = level.n;
+	const float stepWorld = in_voxelStepLod.x / n;
+	// The march in the level's voxel coordinates (tree_voxel.inc.glsl). An EMPTY brick is jumped to its far side.
+	// THIS MARCH SETS THE SHADER'S REGISTER COUNT (40), so its ray is NOT held in voxel coordinates: the face point and the
+	// direction are read from the interpolants at each step (no register between steps) and scaled there, and the box is
+	// tested on the sample. Held as a start + a direction + an exit distance (the main pass's form) it took 48.
 	float t = 0.5 * stepWorld;
 	float transmit = 1.0;
-	bool empty = true;
 	const int maxSteps = int(n * 1.75) + 2;
+	VoxelBrick marchBrick = voxelBrickNone();
 	for (int i = 0; i < maxSteps; ++i)
 	{
-		const vec3 g = in_voxelGrid + dirG * t;
-		if (any(lessThan(g, vec3(-1e-3))) || any(greaterThan(g, vec3(1.0 + 1e-3))))
+		const vec3 c = (in_voxelGrid + in_voxelDirG * t) * n;
+		if (any(greaterThan(abs(c - 0.5 * n), vec3(0.501 * n)))) // the box, + the face's own rounding
 			break;
-		if (empty && skipLod > lod)
+		float skip;
+		const float a = voxelOpacityNearest(grid, level, c, in_voxelDirG * n, stepWorld, marchBrick, skip); // one fetch: the threshold is binary
+		if (skip > 0.0)
 		{
-			const float skip = voxelSkip(tex, g, dirG, res, tilesX, skipLod, 0.0);
-			if (skip > 0.0)
-			{
-				t += skip;
-				continue;
-			}
+			t += skip;
+			continue;
 		}
-		const float a = voxelOpacityNearest(tex, g, n, tilesX, lod); // one fetch: the threshold is binary
-		empty = a <= VOXEL_SKIP_EMPTY;
-		transmit *= 1.0 - a;
+		transmit *= 1.0 - voxelThin(a);
 		if (1.0 - transmit >= in_voxelDepth.y)
 		{
 			gl_FragDepth = max(gl_FragCoord.z + (t + VOXEL_SHADOW_BIAS) * in_voxelDepth.x, gl_FragCoord.z);

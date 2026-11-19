@@ -454,22 +454,77 @@ vec3 doLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCo
 	return doPointLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
 }
 
+// DIFFUSE ONLY (the lit core's LIT_LIGHTS_DIFFUSE: the trees' billboards and voxels - rough surfaces seen from tens of
+// metres, on which a local light's highlight is nothing): doLight's diffuse halves alone - the same radiance, falloff,
+// cone, one-sided test and horizon fade per light kind, with no view vector, no Fresnel and no GGX. The view vector, the
+// specular colour and the roughness are then not live across the light loop (its shadow ray is the register peak).
+vec3 doLightDiffuse(LightInfo light, vec3 pos, f16vec3 N, f16vec3 matColOverPi)
+{
+	vec3 radiance;
+	float cosine;
+	if (light.width > 0.0)
+	{
+		if (light.range < 0.0) // a beam: from the closest point of its core, shaded from the tube's surface
+		{
+			const float height  = length(light.direction);
+			const float halfLen = height * 0.5;
+			const float radius  = abs(light.width);
+			const vec3 axis     = light.direction / height;
+			const vec3 closest  = closestPointOnSegment(pos, light.pos - axis * halfLen, light.pos + axis * halfLen);
+			const float coreDist = length(closest - pos);
+			const float halfExtent = (halfLen + radius) / max(coreDist, 1e-5);
+			cosine = smoothstep(-halfExtent, halfExtent, dot(vec3(N), normalize(light.pos - pos)));
+			radiance = light.color * squareFalloff(max(coreDist - radius, 1e-4), abs(light.range));
+		}
+		else // a rectangle: one-sided, from its closest point, the horizon fade over its angular size
+		{
+			vec3 right, up;
+			float halfWidth, halfHeight;
+			areaLightBasis(light, right, up, halfWidth, halfHeight);
+			const vec3 quadNormal = cross(up, right);
+			if (dot(pos - light.pos, quadNormal) <= 0.0)
+				return vec3(0.0);
+			const vec3 toClosest = closestPointOnRect(pos, light.pos, right, up, halfWidth, halfHeight) - pos;
+			const float dist = length(toClosest);
+			const float halfExtent = (halfWidth + halfHeight) * 0.5 / dist;
+			cosine = smoothstep(-halfExtent, halfExtent, dot(vec3(N), normalize(light.pos - pos)));
+			radiance = light.color * (squareFalloff(dist, light.range) * dot(quadNormal, -toClosest / dist));
+		}
+	}
+	else
+	{
+		const vec3 lightVec = light.pos - pos;
+		const float dist = length(lightVec);
+		const vec3 L = lightVec / dist;
+		radiance = light.color * squareFalloff(dist, light.range);
+		if (light.width < 0.0) // a spot: rotation = the cone's half angle, |direction| = the edge softness
+		{
+			const float softness = length(light.direction);
+			const float cosOuter = cos(light.rotation);
+			radiance *= smoothstep(cosOuter, mix(cosOuter, 1.0, softness), dot(-L, light.direction / softness));
+		}
+		cosine = max(dot(vec3(N), L), 0.0);
+	}
+	return vec3(matColOverPi) * (radiance * cosine);
+}
+
 // Area shadows: ONE ray per pixel per frame at a jittered point on the emitter (shadowJitter); TAA integrates
 // the penumbra. A per-pixel loop of up to 4 rays costs the lit fragments 16 registers (80 -> 96) and the terrain 80
 // bytes of spills: the loop state stays live across every inlined ray query + alpha-test loop.
-float areaLightVisibility(LightInfo light, vec3 pos, vec3 N)
+// The point of the emitter this pixel's ray aims at.
+vec3 areaLightShadowTarget(LightInfo light)
 {
 	vec3 right, up;
 	float halfWidth, halfHeight;
 	areaLightBasis(light, right, up, halfWidth, halfHeight);
 	const vec2 u = shadowJitter() * 2.0 - 1.0;
-	return traceLightVisibility(pos, N, light.pos + right * (u.x * halfWidth) + up * (u.y * halfHeight));
+	return light.pos + right * (u.x * halfWidth) + up * (u.y * halfHeight);
 }
 
 // A beam's shadow: ONE ray at a FIXED point of the line, so it has no noise at all (a jittered point over a line
 // kilometres long never converges under TAA). The point is the closest one on the line, moved along the axis by the
 // distance to the line: the ray leaves at 45 degrees to the beam, over what stands at its foot. Clamped to the line.
-float beamLightVisibility(LightInfo light, vec3 pos, vec3 N)
+vec3 beamLightShadowTarget(LightInfo light, vec3 pos)
 {
 	const float len = length(light.direction);
 	const vec3 axis = light.direction / len;
@@ -479,7 +534,7 @@ float beamLightVisibility(LightInfo light, vec3 pos, vec3 N)
 	const float away = length(rel - axis * along);
 	// max(along, 0): a point BELOW the beam's start (ground lower than a beacon's foot) still aims at least `away` up
 	// the beam; measured from its own negative height, its ray ran low over the start, into what the beam stands on.
-	return traceLightVisibility(pos, N, start + axis * clamp(max(along, 0.0) + away, 0.0, len));
+	return start + axis * clamp(max(along, 0.0) + away, 0.0, len);
 }
 
 // The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The ocean has no
@@ -494,11 +549,28 @@ float beamLightVisibility(LightInfo light, vec3 pos, vec3 N)
 
 // One light's ray-traced shadow visibility at pos (N = the ray origin's offset). The caller gates it on
 // PL_RT_LIGHTS_COMPILED / PL_RT_LIGHTS_ON and on a non-black analytic term.
+// ONE trace call for every light kind: they differ only in the point the ray aims at, and each call site inlines the
+// whole trace (the terrain march and the ray query with its alpha-test loop) - three sites were three copies of it
+// (~27 KB of every lit fragment shader).
+// PL_LIGHT_TRACE_TWO_SITES (an includer's choice, by its pipeline stats): one site for the area / beam lights and one
+// for the punctual ones. The tessellated ground: with one site its allocator took 72 registers / 32 B, with two 64 / 48.
 float lightShadowVisibility(LightInfo light, vec3 pos, vec3 N)
 {
+#ifdef PL_LIGHT_TRACE_TWO_SITES
 	if (light.width > 0.0)
-		return light.range < 0.0 ? beamLightVisibility(light, pos, N) : areaLightVisibility(light, pos, N);
-	return traceLightVisibility(pos, N, light.pos); // point/spot: genuinely punctual, one center ray
+		return traceLightVisibility(pos, N, light.range < 0.0 ? beamLightShadowTarget(light, pos) : areaLightShadowTarget(light));
+	return traceLightVisibility(pos, N, light.pos);
+#else
+	vec3 target = light.pos; // point / spot: genuinely punctual, one centre ray
+	if (light.width > 0.0)
+	{
+		if (light.range < 0.0)
+			target = beamLightShadowTarget(light, pos);
+		else
+			target = areaLightShadowTarget(light);
+	}
+	return traceLightVisibility(pos, N, target);
+#endif
 }
 
 vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)

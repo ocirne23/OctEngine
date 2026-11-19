@@ -44,8 +44,8 @@ bool StructureSystem::deckCellsFree(EStructureType type, const glm::vec3& p) con
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f;
     for (const Ref& r : m_frame)
     {
-        // A CANNON may stand on a RAIL tile (the rail stays; landed, the rail is the cell's occupant, the cannon rides underId).
-        if (!r.onShip || (type == EStructureType::Cannon && r.type == EStructureType::ShipRail))
+        // A GUN may stand on a RAIL tile (the rail stays; landed, the rail is the cell's occupant, the gun rides underId).
+        if (!r.onShip || (isGunType(type) && r.type == EStructureType::ShipRail))
             continue;
         const float other = footprintCellsOf(r.type) * GridCellSize * 0.5f;
         if (glm::abs(r.shipLocal.x - p.x) < half + other - 1e-3f && glm::abs(r.shipLocal.z - p.z) < half + other - 1e-3f)

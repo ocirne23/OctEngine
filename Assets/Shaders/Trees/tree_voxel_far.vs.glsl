@@ -28,8 +28,10 @@ layout (location = 4) out vec3 out_prevWorldDelta;
 layout (location = 5) out flat vec3 out_voxelCam;
 layout (location = 6) out vec3 out_voxelGrid;
 layout (location = 7) out flat vec4 out_voxelQuat;
-layout (location = 8) out flat vec3 out_voxelWorldSize;
-layout (location = 9) out flat vec3 out_instanceOrigin;
+layout (location = 8) out flat vec4 out_voxelWorldSize;
+layout (location = 9) out flat float out_treeDistance;
+layout (location = 10) out flat vec4 out_voxelSunLod;
+#include "tree_voxel_box.inc.glsl"
 
 void main()
 {
@@ -50,15 +52,10 @@ void main()
     out_meshIdxMaterialIdx = inst_data.y;
     out_prevWorldDelta = windPrevDelta; // the trees never move
 
-    const vec3 grid = in_normalV.xyz;
-    const vec3 boxSize = max(in_tangent.xyz, vec3(1e-4));
-    const vec3 boxMin = in_posU.xyz - grid * boxSize;
-    const vec3 camLocal = quat_transform(u_viewPos - instPos, vec4(-inst_quat.xyz, inst_quat.w)) / max(instScale, 1e-6);
-    out_voxelCam = (camLocal - boxMin) / boxSize;
-    out_voxelGrid = grid;
+    out_voxelGrid = in_normalV.xyz;
     out_voxelQuat = inst_quat;
-    out_voxelWorldSize = boxSize * instScale;
-    out_instanceOrigin = instPos;
+    treeVoxelBoxInterface(in_posU.xyz, in_normalV.xyz, in_tangent.xyz, instPos, instScale, inst_quat, out_voxelCam, out_voxelWorldSize, out_voxelSunLod);
+    out_treeDistance = distance(u_viewPos, instPos);
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w;

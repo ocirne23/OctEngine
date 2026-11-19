@@ -260,9 +260,13 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 
 	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's film gate)
 	// resolves it before computeLitColor (a no-op here then); other materials pay the fetch on sun-facing pixels only.
+	// LIT_NO_UNDERWATER (the trees' leaves, billboards and voxels: never under the water): no water-level fetch, no
+	// caustics - the whole underwater path compiles out.
+#ifndef LIT_NO_UNDERWATER
 	resolveLiveDepth(worldPos);
 	const float depthBelow = g_liveDepthBelow;
 	const float localWaterLevel = g_liveWaterLevel;
+#endif
 #ifdef SUN_SHADOW_FIRST
 	const float visibility = g_sunShadowFirst;
 #else
@@ -272,9 +276,11 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), once per frame on the CPU.
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
+#ifndef LIT_NO_UNDERWATER
 	// Underwater: caustic focus + Beer-Lambert absorption (underwater_light.inc.glsl).
 	if (depthBelow > 0.0)
 		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
+#endif
 #ifdef LEAF_SPEC_NORMAL
 	// A LEAF's sun specular from its own, more CURVED normal (g_leafSpecN): the diffuse keeps N, the highlight sweeps a
 	// wider range of directions over each cupped leaf, so some spot on it meets the half vector (a glint) - from N it
@@ -350,12 +356,6 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 #define LIGHT_GRID_DEBUG 0
 #endif
 
-#ifdef FOLIAGE_NO_RTAO
-// FOLIAGE cards (set by the lit FS around computeLitColor): no RTAO. The AO is traced from the depth image, so on a
-// card it is the occlusion of the flat card by the crossing card and the ground, not of the crown it stands for.
-bool g_noRtao = false;
-#endif
-
 #ifdef LEAF_SKY_WRAP
 // The includer's per-pixel "Trees/Leaf sky wrap" (0 on everything but leaves): see computeLitColor.
 float16_t g_leafSkyWrap = float16_t(0.0);
@@ -370,14 +370,20 @@ float16_t g_leafSkyWrap = float16_t(0.0);
 vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
 	const f16vec3 V = f16vec3(Vf);
-#ifdef LIT_SPECULAR_F0
-	const f16vec3 specularColor = mix(f16vec3(LIT_SPECULAR_F0), materialColor, metalness); // the includer's dielectric F0
-#else
-	const f16vec3 specularColor = mix(f16vec3(0.04), materialColor, metalness);
+#ifndef LIT_SPECULAR_F0
+#define LIT_SPECULAR_F0 0.04 // the includer's dielectric F0 otherwise
 #endif
+#ifdef LIT_DIELECTRIC
+	// The includer's materials are never metal (the trees: `metalness` is unused): the specular colour is the ONE F0
+	// scalar, not three values across the light loop, and the diffuse takes no (1 - metalness).
+	const f16vec3 specularColor = f16vec3(float16_t(LIT_SPECULAR_F0));
+	const f16vec3 diffuseColOverPi = materialColor * float16_t(INV_PI);
+#else
+	const f16vec3 specularColor = mix(f16vec3(LIT_SPECULAR_F0), materialColor, metalness);
 	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so metalness is not live
 	// across the light loop (one register fewer).
 	const f16vec3 diffuseColOverPi = materialColor * (float16_t(INV_PI) * (float16_t(1.0) - metalness));
+#endif
 
 	// The sun FIRST: its shadow search is the likely register peak, and here no AO / GI result is live across it yet.
 	// The accumulator is HALF (the scene colour target is RGBA16F); each light's unbounded radiance is clamped to the
@@ -392,16 +398,16 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
 	float16_t ao = float16_t(1.0);
 	f16vec3 bentN = N;
-#ifndef LIT_NO_RTAO // the grass (grass.fs.glsl): no RTAO read at all - its own root occlusion stands in
+	// LIT_NO_RTAO: no RTAO read at all. The grass (grass.fs.glsl): its own root occlusion stands in. The tree billboards
+	// and voxels: the AO is traced from the depth image, so on a card it is the occlusion of the flat card by the crossing
+	// card and the ground (on a voxel hit: of a point inside a crown), not of the crown it stands for - their baked
+	// interior is their AO.
+#ifndef LIT_NO_RTAO
 	// Past the RTAO max distance the trace writes exactly (0, 1.0) (rtao.cs.glsl early-out), so skip the upsample and
 	// use those constants. The gate measures from the SCENE FOCUS, as that early-out does; the camera distance still
 	// drives the upsample's depth weights.
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
-#ifdef FOLIAGE_NO_RTAO
-	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance && !g_noRtao)
-#else
 	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance)
-#endif
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(worldPos, aoViewDist);
@@ -459,7 +465,11 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 				const LightInfo light = in_lightInfos[lightId];
 				// The analytic term goes HALF before the shadow ray: only the half result is live across the query,
 				// the loop's peak.
+#ifdef LIT_LIGHTS_DIFFUSE // the includer's surface takes no highlight from a local light (punctual_lights.inc.glsl doLightDiffuse)
+				const vec3 lit = doLightDiffuse(light, worldPos, N, diffuseColOverPi);
+#else
 				const vec3 lit = doLight(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH);
+#endif
 				const f16vec3 litH = f16vec3(min(lit, vec3(MEDIUMP_FLT_MAX)));
 				float16_t visibility = float16_t(1.0);
 #if PL_RT_LIGHTS_COMPILED

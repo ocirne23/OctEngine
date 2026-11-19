@@ -19,7 +19,7 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
-layout (location = 5) in flat vec3 in_instanceOrigin; // the tree's origin: the distance fade (the VS's TREE_ORIGIN)
+layout (location = 5) in flat float in_treeDistance; // the camera's distance to the tree's origin: the distance fade (the VS's TREE_ORIGIN)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -36,6 +36,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
 #define LIT_EXTRA_LIGHT      // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
+#define LIT_NO_UNDERWATER    // instanced_indirect_lit.inc.glsl: a tree's leaves and bark are never under the water
+#define LIT_DIELECTRIC       // instanced_indirect_lit.inc.glsl: a tree material is never metal (no metal-roughness texture)
 float16_t g_specularF0 = float16_t(0.04);
 #define LIT_SPECULAR_F0 g_specularF0 // instanced_indirect_lit.inc.glsl: the leaves' own F0 ("Trees/Leaf specular")
 #include "instanced_indirect_lit.inc.glsl"
@@ -69,7 +71,6 @@ void main()
 	const MaterialInfo material         = in_materialInfos[materialIdx];
 	const uint16_t diffuseTexIdx        = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
 	const uint16_t normalTexIdx         = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
-	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
 	const vec2 texUv                    = vec2(in_posU.w, in_normalV.w);
 
 	const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], texUv);
@@ -77,49 +78,37 @@ void main()
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
-	if (treeDistanceFaded(material.flags, in_instanceOrigin)) // the crossfades, per tree (tree_fade.inc.glsl)
+	if (treeDistanceFaded(material.flags, in_treeDistance)) // the crossfades, per tree (tree_fade.inc.glsl)
 		discard;
 
 	// After the discards: a cut-out pixel pays no shadow.
 	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
 	sunShadowFirstTree(pos, leaf);
 
-	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness, metalness and the
-	// normal-map decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES.
-	float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
-	float16_t metalness = float16_t(0.0);
-	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
-	{
-		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
-		metalness = metalRoughness.x;
-		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
-	}
+	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness and the normal-map
+	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES. A tree material has NO
+	// metal-roughness texture (Procedural createTreeMaterial): the metalness is the constant 0, so the lit core's
+	// specular colour is the one F0 scalar.
+	const float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
 
 	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz,
 		leaf ? 1.0 : u_terrain_factionSolidScale); // bark: the weaker tint, as the near bark's (instanced_indirect.fs.glsl)
 
-	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal into the surface -
-	// reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+	// THE NORMAL MAP: Z rebuilt from X / Y for BOTH layouts, no branch on the format - the bark's two-channel BC5 has no Z
+	// (.z reads 0), and the leaves' (and the uncompressed bark's) RGB normals are unit with Z > 0, so the rebuilt Z is
+	// their stored one.
 	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
-	const f16vec3 normalSample = normalTap.xyz;
-	f16vec3 tangentNormal;
-	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
-	{
-		const f16vec2 normalXY = normalSample.xy * float16_t(2.0) - float16_t(1.0);
-		tangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
-	}
-	else
-	{
-		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
-	}
+	const f16vec2 normalXY = normalTap.xy * float16_t(2.0) - float16_t(1.0);
+	const f16vec3 rawTangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
 	// Leaves: the normal map's slope x "Trees/Leaf normal strength" (0 = flat cards; the cupped, tilted leaves of the
-	// cluster texture are subtle at 1). Its A is the leaf's RIM (0 at the midrib .. 1 at the edge, Procedural
-	// TreeLeafTexture): a leaf is thicker in its centre, so less sun gets through there. (From the normal's tilt it was
-	// wrong: each leaf's own random tilt cancels the cup on one half, which then read as all centre.)
+	// cluster texture are subtle at 1; at exactly 1 - a constant while its row is locked - nothing to do). Its A is the
+	// leaf's RIM (0 at the midrib .. 1 at the edge, Procedural TreeLeafTexture): a leaf is thicker in its centre, so less
+	// sun gets through there. (From the normal's tilt it was wrong: each leaf's own random tilt cancels the cup on one
+	// half, which then read as all centre.)
 	const float leafRim = float(normalTap.w);
-	const f16vec3 rawTangentNormal = tangentNormal;
-	if (leaf)
-		tangentNormal = normalize(f16vec3(tangentNormal.xy * float16_t(u_foliage_leafNormalStrength), tangentNormal.z));
+	f16vec3 tangentNormal = rawTangentNormal;
+	if (leaf && u_foliage_leafNormalStrength != 1.0) // not unit after it: the TBN's normalize below takes any length
+		tangentNormal.xy *= float16_t(u_foliage_leafNormalStrength);
 
 	const f16vec3 geoN = f16vec3(in_normalV.xyz);
 	const f16vec3 T = f16vec3(in_tangent.xyz);
@@ -143,8 +132,8 @@ void main()
 #ifdef LEAF_SPEC_NORMAL
 		if (u_foliage_leafSpecCurve > 0.0)
 		{
-			const f16vec3 st = normalize(f16vec3(rawTangentNormal.xy * float16_t(u_foliage_leafSpecCurve), rawTangentNormal.z));
-			vec3 sn = normalize(vec3(T * st.x + B * st.y + geoN * st.z));
+			const f16vec2 st = rawTangentNormal.xy * float16_t(u_foliage_leafSpecCurve); // not unit: the normalize below takes any length
+			vec3 sn = normalize(vec3(T * st.x + B * st.y + geoN * rawTangentNormal.z));
 			const float snoV = dot(sn, V);
 			if (snoV < u_foliage_minNoV)
 				sn = normalize(sn + V * (u_foliage_minNoV - snoV));
@@ -176,7 +165,9 @@ void main()
 	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
 #endif
 	g_specularF0 = float16_t(leaf ? u_foliage_leafSpecular : 0.04); // "Trees/Leaf specular": a waxy leaf's white highlight
-	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
-	out_color = vec4(color, min(diffuseSample.a, material.opacity));
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, float16_t(0.0), float16_t(1.0));
+	// Alpha 1: the pipeline does not blend (alpha-tested, opaque), and the texture's alpha and the material's opacity were
+	// two values live across the whole lit core for it.
+	out_color = vec4(color, 1.0);
 	out_motion = motionVector(in_prevWorldDelta);
 }

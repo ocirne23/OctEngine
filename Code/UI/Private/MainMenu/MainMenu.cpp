@@ -269,6 +269,17 @@ void MainMenu::renderMain()
 	//	start(MainMenuAction::EType::StartPvp);
 	if (ImGui::Button("Sandbox (engine testbed)", buttonSize))
 		start(MainMenuAction::EType::StartSandbox);
+	// LOAD SCENARIO: offline co-op with a saved game loaded (--game --coop --scenario <path>; the load waits for the Base
+	// site). The multiplayer fields below do not apply to it.
+	if (ImGui::Button("Load scenario (co-op)", buttonSize))
+	{
+		m_status.clear();
+		m_action = MainMenuAction{};
+		m_action.type = MainMenuAction::EType::StartScenario;
+		m_action.scenarioPath = m_scenarioPath;
+	}
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	ImGui::InputTextWithHint("##scenarioPath", "Scenarios/<save>.txt", m_scenarioPath, sizeof(m_scenarioPath));
 
 	ImGui::Spacing();
 	ImGui::SeparatorText("Multiplayer");

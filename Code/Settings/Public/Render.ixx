@@ -375,7 +375,7 @@ export struct FoliageParams
                                 // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float leafShadowLength = 1.5f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
+    float leafShadowLength = 3.0f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
                                    // strength) - a leaf just under its own billboard's top card is barely shaded,
                                    // one deep under it fully
     float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
@@ -434,8 +434,8 @@ export struct FoliageParams
     float transmissionWarmth = 0.0f;
     // PATCHES of leaf colour over the crown (a world-space noise of this size, m): x 1 -+ variation in brightness, and
     // toward yellow / toward a deeper green with it. 0 = off.
-    float leafPatchVariation = 0.4f;
-    float leafPatchSize = 2.0f;
+    float leafPatchVariation = 1.0f;
+    float leafPatchSize = 1.0f;
     // A leaf facing DOWN takes its ambient (GI) from its normal mirrored this far toward the sky (0 = its own side
     // only, 1 = fully mirrored): a thin leaf is lit through from the sky behind it, not only by the dark ground.
     float leafSkyWrap = 0.5f;
@@ -470,23 +470,27 @@ export struct FoliageParams
     float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (>= 0.0005)
     // THE VOXEL TIER (instanced_indirect_tree_voxel.fs.glsl, "Trees/Voxel impostors"):
     float voxelLodBias = 0.0f;      // + the grid level the march picks (log2: +1 = voxels twice as large, half the steps)
-    float voxelSelfShadow = 1.0f;   // the sun through the tree's own voxels toward the sun ^ this. 0 = no march: the tree
+    float voxelSharpness = 0.95f;    // 0..0.95: the march's filter reach - 0 = trilinear (each voxel's opacity a voxel into its
+                                    // neighbours: fuller clumps), toward 1 = each voxel its own cell
+    float voxelThinning = 0.0f;     // 0..0.95: the leaves' density taken off in every voxel march (view, self-shadow,
+                                    // shadow casters) - a crown fuller than its mesh thinned to match
+    float voxelSelfShadow = 0.9f;   // the sun through the tree's own voxels toward the sun ^ this. 0 = no march: the tree
                                     // reads the cascades at its hit instead and takes its own caster's shadow from them
     // The voxel colour's saturation (linear, about its luminance): 1 = as baked, > 1 more vivid. The bake averages every
     // surface in a voxel - the twigs drawn in the leaf texture, the branches of a sparse voxel - so it reads greyer than the
     // mesh leaves, which keep each texel's own colour.
     float voxelSaturation = 1.1f;
-    float voxelBrightness = 1.0f;   // x the voxel colour (linear), after the saturation
+    float voxelBrightness = 1.05f;   // x the voxel colour (linear), after the saturation
     // The voxel tier's LEAF TRANSMISSION: x the "Foliage transmission" strength / glow / focus, and the share of the voxel
     // self-shadow the transmitted sun takes (its own: the cards' crown chord is another measure).
-    float voxelTransmission = 1.0f;
+    float voxelTransmission = 0.9f;
     float voxelTransmissionGlow = 1.0f;
     float voxelTransmissionFocus = 1.0f;
-    float voxelTransmissionSelfShadow = 0.5f;
+    float voxelTransmissionSelfShadow = 0.8f;
     // The transmission's back term toward leaves facing EVERY way (0.25 x (1 - V.L)) and away from the voxel's mean normal
     // (-N.L): 0 = by how much the voxel's leaves agree (x its cover), 1 = every voxel as leaves facing every way.
     float voxelTransmissionSpread = 0.0f;
-    float voxelNormalHull = 0.5f;   // the shading normal toward the crown's outward direction where the leaves face every
+    float voxelNormalHull = 0.02f;   // the shading normal toward the crown's outward direction where the leaves face every
                                     // way (a short mean normal): x (1 - its length) x this (0 = the mean normal only)
     // The trees' SUN SHADOW CASTER in the cascades: their voxel grid (marched toward the sun, at every distance) instead of
     // their billboard, for the types that have one. RT keeps the billboard.

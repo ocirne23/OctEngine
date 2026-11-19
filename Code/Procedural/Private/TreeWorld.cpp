@@ -262,6 +262,7 @@ namespace Procedural
 			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
 			floor.treeScale = desc.scale;
 			floor.harvest = desc.bush ? 0 : 1;
+			floor.wood = desc.wood;
 			// A bush with a Placement block grows ON ITS OWN too (the desert's agaves): the bush pass, not the trees'.
 			Species& species = (desc.bush ? m_bushes : m_species).emplace_back();
 			species.name = desc.name;
@@ -579,11 +580,11 @@ namespace Procedural
 					const glm::vec2 world = glm::vec2(coord) * m_chunkSize + recordLocal;
 					const uint32 recordSeed = treeRecordSeed(seed(), coord, record);
 					if (floor.harvest == 2)
-						visit(user, world.x, world.y, 0.0f, rockRecordScale(recordSeed, floor.rockScale));
+						visit(user, world.x, world.y, 0.0f, rockRecordScale(recordSeed, floor.rockScale), 1.0f);
 					else if (floor.kind == 3)
 					{
 						const float meanLength = glm::max(0.5f * (floor.rockScale.x + floor.rockScale.y), 0.01f);
-						visit(user, world.x, world.y, DEAD_WOOD_SIZE * rockRecordScale(recordSeed, floor.rockScale) / meanLength, 0.0f);
+						visit(user, world.x, world.y, DEAD_WOOD_SIZE * rockRecordScale(recordSeed, floor.rockScale) / meanLength, 0.0f, 1.0f);
 					}
 					else
 					{
@@ -591,7 +592,7 @@ namespace Procedural
 						const float scale = glm::mix(floor.treeScale.x, floor.treeScale.y, treeHash01(treeHash(recordSeed, 103u)))
 							* std::exp2(sizeVariation * (treeHash01(treeHash(recordSeed, 105u)) * 2.0f - 1.0f));
 						const float meanScale = glm::max(0.5f * (floor.treeScale.x + floor.treeScale.y), 0.01f);
-						visit(user, world.x, world.y, floor.trunk / meanScale * scale / refTrunk, 0.0f);
+						visit(user, world.x, world.y, floor.trunk / meanScale * scale / refTrunk, 0.0f, floor.wood);
 					}
 				}
 			}

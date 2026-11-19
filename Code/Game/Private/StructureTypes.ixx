@@ -10,7 +10,23 @@ import Core;
 // REMOVED here and in every table indexed by the enum (the names and spawn heights in Structures.cpp, the short
 // names in Match.ixx, the prefabs in StructuresPlacement.cpp, the costs in Settings.Game), and an old save or
 // scenario file then loads wrong.
-export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, WardResist, WardAbsorb, WardRetaliate, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Lumberyard, Battery, FuelTank, Solar, Fabricator, Bastion, Barracks, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Quarry, Bridge, Gate, Lens, Searchlight, Walkway, Armory, MageTower, ShipRail, Cannon, AmmoWorks, AmmoStore, WardResist, WardAbsorb, WardRetaliate, WatchPost, Ballista, Count };
+
+// THE GUNS: a crewed, turned emplacement that fires munitions in an arc around its facing - the CANNON (an arcing splash
+// shell) and the BALLISTA (a fast bolt that pierces a line of demons, shadows too). Both share the crew, the munitions, the gun
+// turn and the placement (one cell, on the ground, a road piece, a walkway deck or a ship rail).
+export constexpr bool isGunType(EStructureType t)
+{
+    return t == EStructureType::Cannon || t == EStructureType::Ballista;
+}
+// A WALKABLE TOWER: a 2 m wide block with a flat top - the wards (2 m tall: a Walkway deck's height) and the Watch post
+// (4 m). Its top is a guard post (a high place) and, at a deck's height, a hard edge for the deck solve. A ward's top is
+// also ROAD (StructureSystem::roadAt); the Watch post's is not - only the guards' post search goes onto it.
+export constexpr bool isTowerTopType(EStructureType t)
+{
+    return t == EStructureType::WardResist || t == EStructureType::WardAbsorb || t == EStructureType::WardRetaliate
+        || t == EStructureType::WatchPost;
+}
 
 // THE WARDS: a 1x1 tower with a light store that stands against a wall and strengthens the walls connected to it (a
 // breadth-first search over the touching wall and gate segments, "Walls per ward" at most). One kind each: RESIST takes
@@ -99,15 +115,15 @@ export constexpr bool isShipPlaceableType(EStructureType t)
 // and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab - never the Walkway.
 export constexpr bool isWalkThrough(EStructureType t)
 {
-    return (isCableOrCrossing(t) && t != EStructureType::Walkway) || t == EStructureType::Solar || t == EStructureType::Cannon;
+    return (isCableOrCrossing(t) && t != EStructureType::Walkway) || t == EStructureType::Solar || isGunType(t);
 }
-// THE CANNON stands on ONE cell that may also hold a road piece or a walkway deck (the piece stays the cell's primary
-// occupant, the cannon rides `underId`), turned to a facing (eighths of a turn), and fires in an arc around it.
+// A GUN stands on ONE cell that may also hold a road piece or a walkway deck (the piece stays the cell's primary
+// occupant, the gun rides `underId`), turned to a facing (eighths of a turn), and fires in an arc around it.
 export constexpr bool isRotatedPlacement(EStructureType t)
 {
-    return t == EStructureType::Cannon;
+    return isGunType(t);
 }
-// MUNITIONS: the fourth good (store index 3) - made by the Ammo works, banked by the Ammo store, used by the Cannon.
+// MUNITIONS: the fourth good (store index 3) - made by the Ammo works, banked by the Ammo store, used by the guns.
 // They move ONLY by carrier (never on a cable).
 export constexpr int GoodMunitions = 3;
 export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 minerals; -1 = not a cable

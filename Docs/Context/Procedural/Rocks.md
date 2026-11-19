@@ -249,7 +249,8 @@ tweaks, RendererVK CONTEXT "The rock material") or **Flat grey** (`LitOpaque`: t
 every placement rule** (they stand wherever the camera looks, a hillside too): judge placement with the preview off.
 
 **`Rocks/World`**: `Enabled` (default on: rock records in TreeWorld + rock types in TreeSystem's world set - they need
-"Trees/World/Enabled", "Trees/Enabled" and the terrain too), `Density scale`, `Rugged slope start / full` and
+"Trees/World/Enabled", "Trees/Enabled" and the terrain too), `Density scale` (1.2: x every type's placement density),
+`Rugged slope start / full` and
 `Valley relief start / full (m)` (what the types' `Plains` / `Rugged` / `Valley` mean - `RockWorldDesc` in
 Settings.Rocks, see ROCK RECORDS ([Trees.md](Trees.md)); every change regenerates the record chunks). The system
 serves the world through `worldEnabled()` / `worldRules()` / `typesRevision()` / `worldTypes()` /

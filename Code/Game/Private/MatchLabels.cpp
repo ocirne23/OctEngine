@@ -65,8 +65,8 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     // MINERALS: spent by constructors, banked by silos, made by fabricators + quarries.
     const bool minerals = type == EStructureType::Constructor || type == EStructureType::MineralSilo
         || type == EStructureType::Fabricator || type == EStructureType::Quarry || type == EStructureType::AmmoWorks;
-    // MUNITIONS (by carrier only): made by the Ammo works, banked by the Ammo store, used by the Cannon.
-    const bool munitions = type == EStructureType::Cannon || type == EStructureType::AmmoStore;
+    // MUNITIONS (by carrier only): made by the Ammo works, banked by the Ammo store, used by the guns.
+    const bool munitions = isGunType(type) || type == EStructureType::AmmoStore;
     if (type != EStructureType::Base)
     {
         if (m_structures.lightBeams())

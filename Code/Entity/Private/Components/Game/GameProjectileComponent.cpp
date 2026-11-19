@@ -15,10 +15,12 @@ GameProjectileParams GameProjectileComponent::params;
 
 namespace
 {
-    // The impact lights (GameProjectileComponent::drawImpactLights): the last c_maxImpacts impacts, by their real time.
+    // The impact lights (GameProjectileComponent::drawImpactLights): the last c_maxImpacts impacts, by their real time. A
+    // FIRE impact (the mage's fireball) is a smaller, orange light.
     constexpr int c_maxImpacts = 32;
     constexpr float c_impactSeconds = 0.3f, c_impactRange = 10.8f, c_impactIntensity = 500.0f;
-    struct ImpactLight { glm::vec3 pos{ 0.0f }; double born = -1.0; };
+    constexpr float c_fireRange = 6.0f, c_fireIntensity = 160.0f;
+    struct ImpactLight { glm::vec3 pos{ 0.0f }; double born = -1.0; bool fire = false; };
     ImpactLight g_impacts[c_maxImpacts];
     int g_impactNext = 0;
     std::mutex g_impactMutex; // (constant-initialized: safe at namespace scope)
@@ -34,8 +36,9 @@ void GameProjectileComponent::drawImpactLights()
         if (impact.born < 0.0 || age < 0.0f || age >= c_impactSeconds)
             continue;
         const float fade = 1.0f - age / c_impactSeconds;
-        Globals::rendererVK.addLightInfo(PointLight(impact.pos + glm::vec3(0.0f, 1.0f, 0.0f), c_impactRange, glm::vec3(0.6f, 0.9f, 1.0f),
-            c_impactIntensity * fade * fade));
+        Globals::rendererVK.addLightInfo(PointLight(impact.pos + glm::vec3(0.0f, impact.fire ? 0.6f : 1.0f, 0.0f),
+            impact.fire ? c_fireRange : c_impactRange, impact.fire ? glm::vec3(1.0f, 0.5f, 0.15f) : glm::vec3(0.6f, 0.9f, 1.0f),
+            (impact.fire ? c_fireIntensity : c_impactIntensity) * fade * fade));
     }
 }
 
@@ -51,10 +54,12 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     splashEdge = glm::clamp(info.splashEdge, 0.0f, 1.0f);
     hitsShadows = info.hitsShadows;
     impactPuff = info.impactPuff;
+    fireImpact = info.fireImpact;
     muzzleFlash = info.muzzleFlash;
     fieldDeflect = glm::max(info.fieldDeflect, 0.0f);
     deflectDrain = glm::max(info.deflectDrain, 0.0f);
-    origin = entity.pos;
+    pierce = (uint8)glm::min((int)info.pierce, MaxPierce);
+    origin = lastPos = entity.pos;
     if (muzzleFlash) // the launch, as big as an impact: a few puffs of shards, the impact's flash and smoke where it starts (the light: update)
     {
         for (int k = 0; k < 3; ++k)
@@ -74,13 +79,15 @@ void GameProjectileComponent::destroy(Entity& entity, const SpawnInfo&)
         return; // it ran out in the air: no impact
     GameUnitComponent::reportSound(splashRadius > 0.0f ? GameUnitComponent::ESoundCue::SplashImpact : GameUnitComponent::ESoundCue::ShotImpact,
         entity.pos, glm::max(splashRadius, 1.0f));
-    if (impactPuff) // the burst: a few puffs of shards over the impact and one flash (capped by the particle system)
+    if (impactPuff || fireImpact) // the burst: a few puffs of shards (embers) over the impact and one flash (capped by the particle system)
     {
-        for (int k = 0; k < 3; ++k)
-            Globals::particleSystem.emitPuff(params.impactPuff, entity.pos + glm::vec3(0.0f, 0.4f * (float)k, 0.0f));
-        Globals::particleSystem.emitPuff(params.impactFlash, entity.pos);
+        const int puffs = fireImpact ? 2 : 3;
+        for (int k = 0; k < puffs; ++k)
+            Globals::particleSystem.emitPuff(fireImpact ? params.fireImpactPuff : params.impactPuff,
+                entity.pos + glm::vec3(0.0f, 0.4f * (float)k, 0.0f));
+        Globals::particleSystem.emitPuff(fireImpact ? params.fireImpactFlash : params.impactFlash, entity.pos);
         const std::lock_guard lock(g_impactMutex); // ... and its light (drawImpactLights)
-        g_impacts[g_impactNext] = { entity.pos, Globals::time.getElapsedSec() };
+        g_impacts[g_impactNext] = { entity.pos, Globals::time.getElapsedSec(), fireImpact };
         g_impactNext = (g_impactNext + 1) % c_maxImpacts;
     }
 }
@@ -106,6 +113,43 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
             Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
         spent = true;
         return;
+    }
+    // THE PIERCE (the ballista's bolt): its body flies through the units, so the hits are a swept test - every enemy unit
+    // whose body the segment since the last tick passes (planar within its radius + c_boltRadius, and within its height)
+    // takes the damage once, up to `pierce` of them; then the bolt is spent. Without HitsShadows a SHADOW (not solid) is
+    // passed and not counted. damage() is the atomic inbox: legal from the entity pass's workers.
+    if (pierce > 0)
+    {
+        constexpr float c_boltRadius = 0.35f, c_maxBody = 2.0f;
+        const glm::vec3 from = lastPos, seg = pos - from;
+        const float lenSq = glm::dot(seg, seg);
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(from + seg * 0.5f), std::sqrt(lenSq) * 0.5f + c_boltRadius + c_maxBody,
+            SpatialLayer_Render, [&](uint64 user)
+        {
+            if (pierced >= pierce)
+                return;
+            Entity* other = reinterpret_cast<Entity*>(user);
+            GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+            if (!unit || unit->team == team || !unit->alive() || (!hitsShadows && !unit->solid))
+                return;
+            for (int k = 0; k < pierced; ++k)
+                if (pierceHits[k] == unit)
+                    return;
+            const float t = lenSq > 1e-8f ? glm::clamp(glm::dot(other->pos - from, seg) / lenSq, 0.0f, 1.0f) : 0.0f;
+            const glm::vec3 d = other->pos - (from + seg * t);
+            const float reach = unit->bodyRadius + c_boltRadius;
+            if (d.x * d.x + d.z * d.z > reach * reach || glm::abs(d.y) > unit->bodyRadius + 1.0f)
+                return;
+            unit->damage(unitDamage, team, hitsShadows);
+            pierceHits[pierced++] = unit;
+        });
+        lastPos = pos;
+        if (pierced >= pierce)
+        {
+            spent = true;
+            Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
+            return;
+        }
     }
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity); fc && fc->emitter.isValid() && pc)
     {
@@ -233,7 +277,9 @@ void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info
     if (info.splashEdge != d.splashEdge)             out.set("SplashEdge", info.splashEdge);
     if (info.hitsShadows)                            out.set("HitsShadows", true);
     if (info.impactPuff)                             out.set("ImpactPuff", true);
+    if (info.fireImpact)                             out.set("FireImpact", true);
     if (info.muzzleFlash)                            out.set("MuzzleFlash", true);
     if (info.fieldDeflect != d.fieldDeflect)         out.set("FieldDeflect", info.fieldDeflect);
     if (info.deflectDrain != d.deflectDrain)         out.set("DeflectDrain", info.deflectDrain);
+    if (info.pierce != d.pierce)                     out.set("Pierce", oc::to_string(info.pierce));
 }

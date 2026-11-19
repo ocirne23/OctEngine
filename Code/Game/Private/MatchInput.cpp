@@ -50,8 +50,8 @@ static_assert(c_numCategories == c_buildBarTabs && c_numCategories <= c_rootDele
 static constexpr const char* c_buildCategories[c_numCategories] = { "EMPL", "UNIT", "STRC", "PROD", "RSRC" }; // slot captions
 static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Emplacement", "Unit", "Structure", "Production", "Resource" };
 static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the slots' and the tabs' hover cards
-    "Emplacement\nThe lantern fields, the light towers, the cannon and the builder's hut: what holds the demons off.",
-    "Unit\nThe barracks, the armory, the mage tower and the healer's hut.",
+    "Emplacement\nThe lantern fields, the light towers, the cannon, the ballista and the builder's hut: what holds the demons off.",
+    "Unit\nThe barracks, the armory, the mage tower, the watch post and the healer's hut.",
     "Structure\nRoads for the carriers (hold and drag to paint; over water a road becomes a bridge), walkways, walls, gates and the wards that make walls stronger.",
     "Production\nMaking stone, wood, light and munitions.",
     "Resource\nHouses for the workers, the storehouse for goods, the crystal store and the lens for light, the ammo store for munitions." };
@@ -61,12 +61,14 @@ static constexpr EStructureType c_emplacementItems[] = {
     EStructureType::Turret,      // TOWR
     EStructureType::Searchlight, // SRCH
     EStructureType::Cannon,      // CANN: R turns it
+    EStructureType::Ballista,    // BLST: R turns it
     EStructureType::Constructor, // BUIL
 };
 static constexpr EStructureType c_unitItems[] = {
     EStructureType::Barracks,     // BRK
     EStructureType::Armory,       // ARMR
     EStructureType::MageTower,    // MAGE
+    EStructureType::WatchPost,    // WTCH: a tower for the guards and mages to stand on
     EStructureType::MedicStation, // HEAL
 };
 // The ROAD is the carriers' road (placement PAINTS: press + drag, see updateCablePlacement; connections derive from cell
@@ -200,8 +202,8 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
     aim.type = roadPieceAt(aim.type, aim.pos);                // a road over water: the bridge piece
 
     aim.valid = true;
-    // A CANNON on a road piece or a walkway deck stands on that (placeStructure's own rule), whatever the ground.
-    if (aim.type == EStructureType::Cannon && m_structures.cannonStandY(aim.pos, aim.pos.y))
+    // A GUN on a road piece or a walkway deck stands on that (placeStructure's own rule), whatever the ground.
+    if (isGunType(aim.type) && m_structures.cannonStandY(aim.pos, aim.pos.y))
         aim.ground = StructureSystem::EGroundFit::Ok;
     // The sandbox world's ground (flat enough, dry, no tree or rock) - and the height to stand on.
     else
@@ -675,9 +677,9 @@ void GameMatch::updateModeSwitching()
             if (m_piloting)
             {
                 // AT THE HELM a build key is L (no building there): the landing placement, or take off. While the
-                // landing ghost is up, Q / E turn it (updateLandPlacement) instead.
+                // landing ghost is up, Q / E turn it (updateLandPlacement) instead. X is the ship's BRAKE there (tickShip).
                 const bool turnKey = k == 1 || k == 2;
-                if (down && !m_buildKeyWasDown[k] && !(m_landPlacing && turnKey))
+                if (down && !m_buildKeyWasDown[k] && !(m_landPlacing && turnKey) && k != 3)
                 {
                     toggleShipLanding();
                     if (turnKey)
@@ -1030,18 +1032,20 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.constructorRange(), color, 40);
-    if (aim.type == EStructureType::Cannon)
+    if (isGunType(aim.type))
     {
         // THE ARC it fires in (R turns it): its two edges and the near and far rings over the arc, plus the barrel. On the
-        // deck the facing turns with the ship.
+        // deck the facing turns with the ship. (The Ballista has no near ring: it fires at any distance.)
         glm::vec3 fwd = buildFacing();
         if (aim.ship)
             fwd = m_ship.rotation() * fwd;
         fwd.y = 0.0f;
         fwd = glm::length(fwd) > 1e-4f ? glm::normalize(fwd) : glm::vec3(0.0f, 0.0f, -1.0f);
         const float yaw = std::atan2(-fwd.x, -fwd.z);
-        const float half = glm::radians(glm::clamp(Globals::settings.game.structures.cannonArcDeg, 1.0f, 360.0f) * 0.5f);
-        const float range = Globals::settings.game.structures.cannonRange, minRange = Globals::settings.game.structures.cannonMinRange;
+        const GameStructureSettings& gs = Globals::settings.game.structures;
+        const bool ballista = aim.type == EStructureType::Ballista;
+        const float half = glm::radians(glm::clamp(ballista ? gs.ballistaArcDeg : gs.cannonArcDeg, 1.0f, 360.0f) * 0.5f);
+        const float range = ballista ? gs.ballistaRange : gs.cannonRange, minRange = ballista ? 0.0f : gs.cannonMinRange;
         const glm::vec3 c = aim.pos + glm::vec3(0.0f, 0.4f, 0.0f);
         const auto at = [&](float a, float r) { return c + glm::vec3(-std::sin(yaw + a), 0.0f, -std::cos(yaw + a)) * r; };
         const uint32 arcColor = packColor(glm::vec3(1.0f, 0.75f, 0.35f));

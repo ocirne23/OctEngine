@@ -97,6 +97,10 @@ public:
     // A CANNON's shell (StructureSystem::cannonShots, authority, main thread pre-physics): cannonShell.pre at the
     // muzzle with its launch velocity, on the cannon's team.
     void fireCannonShell(const glm::vec3& from, const glm::vec3& velocity, uint8 team);
+    // A BALLISTA's bolt: ballistaBolt.pre the same way (it flies through the units and hurts the ones it passes).
+    void fireBallistaBolt(const glm::vec3& from, const glm::vec3& velocity, uint8 team);
+    // A MAGE's fireball: mageFireball.pre the same way (a small lobbed splash shot).
+    void fireMageFireball(const glm::vec3& from, const glm::vec3& velocity, uint8 team);
 
 private:
     oc::vector<EntityPtr> m_followers;
@@ -109,6 +113,7 @@ private:
     // every projectile, on every frame a ranged unit fired.
     const EntitySpawnTemplate* shellTemplate(bool lob);
     const EntitySpawnTemplate* cannonShellTemplate();
+    const EntitySpawnTemplate* ballistaBoltTemplate();
     static void despawnUnitsAndShots(); // every unit + projectile root out of the World (load path)
     void discardQueued(); // drops every queued report/request the removed actors left behind
 
@@ -117,6 +122,8 @@ public:
     //   Turret   - the hitscan strike: a column of light (a BeamLight) over "Turret beam lifetime", plus a
     //              muzzle flash.
     //   MeleeHit - a unit's swing: a plain line striker -> victim over "Melee hit lifetime".
+    //   Arrow    - a guard's shot: an ARROW (arrow.pre) that flies from -> to on its arc (Beam::arc) over its flight time
+    //              (StructureSystem::arrowFlightTime: the authority lands the hit then), and the hit's sound on arrival.
     // (No impact flash: the VICTIM lights itself on its health drop - GameUnitComponent's hurt
     // light - on every role, which also covers shells and force-field exposure.)
     // A turret beam also carries its MUZZLE FLASH: drawBeamLights pushes one point light at `from`
@@ -124,7 +131,7 @@ public:
     // owned and no second list is kept). The server broadcasts this frame's new beams (GLt) so
     // clients add the same ones - melee hits capped per frame (c_maxHitBroadcast), turret
     // strikes always.
-    enum class EBeamKind : uint8 { Turret, MeleeHit };
+    enum class EBeamKind : uint8 { Turret, MeleeHit, Arrow };
     struct Beam
     {
         glm::vec3 from{ 0.0f };
@@ -132,8 +139,9 @@ public:
         float ttl = 0.0f;
         float life = 0.0f; // the lifetime it started with (the fade's denominator)
         EBeamKind kind = EBeamKind::Turret;
+        float arc = 0.0f;  // an Arrow: its height over the straight line at the middle (StructureSystem::arrowArc)
     };
-    void addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind);
+    void addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind, float arc = 0.0f);
     oc::span<const Beam> newBeams() const { return m_newBeams; } // added since the last service()
     void drawBeams(float deltaSec); // ages the beams + draws the melee hit lines - main thread, every windowed frame
     void drawBeamLights() const;    // the turret strikes' column of light + muzzle flash (light records: from GameMatch::update)
@@ -143,7 +151,7 @@ private:
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) -
     // no id-keyed maps, and the state dies with its structure. No entity lists here at all - see
     // the class comment.
-    oc::shared_ptr<const EntitySpawnTemplate> m_shellTemplates[3]; // [0] enemyShot.pre, [1] enemyLob.pre, [2] cannonShell.pre (see shellTemplate)
+    oc::shared_ptr<const EntitySpawnTemplate> m_shellTemplates[5]; // [0] enemyShot.pre, [1] enemyLob.pre, [2] cannonShell.pre, [3] ballistaBolt.pre, [4] mageFireball.pre (see shellTemplate)
     uint32 m_shellGeneration = 0; // World::templateGeneration() the cache was resolved at
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<GameUnitComponent::DeathRecord> m_deathScratch;
@@ -168,4 +176,6 @@ private:
 
     oc::vector<Beam> m_beams;
     oc::vector<Beam> m_newBeams;
+    // The ARROWS' entities (arrow.pre, render-only roots): a pool, one per Arrow beam in flight, the rest disabled.
+    oc::vector<EntityPtr> m_arrowPool;
 };

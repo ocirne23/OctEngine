@@ -384,7 +384,7 @@ protected:
     uint16 addDerivedMaterial(uint16 source, uint32 extraFlags);
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color, float emissive = 0.0f);
     uint16 addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
-                      RenderMaterial::ETextureEncoding encoding);
+                      RenderMaterial::ETextureEncoding encoding, bool sRGB = true);
     void destroyTextureMaterial(uint16 materialIdx); // the slot and its textures
     void releaseMaterial(uint16 materialIdx);        // the slot only: a mesh or derived material
     uint32 getMaterialFlags(uint16 materialIdx);

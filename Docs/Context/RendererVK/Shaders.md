@@ -63,6 +63,7 @@ calls `reloadShaders()`.
   from it, see "The frame UBO and the tweak locks" ([FrameUbo.md](FrameUbo.md))). So must the main cull's
   `OutMeshInstance` (64 B): it is declared in the cull (`instanced_indirect.cs.glsl`) and in every scene vertex shader
   that reads it (lit, terrain, ocean, rock, river) - a shader that declares fewer fields reads with the wrong stride.
+  On a TREE record its three "last frame" fields carry the tree's wind ([Vegetation.md](Vegetation.md) "Tree wind").
   They index it by `gl_InstanceIndex` (the cull writes each instance at its draw slot; "Draw-list compaction" in
   [Scene.md](Scene.md)).
 * **`mathutils.inc.glsl`** (Common/, included by shared.inc.glsl; a shader without shared.inc.glsl includes it
@@ -98,6 +99,43 @@ calls `reloadShaders()`.
   BEFORE the init / idle test, because an override fires at registration and `initialize()` must build with it. The
   ocean, fog and GI still read the uniforms. `computeLitColor` evaluates the sun FIRST, so no AO/GI value is live
   across the shadow search.
+* **ONE light shadow trace** (`lightShadowVisibility`, punctual_lights.inc.glsl): the light kinds differ only in the
+  point their ray aims at (`areaLightShadowTarget`, `beamLightShadowTarget`, the light's position), so they share one
+  `traceLightVisibility` call. Each call site inlines the whole trace (the terrain march + the ray query with its
+  alpha-test loop): three sites were three copies, ~27 KB of every lit fragment shader (lit FS 107 -> 80 KB).
+  `PL_LIGHT_TRACE_TWO_SITES` (an includer's define, by its pipeline stats) keeps two sites - the tessellated ground: 72
+  registers / 32 B with one site, 64 / 48 with two.
+* **The lit core's includer defines** (instanced_indirect_lit.inc.glsl), each compiling a path OUT for a material that
+  never takes it:
+  * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter, the tree billboards and voxels (their baked interior is their
+    AO; a runtime flag kept the whole upsample compiled).
+  * `LIT_NO_UNDERWATER` - no water-level fetch, no caustics: the tree leaves, billboards and voxels.
+  * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
+    the light loop, the diffuse takes no (1 - metalness). The three tree shaders.
+  * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided
+    test and horizon fade per light kind; no view vector, no Fresnel, no GGX): the tree billboards and voxels, rough
+    surfaces seen from tens of metres. The sun keeps the full BRDF. Voxel FS 64/32 -> 64/16.
+* **The tree fragment shaders hold nothing for the output across the lit core**: LitTree / LitFoliage write alpha 1 (no
+  blending: the texture's alpha and the material's opacity were two values live to the end, across the light loop),
+  and the voxel FS forms its depth and motion vector AFTER the lighting, from the position.
+* **The tree VS variants** (instanced_indirect.vs.glsl with `TREE_ORIGIN` / `FOLIAGE` / `TREE_VOXEL`): `TREE_STATIC` -
+  a tree piece never moves and is never skinned, so no previous-transform work, the motion is the wind's alone;
+  `TREE_WIND_NO_FLUTTER` (the billboards, the voxel box: no leaf-card TIP vertex); the voxel box passes payload 0 as a
+  constant (the trunk bend only) and writes no normal / tangent. A tree's whole wind comes per TREE, not per vertex
+  ([Vegetation.md](Vegetation.md) "Tree wind"). `TREE_ORIGIN` / `TREE_VOXEL` hand the fragment shader the camera's
+  DISTANCE to the tree's origin (one flat float: `treeDistanceFaded`), not the origin for every pixel to measure;
+  `FOLIAGE` keeps the origin (its FS needs the point itself).
+* **Statement order sets a vertex shader's registers.** In instanced_indirect.vs.glsl the wind is worked out BEFORE the
+  vertex's own transform: the transformed position and normal held across the wind were 15 registers of the generic
+  lit VS (63 -> 48; unlit 62 -> 48, tree 48 -> 40). The voxel box is the exception (its transform first: 40, the other
+  way 48), and its count follows its OUTPUTS: with the gust path compiled out its code shrank 40 % and its registers
+  went UP (45..47), so that path stays. Same rule in a helper: `treeWindOfTree` evaluates the gusts first and returns
+  no early zero, so nothing of the tree is held across them (the main cull 53 -> 50).
+* **A march whose loop sets the shader's register count reads its ray from the interpolants at each step.** An
+  interpolant costs no register between two reads; a start point and a direction worked out before the loop are held
+  across it. The voxel shadow caster (`shadow_depth.fs.glsl`, 40 registers) scales `in_voxelGrid + in_voxelDirG * t` to
+  voxel coordinates inside the loop and tests the box on the sample; held as start + direction + exit distance it took
+  48. Where another part sets the count (the main voxel FS: its light loop), hold them - fewer instructions a step.
 * **The default static-mesh VS packs its interpolants into 4 locations**: `posU` (xyz + uv.x), `normalV` (xyz + uv.y),
   `tangent` (xyz + bitangent sign), flat `meshIdxMaterialIdx` at 3. The fragment shader rebuilds the bitangent. Every
   FS paired with that VS (lit, unlit, the gizmos, sky) uses this layout; the terrain, rock, ocean and river VS have
@@ -116,7 +154,7 @@ calls `reloadShaders()`.
     light, evaluated only in the cells its range touches (`MAX_LIGHTCELL_LIGHTS` 24 a cell, the rest dropped). A light
     whose block or grid claim does not fit goes to an overflow list; the touch array grows for the next frame.
   * **THE SIZES FOLLOW THE GAME'S LIGHTS** (reaches of 4 - 46 m, most 8 - 25 m: unit hurt flashes 4 - 8, turret and
-    cannon flashes 8 - 18, the cannon shell 14, the mage and staff cones 18 - 22, field lights 2 x the field radius, the
+    cannon flashes 8 - 18, the cannon shell 14, the staff cone 18 - 22, field lights 2 x the field radius, the
     player 35, the Searchlight 46). Tried 32 m grids with 1 m cells and a 1024-cell budget: every light over ~5 m was
     LARGE, so a grid in a fight passed its 14 large-light slots and lights went dark at random.
   * **The merge job (`build`, `Renderer::kickGridBuilds` from the App loop right after the force update — the frame's
@@ -199,11 +237,14 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 **`Tools/fp16conv.ps1 <shader>.glsl`** (every OpFConvert by source line - glslang never warns about an implicit
 `float16_t -> float` widening).
 
-**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants, the tree and foliage FS
-too), voxel tree FS 64/64, tree_volume_march 64/0 (handover 62/0), grass FS 64/0, grass VS 48/0, clutter / flower FS
-64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 56/80, ocean 80/32,
-river FS 72/16, rock 56/64, sky.fs 56, aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
-vol_apply FS 64/16, cloud_march 64/0 (64/16 with the vortex on), cloud_sky 64/0, cloud_shadow 39/0 (54/0 with the
+**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0), tree FS 64/16
+(its VS 40/0), foliage FS 56/48 (its VS 39/0), voxel tree FS 64/0 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
+shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
+tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
+cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
+64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 80/32,
+river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 39/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.

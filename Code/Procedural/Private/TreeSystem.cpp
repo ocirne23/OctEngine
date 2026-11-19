@@ -146,6 +146,7 @@ namespace
 		{
 		case TextureConvert::EBlockFormat::BC1: return RenderMaterial::ETextureEncoding::BC1;
 		case TextureConvert::EBlockFormat::BC3: return RenderMaterial::ETextureEncoding::BC3;
+		case TextureConvert::EBlockFormat::BC4: return RenderMaterial::ETextureEncoding::BC4;
 		default:                                return RenderMaterial::ETextureEncoding::BC5;
 		}
 	}
@@ -168,6 +169,41 @@ namespace
 		encodeChain(normal, width, height, normalFormat, out.normal);
 		out.albedoEncoding = textureEncoding(albedoFormat);
 		out.normalEncoding = textureEncoding(normalFormat);
+	}
+
+	// The VOXEL tier's bake (TreeImpostor.ixx) into its UPLOAD encoding, two .tex files: `atlases` = the opacity atlas (the
+	// albedo: BC4, else R8) and the surface atlas (the normal: BC3, else RGBA8 - half the opacity atlas each way), `index` =
+	// the index texture (RGBA8: its bytes are exact). Takes the bake's images.
+	void encodeVoxelTextures(bool compress, TreeVoxelBake& bake, CachedTexture& atlases, CachedTexture& index)
+	{
+		atlases = {};
+		atlases.width = bake.width;
+		atlases.height = bake.height;
+		if (compress)
+		{
+			// The block compressor reads RGBA texels (BC4: their red).
+			oc::vector<oc::vector<uint8>> rgba(1);
+			rgba[0].assign(bake.opacity.size() * 4, 0);
+			for (size_t i = 0; i < bake.opacity.size(); ++i)
+				rgba[0][i * 4] = bake.opacity[i];
+			bake.opacity = {};
+			encodeChain(rgba, bake.width, bake.height, TextureConvert::EBlockFormat::BC4, atlases.albedo);
+			rgba[0] = oc::move(bake.surface);
+			encodeChain(rgba, bake.width / 2, bake.height / 2, TextureConvert::EBlockFormat::BC3, atlases.normal);
+			atlases.albedoEncoding = RenderMaterial::ETextureEncoding::BC4;
+			atlases.normalEncoding = RenderMaterial::ETextureEncoding::BC3;
+		}
+		else
+		{
+			atlases.albedo.push_back(oc::move(bake.opacity));
+			atlases.normal.push_back(oc::move(bake.surface));
+			atlases.albedoEncoding = RenderMaterial::ETextureEncoding::R8;
+			atlases.normalEncoding = RenderMaterial::ETextureEncoding::Rgba8;
+		}
+		index = {};
+		index.width = bake.indexWidth;
+		index.height = bake.indexHeight;
+		index.albedo.push_back(oc::move(bake.index));
 	}
 
 	// The .tex file's key: the species file's text, "Compress textures" and the level-0 size.
@@ -198,6 +234,46 @@ namespace
 		desc.albedoEncoding = texture.albedoEncoding;
 		desc.normalEncoding = texture.normalEncoding;
 		desc.alphaCutoff = alphaCutoff;
+		desc.extraFlags = extraFlags;
+		desc.debugName = debugName;
+		return RenderMaterial::createTextured(desc);
+	}
+
+	// The VOXEL tier's material (the opacity atlas in the albedo slot, the surface atlas in the normal slot) and its index
+	// texture (`outIndex`, linear: exact bytes). The opacity atlas's HEADER - slot 0, no brick: its first two 4 x 4 blocks -
+	// takes the index texture's bindless id, low byte then high: the main pass and the shadow casters, which get the opacity
+	// atlas alone, both find the index through it (tree_voxel.inc.glsl voxelGrid).
+	RenderMaterial createVoxelMaterial(CachedTexture& atlases, CachedTexture& index, RenderTexture& outIndex, const char* debugName, uint32 extraFlags)
+	{
+		oc::vector<oc::span<uint8>> indexMips, opacityMips, surfaceMips;
+		indexMips.push_back(oc::span<uint8>(index.albedo[0].data(), index.albedo[0].size()));
+		outIndex = RenderTexture::create(index.width, index.height, indexMips, oc::format("{}/index", debugName).c_str(),
+			RenderMaterial::ETextureEncoding::Rgba8, false);
+		const uint8 lo = (uint8)(outIndex.index() & 255u), hi = (uint8)(outIndex.index() >> 8);
+		oc::vector<uint8>& opacity = atlases.albedo[0];
+		if (atlases.albedoEncoding == RenderMaterial::ETextureEncoding::BC4)
+		{
+			// A BC4 block of two equal endpoints whose selectors are all 0 decodes to exactly that value.
+			const uint8 blocks[16] = { lo, lo, 0, 0, 0, 0, 0, 0, hi, hi, 0, 0, 0, 0, 0, 0 };
+			memcpy(opacity.data(), blocks, sizeof(blocks));
+		}
+		else
+		{
+			for (uint32 y = 0; y < 4; ++y)
+				for (uint32 x = 0; x < 8; ++x)
+					opacity[(size_t)y * atlases.width + x] = x < 4 ? lo : hi;
+		}
+		opacityMips.push_back(oc::span<uint8>(opacity.data(), opacity.size()));
+		surfaceMips.push_back(oc::span<uint8>(atlases.normal[0].data(), atlases.normal[0].size()));
+		RenderMaterial::TextureDesc desc;
+		desc.width = atlases.width;
+		desc.height = atlases.height;
+		desc.albedoMips = &opacityMips;
+		desc.normalMips = &surfaceMips;
+		desc.normalWidth = atlases.width / 2;
+		desc.normalHeight = atlases.height / 2;
+		desc.albedoEncoding = atlases.albedoEncoding;
+		desc.normalEncoding = atlases.normalEncoding;
 		desc.extraFlags = extraFlags;
 		desc.debugName = debugName;
 		return RenderMaterial::createTextured(desc);
@@ -273,8 +349,8 @@ namespace Procedural
 				if (material.isValid())
 					material.setFlags((material.getFlags() & ~FADE_BITS) | fade);
 			};
-			const float width = species.desc.billboardFadeWidth;
-			const float start = glm::max(species.desc.billboardDistance * m_settings.farDistanceScale - width * 0.5f, 0.0f);
+			const float width = fadeWidth(species);
+			const float start = glm::max(farDistance(species) * m_settings.farDistanceScale - width * 0.5f, 0.0f);
 			const uint32 fadeOut = RendererVKLayout::makeDistanceFadeFlags(start, width, false);
 			const uint32 fadeIn = RendererVKLayout::makeDistanceFadeFlags(start, width, true);
 			setFade(species.barkFadeMaterial, fadeOut);
@@ -305,12 +381,29 @@ namespace Procedural
 		return species.desc.billboardDistance * m_settings.branchCardDistance;
 	}
 
+	float TreeSystem::fadeWidth(const Species& species) const
+	{
+		return glm::clamp(species.desc.billboardFadeWidth * m_settings.fadeWidthScale, 1.0f, 1023.0f); // the material packs 10 bits
+	}
+
+	// "Voxel start (m)" puts a TREE's band start there in metres: unscaled, so the scale the culls and the fade bands apply
+	// lands it back on that start (a "Far distance scale" change respawns then, initialize).
+	float TreeSystem::farDistance(const Species& species) const
+	{
+		if (!species.desc.bush && m_settings.voxelStart > 0.0f && m_settings.farDistanceScale > 0.0f)
+			return (m_settings.voxelStart + 0.5f * fadeWidth(species)) / m_settings.farDistanceScale;
+		return species.desc.billboardDistance;
+	}
+
 	void TreeSystem::initialize()
 	{
 		// The "Trees" buttons and respawn / reload triggers are the settings' own (Settings::registerTrees); the fade
 		// bands are this system's.
 		const auto fadeBandsDirty = [this]() { m_fadeBandsDirty = true; };
-		Tweak::onChange(m_settings.farDistanceScale, this, fadeBandsDirty);
+		// With "Voxel start" the trees' distances are stored unscaled for the scale of their spawn: a new scale respawns.
+		Tweak::onChange(m_settings.farDistanceScale, this, [this]() { m_fadeBandsDirty = true; if (m_settings.voxelStart > 0.0f) m_settings.respawn = true; });
+		Tweak::onChange(m_settings.fadeWidthScale, this, fadeBandsDirty);
+		Tweak::onChange(m_settings.voxelStart, this, fadeBandsDirty);
 		Tweak::onChange(m_settings.branchCardDistance, this, fadeBandsDirty);
 		Tweak::onChange(m_settings.forceFar, this, fadeBandsDirty);
 		m_world.initialize();
@@ -473,10 +566,11 @@ namespace Procedural
 		settings.regenerateTextures = m_settings.regenerateTextures;
 		settings.billboards = m_settings.farMode == 0;
 		settings.showLibrary = m_settings.showLibrary;
+		settings.branchCards = m_settings.branchCardDistance > 0.0f && m_settings.gpuExpansion;
 		settings.billboardViews = m_settings.billboardViews == 0 ? 2u : 4u;
 		// The voxel tier needs the GPU path (its record) and the billboards (it takes their place and keeps their shadows).
 		settings.voxelRes = m_settings.voxelImpostors && m_settings.gpuExpansion && settings.billboards
-			? 32u << glm::clamp(m_settings.voxelResolution, 0, 2) : 0u;
+			? 32u << glm::clamp(m_settings.voxelResolution, 0, 3) : 0u;
 		for (const FileSystem::DirEntry& entry : entries)
 		{
 			if (entry.isDirectory || entry.extension != ".tree")
@@ -736,20 +830,20 @@ namespace Procedural
 				}
 			if (!load.atlas.albedo.empty())
 			{
-				// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
+				// Foliage cards like the whole-tree billboards (LitFoliage: the same shading, tweaks and edge-on fade).
 				species.cardAtlasMaterial = createTreeMaterial(load.atlas, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeCardAtlas/{}", name).c_str(),
-					RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+					RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF);
 				for (size_t v = 0; v < load.variantCards.size() && v < species.variantMeshes.size(); ++v)
 					species.variantMeshes[v].cards = uploadTreeMesh(renderer, load.variantCards[v], false); // main pass only
 			}
 			// The VOXEL tier (main pass only: no BLAS). LEAF: the leaf terms (transmission, the N.V bend, the sky wrap).
 			for (size_t v = 0; v < load.voxelTextures.size() && v < species.variantMeshes.size(); ++v)
 			{
-				if (load.voxelTextures[v].albedo.empty() || v >= load.voxelBoxes.size())
+				if (load.voxelTextures[v].albedo.empty() || v >= load.voxelBoxes.size() || v >= load.voxelIndex.size() || load.voxelIndex[v].albedo.empty())
 					continue;
 				PieceMeshes& meshes = species.variantMeshes[v];
-				meshes.voxelMaterial = createTreeMaterial(load.voxelTextures[v], 0.0f, oc::format("TreeVoxel/{}_{}", name, v).c_str(),
-					RendererVKLayout::MATERIAL_FLAG_LEAF);
+				meshes.voxelMaterial = createVoxelMaterial(load.voxelTextures[v], load.voxelIndex[v], meshes.voxelIndex,
+					oc::format("TreeVoxel/{}_{}", name, v).c_str(), RendererVKLayout::MATERIAL_FLAG_LEAF);
 				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
 			}
 			// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
@@ -825,6 +919,12 @@ namespace Procedural
 			PieceBillboard& billboard = out.pieceBillboards[set][i];
 			const TreeBillboardBox box = billboardBox(piece);
 			const bool horizontal = set == 2;
+			billboard.farCentre = (box.min + box.max) * 0.5f;
+			billboard.farRadius = glm::length(box.max - box.min) * 0.5f;
+			// A module / trunk billboard is needed only by the piece library rows and (modules) the mid tier's atlas: without
+			// them it is neither baked nor loaded.
+			if (set != 2 && !settings.showLibrary && !(set == 0 && settings.branchCards))
+				continue;
 			// Mips down to ~4 px per strip, while the strip boundaries stay on texel boundaries (billboardLayout).
 			const uint32 numMips = billboardLayout(size, numViews, horizontal).numMips;
 
@@ -889,9 +989,7 @@ namespace Procedural
 			billboard.upload = set == 2 || settings.showLibrary;
 			if (billboard.upload)
 				billboardMesh(box, size, numViews, horizontal, billboard.cards, false, desc.billboardTopCardHeight);
-			billboard.farCentre = (box.min + box.max) * 0.5f;
-			billboard.farRadius = glm::length(box.max - box.min) * 0.5f;
-			if (set == 0)
+			if (set == 0 && settings.branchCards)
 			{
 				// The atlas's (and the card meshes') - a copy only when the module's own billboard uploads too.
 				if (billboard.upload)
@@ -904,14 +1002,15 @@ namespace Procedural
 				billboard.texture = oc::move(texture);
 		}
 
-		// THE VOXEL TIER: per baked variant of a TREE (bushes keep their billboards) its prefiltered voxel grid as two atlases
-		// (bakeTreeVoxels), cached as one .tex beside the billboards: "<species>_treevoxel<v>r<res>_<hash>.tex", keyed as
-		// they are plus TREE_VOXEL_BAKE_VERSION. Its box comes from the geometry on every load (treeVoxelBox).
+		// THE VOXEL TIER: per baked variant of a TREE (bushes keep their billboards) its prefiltered voxel grid as SPARSE
+		// BRICKS (bakeTreeVoxels): the opacity + surface atlases in "<species>_treevoxel<v>r<res>_<hash>.tex" and the index
+		// in "..._index.tex" beside the billboards, keyed as they are plus TREE_VOXEL_BAKE_VERSION. Its box comes from the
+		// geometry on every load (treeVoxelBox).
 		if (settings.voxelRes > 0 && !desc.bush)
 		{
 			const uint32 res = settings.voxelRes;
-			const uint32 numLevels = treeVoxelLevels(res);
 			out.voxelTextures.resize(variants.size());
+			out.voxelIndex.resize(variants.size());
 			out.voxelBoxes.resize(variants.size());
 			for (size_t v = 0; v < variants.size(); ++v)
 			{
@@ -919,11 +1018,12 @@ namespace Procedural
 				const uint32 key = treeBakeHash(treeHash(speciesHash, treeHash(7u, (uint32)v)), TREE_VOXEL_BAKE_VERSION, res);
 				const oc::string stem = oc::format("{}{:08x}", prefix, key);
 				const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
+				const oc::string indexPath = oc::format("{}/{}_index.tex", TREE_TEXTURE_DIR, stem);
 				const uint64 textureHash = meshCacheMix(meshCacheHash(stem), settings.compressTextures ? 1u : 0u);
-				const uint32 width = res / TREE_VOXEL_TILES_Y * res, height = TREE_VOXEL_TILES_Y * res;
 				CachedTexture& texture = out.voxelTextures[v];
-				if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture) || texture.width != width || texture.height != height
-					|| texture.albedo.size() != numLevels || texture.normal.size() != numLevels)
+				CachedTexture& index = out.voxelIndex[v];
+				if (settings.regenerateTextures || !loadCachedTexture(path, textureHash, texture) || !loadCachedTexture(indexPath, textureHash, index)
+					|| texture.albedo.size() != 1 || texture.normal.size() != 1 || index.albedo.size() != 1)
 				{
 					for (const FileSystem::DirEntry& entry : existing)
 						if (entry.name.rfind(prefix.c_str(), 0) == 0)
@@ -932,11 +1032,14 @@ namespace Procedural
 					TreeVoxelBake bake;
 					bakeTreeVoxels(variants[v], TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize }, res,
 						desc.billboardAlbedoScale, bake);
-					// BC3 both: every level's tiles are a multiple of 4 texels (TREE_VOXEL_MIN_RES), so no block mixes two slices.
-					texture = {};
-					encodeTexture(settings.compressTextures, bake.width, bake.height, bake.albedo, TextureConvert::EBlockFormat::BC3,
-						bake.normal, TextureConvert::EBlockFormat::BC3, texture);
+					const uint32 bricks = bake.bricks, bricksTotal = bake.bricksTotal;
+					// BC4 / BC3: a brick's tiles are whole blocks (8 x 8 opacity, 4 x 4 surface), so no block mixes two slices.
+					encodeVoxelTextures(settings.compressTextures, bake, texture, index);
 					saveTexture(path, textureHash, texture);
+					saveCachedTexture(indexPath, textureHash, index);
+					Log::info(oc::format("Trees: '{}' voxels {} at {}: {} of {} bricks stored ({:.0f} %), {:.1f} MB", name, v, res, bricks, bricksTotal,
+						100.0f * (float)bricks / (float)glm::max(bricksTotal, 1u),
+						(float)(texture.albedo[0].size() + texture.normal[0].size() + index.albedo[0].size()) / (1024.0f * 1024.0f)));
 				}
 				treeVoxelBoxMesh(treeVoxelBox(variants[v], res), out.voxelBoxes[v]);
 			}
@@ -948,7 +1051,7 @@ namespace Procedural
 		// block covers 4x4 texels of one module, since every level a material gets is a multiple of 4 high (billboardLayout
 		// keeps >= 4 px per strip). Then per baked variant ONE card mesh: each module placement's cards in the variant's
 		// space, v remapped into the module's block, the card axis code (texCoords.z, billboardMesh) remapped with it.
-		if (numModules == 0 || variants.empty())
+		if (!settings.branchCards || numModules == 0 || variants.empty())
 			return;
 		const uint32 numMips = billboardLayout(size, numViews, false).numMips;
 		CachedTexture atlas;
@@ -1019,8 +1122,8 @@ namespace Procedural
 		if (meshes.billboard.isValid())
 		{
 			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage, transform);
-			piece.farDistance = species.desc.billboardDistance;
-			piece.fadeWidth = species.desc.billboardFadeWidth;
+			piece.farDistance = farDistance(species);
+			piece.fadeWidth = fadeWidth(species);
 			piece.radius = meshes.farRadius * transform.scale;
 			// The crossfade copies: the same LOD-chain meshes on LitTree (the dither discards) with the fade-out
 			// materials. Drawn only inside the band, so the bark keeps LitOpaque's early depth elsewhere.
@@ -1056,8 +1159,8 @@ namespace Procedural
 						type.billboard = { &meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
 						type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 						type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-						type.farDistance = species.desc.billboardDistance;
-						type.fadeWidth = species.desc.billboardFadeWidth;
+						type.farDistance = farDistance(species);
+						type.fadeWidth = fadeWidth(species);
 						// The VOXEL tier: the billboard's place in the main pass (its band, its fade-in material).
 						if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid())
 							type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
@@ -1076,7 +1179,7 @@ namespace Procedural
 							type.cardsIn = { &meshes.cards, species.cardInMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.cardsOut = { &meshes.cards, species.cardOutMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.midDistance = midDistance(species);
-							type.midFadeWidth = species.desc.billboardFadeWidth;
+							type.midFadeWidth = fadeWidth(species);
 						}
 					}
 					if (species.desc.bush)

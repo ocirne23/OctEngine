@@ -10,6 +10,7 @@ TreeSpecies Cedar
 	Climate Temperate
 	Seed 71
 	Scale 1.1 2.0
+	Wood 0.35
 	Trunk
 		Count 6
 		Height 7.5 9.5

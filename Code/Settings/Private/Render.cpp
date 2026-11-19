@@ -120,6 +120,8 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Leaf sky wrap", &s.leafSkyWrap, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Billboard shadow shift (m)", &s.billboardShadowShift, -20.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Voxel LOD bias", &s.voxelLodBias, -2.0f, 4.0f, 0.05f);
+    Tweak::floatVar("Trees", "Voxel sharpness", &s.voxelSharpness, 0.0f, 0.95f, 0.01f);
+    Tweak::floatVar("Trees", "Voxel thinning", &s.voxelThinning, 0.0f, 0.95f, 0.01f);
     Tweak::floatVar("Trees", "Voxel self shadow", &s.voxelSelfShadow, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Voxel normal hull", &s.voxelNormalHull, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Voxel saturation", &s.voxelSaturation, 0.0f, 3.0f, 0.01f);

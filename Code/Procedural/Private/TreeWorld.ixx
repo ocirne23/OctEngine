@@ -123,16 +123,18 @@ export namespace Procedural
 			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
 			RockFootprint footprint;  // rock / wood: its capsule x the record's scale (along the record's yaw, hash 104)
 			uint8 harvest = 0;        // surveyHarvest: 0 = nothing (a bush, a cactus), 1 = wood (a tree, dead wood), 2 = stone (a rock)
+			float wood = 1.0f;        // tree: the species' `Wood` (x what a lumberyard counts for one)
 		};
 		const oc::vector<FloorType>& floorTypes() const { return m_floorTypes; }
 		// THE HARVEST SURVEY (the game's lumberyard and quarry): every tree and rock within `radius` of a point, one
 		// visit each - its world position (the same in every survey: the game shares the records of overlapping
 		// circles by it), then wood (a tree's SIZE: its trunk over the world's average tree's, 1 = average; dead wood 0.7
 		// at its mean length; 0 for a rock) and stone (a rock's size in m, its longest axis; 0 for a tree). The game
-		// weights both by its size exponent. Main thread, between update and kickUpdate (as cpuRecords). false = the CPU does not hold
-		// every chunk the circle touches (too far from the camera, or not generated yet): no answer, and the visits made
-		// so far do not count. Disabled = true with no visit.
-		using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone);
+		// weights both by its size exponent, then x `weight` (a tree: its species' `Wood`; else 1). Main thread, between
+		// update and kickUpdate (as cpuRecords). false = the CPU does not hold every chunk the circle touches (too far
+		// from the camera, or not generated yet): no answer, and the visits made so far do not count. Disabled = true
+		// with no visit.
+		using HarvestVisitor = void (*)(void* user, float x, float z, float wood, float stone, float weight);
 		bool surveyHarvest(glm::vec2 centre, float radius, HarvestVisitor visit, void* user) const;
 		// The keep radius is at least this (the expansion's near radius needs the records).
 		void requireKeepRadius(int chunks)

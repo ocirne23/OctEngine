@@ -10,7 +10,7 @@
 // EPipelineIndex::LitTreeVoxel: THE VOXEL TIER of the procedural trees (Procedural TreeSystem, "Trees/Voxel impostors").
 // The main pass draws it wherever a tree's whole billboard would draw (tree_cull.inc.glsl treeCullMainFar); shadows, GI
 // and RT keep the billboard. The mesh is the variant's grid box (Procedural treeVoxelBoxMesh), front faces only; this
-// shader marches the tree's PREFILTERED voxel grid (two atlases, Procedural TreeImpostor.ixx "The VOXEL tier") from the
+// shader marches the tree's PREFILTERED voxel grid (sparse bricks: tree_voxel.inc.glsl, Procedural TreeImpostor.ixx "The VOXEL tier") from the
 // face along the view ray at the level whose voxel is about a pixel, stops where the ray's coverage passes this pixel's
 // threshold (stochastic coverage: TAA / DLSS resolve it), writes that point's depth and lights it with the foliage
 // cards' terms - the leaf transmission, the N.V bend, the sky wrap, the interior as AO - and a real self-shadow: the sun
@@ -27,8 +27,9 @@ layout (location = 4) in vec3 in_prevWorldDelta;       // the wind's motion (ins
 layout (location = 5) in flat vec3 in_voxelCam;        // the camera in grid space
 layout (location = 6) in vec3 in_voxelGrid;            // the face point in grid space
 layout (location = 7) in flat vec4 in_voxelQuat;       // grid (tree) axes -> world
-layout (location = 8) in flat vec3 in_voxelWorldSize;  // the box in world metres
-layout (location = 9) in flat vec3 in_instanceOrigin;  // the tree's origin: the distance fade
+layout (location = 8) in flat vec4 in_voxelWorldSize;  // xyz = the box in world metres, w = the cube root of its volume
+layout (location = 9) in flat float in_treeDistance;   // the camera's distance to the tree's origin: the distance fade
+layout (location = 10) in flat vec4 in_voxelSunLod;    // xyz = the sun in grid units per metre (no zero component), w = the LOD scale (tree_voxel_box.inc.glsl)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -42,7 +43,10 @@ layout (depth_less) out float gl_FragDepth;
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST    // instanced_indirect_lit.inc.glsl: the sun's shadow before the material
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage's constant depth bias
-#define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao (the depth is a point inside a crown)
+#define LIT_NO_RTAO         // instanced_indirect_lit.inc.glsl: no RTAO read (the depth is a point inside a crown; the interior is its AO)
+#define LIT_NO_UNDERWATER   // instanced_indirect_lit.inc.glsl: a tree's crown is never under the water
+#define LIT_DIELECTRIC      // instanced_indirect_lit.inc.glsl: a voxel is never metal
+#define LIT_LIGHTS_DIFFUSE  // instanced_indirect_lit.inc.glsl: the local lights' diffuse only (a rough crown seen from afar)
 #define LEAF_SKY_WRAP
 #define LIT_EXTRA_LIGHT     // the leaves' transmitted sun, added inside computeLitColor
 #include "instanced_indirect_lit.inc.glsl"
@@ -51,6 +55,7 @@ layout (depth_less) out float gl_FragDepth;
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the far trees take the faction look of the land they stand on
 
+#define VOXEL_BRICK_ORIGIN // tree_voxel.inc.glsl: a march's brick holds its atlas origin (the light loop sets this shader's registers, not the march)
 #include "tree_voxel.inc.glsl"
 
 // Interleaved gradient noise, shifted per frame (TAA averages it); `offset` decorrelates the uses.
@@ -58,13 +63,6 @@ float voxelNoise(vec2 offset)
 {
 	const vec2 pixel = gl_FragCoord.xy + offset + 5.588238 * float(u_frameIndex & 7u);
 	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
-}
-
-// tree_voxel.inc.glsl's voxelTap on level `lod`: the scene sampler's mip bias (DLSS), which Vulkan adds to the explicit
-// level, taken back off.
-vec4 voxelTapScene(uint tex, vec3 g, float n, float tilesX, float lod)
-{
-	return voxelTap(tex, g, n, tilesX, lod - u_foliage_voxelSamplerBias);
 }
 
 // motion_vector.inc.glsl's motionVector at the HIT's depth, not the box face's.
@@ -89,67 +87,62 @@ void main()
 	const uint materialIdx = in_meshIdxMaterialIdx >> 16;
 	const MaterialInfo material = in_materialInfos[materialIdx];
 	// The crossfade with the meshes / branch cards (the billboard's band), per tree: before the march.
-	if (treeDistanceFaded(material.flags, in_instanceOrigin))
+	if (treeDistanceFaded(material.flags, in_treeDistance))
 		discard;
 
-	const uint albedoTex = material.diffuseNormalTexIdx & 0xFFFFu;
-	const uint normalTex = material.diffuseNormalTexIdx >> 16;
-	// The grid's resolution from the atlas width (res^2 / TREE_VOXEL_TILES_Y) and its last level.
-	const float res = voxelGridRes(albedoTex);
-	const float tilesX = res / TREE_VOXEL_TILES_Y;
-	const float maxLod = float(textureQueryLevels(u_textures[albedoTex]) - 1);
+	// The material's albedo slot = the grid's opacity atlas (its header names the index), its normal slot = the surface atlas.
+	const VoxelGrid grid = voxelGrid(material.diffuseNormalTexIdx & 0xFFFFu);
+	const uint surfaceTex = material.diffuseNormalTexIdx >> 16;
+	const float maxLod = grid.levels - 1.0;
 
-	// THE RAY, in grid space from the face; its parameter is the world distance from the face.
-	const vec3 entry = in_posU.xyz;
-	const vec3 V = normalize(u_viewPos - entry);
+	// THE RAY, in grid space from the face; its parameter is the world distance from the face. The grid-space ray x the
+	// box's size is the camera -> face vector in metres: its length serves the direction and the level both.
 	const vec3 rayG = in_voxelGrid - in_voxelCam;
-	const vec3 dirG = rayG / max(length(rayG * in_voxelWorldSize), 1e-6); // grid units per metre
+	const vec3 rayW = rayG * in_voxelWorldSize.xyz;
+	const float invDist = inversesqrt(dot(rayW, rayW));
+	const vec3 dirRaw = rayG * invDist; // grid units per metre
+	// No zero component: the empty bricks' jump divides by it.
+	const vec3 dirG = mix(vec3(1e-6), dirRaw, greaterThan(abs(dirRaw), vec3(1e-6)));
 
-	// THE LEVEL: a voxel about a pixel ("Trees/Voxel LOD bias"), dithered between the two nearest per pixel.
-	const float voxel0 = pow(in_voxelWorldSize.x * in_voxelWorldSize.y * in_voxelWorldSize.z, 1.0 / 3.0) / res;
-	const float pixelWorld = 2.0 * distance(u_viewPos, entry) / max(u_mipPixelScale, 1e-3);
-	const float lodF = log2(max(pixelWorld / voxel0, 1e-6)) + u_foliage_voxelLodBias;
+	// THE LEVEL: a voxel about a pixel ("Trees/Voxel LOD bias", inside the vertex shader's LOD scale), dithered between
+	// the two nearest per pixel.
+	const float lodF = log2(grid.res * in_voxelSunLod.w / invDist);
 	const float lod = clamp(floor(lodF + voxelNoise(vec2(29.0, 61.0))), 0.0, maxLod);
-	const float n = res * exp2(-lod);
-	const float stepWorld = voxel0 * exp2(lod); // one crossing: the stored opacity's length
+	const VoxelLevel level = voxelLevel(grid, lod);
+	const float n = level.n;
+	const float stepWorld = in_voxelWorldSize.w / n; // one crossing: the stored opacity's length
 
-	// THE MARCH: until the ray's coverage passes this pixel's threshold, or it leaves the box (then nothing). Not the
-	// distance fade's noise (tree_fade.inc.glsl, offset 0): inside its band only the high thresholds would be kept.
+	// THE MARCH, in the level's voxel coordinates (tree_voxel.inc.glsl): until the ray's coverage passes this pixel's
+	// threshold, or it leaves the box (then nothing). Not the distance fade's noise (tree_fade.inc.glsl, offset 0):
+	// inside its band only the high thresholds would be kept. An EMPTY brick (nothing stored: the index says so) is
+	// jumped to its far side.
 	const float threshold = max(voxelNoise(vec2(47.0, 113.0)), 0.004);
-	// Empty space is skipped two levels coarser (voxelSkip), tested only while the last sample was empty.
-	const vec3 skipDirG = mix(vec3(1e-6), dirG, greaterThan(abs(dirG), vec3(1e-6)));
-	const float skipLod = min(lod + 2.0, maxLod);
+	const vec3 faceC = in_voxelGrid * n;
+	const vec3 dirC = dirG * n;
+	const float exitT = voxelBoxExit(level, faceC, dirC); // the march ends where the ray leaves the box
 	float t = stepWorld * voxelNoise(vec2(83.0, 7.0));
 	float transmit = 1.0;
 	bool hit = false;
-	bool empty = true;
-	vec3 hitG = vec3(0.0);
-	vec3 albedo = vec3(0.0);
+	vec3 hitC = vec3(0.0);
 	float hitOpacity = 0.0;
 	const int maxSteps = int(n * 1.75) + 2;
-	for (int i = 0; i < maxSteps; ++i)
+	VoxelBrick marchBrick = voxelBrickNone();
+	for (int i = 0; i < maxSteps && t <= exitT; ++i)
 	{
-		const vec3 g = in_voxelGrid + dirG * t;
-		if (any(lessThan(g, vec3(-1e-3))) || any(greaterThan(g, vec3(1.0 + 1e-3))))
-			break;
-		if (empty && skipLod > lod)
+		const vec3 c = faceC + dirC * t;
+		float skip;
+		const float a = voxelThin(voxelOpacity(grid, level, c, dirC, stepWorld, marchBrick, skip));
+		if (skip > 0.0)
 		{
-			const float skip = voxelSkip(albedoTex, g, skipDirG, res, tilesX, skipLod, u_foliage_voxelSamplerBias);
-			if (skip > 0.0)
-			{
-				t += skip;
-				continue;
-			}
+			t += skip;
+			continue;
 		}
-		const vec4 tap = voxelTapScene(albedoTex, g, n, tilesX, lod);
-		empty = tap.a <= VOXEL_SKIP_EMPTY;
-		transmit *= 1.0 - tap.a;
+		transmit *= 1.0 - a;
 		if (1.0 - transmit >= threshold)
 		{
 			hit = true;
-			hitG = g;
-			albedo = tap.rgb; // linear: the atlas is sRGB
-			hitOpacity = tap.a;
+			hitC = c;
+			hitOpacity = a;
 			break;
 		}
 		t += stepWorld;
@@ -157,59 +150,110 @@ void main()
 	if (!hit)
 		discard;
 
-	const vec3 pos = entry - V * t;
-	const vec4 clip = u_mvp * vec4(pos, 1.0);
-	const float depth = min(clip.z / clip.w, gl_FragCoord.z); // never nearer than the face (depth_less)
-	gl_FragDepth = depth;
+	// The hit lies on the pixel's own view ray: ONE view vector for the position and the lighting, formed after the march.
+	const vec3 V = normalize(u_viewPos - in_posU.xyz);
+	const vec3 pos = in_posU.xyz - V * t;
+
+	// THE SURFACE at the hit: its colour, mean normal and interior (the surface atlas: 4 samples per brick side).
+	vec3 albedo, normalTap;
+	float interiorTap, leafShare;
+	voxelSurface(grid, level, surfaceTex, hitC, marchBrick, albedo, normalTap, interiorTap, leafShare);
+	const vec3 hitG = hitC / n;
 
 	// THE NORMAL: the voxel's mean leaf normal; where its leaves face every way (a short mean) toward the crown's outward
 	// direction ("Trees/Voxel normal hull"). Stored in the tree's axes.
-	const vec4 normalTap = voxelTapScene(normalTex, hitG, n, tilesX, lod);
-	const vec3 meanN = normalTap.xyz * 2.0 - 1.0;
+	const vec3 meanN = normalTap * 2.0 - 1.0;
+	const float meanLength = min(length(meanN), 1.0);
 	// 0 = the voxel's leaves face every way, 1 = all one way. Trusted by the voxel's cover: a sparse voxel (a thin tip) holds
 	// a leaf or two, whose mean is long though the tip around it faces every way. "Voxel transmission spread" takes off more.
-	const float leafAgree = min(length(meanN), 1.0) * smoothstep(0.05, 0.5, hitOpacity) * (1.0 - u_foliage_voxelTransmissionSpread);
-	const vec3 hull = (hitG - 0.5) * in_voxelWorldSize;
-	const vec3 hullN = dot(hull, hull) > 1e-8 ? normalize(hull) : vec3(0.0, 1.0, 0.0);
-	vec3 localN = meanN + hullN * ((1.0 - min(length(meanN), 1.0)) * u_foliage_voxelNormalHull);
-	localN = dot(localN, localN) > 1e-8 ? normalize(localN) : hullN;
+	const float leafAgree = meanLength * smoothstep(0.05, 0.5, hitOpacity) * (1.0 - u_foliage_voxelTransmissionSpread);
+	// A zero vector (the box's exact centre; a mean that cancels the hull term) stays zero: no NaN, no select.
+	const vec3 hull = (hitG - 0.5) * in_voxelWorldSize.xyz;
+	const vec3 hullN = hull * inversesqrt(max(dot(hull, hull), 1e-8));
+	const vec3 rawN = meanN + hullN * ((1.0 - meanLength) * u_foliage_voxelNormalHull);
+	const vec3 localN = rawN * inversesqrt(max(dot(rawN, rawN), 1e-8));
 	f16vec3 N = f16vec3(quat_transform(localN, in_voxelQuat));
 
-	// THE SUN through the tree's own voxels (one level coarser), to where its path leaves the box.
+	// THE SUN through the tree's own voxels (one level coarser), to where its path leaves the box. Its direction in grid
+	// space comes from the vertex shader (one per tree).
 	const vec3 L = u_sunDirection.xyz;
-	vec3 sunG = quat_transform(L, vec4(-in_voxelQuat.xyz, in_voxelQuat.w)) / in_voxelWorldSize; // grid units per metre
-	sunG = mix(vec3(1e-6), sunG, greaterThan(abs(sunG), vec3(1e-6)));
-	const vec3 toFace = (step(vec3(0.0), sunG) - hitG) / sunG;
-	const float exitDist = max(min(min(toFace.x, toFace.y), toFace.z), 0.0);
+	const vec3 sunG = in_voxelSunLod.xyz;
+	const float exitDist = voxelBoxExit(level, hitC, sunG * n);
 	float sunTransmit = 1.0;
 	if (u_foliage_voxelSelfShadow > 0.0)
 	{
-		const float sunLod = min(lod + 1.0, maxLod);
-		const float sunN = res * exp2(-sunLod);
-		const float sunStep = voxel0 * exp2(sunLod);
-		// Empty space skipped two levels coarser (voxelSkip), tested only while the last sample was empty: the path out
-		// of the crown often crosses the box's empty corners.
-		const float sunSkipLod = min(sunLod + 2.0, maxLod);
+		VoxelLevel sunLevel = level;
+		if (lod < maxLod)
+			sunLevel = voxelLevelCoarser(level);
+		const float sunN = sunLevel.n;
+		const float sunStep = in_voxelWorldSize.w / sunN;
+		const vec3 sunC = hitG * sunN;
+		const vec3 sunDirC = sunG * sunN;
+		// Empty bricks are jumped: the path out of the crown often crosses the box's empty corners.
 		const int sunSteps = min(int(exitDist / sunStep) + 1, 64);
 		float d = 0.5 * sunStep;
-		bool sunEmpty = false; // the hit's own voxel holds cover
+		VoxelBrick sunBrick = voxelBrickNone();
 		for (int i = 0; i < sunSteps && sunTransmit > 0.01 && d <= exitDist; ++i)
 		{
-			const vec3 g = hitG + sunG * d;
-			if (sunEmpty && sunSkipLod > sunLod)
+			float skip;
+			const float a = voxelOpacity(grid, sunLevel, sunC + sunDirC * d, sunDirC, sunStep, sunBrick, skip);
+			if (skip > 0.0)
 			{
-				const float skip = voxelSkip(albedoTex, g, sunG, res, tilesX, sunSkipLod, u_foliage_voxelSamplerBias);
-				if (skip > 0.0)
-				{
-					d += skip;
-					continue;
-				}
+				d += skip;
+				continue;
 			}
-			const float a = voxelTapScene(albedoTex, g, sunN, tilesX, sunLod).a;
-			sunEmpty = a <= VOXEL_SKIP_EMPTY;
-			sunTransmit *= 1.0 - a;
+			sunTransmit *= 1.0 - voxelThin(a);
 			d += sunStep;
 		}
+	}
+
+	// EVERYTHING OF THE SURFACE IS FORMED HERE, before the cascades' shadow search (the register peak): across it stay the
+	// position, the colour, the normal and three scalars (the AO, the transmission's back + glow, the sun march's result).
+	// A voxel material is always a LEAF material (Procedural createVoxelMaterial): no leaf test.
+
+	// THE INTERIOR (the surface atlas's colour A) as the billboards': an AO on the ambient, remapped by "Foliage interior depth
+	// start / end" x "Foliage interior shadow". The sun takes the real self-shadow instead.
+	const float16_t surfaceAO = float16_t(1.0 - u_foliage_interiorShadow * smoothstep(u_foliage_interiorStart, u_foliage_interiorEnd, interiorTap));
+
+	// "Trees/Voxel saturation": about the colour's luminance (linear) - the bake's averages read greyer than the mesh leaves.
+	// Then x "Trees/Voxel brightness".
+	if (u_foliage_voxelSaturation != 1.0) // a constant while its row is locked
+	{
+		const float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+		albedo = max(vec3(luma) + (albedo - vec3(luma)) * u_foliage_voxelSaturation, vec3(0.0));
+	}
+	albedo *= u_foliage_voxelBrightness;
+	// The crown's colour patches on the LEAVES only: by the voxel's leaf share, so the trunk and the bare branches keep
+	// their bark colour.
+	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(mix(albedo, leafPatchTint(albedo, pos), leafShare)), pos.xz, 1.0);
+
+	// LEAVES seen edge-on: N bent toward the viewer until N.V reaches "Foliage min N.V" (the foliage FS's). After it N
+	// faces the viewer (N.V >= 0: the min is >= 0), so the transmission below needs no "seen side" flip.
+	{
+		const float noV = dot(vec3(N), V);
+		if (noV < u_foliage_minNoV)
+			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
+	}
+
+	// LEAF TRANSMISSION, as the foliage cards': a diffuse back term + the forward glow, x the sun's shadow by "Foliage
+	// transmission shadow" and the self-shadow at "Voxel transmission self shadow"'s share. The "Foliage transmission"
+	// strength, glow and focus x the voxel tier's own "Voxel transmission ..." factors.
+	// THE BACK TERM by the voxel's leaves: its mean normal points out of the crown, so -N.L alone lit only the crown's
+	// underside (under a high sun the top and the sides face it), while a mesh crown's leaves face every way and glow all
+	// over. Leaves facing every way (two-sided, the face the viewer sees): on average 0.25 x (1 - V.L) - 0 with the sun
+	// behind the viewer, 0.5 straight ahead; aligned leaves: -N.L, N turned to the seen side. Blended by the mean normal's
+	// length. The back + glow sum needs no shadow: formed here, ONE scalar across the search.
+	float throughNoShadow;
+	{
+		const float VoL = dot(V, L);
+		const float back = mix(0.25 - 0.25 * VoL, max(-dot(vec3(N), L), 0.0), leafAgree);
+		const float glow = pow(max(-VoL, 0.0), u_foliage_transmissionFocus * u_foliage_voxelTransmissionFocus)
+			* (u_foliage_transmissionGlow * u_foliage_voxelTransmissionGlow);
+		// x the voxel's LEAF SHARE: no sun comes through bark (the trunk, the bare branches).
+		throughNoShadow = (back + glow) * leafShare;
+		// The sky wrap too is a leaf's (a downward leaf's ambient mirrored toward the sky): set here, so the share itself
+		// is not held across the shadow search.
+		g_leafSkyWrap = float16_t(u_foliage_leafSkyWrap * leafShare);
 	}
 
 	// The cascades' shadow (and the terrain's, the clouds'). With the SELF-SHADOW on ("Voxel self shadow" > 0): where the
@@ -222,58 +266,26 @@ void main()
 	g_shadowFoliage = true;
 	g_sunShadowFirst = sunShadowVisibility(shadowPos, L);
 	g_shadowFoliage = false;
-	const float sunVisibility = g_sunShadowFirst; // before the self-shadow (the transmission's own share below)
-	const float selfSun = pow(max(sunTransmit, 1e-4), u_foliage_voxelSelfShadow);
-	const float selfTransmit = pow(max(sunTransmit, 1e-4), u_foliage_voxelSelfShadow * u_foliage_voxelTransmissionSelfShadow);
-	g_sunShadowFirst *= selfSun;
-	g_noRtao = true;
-
-	// THE INTERIOR (the normal atlas's A) as the billboards': an AO on the ambient, remapped by "Foliage interior depth
-	// start / end" x "Foliage interior shadow". The sun takes the real self-shadow instead.
-	const float interior = 1.0 - u_foliage_interiorShadow * smoothstep(u_foliage_interiorStart, u_foliage_interiorEnd, normalTap.w);
-	const float16_t surfaceAO = float16_t(interior);
-
-	// "Trees/Voxel saturation": about the colour's luminance (linear) - the bake's averages read greyer than the mesh leaves.
-	// Then x "Trees/Voxel brightness".
-	const float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-	albedo = max(vec3(luma) + (albedo - vec3(luma)) * u_foliage_voxelSaturation, vec3(0.0)) * u_foliage_voxelBrightness;
-	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
-	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(albedo, pos) : albedo), pos.xz,
-		leaf ? 1.0 : u_terrain_factionSolidScale);
-	const vec3 Vh = normalize(u_viewPos - pos);
-
-	// LEAVES seen edge-on: N bent toward the viewer until N.V reaches "Foliage min N.V" (the foliage FS's).
-	if (leaf)
+	// The self-shadow's two strengths are two powers of the sun march's result: ONE logarithm for both.
+	const float sunLog = log2(max(sunTransmit, 1e-4)) * u_foliage_voxelSelfShadow;
 	{
-		const float noV = dot(vec3(N), Vh);
-		if (noV < u_foliage_minNoV)
-			N = f16vec3(normalize(vec3(N) + Vh * (u_foliage_minNoV - noV)));
-	}
-
-	// LEAF TRANSMISSION, as the foliage cards': a diffuse back term + the forward glow, x the sun's shadow by "Foliage
-	// transmission shadow" and the self-shadow at "Voxel transmission self shadow"'s share. The "Foliage transmission"
-	// strength, glow and focus x the voxel tier's own "Voxel transmission ..." factors.
-	// THE BACK TERM by the voxel's leaves: its mean normal points out of the crown, so -N.L alone lit only the crown's
-	// underside (under a high sun the top and the sides face it), while a mesh crown's leaves face every way and glow all
-	// over. Leaves facing every way (two-sided, the face the viewer sees): on average 0.25 x (1 - V.L) - 0 with the sun
-	// behind the viewer, 0.5 straight ahead; aligned leaves: -N.L, N turned to the seen side. Blended by the mean normal's
-	// length.
-	if (leaf)
-	{
-		const vec3 seenN = dot(vec3(N), Vh) >= 0.0 ? vec3(N) : -vec3(N);
-		const float back = mix(0.25 * (1.0 - dot(Vh, L)), max(-dot(seenN, L), 0.0), leafAgree);
-		const float glow = pow(max(-dot(Vh, L), 0.0), u_foliage_transmissionFocus * u_foliage_voxelTransmissionFocus)
-			* (u_foliage_transmissionGlow * u_foliage_voxelTransmissionGlow);
-		const float visibility = mix(1.0, sunVisibility, u_foliage_transmissionShadow) * selfTransmit;
-		const float through = (back + glow) * visibility;
+		// The transmission takes the cascades' shadow by "Foliage transmission shadow" and the self-shadow at its own share.
+		const float selfTransmit = exp2(sunLog * u_foliage_voxelTransmissionSelfShadow);
+		const float through = throughNoShadow * mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * selfTransmit;
 		if (through > 0.0)
 			g_litExtraLight = f16vec3(min(leafTransmitColor(vec3(materialColor))
 				* (through * u_foliage_transmission * u_foliage_voxelTransmission * INV_PI)
 				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
+	g_sunShadowFirst *= exp2(sunLog);
 
-	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
-	const vec3 color = computeLitColor(pos, Vh, N, materialColor, float16_t(0.65), float16_t(0.0), surfaceAO);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, float16_t(0.65), float16_t(0.0), surfaceAO);
 	out_color = vec4(color, 1.0);
+
+	// THE DEPTH and the motion vector at the hit, formed AFTER the lighting from `pos` (which the light loop keeps live
+	// anyway): held from the march on, the depth and 1 / w were two more values across the lit core's register peak.
+	const vec4 clip = u_mvp * vec4(pos, 1.0);
+	const float depth = min(clip.z / clip.w, gl_FragCoord.z); // never nearer than the face (depth_less)
+	gl_FragDepth = depth;
 	out_motion = voxelMotionVector(in_prevWorldDelta, depth, 1.0 / clip.w);
 }

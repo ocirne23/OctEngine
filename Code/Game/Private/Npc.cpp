@@ -157,18 +157,20 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
     return onGround(center.x + std::cos(start) * ringRadius, center.z + std::sin(start) * ringRadius);
 }
 
-void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind)
+void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind, float arc)
 {
     const GameNpcSettings& npc = Globals::settings.game.npc;
-    const float life = kind == EBeamKind::Turret ? npc.beamLifetime : npc.hitLifetime;
-    const Beam beam{ from, to, life, life, kind };
+    const float life = kind == EBeamKind::Turret ? npc.beamLifetime
+                     : kind == EBeamKind::Arrow  ? StructureSystem::arrowFlightTime(from, to, arc) : npc.hitLifetime;
+    const Beam beam{ from, to, life, life, kind, arc };
     m_beams.push_back(beam);
     if (kind == EBeamKind::Turret || m_newBeams.size() < c_maxHitBroadcast)
         m_newBeams.push_back(beam);
-    // The strike's sound, on every role (a client adds the server's beams here too): the shot at the muzzle, the hit on the victim.
+    // The strike's sound, on every role (a client adds the server's beams here too): the shot at the muzzle, the hit on the
+    // victim (an arrow's when it arrives: drawBeams).
     if (kind == EBeamKind::Turret)
         GameSound::post(EGameSound::TurretFire, from);
-    else
+    else if (kind == EBeamKind::MeleeHit)
         GameSound::post(EGameSound::MeleeHit, to);
     // No impact flash: the VICTIM lights itself on the health drop (GameUnitComponent's hurt
     // light), on every role. The turret's muzzle light is drawn off the beam itself.
@@ -178,10 +180,42 @@ void NpcSystem::drawBeams(float deltaSec)
 {
     // Ages every beam, and draws the MELEE HIT: one line striker -> victim, plus one faint strand beside it, fading.
     // The turret's column is LIGHT RECORDS: drawBeamLights adds them, later in the frame.
+    // An ARROW flies from -> to over its life on its arc (a parabola, Beam::arc over the straight line at the middle:
+    // higher over a wall in the way, StructureSystem::arrowArc), nose first: one pooled arrow.pre entity each; on arrival
+    // the hit's sound plays (the authority lands the damage then).
+    size_t arrows = 0;
     for (Beam& b : m_beams)
     {
+        const float before = b.ttl;
         b.ttl -= deltaSec;
         const float fade = glm::clamp(b.ttl / glm::max(b.life, 1e-3f), 0.0f, 1.0f);
+        if (b.kind == EBeamKind::Arrow)
+        {
+            if (b.ttl <= 0.0f)
+            {
+                if (before > 0.0f)
+                    GameSound::post(EGameSound::MeleeHit, b.to);
+                continue;
+            }
+            if (arrows == m_arrowPool.size())
+            {
+                EntityPtr arrow = Globals::world.spawnAssetFile("Entities/Game/arrow.pre", Transform(b.from), true);
+                if (!arrow)
+                    continue;
+                Globals::world.addRootEntity(arrow);
+                m_arrowPool.push_back(oc::move(arrow));
+            }
+            Entity* arrow = m_arrowPool[arrows++].get();
+            const float t = 1.0f - fade;
+            const glm::vec3 span = b.to - b.from;
+            const float arc = b.arc;
+            arrow->pos = b.from + span * t + glm::vec3(0.0f, 4.0f * arc * t * (1.0f - t), 0.0f);
+            const glm::vec3 dir = span + glm::vec3(0.0f, 4.0f * arc * (1.0f - 2.0f * t), 0.0f);
+            if (glm::dot(dir, dir) > 1e-6f)
+                arrow->rot = glm::quatLookAt(glm::normalize(dir), glm::vec3(0.0f, 1.0f, 0.0f)); // an entity's forward is -Z
+            arrow->setEnabled(true);
+            continue;
+        }
         if (b.kind != EBeamKind::MeleeHit)
             continue;
         const glm::vec3 lift(0.0f, 0.5f, 0.0f); // out of the ground, through the bodies' middles
@@ -191,6 +225,8 @@ void NpcSystem::drawBeams(float deltaSec)
             packColor(glm::vec3(1.0f, 0.5f, 0.2f) * (0.15f + 0.5f * fade)));
     }
     oc::erase_if(m_beams, [](const Beam& b) { return b.ttl <= 0.0f; });
+    for (size_t k = arrows; k < m_arrowPool.size(); ++k) // the pool's idle arrows
+        m_arrowPool[k]->setEnabled(false);
 }
 
 // THE TURRET STRIKES' LIGHT: a COLUMN OF LIGHT from the muzzle to the victim - a BeamLight (the Beacon's beam in small):
@@ -323,9 +359,9 @@ const EntitySpawnTemplate* NpcSystem::shellTemplate(bool lob)
 {
     if (m_shellGeneration != Globals::world.templateGeneration())
     {
-        static constexpr const char* c_paths[3] = { "Entities/Game/enemyShot.pre", "Entities/Game/enemyLob.pre",
-            "Entities/Game/cannonShell.pre" };
-        for (int i = 0; i < 3; ++i)
+        static constexpr const char* c_paths[5] = { "Entities/Game/enemyShot.pre", "Entities/Game/enemyLob.pre",
+            "Entities/Game/cannonShell.pre", "Entities/Game/ballistaBolt.pre", "Entities/Game/mageFireball.pre" };
+        for (int i = 0; i < 5; ++i)
             m_shellTemplates[i] = Globals::world.resolveAssetTemplate(c_paths[i]);
         m_shellGeneration = Globals::world.templateGeneration();
     }
@@ -334,8 +370,27 @@ const EntitySpawnTemplate* NpcSystem::shellTemplate(bool lob)
 
 const EntitySpawnTemplate* NpcSystem::cannonShellTemplate()
 {
-    shellTemplate(false); // (re)resolves all three when the template generation moved
+    shellTemplate(false); // (re)resolves all of them when the template generation moved
     return m_shellTemplates[2].get();
+}
+
+const EntitySpawnTemplate* NpcSystem::ballistaBoltTemplate()
+{
+    shellTemplate(false);
+    return m_shellTemplates[3].get();
+}
+
+void NpcSystem::fireBallistaBolt(const glm::vec3& from, const glm::vec3& velocity, uint8 team)
+{
+    if (const EntitySpawnTemplate* bolt = ballistaBoltTemplate())
+        fireShot(*bolt, from, velocity, team);
+}
+
+void NpcSystem::fireMageFireball(const glm::vec3& from, const glm::vec3& velocity, uint8 team)
+{
+    shellTemplate(false);
+    if (const EntitySpawnTemplate* fireball = m_shellTemplates[4].get())
+        fireShot(*fireball, from, velocity, team);
 }
 
 void NpcSystem::fireCannonShell(const glm::vec3& from, const glm::vec3& velocity, uint8 team)

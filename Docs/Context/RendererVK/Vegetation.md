@@ -403,18 +403,36 @@ which mean "tree" too; 1 = no wind). The layers:
   not in the motion vectors (a texture-space motion). The branch cards (axis code) get no texture waves (their vertices bend, above).
 
 **Per species** (`.tree` `Wind Trunk / Branch`): `TreeCullType::wind` holds the two scales (4.12 fixed point each,
-`treeCullWind`). The main cull writes them into a tree record's `prevPosScale` = (trunk, branch, 1, 0) - a tree never
-moves, so w = 0 and xyz were free; the VS takes them when w = 0 and z = 1, else 1. The shadow cull packs the trunk
+`treeCullWind`); the main cull multiplies them into the tree's wind (below). The shadow cull packs the trunk
 scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree BILLBOARD, for "Trees/Billboard shadow shift
 (m)"; the cascade mask is the low 7 bits). Both culls grow the wind
 reach by the larger scale above 1. The billboard waves and the leaf flutter keep the global settings.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
 offset minus this frame's (`u_foliage_windPrevTime`) to the motion vector. `shadow_depth.vs` applies the trunk layer
-to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`).
+(`treeWindTrunkOffset`) to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`).
+
+**A TREE'S WIND IS WORKED OUT PER TREE, NOT PER VERTEX** (`TreeWind`, tree_wind.inc.glsl): everything that is the same
+for all of a tree's vertices - the gusts at its origin (`vegetationWindVector`: 4 sines), the trunk's lean + sway at
+the reference height (`treeWindTrunk`: 2 sines), the species' scales, the trunk fade, the branch fade and the tree's
+phase - at this frame's time, and as the DIFFERENCE to last frame's for the motion vectors (`treeWindOfTree`). The
+trees work from the wind VECTOR (the direction x the speed is the vector: no normalize, no divide).
+* **The main cull writes it into the tree's record** (`treeWindPack`): a tree never moves and is never skinned, so
+  the record's three "last frame" fields are free. `prevPosScale` = (the trunk vector xy, the branch amplitude, w =
+  -(1 + the branch fade + 2 x the phase's step of 1024)); `prevQuat` = the wind and its difference, two halves each;
+  `prevVertexDelta` = the trunk's difference, two halves. **w <= -1 marks a tree record** (`treeWindIsRecord`; 0 = a
+  node that did not move, > 0 = last frame's scale). The differences keep their precision in a half; two absolute
+  values did not. Worked out per drawn record, at the write: held across the record loop it took the cull from 51 to
+  60 registers. A rock of the tree set gets "did not move" and no wind.
+* **A vertex** (`treeWindVertex`) scales the trunk vector by its height's share (`treeWindTrunkShare`: (height / ref
+  height)², and the drop from the vector's squared length) and adds its branch's sway (`treeWindBranch`, 3 sines a
+  time) x the amplitude - no gust, no trunk sine, no distance and no fade per vertex. The leaf flutter (TIP vertices
+  of the card species) is the one layer that still takes the tree's distance per vertex.
+* A node that is no record (the CPU path's pieces) and the far voxel trees (8 vertices a tree) call `treeWindOfTree`
+  per vertex (`treeWind`).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond
-"Trunk fade end (m)" (3 km, a 100 m band) nothing. **The TLAS stays static**: RT shadows / GI / reflections see
-unswayed trees.
+"Trunk fade end (m)" (3 km, a 100 m band) the trunk vector and the amplitude are zero. **The TLAS stays static**: RT
+shadows / GI / reflections see unswayed trees.
 
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 

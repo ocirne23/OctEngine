@@ -779,8 +779,6 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // drawn on LitFoliage (its paths assume it): the sun shadow is NOT rejected by the geometric
                                                        // normal's facing (a flat card standing for a foliage clump,
                                                        // the tree billboards) - the normal-mapped normal decides
-    constexpr uint32 MATERIAL_FLAG_NO_EDGE_FADE = 1u << 22; // with BILLBOARD: no edge-on fade (the mid tier's branch
-                                                       // cards; outside the fade bits TreeSystem rewrites)
     constexpr uint32 MATERIAL_FLAG_BILLBOARD_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
                                                        // HORIZONTAL card (its top-down view; the card whose normal
                                                        // points up) - the lit FS's crown frame runs along its normal

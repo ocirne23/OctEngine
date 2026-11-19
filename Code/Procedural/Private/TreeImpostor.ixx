@@ -88,27 +88,47 @@ export namespace Procedural
 
 	// ---- The VOXEL tier (RendererVK LitTreeVoxel, instanced_indirect_tree_voxel.fs.glsl) ----
 	// A baked variant as a PREFILTERED voxel grid of res^3 voxels at level 0 over treeVoxelBox, with levels halving down to
-	// TREE_VOXEL_MIN_RES. Every level is a 2D ATLAS of its z slices: slice z is tile (z % tilesX, z / tilesX) of a grid of
-	// tilesX = res / TREE_VOXEL_TILES_Y by TREE_VOXEL_TILES_Y tiles, each n x n texels at a level of n voxels (x along u,
-	// y along v); a level's image is level 0's halved, so a tile keeps its uv rect at every level. The FS reads the grid's
-	// res from the texture's width (res^2 / TREE_VOXEL_TILES_Y) - keep the layout in step with it.
-	//   albedo: RGB = the voxel's mean surface colour (sRGB), A = its OPACITY: the share of a ray it stops over one voxel
-	//           crossing (the cube root of its volume) at that level
-	//   normal: RGB = the mean leaf normal (outward from the crown) x 0.5 + 0.5 - its length is how much the leaves agree,
-	//           A = the INTERIOR (0 = the crown's surface .. 1 = its core), as the billboards' normal map's A
+	// TREE_VOXEL_MIN_RES - stored SPARSE, in BRICKS (keep tree_voxel.inc.glsl in step):
+	// - A level of n voxels is cut into bricks of TREE_VOXEL_BRICK voxels a side, CENTRE TO CENTRE: brick k covers the
+	//   voxel centres k B .. k B + B per axis, so it stores B + 1 = TREE_VOXEL_BRICK_TEXELS voxels a side and a filtered
+	//   sample inside it never reads another brick (the shared face is stored by both). A brick with no opacity in any of
+	//   its voxels is NOT stored: most of a tree's box is air.
+	// - THE OPACITY ATLAS (one channel; BC4): every stored brick of EVERY level, slot s at column s % cols, row s / cols,
+	//   as its 8 z slices side by side (64 x 8 texels: whole BC blocks). A voxel's OPACITY = the share of a ray it stops
+	//   over one voxel crossing (the cube root of its volume) at that level. Slot 0 is the HEADER, no brick: its first two
+	//   blocks hold the index texture's bindless id (TreeSystem writes it at upload).
+	// - THE SURFACE ATLAS (RGBA, linear; BC3), half the opacity atlas each way: per stored brick
+	//   TREE_VOXEL_SURFACE_TEXELS^3 samples over the SAME span (one every B / 3 voxels: the colour and the normal change
+	//   slowly, the opacity carries the silhouette), as two tile sets side by side (2 x 16 x 4 texels): RGB = the mean
+	//   surface colour (sRGB-ENCODED: the FS decodes it), A = the INTERIOR (0 = the crown's surface .. 1 = its core); then
+	//   RGB = the mean leaf normal (outward from the crown) x 0.5 + 0.5 - its length is how much the leaves agree. Each
+	//   sample is the opacity-weighted mean under a tent of its spacing.
+	// - THE INDEX (RGBA8, exact): texel (0, 0) = the header (R = log2 res, G = the levels, B = log2 cols); below it level
+	//   by level (level 0 first) its D^3 bricks, D = treeVoxelBricks(n): brick (x, y, z) at (x + z D, y) of the level's D
+	//   rows - RGB = the brick's slot (24 bits), 0 = empty.
+	// One level of each texture, no mip chain: a level's bricks take what it needs, nothing more.
 	// Coarser levels keep the coverage: a coarse voxel's opacity is 1 - the mean transmission through its children along
 	// the three axes, not the mean opacity (which made dense clumps too thin far away).
-	constexpr uint32 TREE_VOXEL_TILES_Y = 8;
-	constexpr uint32 TREE_VOXEL_MIN_RES = 4;      // the last level: a slice is then one BC block
-	constexpr uint32 TREE_VOXEL_BAKE_VERSION = 2; // bump when the voxel bake changes (its .tex re-bakes)
+	constexpr uint32 TREE_VOXEL_BRICK = 7;
+	constexpr uint32 TREE_VOXEL_BRICK_TEXELS = TREE_VOXEL_BRICK + 1;
+	constexpr uint32 TREE_VOXEL_SURFACE_TEXELS = 4;
+	constexpr uint32 TREE_VOXEL_MAX_COLS = 128;   // bricks per atlas row: at most 8192 texels wide
+	constexpr uint32 TREE_VOXEL_MIN_RES = 4;      // the last level
+	constexpr uint32 TREE_VOXEL_BAKE_VERSION = 6; // bump when the voxel bake changes (its .tex re-bakes)
 	struct TreeVoxelBake
 	{
-		uint32 width = 0;  // level 0's atlas
+		uint32 width = 0;  // the opacity atlas; the surface atlas is (width / 2) x (height / 2)
 		uint32 height = 0;
-		oc::vector<oc::vector<uint8>> albedo; // RGBA8 per level
-		oc::vector<oc::vector<uint8>> normal; // RGBA8 per level
+		oc::vector<uint8> opacity; // R8
+		oc::vector<uint8> surface; // RGBA8
+		uint32 indexWidth = 0;
+		uint32 indexHeight = 0;
+		oc::vector<uint8> index;   // RGBA8
+		uint32 bricks = 0;         // stored (the header's slot not counted)
+		uint32 bricksTotal = 0;    // of every level
 	};
 	uint32 treeVoxelLevels(uint32 res); // res down to TREE_VOXEL_MIN_RES
+	uint32 treeVoxelBricks(uint32 n);   // bricks per axis of a level of n voxels
 	// The grid's box: the billboard box with a voxel of margin on every side (the trilinear filter never cuts the crown).
 	TreeBillboardBox treeVoxelBox(const TreePiece& piece, uint32 res);
 	// From the LOD-0 leaves (their texture's alpha and colour) and bark (its texture's colour), both sampled per point. The

@@ -27,6 +27,6 @@ Prefab gameEnemyGiant
 		AttackInterval 2.0
 		AttackDamage 56
 		PlayerDamage 60
-		StructureDamage 240
+		StructureDamage 180
 		EmitterDrain 15
 		AlwaysDisplayHealth true

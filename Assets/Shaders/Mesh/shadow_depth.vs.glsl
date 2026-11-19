@@ -41,10 +41,10 @@ layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragmen
 #ifdef TREE_VOXEL
 // The trees' VOXEL casters (ShadowMapGraphicsPipeline's voxel pipeline, "Trees/Voxel shadows"): the box mesh of the main
 // pass's voxel tier (its normal = the corner's grid coordinate, its tangent = the box size); the alpha index is the grid's
-// albedo atlas. The FS marches along the light from the face the sun sees.
+// opacity atlas (its header names the brick index: tree_voxel.inc.glsl). The FS marches along the light from the face the sun sees.
 layout (location = 2) out vec3 out_voxelGrid;
-layout (location = 3) out flat vec3 out_voxelDirG;    // grid units per metre along the light's travel
-layout (location = 4) out flat vec4 out_voxelSizeLod; // xyz = the box in world metres, w = log2(the cascade's texel / the box volume's cube root) + "Voxel shadow LOD bias"
+layout (location = 3) out flat vec3 out_voxelDirG;    // grid units per metre along the light's travel, no zero component
+layout (location = 4) out flat vec2 out_voxelStepLod; // x = the cube root of the box's volume (world metres), y = log2(the cascade's texel / x) + "Voxel shadow LOD bias"
 layout (location = 5) out flat vec2 out_voxelDepth;   // x = depth per metre along the light, y = the coverage that casts
 #endif
 
@@ -92,9 +92,8 @@ void main()
     // attribute in this pass) - the same bend the main pass gives every representation.
     if ((inst.alphaTexIdxCascadeMask & 0x00008000u) != 0u)
     {
-        vec3 unusedPrevDelta;
         const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
-        worldPos += treeWind(localPos, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, vec2(windTrunk, 1.0), unusedPrevDelta);
+        worldPos += treeWindTrunkOffset(localPos, inst.posScale.xyz, inst.posScale.w, windTrunk);
         // A tree BILLBOARD (bit 7) shifted toward the sun by "Trees/Billboard shadow shift (m)" (< 0: away from it): its
         // flat cards stand at the crown's middle, so its shadow starts there, not at the crown's sun side.
         if ((inst.alphaTexIdxCascadeMask & 0x00000080u) != 0u)
@@ -108,14 +107,16 @@ void main()
 
 #ifdef TREE_VOXEL
     {
-        const vec3 boxSize = max(in_vertices[vertexIdx].tangent.xyz, vec3(1e-4));
-        const vec3 worldSize = boxSize * inst.posScale.w;
+        // The box's sides are > 0 (Procedural billboardBox), and so is a tree's scale: no clamp.
+        const vec3 worldSize = in_vertices[vertexIdx].tangent.xyz * inst.posScale.w;
         const vec3 travel = -u_sunDirection.xyz; // from the sun into the scene
         out_voxelGrid = in_vertices[vertexIdx].normalV.xyz;
-        out_voxelDirG = quat_transform(travel, vec4(-inst.quat.xyz, inst.quat.w)) / worldSize;
+        const vec3 dirG = quat_transform(travel, vec4(-inst.quat.xyz, inst.quat.w)) / worldSize;
+        out_voxelDirG = mix(vec3(1e-6), dirG, greaterThan(abs(dirG), vec3(1e-6))); // the empty bricks' jump divides by it
         // The cascade's texel in metres: its ortho x row maps world to clip -1..1 over the map's resolution.
-        const float texel = 2.0 * u_shadow_invResolution / max(length(vec3(m[0][0], m[1][0], m[2][0])), 1e-9);
-        out_voxelSizeLod = vec4(worldSize, log2(texel / pow(worldSize.x * worldSize.y * worldSize.z, 1.0 / 3.0)) + u_foliage_voxelShadowLodBias);
+        const float texel = 2.0 * u_shadow_invResolution / length(vec3(m[0][0], m[1][0], m[2][0]));
+        const float cubeRoot = pow(worldSize.x * worldSize.y * worldSize.z, 1.0 / 3.0);
+        out_voxelStepLod = vec2(cubeRoot, log2(texel / cubeRoot) + u_foliage_voxelShadowLodBias);
         out_voxelDepth = vec2((m * vec4(travel, 0.0)).z, u_foliage_voxelShadowCoverage);
     }
 #endif

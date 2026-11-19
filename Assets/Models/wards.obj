@@ -2,7 +2,7 @@
 # side of a 2 m wall segment, in the WALL's space: its origin (1.5 m over the ground), the ground at y = -1.5, the wall's
 # side at x = 1, the cell's edges at z = -1 and z = 1. The game turns each piece about +Y to the other sides.
 #   ResistPane   - the barrier: a full-size pane of light in front of the side (x 1.06 .. 1.16), the cell's whole width
-#                  (two segments' panes meet edge to edge) and the wall's height and a bit more (to 3.25 m).
+#                  (two segments' panes meet edge to edge) and the wall's height (to 3 m: it does not stand over the wall).
 #   ResistCorner - the post at the OUTER corner of two panes (+X and +Z), so the barrier goes round a corner with no seam.
 #   AbsorbPane   - a smaller pane in front of the barrier (x 1.28 .. 1.34): it does not touch the ResistPane.
 #   Spikes       - five cones of light out of the wall's side, through both panes (to x = 1.8).
@@ -28,10 +28,10 @@ v 1.06 -1.5 -1
 v 1.16 -1.5 -1
 v 1.16 -1.5 1
 v 1.06 -1.5 1
-v 1.06 1.75 -1
-v 1.16 1.75 -1
-v 1.16 1.75 1
-v 1.06 1.75 1
+v 1.06 1.5 -1
+v 1.16 1.5 -1
+v 1.16 1.5 1
+v 1.06 1.5 1
 f -4/1/3 -1/1/3 -2/1/3 -3/1/3
 f -8/1/4 -7/1/4 -6/1/4 -5/1/4
 f -7/1/1 -3/1/1 -2/1/1 -6/1/1
@@ -43,10 +43,10 @@ v 1 -1.5 1
 v 1.16 -1.5 1
 v 1.16 -1.5 1.16
 v 1 -1.5 1.16
-v 1 1.75 1
-v 1.16 1.75 1
-v 1.16 1.75 1.16
-v 1 1.75 1.16
+v 1 1.5 1
+v 1.16 1.5 1
+v 1.16 1.5 1.16
+v 1 1.5 1.16
 f -4/1/3 -1/1/3 -2/1/3 -3/1/3
 f -8/1/4 -7/1/4 -6/1/4 -5/1/4
 f -7/1/1 -3/1/1 -2/1/1 -6/1/1

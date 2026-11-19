@@ -249,6 +249,51 @@ glm::vec3 GameMatch::waveTargetFrom(const glm::vec3& origin) const
     return target + glm::vec3(toward.x, 0.0f, toward.y) * glm::min(6.0f, len);
 }
 
+// THE RAIDERS (authority, every second). A wave unit's march order ends at its building (arrival, or the first enemy
+// structure inside "Order break radius"), and from then on its AI looks for targets only within "Target search radius"
+// (the range gate: Targeting range gates in Docs/Context/Game/Modes.md). With the next building farther than that, it
+// stood where it broke the first one. So: every AI-team unit with NO order (a wave's after its march, a Spawner's
+// brood) whose nearest standing own building (waveTargetFrom's rule: no road piece, no rubble, not invulnerable) is
+// past that radius gets a new march order to it - 6 m short on its own side, +-2 m of jitter. Near enough, its AI has it.
+void GameMatch::tickRaiders(float deltaSec)
+{
+    m_raiderTimer -= deltaSec;
+    if (m_raiderTimer > 0.0f || Globals::networkManager.role() == ENetRole::Client)
+        return;
+    m_raiderTimer = 1.0f;
+    m_raiderTargets.clear();
+    for (const StructureSystem::Ref& ref : m_structures.structures())
+    {
+        const GameStructureComponent& s = *ref.state;
+        if (s.team == 0 && !s.invulnerable && !s.rubble && s.alive() && !isCableOrCrossing(ref.type))
+            m_raiderTargets.push_back(ref.entity->pos - glm::vec3(0.0f, StructureSystem::spawnHeightOf(ref.type), 0.0f));
+    }
+    if (m_raiderTargets.empty())
+        return;
+    const float reach = GameUnitComponent::params.targetSearchRadius + 2.0f;
+    for (const EntityPtr& e : Globals::world.rootEntities()) // every unit is a World root
+    {
+        GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
+        if (!u || u->puppet || u->team != CoopAiTeam || !u->alive() || u->targetLocked)
+            continue;
+        const glm::vec2 here(e->pos.x, e->pos.z);
+        float bestSq = FLT_MAX;
+        glm::vec3 target(0.0f);
+        for (const glm::vec3& t : m_raiderTargets)
+            if (const glm::vec2 d = glm::vec2(t.x, t.z) - here; glm::dot(d, d) < bestSq)
+            {
+                bestSq = glm::dot(d, d);
+                target = t;
+            }
+        const float distance = std::sqrt(bestSq);
+        if (distance <= reach)
+            continue;
+        const glm::vec2 toward = (here - glm::vec2(target.x, target.z)) / glm::max(distance, 1e-3f);
+        u->orderMove(target + glm::vec3(toward.x, 0.0f, toward.y) * glm::min(6.0f, distance)
+            + glm::vec3(glm::linearRand(-2.0f, 2.0f), 0.0f, glm::linearRand(-2.0f, 2.0f)));
+    }
+}
+
 void GameMatch::tickBeacon(float deltaSec)
 {
     if (!m_sandboxWorld)

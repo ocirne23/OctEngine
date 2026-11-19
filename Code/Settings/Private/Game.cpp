@@ -174,7 +174,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     // Solar 5, Fabricator 6, Bastion 7, Barracks 8, Wall 9, Turret 10, MineralSilo 11, Constructor 12, Base 13,
     // CablePower 14, CablePipe 15, CableConveyor 16, CrossingPower 17, CrossingPipe 18, CrossingConveyor 19, House 20,
     // MedicStation 21, Quarry 22, Bridge 23, Gate 24, Lens 25, Searchlight 26, Walkway 27, Armory 28, MageTower 29, ShipRail 30,
-    // Cannon 31, AmmoWorks 32, AmmoStore 33, WardResist 34, WardAbsorb 35, WardRetaliate 36.
+    // Cannon 31, AmmoWorks 32, AmmoStore 33, WardResist 34, WardAbsorb 35, WardRetaliate 36, WatchPost 37, Ballista 38.
     Tweak::floatVar("Game/Economy", "Ship rail repair cost", &s.costs[30], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Resist ward cost", &s.costs[34], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Absorb ward cost", &s.costs[35], 0.0f, 500.0f, 1.0f);
@@ -204,6 +204,14 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::intVar("Game/Cannon", "Crew", &s.cannonCrew, 1, 6, 1);
     Tweak::floatVar("Game/Cannon", "Crew call range (m)", &s.cannonCallRange, 5.0f, 200.0f, 1.0f);
     Tweak::floatVar("Game/Cannon", "Crew stand down (s)", &s.cannonStandDown, 0.0f, 120.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Ballista cost", &s.costs[38], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Ballista", "Range (m)", &s.ballistaRange, 5.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Ballista", "Arc (deg)", &s.ballistaArcDeg, 10.0f, 360.0f, 5.0f);
+    Tweak::floatVar("Game/Ballista", "Fire interval (s)", &s.ballistaFireInterval, 0.2f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Ballista", "Bolt speed (m/s)", &s.ballistaBoltSpeed, 5.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Ballista", "Munitions held", &s.ballistaAmmoCapacity, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Watch post cost", &s.costs[37], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Armory", "Watch post range (x)", &s.watchPostRangeMult, 1.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Cannon", "Ammo works munitions/s", &s.ammoRate, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Cannon", "Stone per munition", &s.ammoStonePer, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Cannon", "Light per munition", &s.ammoLightPer, 0.0f, 50.0f, 0.1f);
@@ -246,7 +254,7 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
             "Road crossing health", "House health", "Healer's hut health", "Quarry health", "Bridge health", "Gate health",
             "Lens health", "Searchlight health", "Walkway health", "Armory health", "Mage tower health", "Ship rail health",
             "Cannon health", "Ammo works health", "Ammo store health", "Resist ward health", "Absorb ward health",
-            "Retaliate ward health" };
+            "Retaliate ward health", "Watch post health", "Ballista health" };
         for (int i = 0; i < GameStructureTypeCount; ++i)
             Tweak::floatVar("Game/Health", c_healthNames[i], &s.health[i], 1.0f, 10000.0f, 5.0f);
     }
@@ -269,6 +277,8 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::boolean("Game/Carriers", "Enabled", &s.carriers);
     Tweak::floatVar("Game/Carriers", "Load", &s.carrierLoad, 1.0f, 100.0f, 1.0f);
     Tweak::floatVar("Game/Carriers", "Cart load", &s.carrierCartLoad, 1.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Carriers", "Cart min fill gap", &s.cartMinFillGap, 0.01f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Carriers", "Cart urgent fill gap", &s.cartUrgentFillGap, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Carriers", "Walk speed (m/s)", &s.carrierSpeed, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Carriers", "Build rate (stone/s)", &s.carrierBuildRate, 0.1f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Armory", "Range (m)", &s.armoryRange, 5.0f, 300.0f, 1.0f);
@@ -278,11 +288,12 @@ static void registerStructures(GameStructureSettings& s, GameStructureParams& sp
     Tweak::floatVar("Game/Armory", "Guard range (m)", &s.guardRange, 2.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Armory", "Guard damage", &s.guardDamage, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Game/Armory", "Guard shot interval (s)", &s.guardInterval, 0.1f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Armory", "Arrow speed (m/s)", &s.guardArrowSpeed, 2.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Game/Armory", "Arrow arc gravity (x)", &s.guardArrowGravity, 0.1f, 20.0f, 0.1f);
     Tweak::intVar("Game/Armory", "Mages per tower", &s.mageCount, 0, 32, 1);
     Tweak::floatVar("Game/Armory", "Mage range (m)", &s.mageRange, 2.0f, 80.0f, 0.5f);
-    Tweak::floatVar("Game/Armory", "Mage cone half angle (deg)", &s.mageHalfAngleDeg, 2.0f, 80.0f, 0.5f);
-    Tweak::floatVar("Game/Armory", "Mage damage/s", &s.mageDps, 0.0f, 200.0f, 0.1f);
-    Tweak::floatVar("Game/Armory", "Mage light brightness (x)", &s.mageLightIntensity, 0.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Armory", "Mage fire interval (s)", &s.mageFireInterval, 0.1f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Armory", "Mage fireball speed (m/s)", &s.mageShotSpeed, 2.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Carriers", "Max walkers per building", &s.carriersPerBuilding, 1, 32, 1);
     Tweak::floatVar("Game/Structures", "Constructor range", &s.constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &s.constructorBuildRate, 0.5f, 50.0f, 0.25f);
@@ -512,6 +523,8 @@ static void registerShip(GameShipSettings& s)
     Tweak::floatVar("Game/Ship", "Throttle rate (/s)", &s.throttleRate, 0.05f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Ship", "Max speed (m/s)", &s.maxSpeed, 1.0f, 80.0f, 0.5f);
     Tweak::floatVar("Game/Ship", "Side drag (/s)", &s.sideDrag, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Ship", "Brake (m/s2)", &s.brake, 0.1f, 50.0f, 0.1f);
+    Tweak::floatVar("Game/Ship", "Land distance (m)", &s.landDistance, 2.0f, 300.0f, 1.0f);
     Tweak::floatVar("Game/Ship", "Turn rate (deg/s)", &s.turnRate, 1.0f, 90.0f, 0.5f);
     Tweak::floatVar("Game/Ship", "Turn accel (deg/s2)", &s.turnAccel, 0.5f, 90.0f, 0.5f);
     Tweak::floatVar("Game/Ship", "Turn drag (/s)", &s.turnDrag, 0.0f, 10.0f, 0.05f);

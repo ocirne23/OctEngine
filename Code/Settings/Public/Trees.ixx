@@ -15,7 +15,7 @@ export struct TreeSettings
 	bool reload = false;             // button: re-read the .tree files, regenerate, respawn (TreeSystem clears it)
 	bool respawn = false;            // button: respawn the preview in front of the camera (TreeSystem clears it)
 	bool regenerateTextures = false; // button: regenerate the species textures over the files on disk
-	bool showLibrary = true;         // also reloads: without it the module / trunk billboards are never uploaded
+	bool showLibrary = false;        // also reloads: without it the module / trunk billboards are never baked or loaded
 	bool compressTextures = true;    // BC: bark BC1 + BC5 normal, leaves / billboards / card atlas BC3 (reloads)
 	int gridSize = 1;
 	float spacing = 11.0f;
@@ -36,12 +36,15 @@ export struct TreeSettings
 	int collidersPerFrame = 64;       // bodies created per frame (removals are not budgeted)
 	int farMode = 0;                  // 0 = billboards, 1 = none (reloads)
 	int billboardViews = 0;           // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-	float farDistanceScale = 3.0f;    // x every species' billboard distance; 0 = off
-	float branchCardDistance = 0.3f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
+	float farDistanceScale = 1.0f;    // x every species' billboard distance; 0 = off
+	float fadeWidthScale = 2.0f;      // x every species' `Billboard FadeWidth`: the mesh <-> voxels / billboard blend band (respawns)
+	float voxelStart = 0.0f;          // m: the TREES' (not the bushes') mesh -> voxels / billboard blend starts here; 0 = each
+	                                  // species' `Billboard Distance` x farDistanceScale - FadeWidth / 2 (respawns)
+	float branchCardDistance = 0.0f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
 	// THE VOXEL TIER (GPU path, trees only - not bushes): in the MAIN pass a baked variant's whole-tree billboard is replaced
 	// by its prefiltered voxel grid, marched per pixel (LitTreeVoxel). Shadows, GI and RT keep the billboard. Reloads.
 	bool voxelImpostors = true;
-	int voxelResolution = 2;          // 0 = 32^3, 1 = 64^3, 2 = 128^3 voxels at level 0 (reloads)
+	int voxelResolution = 3;          // 0 = 32^3, 1 = 64^3, 2 = 128^3, 3 = 256^3 voxels at level 0 (reloads)
 	bool forceFar = false;            // debug: every module as its far representation
 	bool gpuExpansion = true;         // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 };

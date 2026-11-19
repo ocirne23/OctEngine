@@ -7,6 +7,15 @@
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
+// The tree variants (LitTree: TREE_ORIGIN, LitFoliage: FOLIAGE, LitTreeVoxel: TREE_VOXEL) draw tree pieces only -
+// instances that never move and are never skinned, so their only motion is the wind's (TREE_STATIC). A billboard, a
+// branch card and the voxel box carry no leaf-card TIP vertex: their wind compiles without the flutter.
+#if defined(FOLIAGE) || defined(TREE_ORIGIN) || defined(TREE_VOXEL)
+#define TREE_STATIC
+#endif
+#if defined(FOLIAGE) || defined(TREE_VOXEL)
+#define TREE_WIND_NO_FLUTTER
+#endif
 #include "tree_wind.inc.glsl"
 
 #ifdef STEREO
@@ -21,7 +30,7 @@ struct InMeshInstancesData
 {
     vec4 posScale;
     vec4 quat;
-    vec4 prevPosScale;    // the instance transform last frame; w = 0: the node did not move
+    vec4 prevPosScale;    // the instance transform last frame; w = 0: the node did not move; w <= -1: a tree record's wind
     uint meshIdxMaterialIdx;
     uint prevVertexDelta; // skinned: last frame's position sits this many vertices on (0 = not skinned)
     uvec2 prevQuat;       // packSnorm2x16 (x, y), (z, w)
@@ -41,16 +50,21 @@ layout (location = 2) in vec4 in_tangent;
 // and the sign. The world position stays INTERPOLATED: an interpolant costs no register until it is read, while a
 // position rebuilt from gl_FragCoord + the depth stays live across the whole lit core (lit FS spill 16 -> 64 B, slower).
 layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
+#ifndef TREE_VOXEL // the voxel box has no surface frame: its normal and tangent attributes carry the grid coordinate and the box size
 layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
 layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
+#endif
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#if defined(FOLIAGE) || defined(TREE_ORIGIN)
-// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS). LitTree
-// (TREE_ORIGIN) and LitFoliage: the tree's origin, which its distance fade measures from (tree_fade.inc.glsl).
+#if defined(FOLIAGE)
+// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS), and the
+// tree's origin, which its distance fade measures from (tree_fade.inc.glsl).
 layout (location = 5) out flat vec3 out_instanceOrigin;
+#elif defined(TREE_ORIGIN)
+// LitTree: the camera's distance to the tree's origin - its distance fade (tree_fade.inc.glsl), one value a tree.
+layout (location = 5) out flat float out_treeDistance;
 #endif
 #ifdef TREE_VOXEL
 // The LitTreeVoxel variant (the trees' voxel tier, Procedural treeVoxelBoxMesh): the box vertex carries its GRID
@@ -58,15 +72,19 @@ layout (location = 5) out flat vec3 out_instanceOrigin;
 layout (location = 5) out flat vec3 out_voxelCam;       // the camera in grid space (unbent by the wind)
 layout (location = 6) out vec3 out_voxelGrid;           // this point of the box in grid space
 layout (location = 7) out flat vec4 out_voxelQuat;      // the instance rotation (grid axes -> world)
-layout (location = 8) out flat vec3 out_voxelWorldSize; // the box size in world metres (x the instance scale)
-layout (location = 9) out flat vec3 out_instanceOrigin; // the tree's origin: its distance fade (tree_fade.inc.glsl)
+layout (location = 8) out flat vec4 out_voxelWorldSize; // xyz = the box in world metres, w = the cube root of its volume
+layout (location = 9) out flat float out_treeDistance;  // the camera's distance to the tree's origin: its distance fade (tree_fade.inc.glsl)
+layout (location = 10) out flat vec4 out_voxelSunLod;   // xyz = the sun in grid units per metre, w = the LOD scale
+#include "tree_voxel_box.inc.glsl"
 #endif
 
+#ifndef TREE_STATIC
 // Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before they meet
 // the rotated offsets), so the result keeps its precision far from the world origin.
 vec3 prevWorldDelta(InMeshInstancesData inst)
 {
-    const bool skinned = inst.prevVertexDelta != 0u;
+    // Not a tree record (a tree never moves; its record's fields carry its wind, tree_wind.inc.glsl).
+    const bool skinned = inst.prevVertexDelta != 0u && !treeWindIsRecord(inst.prevPosScale);
     if (inst.prevPosScale.w <= 0.0 && !skinned)
         return vec3(0.0);
     const vec3 prevLocal = skinned ? in_vertices[uint(gl_VertexIndex) + inst.prevVertexDelta].positionU.xyz : in_posU.xyz;
@@ -76,6 +94,7 @@ vec3 prevWorldDelta(InMeshInstancesData inst)
     return (inst.prevPosScale.xyz - inst.posScale.xyz)
          + (quat_transform(prevLocal * inst.prevPosScale.w, prevQuat) - quat_transform(in_posU.xyz * inst.posScale.w, inst.quat));
 }
+#endif
 
 void main()
 {
@@ -89,37 +108,62 @@ void main()
 
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
-    vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
+#ifndef TREE_VOXEL
     const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
+#else
+    const vec3 normal = vec3(0.0); // no leaf flutter on the box
+#endif
 
-    // The procedural trees sway in the wind (tree_wind.inc.glsl; its payload rides the tangent's w magnitude).
+    // The procedural trees sway in the wind (tree_wind.inc.glsl; its payload rides the tangent's w magnitude). Worked out
+    // BEFORE the vertex's own transform: nothing of that is then held across it (the generic lit variant: 63 -> 48
+    // registers). The voxel box is the exception (measured: its transform first is the lower count).
+#ifdef TREE_VOXEL
+    const vec3 restPos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
+#endif
+    vec3 windOffset = vec3(0.0);
     vec3 windPrevDelta = vec3(0.0);
+    // A tree RECORD (the main cull) carries its tree's whole wind in its three "last frame" fields (tree_wind.inc.glsl
+    // treeWindPack: the gusts, the trunk's sway and the fades, once per tree). Any other node with a wind payload (the CPU
+    // path's tree pieces) works it out here, per vertex.
+    const bool treeRecord = treeWindIsRecord(inst.prevPosScale);
+#ifndef TREE_VOXEL
     uint windPayload;
     if (treeWindPayload(in_tangent.w, windPayload))
+#else
+    // The voxel box (its tangent's code 2.5): the trunk bend ONLY - payload 0 as a constant, so the branch sway compiles out.
+    const uint windPayload = 0u;
+#endif
     {
-        // A tree record (the main cull): prevPosScale = (trunk scale, branch scale, 1, 0) - its species' `Wind`.
-        const vec2 windScale = inst.prevPosScale.w <= 0.0 && inst.prevPosScale.z > 0.5 ? inst.prevPosScale.xy : vec2(1.0);
-        pos += treeWind(in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windScale, windPrevDelta);
+        TreeWind tree;
+        if (treeRecord)
+            tree = treeWindUnpack(inst.prevPosScale, inst.prevQuat, inst.prevVertexDelta);
+        else
+            tree = treeWindOfTree(inst_pos, inst_scale, vec2(1.0));
+        windOffset = treeWindVertex(tree, in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windPrevDelta);
     }
-
-    out_posU   = vec4(pos, in_posU.w);
+#ifdef TREE_VOXEL
+    const vec3 pos = restPos + windOffset;
+    out_posU   = vec4(pos, 0.0); // the box has no texture coordinate
+#else
+    const vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos + windOffset;
     out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
+    out_posU   = vec4(pos, in_posU.w);
+#endif
+#ifdef TREE_STATIC
+    out_prevWorldDelta = windPrevDelta;
+#else
     out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
-#if defined(FOLIAGE) || defined(TREE_ORIGIN) || defined(TREE_VOXEL)
+#endif
+#if defined(FOLIAGE)
     out_instanceOrigin = inst_pos;
+#elif defined(TREE_ORIGIN) || defined(TREE_VOXEL)
+    out_treeDistance = distance(u_viewPos, inst_pos);
 #endif
 #ifdef TREE_VOXEL
-    {
-        const vec3 grid = in_normalV.xyz;
-        const vec3 boxSize = max(in_tangent.xyz, vec3(1e-4));
-        const vec3 boxMin = in_posU.xyz - grid * boxSize;
-        const vec3 camLocal = quat_transform(u_viewPos - inst_pos, vec4(-inst_quat.xyz, inst_quat.w)) / max(inst_scale, 1e-6);
-        out_voxelCam = (camLocal - boxMin) / boxSize;
-        out_voxelGrid = grid;
-        out_voxelQuat = inst_quat;
-        out_voxelWorldSize = boxSize * inst_scale;
-    }
+    out_voxelGrid = in_normalV.xyz;
+    out_voxelQuat = inst_quat;
+    treeVoxelBoxInterface(in_posU.xyz, in_normalV.xyz, in_tangent.xyz, inst_pos, inst_scale, inst_quat, out_voxelCam, out_voxelWorldSize, out_voxelSunLod);
 #endif
 
     // Per-eye projection in VR / centre view on desktop, with the same TAA sub-pixel jitter for both eyes.

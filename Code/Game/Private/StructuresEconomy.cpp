@@ -543,16 +543,30 @@ void StructureSystem::tickDamage(float)
 // points at the target (within 3 degrees), its reload is done and it holds a munition: the LOWEST lob whose whole arc is
 // clear, the vertical speed solved for the gravity so the shell comes down on the target's spot. The match spawns it
 // (cannonShots). With the carriers off ("Game/Carriers" "Enabled") there are no crews: every cannon is manned.
+// THE BALLISTA runs the same crew, reload, search and turn with its own "Game/Ballista" range, arc and interval, at any
+// distance in range (a shadow too), with no lob: it fires a nearly flat BOLT (ballistaBolt.pre) at the target, the
+// vertical speed raised for the gravity over the flight. The bolt flies over the own walls and through the units, and
+// hurts the ones it passes, shadows too (GameProjectileComponent's Pierce, HitsShadows).
 void StructureSystem::tickCannons(float deltaSec)
 {
     ProfileScope scope("Structures cannons", EProfileCategory::Game);
-    const float range = glm::max(m_settings.cannonRange, 1.0f);
-    const float minRange = glm::clamp(m_settings.cannonMinRange, 0.0f, range * 0.9f);
-    const float halfArc = glm::radians(glm::clamp(m_settings.cannonArcDeg, 1.0f, 360.0f) * 0.5f);
-    const float cosHalfArc = std::cos(halfArc);
     const float gravity = glm::max(-Globals::settings.physics.gravity.y, 0.1f);
     const int crewFull = glm::max(m_settings.cannonCrew, 1);
-    constexpr float c_muzzleHeight = 0.55f, c_muzzleOut = 1.65f; // the barrel's mouth over / ahead of the origin (cannon.pre's Mouth)
+    struct GunParams { float range, minRange, halfArc, cosHalfArc, interval, muzzleHeight, muzzleOut; };
+    const auto gunParams = [&](bool ballista)
+    {
+        GunParams g;
+        g.range = glm::max(ballista ? m_settings.ballistaRange : m_settings.cannonRange, 1.0f);
+        g.minRange = ballista ? 0.0f : glm::clamp(m_settings.cannonMinRange, 0.0f, g.range * 0.9f);
+        g.halfArc = glm::radians(glm::clamp(ballista ? m_settings.ballistaArcDeg : m_settings.cannonArcDeg, 1.0f, 360.0f) * 0.5f);
+        g.cosHalfArc = std::cos(g.halfArc);
+        g.interval = glm::max(ballista ? m_settings.ballistaFireInterval : m_settings.cannonFireInterval, 0.1f);
+        // The mouth over / ahead of the origin (cannon.pre's Mouth, ballista.pre's Tip).
+        g.muzzleHeight = ballista ? 0.45f : 0.55f;
+        g.muzzleOut = ballista ? 1.3f : 1.65f;
+        return g;
+    };
+    const GunParams cannonParams = gunParams(false), ballistaParams = gunParams(true);
     constexpr float c_seekSeconds = 0.2f, c_aimTolerance = 0.05f; // (radians: ~3 degrees)
     // THE LOB to `aim` from `muzzle`. The flight time: the distance / "Shot speed", at least 1 s, and long enough for a
     // launch at least 45 degrees up (vertical >= horizontal: dy + g t^2 / 2 >= dist), so the shell climbs steeply out of
@@ -605,8 +619,12 @@ void StructureSystem::tickCannons(float deltaSec)
     };
     for (Ref& ref : m_frame)
     {
-        if (ref.type != EStructureType::Cannon)
+        if (!isGunType(ref.type))
             continue;
+        const bool ballista = ref.type == EStructureType::Ballista;
+        const GunParams& gun = ballista ? ballistaParams : cannonParams;
+        const float range = gun.range, minRange = gun.minRange, halfArc = gun.halfArc, cosHalfArc = gun.cosHalfArc;
+        const float c_muzzleHeight = gun.muzzleHeight, c_muzzleOut = gun.muzzleOut;
         GameStructureComponent& s = *ref.state;
         const int manned = m_settings.carriers ? glm::min((int)ref.crewAtGun, crewFull) : crewFull;
         if (s.blueprint || manned == 0)
@@ -625,7 +643,8 @@ void StructureSystem::tickCannons(float deltaSec)
             const glm::vec2 fwd = glm::length(glm::vec2(fwd3.x, fwd3.z)) > 1e-4f ? glm::normalize(glm::vec2(fwd3.x, fwd3.z)) : glm::vec2(0.0f, -1.0f);
             // The c_candidates NEAREST enemy units in the arc (kept sorted while the query streams them), then the nearest
             // of those a lob can reach: its HIGHEST lob clear (planLob's last attempt; the fire step picks the lowest
-            // clear one). None: no target - the gun holds rather than fire into its own wall.
+            // clear one). None: no target - the gun holds rather than fire into its own wall. (A Ballista: the nearest
+            // one, no lob.)
             constexpr int c_candidates = 4;
             struct Candidate { float distSq; Entity* entity; };
             Candidate nearest[c_candidates];
@@ -650,7 +669,7 @@ void StructureSystem::tickCannons(float deltaSec)
                     nearest[k] = nearest[k - 1];
                 nearest[k] = { distSq, other };
             });
-            Entity* target = nullptr;
+            Entity* target = ballista && count > 0 ? nearest[0].entity : nullptr;
             for (int k = 0; k < count && !target; ++k)
             {
                 const glm::vec3 to = nearest[k].entity->pos - pos;
@@ -675,6 +694,20 @@ void StructureSystem::tickCannons(float deltaSec)
         const glm::vec3 aimed3 = ref.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f); // the gun as it points now
         const glm::vec2 fwd = glm::length(glm::vec2(aimed3.x, aimed3.z)) > 1e-4f ? glm::normalize(glm::vec2(aimed3.x, aimed3.z)) : glm::vec2(0.0f, -1.0f);
         const glm::vec3 muzzle = pos + glm::vec3(fwd.x * c_muzzleOut, c_muzzleHeight, fwd.y * c_muzzleOut);
+        if (ballista)
+        {
+            // THE BOLT: straight at the target's place of the last search, at "Bolt speed", the vertical speed raised by
+            // half the gravity's fall over the flight so it does not drop short.
+            const glm::vec3 to = ref.cannonTargetPos - muzzle;
+            const float time = glm::max(glm::length(to) / glm::max(m_settings.ballistaBoltSpeed, 5.0f), 0.05f);
+            glm::vec3 velocity = to / time;
+            velocity.y += 0.5f * gravity * time;
+            m_cannonShots.push_back({ muzzle, velocity, s.team, EShotKind::Bolt });
+            s.store[GoodMunitions] -= 1.0f;
+            ref.cannonReload = gun.interval;
+            ref.cannonSeek = 0.0f; // the next target at once: this one may be dead
+            continue;
+        }
         // The lowest lob whose whole arc is clear (planLob). None (the target moved behind a wall since the search): hold
         // the shot and look again at once - the search takes the next target a lob can reach.
         Lob lob;
@@ -685,7 +718,7 @@ void StructureSystem::tickCannons(float deltaSec)
         }
         m_cannonShots.push_back({ lob.start, lob.velocity, s.team });
         s.store[GoodMunitions] -= 1.0f;
-        ref.cannonReload = glm::max(m_settings.cannonFireInterval, 0.1f);
+        ref.cannonReload = gun.interval;
     }
 }
 
@@ -790,6 +823,8 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
             child->setEnabled(!rubble);
     if (!rubble && s.type == EStructureType::ShipRail)
         applyRailSides(s); // only the sides that face off the deck
+    if (!rubble && s.type == EStructureType::WatchPost)
+        updateArms(s); // its railings: open toward the road
     if (s.type == EStructureType::ShipRail)
         buildRailBody(s); // rubble: no collider; built again: its pieces
 }

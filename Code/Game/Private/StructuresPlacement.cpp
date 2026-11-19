@@ -32,7 +32,8 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/searchlight.pre", "Entities/Game/walkway.pre", "Entities/Game/armory.pre",
     "Entities/Game/magetower.pre", "Entities/Game/shipRail.pre", "Entities/Game/cannon.pre",
     "Entities/Game/ammoWorks.pre", "Entities/Game/ammoStore.pre",
-    "Entities/Game/wardResist.pre", "Entities/Game/wardAbsorb.pre", "Entities/Game/wardRetaliate.pre" };
+    "Entities/Game/wardResist.pre", "Entities/Game/wardAbsorb.pre", "Entities/Game/wardRetaliate.pre",
+    "Entities/Game/watchPost.pre", "Entities/Game/ballista.pre" };
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 // ---------------------------------------------------------------- grid placement
@@ -129,8 +130,8 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
             free = false;
             return;
         }
-        // THE CANNON may stand ON a road piece (the Road, the Bridge) or a walkway DECK: it rides the cell's underId.
-        if (type == EStructureType::Cannon && occIdx >= 0 && entry.underId == 0)
+        // A GUN may stand ON a road piece (the Road, the Bridge) or a walkway DECK: it rides the cell's underId.
+        if (isGunType(type) && occIdx >= 0 && entry.underId == 0)
         {
             const Ref& o = m_frame[occIdx];
             if (o.type == EStructureType::CableConveyor || o.type == EStructureType::Bridge
@@ -283,9 +284,11 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     ref.state = state;
     ref.type = type;
     ref.yield = isHarvestType(type) && std::isfinite(yield) ? glm::clamp(yield, 0.0f, 1.0f) : 1.0f;
-    if (isCableType(type)) // cache the 4 render-only arm children (see updateArms)
+    if (isCableType(type) || type == EStructureType::WatchPost) // cache the 4 render-only arm children (see updateArms)
     {
-        static constexpr const char* armNames[4] = { "ArmPX", "ArmNX", "ArmPZ", "ArmNZ" };
+        static constexpr const char* cableArms[4] = { "ArmPX", "ArmNX", "ArmPZ", "ArmNZ" };
+        static constexpr const char* railArms[4] = { "RailPX", "RailNX", "RailPZ", "RailNZ" }; // the Watch post's railings
+        const char* const* armNames = type == EStructureType::WatchPost ? railArms : cableArms;
         if (const SceneComponent* sc = getComponent<SceneComponent>(entity.get()))
             for (const EntityPtr& child : sc->children)
                 for (int a = 0; a < 4; ++a)
@@ -431,7 +434,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     // client building far from the server's camera, outside the server's collider ring - the requester's own height
     // stands (its aim ran the full test against its own colliders).
     float groundY = 0.0f;
-    if (type == EStructureType::Cannon && cannonStandY(snappedGround, groundY))
+    if (isGunType(type) && cannonStandY(snappedGround, groundY))
     {
         // on a road piece or a walkway deck: it stands on that, whatever the ground under it
     }

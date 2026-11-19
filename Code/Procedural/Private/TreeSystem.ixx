@@ -70,10 +70,12 @@ export namespace Procedural
 			RenderMesh trunkBark[TREE_PIECE_LODS];
 			RenderMesh branchBark[TREE_PIECE_LODS];
 			RenderMesh cards;
-			// Baked TREE variants with "Voxel impostors" (GPU path): the voxel tier - the box the march starts from and its
-			// material (the grid's albedo / normal atlases, owned; LitTreeVoxel). Main pass only, in the billboard's place.
+			// Baked TREE variants with "Voxel impostors" (GPU path): the voxel tier - the box the march starts from, its
+			// material (the grid's opacity / surface brick atlases, owned; LitTreeVoxel) and the brick index texture the
+			// opacity atlas's header names. Main pass only, in the billboard's place.
 			RenderMesh voxelBox;
 			RenderMaterial voxelMaterial;
+			RenderTexture voxelIndex;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
 			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
 			// Baked variants only: the far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
@@ -142,6 +144,7 @@ export namespace Procedural
 			bool regenerateTextures = false;
 			bool billboards = true;   // Far mode Billboards
 			bool showLibrary = false;
+			bool branchCards = false; // "Branch card distance" > 0 (GPU path): the mid tier's module billboards, atlas and card meshes
 			uint32 billboardViews = 2;
 			uint32 voxelRes = 0;      // "Voxel impostors": the voxel tier's grid resolution; 0 = off
 		};
@@ -170,6 +173,7 @@ export namespace Procedural
 			CachedTexture atlas;                           // the mid tier's card atlas (empty: none)
 			oc::vector<TreeMesh> variantCards;             // per baked variant: its branch-card mesh
 			oc::vector<CachedTexture> voxelTextures;       // per baked variant: the voxel tier's atlases (empty: none)
+			oc::vector<CachedTexture> voxelIndex;          // ... and its brick index
 			oc::vector<TreeMesh> voxelBoxes;               // ... and its box
 		};
 		struct LoadSlot
@@ -194,6 +198,8 @@ export namespace Procedural
 		// fade-out materials and its billboards' fade-in materials.
 		void applyFadeBands(Renderer& renderer);
 		float midDistance(const Species& species) const; // the mid tier's switch distance (m, unscaled); 0 = off
+		float fadeWidth(const Species& species) const;   // the blend band's width (m): FadeWidth x "Fade width scale"
+		float farDistance(const Species& species) const; // the blend band's centre (m, before "Far distance scale")
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
 		void spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform);
 		// The GPU set's piece TYPES: one per library piece (trunks, modules, baked variants) of every species.

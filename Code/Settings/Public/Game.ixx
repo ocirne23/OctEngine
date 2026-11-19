@@ -5,7 +5,7 @@ import Core.glm;
 
 // The game's settings (Code/Game, plus the unit/structure component baselines Entity reads). Array sizes match
 // Game's enums: EStructureType::Count and ENpcType::Count (static_asserts in Game).
-export constexpr int GameStructureTypeCount = 37;
+export constexpr int GameStructureTypeCount = 39;
 export constexpr int GameUnitTypeCount = 13;
 
 // GameMatch: the co-op director, the material loop, base healing, melee, the nav feed and the labels.
@@ -140,7 +140,7 @@ export struct GamePlayerSettings
     bool detachFocus = false;           // local-only: the scene focus follows the fly camera
     float moveSpeed = 4.0f;
     float accel = 30.0f;                // deliberately soft: steering force must lose against bubble push
-    float jumpSpeed = 6.0f;
+    float jumpSpeed = 6.85f;
     float sprintMult = 2.0f;
     float sprintEnergyPerSec = 15.0f;   // sprint burns the shield battery; emptying it COLLAPSES the shield
     float healthMax = 100.0f;
@@ -153,7 +153,7 @@ export struct GamePlayerSettings
     float damageAbsorb = 2.0f;          // shield ENERGY spent per hp of direct damage absorbed (0 = none)
     float coverDrainReduction = 0.75f;  // drain reduction per unit of FRIENDLY field surplus over the own output
     float spawnGraceSec = 1.0f;         // no energy/health drain this long after (re)spawn
-    float materialsMax = 50.0f;         // inventory size
+    float materialsMax = 100.0f;       // inventory size
     float arriveRadius = 0.8f;          // metres: a move order completes inside this ring
     float damageRadius = 1.0f;          // metres: health drains once the equilibrium shield radius squishes below this
     float shieldPushGain = 10000.0f;    // applied-force -> impulse scale
@@ -201,6 +201,8 @@ export struct GameStructureSettings
         50.0f,  // WardResist
         50.0f,  // WardAbsorb
         50.0f,  // WardRetaliate
+        30.0f,  // WatchPost
+        45.0f,  // Ballista
     };
     // HEALTH per type (indexed by EStructureType). A blueprint's health is its build progress, and the build and repair
     // price is the type's cost over this health, so a tougher building costs the same to build. For scale: a Grunt
@@ -245,6 +247,8 @@ export struct GameStructureSettings
         200.0f,  // WardResist
         200.0f,  // WardAbsorb
         200.0f,  // WardRetaliate
+        400.0f,  // WatchPost: a stone tower
+        250.0f,  // Ballista
     };
     // THE WARDS (Wards.cpp): a pylon with a light store against a wall; it strengthens the wall and gate segments
     // connected to it (a breadth-first search, wardWalls at most) and pays for it from its store. A ward whose store
@@ -270,19 +274,29 @@ export struct GameStructureSettings
     float cannonArcDeg = 150.0f;      // the arc it fires in, centred on its facing
     float cannonFireInterval = 3.0f;  // s between two shots
     float cannonShotSpeed = 20.0f;    // m/s: the shell's horizontal speed (the flight time follows the distance)
-    float cannonAmmoCapacity = 5.0f;  // munitions it holds (one per shot)
+    float cannonAmmoCapacity = 10.0f;  // munitions it holds (one per shot)
     float cannonTurnRate = 60.0f;     // deg/s the gun turns to aim (it fires only when it points at the target)
     // THE CREW: workers MAN a cannon (it fires only with one at the gun; with fewer than "Crew" the reload is slower).
     // An enemy unit within "Crew call range" calls them out; they stay "Crew stand down" after the last one left it.
     int   cannonCrew = 2;
     float cannonCallRange = 60.0f;    // m
     float cannonStandDown = 15.0f;    // s
+    // THE BALLISTA: a gun like the cannon (the same crew, munitions, turn and placement) that fires a fast, nearly flat
+    // BOLT (ballistaBolt.pre: its damage and how many demons it goes through). The bolt hurts shadows too; it passes
+    // over the own walls and stops in the ground.
+    float ballistaRange = 48.0f;         // m
+    float ballistaArcDeg = 120.0f;        // the arc it fires in, centred on its facing
+    float ballistaFireInterval = 2.5f;    // s between two shots
+    float ballistaBoltSpeed = 45.0f;      // m/s
+    float ballistaAmmoCapacity = 10.0f;   // munitions it holds (one per bolt)
+    // THE WATCH POST: a walkable tower (its top is road and a high guard post). A guard or a mage on it reaches farther.
+    float watchPostRangeMult = 2.0f;      // x a guard's / a mage's range while it stands on a Watch post
     float ammoRate = 0.5f;            // munitions/s an Ammo works makes with full staff
     float ammoStonePer = 1.0f;        // stone per munition
     float ammoLightPer = 1.0f;       // light per munition
     int   workersAmmo = 2;            // workers an Ammo works needs
     float ammoWorksBuffer = 50.0f;    // munitions (and stone) it holds
-    float ammoStoreCapacity = 30.0f;  // munitions an Ammo store banks
+    float ammoStoreCapacity = 50.0f;  // munitions an Ammo store banks
     // THE BLAST: an Ammo store destroyed with munitions in it explodes - units of EVERY team and buildings in the radius
     // take the damage, less toward the edge. Both scale with the munitions inside (a full store: the full values).
     float ammoBlastRadius = 8.0f;     // m
@@ -340,21 +354,25 @@ export struct GameStructureSettings
     bool carriers = true;             // off = the old cell flow on pipelines and conveyors
     float carrierLoad = 10.0f;        // goods a walker carries
     float carrierCartLoad = 100.0f;   // goods in a CART: a transport trip between two storages (it evens out their fill)
+    float cartMinFillGap = 0.15f;     // two storages' fills (of a full store) must differ by this for a cart trip
+    float cartUrgentFillGap = 0.2f;  // ... and from this gap on the cart goes BEFORE the loads at the pickup
     float carrierSpeed = 3.5f;        // m/s
     // THE ARMORY'S GUARDS (Carriers.cpp): free workers with a bow, while an enemy unit is in the Armory's range.
-    float armoryRange = 40.0f;       // m: an enemy unit this near calls the guards out
+    float armoryRange = 75.0f;     // m: an enemy unit this near calls the guards out
     float armoryPostRange = 25.0f;   // m: the posts lie this near the Armory (so each one guards its own part of the base)
-    int   armoryGuards = 6;           // guards one Armory arms at most (the Beacon arms as many: it is an armory too)
+    int   armoryGuards = 10;          // guards one Armory arms at most (the Beacon arms as many: it is an armory too)
     float armoryStandDown = 10.0f;    // s with no enemy in range before the guards go back to work
     float guardRange = 20.0f;         // m: a guard shoots the nearest enemy unit within this
     float guardDamage = 12.0f;        // per shot (it never misses, and nothing blocks it)
     float guardInterval = 1.2f;       // s between a guard's shots
-    // THE MAGES (the Mage tower: walkers like the guards): each turns a small Searchlight cone on the nearest enemy unit.
-    int   mageCount = 3;              // mages one Mage tower arms at most
-    float mageRange = 16.0f;          // m: the cone's length (and the reach it picks a target in)
-    float mageHalfAngleDeg = 14.0f;
-    float mageDps = 1.5f;             // health/s to each enemy unit in the cone (the Searchlight: 3.2)
-    float mageLightIntensity = 0.3f;  // x the Searchlight's brightness
+    float guardArrowSpeed = 30.0f;    // m/s: the drawn arrow's speed - the hit lands when it arrives
+    float guardArrowGravity = 3.0f;   // x the gravity an arcing arrow's flight time follows (higher: a high arc flies faster)
+    // THE MAGES (the Mage tower: walkers like the guards): each lobs a small FIREBALL (mageFireball.pre: its damage and
+    // splash) at the nearest enemy unit.
+    int   mageCount = 5;           // mages one Mage tower arms at most
+    float mageRange = 16.0f;          // m: the reach it picks a target in
+    float mageFireInterval = 1.5f;    // s between a mage's fireballs
+    float mageShotSpeed = 14.0f;      // m/s: the fireball's horizontal speed (the flight time follows the distance)
     float carrierBuildRate = 2.0f;    // stone/s a walker puts into the blueprint or the damaged structure it stands at
     int   carriersPerBuilding = 6;    // walkers one sending building can have at most
     float internalBuffer = 30.0f;     // several walker loads: a walker only delivers where its whole load fits
@@ -423,14 +441,14 @@ export struct GameStructureSettings
     int unitPopulation[GameUnitTypeCount] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3, 3, 8 };
     // WORKERS: production runs on population, not on light. A team has baseWorkers + houseWorkers for each House; every
     // production building asks for its workers; short of workers, all production of the team slows by workers / jobs.
-    int baseWorkers = 6;
-    int houseWorkers = 4;
+    int baseWorkers = 10;
+    int houseWorkers = 5;
     int workersHarvest = 2; // a Lumberyard, a Quarry
     int workersFabricator = 3;
     int workersConstructor = 2;
     int workersGenerator = 1;
     int barracksPopulation = 20;      // a barracks' own population cap
-    int housePopulation = 10;         // added per linked house
+    int housePopulation = 5;        // added per linked house
     float houseLinkRadius = 25.0f;
 };
 
@@ -643,12 +661,14 @@ export struct GameShipSettings
 {
     bool enabled = true;              // the sandbox world spawns one next to the Base
     // FLIGHT (the throttle is the forward thrust; the drag is quadratic, so it has a top speed)
-    float thrust = 2.2f;              // m/s^2 at full throttle (reverse: a third of it)
-    float throttleRate = 0.6f;        // the throttle's change per second while W / S is held (a ship's telegraph, not a pedal)
+    float thrust = 3.0f;              // m/s^2 at full throttle (reverse: a third of it)
+    float throttleRate = 0.8f;      // the throttle's change per second while W / S is held (a ship's telegraph, not a pedal)
     float maxSpeed = 30.0f;           // m/s: the speed where the drag eats the full thrust
     float sideDrag = 1.2f;            // 1/s: how fast the sideways slip dies (the hull's keel)
-    float turnRate = 14.0f;           // deg/s at full rudder
-    float turnAccel = 9.0f;           // deg/s^2: the rudder's push (the hull's weight)
+    float brake = 5.0f;               // m/s^2: X at the helm stops the ship this hard (and pulls the lever to stop)
+    float landDistance = 20.0f;       // m (10 tiles): it lands only on a site this near (farther ones show, but fly there first)
+    float turnRate = 21.5f;           // deg/s at full rudder
+    float turnAccel = 14.5f;        // deg/s^2: the rudder's push (the hull's weight)
     float turnDrag = 1.6f;            // 1/s: the spin dies at this rate with no rudder
     // HEIGHT (Space up, Ctrl down: the height over the ground under the hull)
     float minHeight = 1.0f;          // m from the hull's keel to the highest ground under it

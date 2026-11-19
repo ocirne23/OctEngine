@@ -11,10 +11,10 @@ export class RenderTexture final : public RenderTextureState
 {
 public:
 
-    // sRGB from the caller's mip chain (level 0 first, each level half the previous; the ground clutter's fern fronds), RGBA8 or the BC
-    // blocks the caller compressed (`encoding`).
+    // From the caller's mip chain (level 0 first, each level half the previous; the ground clutter's fern fronds), RGBA8 or the BC
+    // blocks the caller compressed (`encoding`). sRGB, or LINEAR with `sRGB` false (exact bytes: the trees' voxel index).
     static RenderTexture create(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
-                                RenderMaterial::ETextureEncoding encoding = RenderMaterial::ETextureEncoding::Rgba8);
+                                RenderMaterial::ETextureEncoding encoding = RenderMaterial::ETextureEncoding::Rgba8, bool sRGB = true);
 
     RenderTexture() = default;
     RenderTexture(RenderTexture&& other) noexcept { moveFrom(other); }

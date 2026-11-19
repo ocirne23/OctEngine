@@ -1,0 +1,12 @@
+# ARROW: a guard's shot in flight - a pure visual (NpcSystem::drawBeams' Arrow beams: a pooled render-only root that flies
+# from the guard to its victim on a low arc, nose first; the hit itself is the authority's hitscan, landed on arrival).
+# Models/emplacementParts.obj's `Arrow` (nose at -Z, an entity's forward), shown at 0.9x (0.8 m long).
+Prefab gameArrow
+	Global true
+	CullMode None
+	Component Render
+		ObjectContainer emplacementParts
+		Node Arrow
+		Type StaticMesh
+		Color 0.62 0.5 0.32
+		Scale 0.9

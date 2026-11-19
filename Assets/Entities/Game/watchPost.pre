@@ -1,0 +1,134 @@
+# Watch post: a 1x1 stone TOWER to stand on. Its top is ROAD (StructureSystem::roadAt, like a ward's top): the workers
+# walk over it, and the guards and the mages take it as their FIRST post (guardPost) and reach farther from it ("Watch
+# post range (x)"). Spawned origin 3.75 above ground: the top is 0.25 over the origin, like a ward's (wardTopY).
+# SHAPE (a placeholder): two of the ward's 2 m stone cubes stacked (the root and `Upper`), twice a ward's height: its flat
+# top is 4 m up, a deck's height (2 m) over a Walkway, so it is no edge for the deck solve (more than a step) - a walker
+# goes straight up to it. A darker plinth at the foot, a band where the two cubes meet and a cornice just under the top
+# edge. ON THE TOP: four stone corner posts (1.08 m) and a wooden RAILING on each side between them (top rail 1 m up, a
+# mid rail, a kick board, a middle post: Models/emplacementParts.obj's WatchRailX / WatchRailZ). A side's railing is
+# open where a road piece is next to it, so the walkers come and go there (RailPX / RailNX / RailPZ / RailNZ: Ref::arms,
+# StructureSystem::updateArms). The collider is the block alone.
+Prefab gameWatchPost
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.58 0.55 0.5
+		Position 0 -2.75 0
+		Scale 1
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 1 2 1
+		Offset 0 -1.75 0
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name Upper
+			Position 0 -0.75 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+				Color 0.58 0.55 0.5
+				Scale 1
+		Entity
+			Name Plinth
+			Position 0 -3.62 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 1.06
+		Entity
+			Name Band
+			Position 0 -1.75 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeEights
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 1.02
+		Entity
+			Name Cornice
+			Position 0 -0.03 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 1.04
+		Entity
+			Name PostA
+			Position 0.82 0.79 0.82
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 0.18
+		Entity
+			Name PostB
+			Position -0.82 0.79 0.82
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 0.18
+		Entity
+			Name PostC
+			Position 0.82 0.79 -0.82
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 0.18
+		Entity
+			Name PostD
+			Position -0.82 0.79 -0.82
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.42 0.4 0.37
+				Scale 0.18
+		Entity
+			Name RailPX
+			Position 0 0.25 0
+			Component Render
+				ObjectContainer emplacementParts
+				Node WatchRailX
+				Type StaticMesh
+				Color 0.45 0.32 0.18
+		Entity
+			Name RailNX
+			Position 0 0.25 0
+			Component Render
+				ObjectContainer emplacementParts
+				Node WatchRailX
+				Type StaticMesh
+				Color 0.45 0.32 0.18
+				Rotation 0 180 0
+		Entity
+			Name RailPZ
+			Position 0 0.25 0
+			Component Render
+				ObjectContainer emplacementParts
+				Node WatchRailZ
+				Type StaticMesh
+				Color 0.45 0.32 0.18
+		Entity
+			Name RailNZ
+			Position 0 0.25 0
+			Component Render
+				ObjectContainer emplacementParts
+				Node WatchRailZ
+				Type StaticMesh
+				Color 0.45 0.32 0.18
+				Rotation 0 180 0

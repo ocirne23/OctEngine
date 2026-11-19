@@ -422,6 +422,12 @@ namespace Procedural
 		return levels;
 	}
 
+	// A level's sampled span is n - 1 voxels (centre to centre), a brick's TREE_VOXEL_BRICK.
+	uint32 treeVoxelBricks(uint32 n)
+	{
+		return glm::max((n - 1 + TREE_VOXEL_BRICK - 1) / TREE_VOXEL_BRICK, 1u);
+	}
+
 	TreeBillboardBox treeVoxelBox(const TreePiece& piece, uint32 res)
 	{
 		TreeBillboardBox box = billboardBox(piece);
@@ -476,9 +482,11 @@ namespace Procedural
 				const float triArea = 0.5f * glm::length(glm::cross(b - a, c - a));
 				if (triArea <= 0.0f)
 					continue;
-				// A barycentric grid fine enough that every voxel the triangle crosses gets points (bakeTreeDensity's).
+				// A barycentric grid fine enough that every voxel the triangle crosses gets points (bakeTreeDensity's). The
+				// limit is for a degenerate triangle only: a trunk triangle of 2 m needs ~120 points an edge at 256 voxels
+				// (at 64 its points stood further apart than a voxel, and the trunk was a net of filled voxels with holes).
 				const float longest = glm::max(glm::max(glm::length(b - a), glm::length(c - b)), glm::length(a - c));
-				const uint32 n = glm::clamp((uint32)std::ceil(longest / (0.5f * minVoxel)), 1u, 64u);
+				const uint32 n = glm::clamp((uint32)std::ceil(longest / (0.5f * minVoxel)), 1u, 1024u);
 				const float share = triArea * projected / (float)(n * (n + 1) / 2);
 				const glm::vec2 ta = glm::vec2(mesh.texCoords[i0]), tb = glm::vec2(mesh.texCoords[i1]), tc = glm::vec2(mesh.texCoords[i2]);
 				const glm::vec3 na = mesh.normals[i0], nb = mesh.normals[i1], nc = mesh.normals[i2];
@@ -515,6 +523,9 @@ namespace Procedural
 		// AlbedoScale`, as the whole-tree billboards.
 		oc::vector<glm::vec3> colour(count, glm::vec3(0.0f)), normal(count, glm::vec3(0.0f));
 		oc::vector<float> opacity(count, 0.0f), tau(count, 0.0f), interior(count, 0.0f);
+		// THE LEAF SHARE of a voxel's seen surface (1 = leaves only, 0 = bark only: the trunk): the shader's leaf-only terms
+		// (the crown's colour patches) take it, so they stay off the bark. An empty voxel counts as leaves (the crown's air).
+		oc::vector<float> leafShare(count, 1.0f);
 		glm::vec3 meanColour(0.0f);
 		float meanWeight = 0.0f;
 		oc::vector<uint8> filled(count, 0);
@@ -533,9 +544,49 @@ namespace Procedural
 			meanWeight += weight;
 			colour[i] = c / weight * albedoScale;
 			normal[i] = (leafSurface.normal[i] + barkSurface.normal[i] * barkSeen) / weight; // the MEAN normal: shorter where the leaves face every way
+			leafShare[i] = leafArea / weight;
 			filled[i] = 1;
 		}
 		meanColour = meanWeight > 0.0f ? meanColour / meanWeight * albedoScale : glm::vec3(0.05f, 0.1f, 0.03f);
+
+		// THE BARK BODIES ARE SOLID. The law above is for a cloud of small surfaces (leaves, twigs below a voxel): one bark
+		// WALL that crosses a whole voxel gets an opacity of ~0.4 from it, so a ray through a trunk - a hollow shell of two
+		// such walls, many voxels apart at a fine grid - passed in ~40 % of the pixels. Where a voxel's bark normals AGREE
+		// (a wall: the body is at least ~2.5 voxels thick; around a thinner twig they cancel), the voxel one step BEHIND
+		// the wall lies inside the body: it becomes opaque, with the wall's colour and normal. The wall voxels keep their
+		// own partial opacity (the silhouette does not grow).
+		{
+			constexpr float WALL_AGREE = 0.93f; // the mean normal's length: a 60 degree arc of a tube is 0.955, a half tube 0.64
+			const glm::vec3 invVoxel = 1.0f / voxel;
+			for (uint32 z = 0; z < res; ++z)
+				for (uint32 y = 0; y < res; ++y)
+					for (uint32 x = 0; x < res; ++x)
+					{
+						const size_t wall = index(x, y, z);
+						const float barkArea = barkSurface.area[wall];
+						if (barkArea <= 0.0f)
+							continue;
+						const glm::vec3 mean = barkSurface.normal[wall] / barkArea;
+						if (glm::dot(mean, mean) < WALL_AGREE * WALL_AGREE)
+							continue;
+						// One voxel inward: the normal in voxel units, its largest component a whole step.
+						const glm::vec3 inVoxels = mean * invVoxel;
+						const float largest = glm::max(glm::max(glm::abs(inVoxels.x), glm::abs(inVoxels.y)), glm::abs(inVoxels.z));
+						const glm::ivec3 behind = glm::ivec3((int)x, (int)y, (int)z) - glm::ivec3(glm::round(inVoxels / largest));
+						if (behind.x < 0 || behind.y < 0 || behind.z < 0 || behind.x >= (int)res || behind.y >= (int)res || behind.z >= (int)res)
+							continue;
+						const size_t core = index((uint32)behind.x, (uint32)behind.y, (uint32)behind.z);
+						opacity[core] = 1.0f;
+						tau[core] = glm::max(tau[core], 1.0f); // the interior's optical depth: a moderate value, the crown sets its scale
+						if (!filled[core])
+						{
+							colour[core] = colour[wall];
+							normal[core] = normal[wall];
+							leafShare[core] = leafShare[wall];
+							filled[core] = 1;
+						}
+					}
+		}
 		leafSurface = {};
 		barkSurface = {};
 
@@ -552,6 +603,7 @@ namespace Procedural
 						if (filled[idx])
 							continue;
 						glm::vec3 c(0.0f), nrm(0.0f);
+						float leaf = 0.0f;
 						uint32 k = 0;
 						const int dx[6] = { 1, -1, 0, 0, 0, 0 }, dy[6] = { 0, 0, 1, -1, 0, 0 }, dz[6] = { 0, 0, 0, 0, 1, -1 };
 						for (int d = 0; d < 6; ++d)
@@ -564,12 +616,14 @@ namespace Procedural
 								continue;
 							c += colour[nIdx];
 							nrm += normal[nIdx];
+							leaf += leafShare[nIdx];
 							++k;
 						}
 						if (k == 0)
 							continue;
 						colour[idx] = c / (float)k;
 						normal[idx] = nrm / (float)k;
+						leafShare[idx] = leaf / (float)k;
 						next[idx] = 1;
 					}
 			filled = oc::move(next);
@@ -619,13 +673,21 @@ namespace Procedural
 				interior[i] = glm::clamp(best[i] * invCore, 0.0f, 1.0f);
 		}
 
-		// ---- The levels and their atlases ----
+		// ---- The levels, cut into BRICKS (TreeImpostor.ixx "The VOXEL tier") ----
+		constexpr uint32 B = TREE_VOXEL_BRICK, S = TREE_VOXEL_BRICK_TEXELS, C = TREE_VOXEL_SURFACE_TEXELS;
+		static_assert(2 * C == S && 4 * C * C == S * S, "the surface atlas is half the opacity atlas each way");
+		constexpr size_t OPACITY_BYTES = (size_t)S * S * S;         // a brick's opacity: [z][y][x]
+		constexpr size_t SURFACE_BYTES = (size_t)C * C * C * 4 * 2; // its surface: the colour set, then the normal set, RGBA [z][y][x]
 		const uint32 levels = treeVoxelLevels(res);
-		const uint32 tilesX = res / TREE_VOXEL_TILES_Y;
-		out.width = tilesX * res;
-		out.height = TREE_VOXEL_TILES_Y * res;
-		out.albedo.assign(levels, {});
-		out.normal.assign(levels, {});
+		struct LevelIndex
+		{
+			uint32 bricks = 0;       // per axis
+			oc::vector<uint32> slots; // per brick: its atlas slot, 0 = empty
+		};
+		oc::vector<LevelIndex> levelIndex(levels);
+		oc::vector<uint8> opacityBricks(OPACITY_BYTES, 0), surfaceBricks(SURFACE_BYTES, 0); // slot 0: the header
+		uint32 numSlots = 1;
+		out = {};
 		uint32 n = res;
 		for (uint32 level = 0; level < levels; ++level)
 		{
@@ -635,14 +697,14 @@ namespace Procedural
 				const uint32 m = n / 2;
 				const auto childIdx = [n](uint32 x, uint32 y, uint32 z) { return (size_t)x + n * ((size_t)y + n * (size_t)z); };
 				const size_t coarse = (size_t)m * m * m;
-				oc::vector<float> cOpacity(coarse), cInterior(coarse);
+				oc::vector<float> cOpacity(coarse), cInterior(coarse), cLeafShare(coarse);
 				oc::vector<glm::vec3> cColour(coarse), cNormal(coarse);
 				for (uint32 z = 0; z < m; ++z)
 					for (uint32 y = 0; y < m; ++y)
 						for (uint32 x = 0; x < m; ++x)
 						{
 							float t[2][2][2];
-							float weight = 0.0f, inter = 0.0f;
+							float weight = 0.0f, inter = 0.0f, leaf = 0.0f;
 							glm::vec3 c(0.0f), nrm(0.0f);
 							for (uint32 k = 0; k < 8; ++k)
 							{
@@ -654,6 +716,7 @@ namespace Procedural
 								c += colour[idx] * w;
 								nrm += normal[idx] * w;
 								inter += interior[idx] * w;
+								leaf += leafShare[idx] * w;
 							}
 							float transmit = 0.0f;
 							for (uint32 i = 0; i < 2; ++i)
@@ -664,41 +727,152 @@ namespace Procedural
 							cColour[cIdx] = c / weight;
 							cNormal[cIdx] = nrm / weight;
 							cInterior[cIdx] = inter / weight;
+							cLeafShare[cIdx] = leaf / weight;
 						}
 				opacity = oc::move(cOpacity);
 				colour = oc::move(cColour);
 				normal = oc::move(cNormal);
 				interior = oc::move(cInterior);
+				leafShare = oc::move(cLeafShare);
 				n = m;
 			}
-			const uint32 w = out.width >> level, h = out.height >> level;
-			oc::vector<uint8>& albedoImage = out.albedo[level];
-			oc::vector<uint8>& normalImage = out.normal[level];
-			albedoImage.assign((size_t)w * h * 4, 0);
-			normalImage.assign((size_t)w * h * 4, 0);
-			for (size_t p = 0; p < (size_t)w * h; ++p)
-			{
-				normalImage[p * 4 + 0] = normalImage[p * 4 + 1] = normalImage[p * 4 + 2] = 128;
-			}
-			for (uint32 z = 0; z < n; ++z)
-			{
-				const uint32 tx = z % tilesX, ty = z / tilesX;
-				for (uint32 y = 0; y < n; ++y)
-					for (uint32 x = 0; x < n; ++x)
+			// This level's bricks: brick k stores the voxels k B .. k B + B per axis (beyond the grid: empty), and is kept
+			// only when one of them holds cover.
+			const uint32 D = treeVoxelBricks(n);
+			LevelIndex& levelBricks = levelIndex[level];
+			levelBricks.bricks = D;
+			levelBricks.slots.assign((size_t)D * D * D, 0u);
+			out.bricksTotal += D * D * D;
+			const auto voxelIdx = [n](uint32 x, uint32 y, uint32 z) { return (size_t)x + n * ((size_t)y + n * (size_t)z); };
+			const float spacing = (float)B / (float)(C - 1); // voxels between two surface samples: the tent's radius too
+			for (uint32 kz = 0; kz < D; ++kz)
+				for (uint32 ky = 0; ky < D; ++ky)
+					for (uint32 kx = 0; kx < D; ++kx)
 					{
-						const size_t idx = (size_t)x + n * ((size_t)y + n * (size_t)z);
-						const size_t p = ((size_t)(ty * n + y) * w + (tx * n + x)) * 4;
-						albedoImage[p + 0] = toByte(toSrgb(colour[idx].x));
-						albedoImage[p + 1] = toByte(toSrgb(colour[idx].y));
-						albedoImage[p + 2] = toByte(toSrgb(colour[idx].z));
-						albedoImage[p + 3] = toByte(opacity[idx]);
-						const glm::vec3 nrm = glm::clamp(normal[idx], glm::vec3(-1.0f), glm::vec3(1.0f));
-						normalImage[p + 0] = toByte(nrm.x * 0.5f + 0.5f);
-						normalImage[p + 1] = toByte(nrm.y * 0.5f + 0.5f);
-						normalImage[p + 2] = toByte(nrm.z * 0.5f + 0.5f);
-						normalImage[p + 3] = toByte(interior[idx]);
+						const glm::uvec3 first(kx * B, ky * B, kz * B);
+						uint8 block[OPACITY_BYTES];
+						bool any = false;
+						for (uint32 z = 0; z < S; ++z)
+							for (uint32 y = 0; y < S; ++y)
+								for (uint32 x = 0; x < S; ++x)
+								{
+									const glm::uvec3 v = first + glm::uvec3(x, y, z);
+									const uint8 a = v.x < n && v.y < n && v.z < n ? toByte(opacity[voxelIdx(v.x, v.y, v.z)]) : (uint8)0;
+									block[x + S * (y + S * z)] = a;
+									any |= a != 0;
+								}
+						if (!any)
+							continue;
+						levelBricks.slots[kx + D * ((size_t)ky + D * (size_t)kz)] = numSlots++;
+						opacityBricks.insert(opacityBricks.end(), block, block + OPACITY_BYTES);
+
+						// THE SURFACE: C samples per axis over the brick's span, each the mean of the voxels under a tent of the
+						// sample spacing, weighted by their opacity (an empty voxel's dilated colour counts only where nothing
+						// else is). A voxel's centre is its index here.
+						uint8 surface[SURFACE_BYTES];
+						for (uint32 jz = 0; jz < C; ++jz)
+							for (uint32 jy = 0; jy < C; ++jy)
+								for (uint32 jx = 0; jx < C; ++jx)
+								{
+									const glm::vec3 centre = glm::min(glm::vec3(first) + glm::vec3((float)jx, (float)jy, (float)jz) * spacing, glm::vec3((float)(n - 1)));
+									const glm::ivec3 lo = glm::max(glm::ivec3(glm::ceil(centre - spacing + 1e-4f)), glm::ivec3(0));
+									const glm::ivec3 hi = glm::min(glm::ivec3(glm::floor(centre + spacing - 1e-4f)), glm::ivec3((int)n - 1));
+									glm::vec3 c(0.0f), nrm(0.0f);
+									float inter = 0.0f, leaf = 0.0f, weight = 0.0f;
+									for (int z = lo.z; z <= hi.z; ++z)
+									{
+										const float wz = 1.0f - glm::abs((float)z - centre.z) / spacing;
+										for (int y = lo.y; y <= hi.y; ++y)
+										{
+											const float wzy = wz * (1.0f - glm::abs((float)y - centre.y) / spacing);
+											for (int x = lo.x; x <= hi.x; ++x)
+											{
+												const size_t idx = voxelIdx((uint32)x, (uint32)y, (uint32)z);
+												const float w = wzy * (1.0f - glm::abs((float)x - centre.x) / spacing) * (opacity[idx] + 1e-4f);
+												c += colour[idx] * w;
+												nrm += normal[idx] * w;
+												inter += interior[idx] * w;
+												leaf += leafShare[idx] * w;
+												weight += w;
+											}
+										}
+									}
+									const float inv = weight > 0.0f ? 1.0f / weight : 0.0f;
+									const size_t texel = ((size_t)jx + C * ((size_t)jy + C * (size_t)jz)) * 4;
+									uint8* colourTexel = surface + texel;
+									uint8* normalTexel = surface + (size_t)C * C * C * 4 + texel;
+									colourTexel[0] = toByte(toSrgb(c.x * inv));
+									colourTexel[1] = toByte(toSrgb(c.y * inv));
+									colourTexel[2] = toByte(toSrgb(c.z * inv));
+									colourTexel[3] = toByte(inter * inv);
+									const glm::vec3 meanNormal = glm::clamp(nrm * inv, glm::vec3(-1.0f), glm::vec3(1.0f));
+									normalTexel[0] = toByte(meanNormal.x * 0.5f + 0.5f);
+									normalTexel[1] = toByte(meanNormal.y * 0.5f + 0.5f);
+									normalTexel[2] = toByte(meanNormal.z * 0.5f + 0.5f);
+									normalTexel[3] = toByte(leaf * inv); // the leaf share
+								}
+						surfaceBricks.insert(surfaceBricks.end(), surface, surface + SURFACE_BYTES);
 					}
-			}
+		}
+		out.bricks = numSlots - 1;
+
+		// ---- The atlases: slot s at column s % cols, row s / cols; about square ----
+		uint32 cols = 2, colsLog2 = 1;
+		while (cols < TREE_VOXEL_MAX_COLS && (size_t)cols * cols * S < numSlots)
+		{
+			cols *= 2;
+			++colsLog2;
+		}
+		const uint32 rows = (numSlots + cols - 1) / cols;
+		out.width = cols * S * S;
+		out.height = rows * S;
+		const uint32 surfaceWidth = out.width / 2, surfaceHeight = out.height / 2;
+		out.opacity.assign((size_t)out.width * out.height, 0);
+		out.surface.assign((size_t)surfaceWidth * surfaceHeight * 4, 0);
+		for (uint32 slot = 0; slot < numSlots; ++slot)
+		{
+			const uint32 col = slot % cols, row = slot / cols;
+			const uint8* opacitySrc = &opacityBricks[(size_t)slot * OPACITY_BYTES];
+			for (uint32 z = 0; z < S; ++z)
+				for (uint32 y = 0; y < S; ++y)
+					memcpy(&out.opacity[(size_t)(row * S + y) * out.width + (size_t)col * S * S + z * S], opacitySrc + S * (y + S * z), S);
+			const uint8* surfaceSrc = &surfaceBricks[(size_t)slot * SURFACE_BYTES];
+			for (uint32 set = 0; set < 2; ++set)
+				for (uint32 z = 0; z < C; ++z)
+					for (uint32 y = 0; y < C; ++y)
+						memcpy(&out.surface[((size_t)(row * C + y) * surfaceWidth + (size_t)col * 2 * C * C + set * C * C + z * C) * 4],
+							surfaceSrc + ((size_t)set * C * C * C + C * (y + C * z)) * 4, (size_t)C * 4);
+		}
+
+		// ---- The index: the header texel, then every level's bricks ----
+		uint32 resLog2 = 0;
+		while ((1u << resLog2) < res)
+			++resLog2;
+		out.indexWidth = levelIndex[0].bricks * levelIndex[0].bricks;
+		out.indexHeight = 1;
+		for (const LevelIndex& entry : levelIndex)
+			out.indexHeight += entry.bricks;
+		out.index.assign((size_t)out.indexWidth * out.indexHeight * 4, 0);
+		out.index[0] = (uint8)resLog2;
+		out.index[1] = (uint8)levels;
+		out.index[2] = (uint8)colsLog2;
+		out.index[3] = 255;
+		uint32 baseY = 1;
+		for (const LevelIndex& entry : levelIndex)
+		{
+			const uint32 D = entry.bricks;
+			for (uint32 z = 0; z < D; ++z)
+				for (uint32 y = 0; y < D; ++y)
+					for (uint32 x = 0; x < D; ++x)
+					{
+						const uint32 slot = entry.slots[x + D * ((size_t)y + D * (size_t)z)];
+						uint8* texel = &out.index[((size_t)(baseY + y) * out.indexWidth + x + z * D) * 4];
+						texel[0] = (uint8)(slot & 255u);
+						texel[1] = (uint8)((slot >> 8) & 255u);
+						texel[2] = (uint8)((slot >> 16) & 255u);
+						texel[3] = 255;
+					}
+			baseY += D;
 		}
 	}
 

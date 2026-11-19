@@ -77,7 +77,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
         s.emitter.outputFracTarget = outputFrac; // tickMirror eases the live field toward this
     else if (isBarracksType(ref.type)) // the output byte carries the barracks' POPULATION instead
         s.barracks.population = (int)glm::round(outputFrac * 255.0f);
-    else if (ref.type == EStructureType::Cannon) // ... and the CANNON's gun turn (tickMirror turns it there)
+    else if (isGunType(ref.type)) // ... and a GUN's turn (tickMirror turns it there)
         ref.cannonAimGoal = (outputFrac - 0.5f) * glm::two_pi<float>();
     s.powered = powered;
 }
@@ -238,7 +238,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
         const bool onShip = n->find("Ship") && n->find("Ship")->asBool();
         if (onShip && !m_shipExists)
             continue; // no ship to stand on (the ship is off)
-        if (float groundY = 0.0f; !onShip && typeInt == (int)EStructureType::Cannon && cannonStandY(pos, groundY))
+        if (float groundY = 0.0f; !onShip && isGunType((EStructureType)typeInt) && cannonStandY(pos, groundY))
             pos.y = groundY + spawnHeightOf((EStructureType)typeInt); // on its road piece / walkway deck (loaded before it)
         else if (!onShip && groundFit((EStructureType)typeInt, pos, rot, groundY) != EGroundFit::NoGround)
             pos.y = groundY + spawnHeightOf((EStructureType)typeInt);

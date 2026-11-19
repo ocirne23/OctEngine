@@ -61,6 +61,9 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // The burst of a cannon shell's impact (GameProjectileComponent::destroy, ImpactPuff shells).
     GameProjectileComponent::params.impactPuff = Globals::particleSystem.createPuffStream("Effects/shell_blast.pfx");
     GameProjectileComponent::params.impactFlash = Globals::particleSystem.createPuffStream("Effects/shell_flash.pfx");
+    // ... and of a mage's fireball (FireImpact shots).
+    GameProjectileComponent::params.fireImpactPuff = Globals::particleSystem.createPuffStream("Effects/fire_blast.pfx");
+    GameProjectileComponent::params.fireImpactFlash = Globals::particleSystem.createPuffStream("Effects/fire_flash.pfx");
     // ... and of its launch (MuzzleFlash shells: GameProjectileComponent::spawn).
     GameProjectileComponent::params.muzzlePuff = Globals::particleSystem.createPuffStream("Effects/muzzle_flash.pfx");
     GameProjectileComponent::params.muzzleSmoke = Globals::particleSystem.createPuffStream("Effects/muzzle_smoke.pfx");
@@ -793,11 +796,16 @@ void GameMatch::update(float deltaSec)
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
-    for (const StructureSystem::GuardShot& shot : m_structures.guardShots()) // the Armory guards' arrows: a hit line each
-        m_npcs.addBeam(shot.from, shot.to, NpcSystem::EBeamKind::MeleeHit);
+    for (const StructureSystem::GuardShot& shot : m_structures.guardShots()) // the Armory guards' arrows: a flying arrow each
+        m_npcs.addBeam(shot.from, shot.to, NpcSystem::EBeamKind::Arrow, shot.arc);
     m_structures.guardShots().clear();
-    for (const StructureSystem::CannonShot& shot : m_structures.cannonShots()) // the cannons' shells (replicated entities)
-        m_npcs.fireCannonShell(shot.from, shot.velocity, shot.team);
+    for (const StructureSystem::CannonShot& shot : m_structures.cannonShots()) // the guns' and mages' shots (replicated entities)
+        if (shot.kind == StructureSystem::EShotKind::Bolt)
+            m_npcs.fireBallistaBolt(shot.from, shot.velocity, shot.team);
+        else if (shot.kind == StructureSystem::EShotKind::Fireball)
+            m_npcs.fireMageFireball(shot.from, shot.velocity, shot.team);
+        else
+            m_npcs.fireCannonShell(shot.from, shot.velocity, shot.team);
     m_structures.cannonShots().clear();
     // An Ammo store that blew up (the damage is done): a burst of light charges, a flash and the crash. Authority only.
     for (const StructureSystem::Blast& blast : m_structures.blasts())
@@ -820,6 +828,7 @@ void GameMatch::update(float deltaSec)
             writer.write<uint8>((uint8)beam.kind);
             writer.write<float>(beam.from.x); writer.write<float>(beam.from.y); writer.write<float>(beam.from.z);
             writer.write<float>(beam.to.x);   writer.write<float>(beam.to.y);   writer.write<float>(beam.to.z);
+            writer.write<float>(beam.arc); // an arrow's arc (0 for the others)
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
         }
     }
@@ -828,6 +837,7 @@ void GameMatch::update(float deltaSec)
         ProfileScope coopScope("Coop waves", EProfileCategory::Game);
         tickWaves(deltaSec);
         tickCoopSpawns();
+        tickRaiders(deltaSec);
     }
 
     // Flow fields: obstacles + per-team sources staged for the NEXT frame's NavSystem::update
@@ -1123,7 +1133,7 @@ void GameMatch::tickShip(float deltaSec)
         m_structures.setShipPose(false, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false);
         return;
     }
-    // At the helm: the keys are the ship's (W / S the throttle lever, A / D the rudder, Space / Ctrl the height).
+    // At the helm: the keys are the ship's (W / S the throttle lever, A / D the rudder, Space / Ctrl the height, X the brake).
     GameShip::Input input;
     const Input& keys = Globals::input;
     const bool focused = keys.isWindowHasFocus() && Globals::ui.isViewportFocused() && !m_player.cameraDetached();
@@ -1133,6 +1143,7 @@ void GameMatch::tickShip(float deltaSec)
         input.throttle = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_W) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_S) ? 1.0f : 0.0f);
         input.turn = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_A) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_D) ? 1.0f : 0.0f);
         input.climb = (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_SPACE) ? 1.0f : 0.0f) - (keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_LCTRL) ? 1.0f : 0.0f);
+        input.brake = keys.isKeyDown(SDL_Scancode::SDL_SCANCODE_X); // (X is no landing key at the helm: MatchInput)
     }
     else if (m_piloting)
         input.piloted = true; // the window lost focus: the lever holds, nothing steers
@@ -1294,15 +1305,23 @@ void GameMatch::updateLandPlacement(const Camera& camera, bool confirmEdge, bool
         m_landCacheWhy = shipLandingSite(at, m_landPlaceTurns, m_landCacheCentre);
     }
     const char* why = m_landCacheWhy;
-    constexpr float c_maxRange = 300.0f; // from the ship
-    if (!why && glm::length(glm::vec2(at.x - m_ship.position().x, at.z - m_ship.position().z)) > c_maxRange)
+    constexpr float c_viewRange = 300.0f; // from the ship: the ghost tests sites this far
+    const float distance = glm::length(glm::vec2(at.x - m_ship.position().x, at.z - m_ship.position().z));
+    if (!why && distance > c_viewRange)
         why = "too far";
+    // OUT OF REACH: a good site farther than "Land distance (m)" (5 tiles) from the ship shows (yellow), but the ship
+    // does not land there - fly over it first. The landing's travel is no fast way to move the ship.
+    const float reach = glm::max(Globals::settings.game.ship.landDistance, 2.0f);
+    const bool outOfReach = !why && distance > reach;
     const glm::vec3 shown = why ? glm::vec3(at.x, hit.point.y, at.z) : m_landCacheCentre;
     drawShipFootprint(shown, m_landPlaceTurns, packColor(why ? glm::vec3(1.0f, 0.3f, 0.2f)
-        : home ? glm::vec3(0.4f, 0.8f, 1.0f) : glm::vec3(0.3f, 1.0f, 0.4f)));
-    hud.setCounterText("Ship", why ? why : home ? "LMB: land home" : "LMB: land  Q/E: turn",
-        why ? glm::vec3(1.0f, 0.45f, 0.35f) : glm::vec3(0.6f, 1.0f, 0.6f));
-    if (confirmEdge && !why)
+        : outOfReach ? glm::vec3(1.0f, 0.85f, 0.3f) : home ? glm::vec3(0.4f, 0.8f, 1.0f) : glm::vec3(0.3f, 1.0f, 0.4f)));
+    if (outOfReach)
+        hud.setCounterText("Ship", oc::format("fly closer: {:.0f} m", distance - reach), glm::vec3(1.0f, 0.85f, 0.4f));
+    else
+        hud.setCounterText("Ship", why ? why : home ? "LMB: land home" : "LMB: land  Q/E: turn",
+            why ? glm::vec3(1.0f, 0.45f, 0.35f) : glm::vec3(0.6f, 1.0f, 0.6f));
+    if (confirmEdge && !why && !outOfReach)
     {
         m_ship.land(m_landCacheCentre, m_landPlaceTurns);
         m_landPlacing = false;

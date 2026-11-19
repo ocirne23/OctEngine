@@ -20,11 +20,13 @@ export struct MainMenuAction
 		StartCoop,    // --game --coop equivalent
 		StartPvp,     // --game
 		StartSandbox, // the engine testbed (no game)
+		StartScenario, // --game --coop --scenario <scenarioPath> equivalent (offline single player)
 		Quit,
 	};
 	EType type = EType::None;
 	bool host = false;         // start as a listen server (windowed --server)
 	oc::string connectAddress; // !host: "ip[:port]" to join; empty = offline single player
+	oc::string scenarioPath;   // StartScenario: the save to load (relative to Assets/, as --scenario)
 };
 
 // ---- Lobby (pre-game screen) ----
@@ -230,6 +232,7 @@ private:
 	bool m_host = false;
 	int m_settingsSection = 0;
 	char m_address[64] = "";   // client address input, "ip[:port]"
+	char m_scenarioPath[128] = "Scenarios/coop-base.txt"; // "Load scenario": the save it loads
 	oc::string m_hostEndpoint; // what the host displays ("203.0.113.7:27888" once external resolved)
 	oc::string m_hostNote;     // dim line under it (LAN address / lookup status)
 	oc::string m_status;       // front-page status line, see setStatus

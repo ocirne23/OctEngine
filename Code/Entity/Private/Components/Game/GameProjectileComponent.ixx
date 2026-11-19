@@ -14,6 +14,8 @@ export struct GameProjectileParams
     uint32 impactFlash = UINT32_MAX; // makes them; UINT32_MAX = none)
     uint32 muzzlePuff = UINT32_MAX;  // ... of a MuzzleFlash shell's launch: its burst and its smoke
     uint32 muzzleSmoke = UINT32_MAX;
+    uint32 fireImpactPuff = UINT32_MAX;  // ... of a FireImpact shot's burst (the mage's fireball): its embers and its flash
+    uint32 fireImpactFlash = UINT32_MAX;
 };
 
 // Authority only (clients early-out of update); onContact is main-thread (physics contact dispatch).
@@ -36,24 +38,31 @@ export struct GameProjectileComponent
         float splashEdge = 1.0f;       // the splash damage's share at the edge of splashRadius: linear from the full damage at the centre (1 = flat)
         bool hitsShadows = false;      // its damage hurts a SHADOW too (a unit that is not solid: GameUnitComponent::damage)
         bool impactPuff = false;       // its impact bursts (params.impactPuff), on every role
+        bool fireImpact = false;       // ... a FIRE burst instead (params.fireImpactPuff, an orange light), on every role
         bool muzzleFlash = false;      // its launch flashes where it starts: a burst, smoke and a short light, on every role
         float fieldDeflect = 0.0f;     // m/s^2 at full depth: an ENEMY bubble bends its flight out of it (the baked field;
                                        // for a shot with no Force emitter of its own - the cannon shell)
         float deflectDrain = 0.0f;     // battery energy/s it takes, while it is bent, from the enemy unit whose bubble bends it
+        uint8 pierce = 0;              // > 0: it flies THROUGH units (its body must not collide with them) and hurts each enemy
+                                       // it passes, up to this many (the ballista's bolt); without HitsShadows only SOLID ones
     };
+    static constexpr int MaxPierce = 8;
 
     uint32 team = 0;
     float unitDamage = 25.0f, structureDamage = 20.0f;
     float lifetime = 6.0f;
     float emitterDrain = 0.0f, emitterDrainRadius = 5.0f;
     float splashRadius = 0.0f, splashEdge = 1.0f;
-    bool hitsShadows = false, impactPuff = false, muzzleFlash = false;
+    bool hitsShadows = false, impactPuff = false, fireImpact = false, muzzleFlash = false;
     float fieldDeflect = 0.0f, deflectDrain = 0.0f;
+    uint8 pierce = 0, pierced = 0;
+    const void* pierceHits[MaxPierce] = {}; // the units it hurt already (compared only, never read)
+    glm::vec3 lastPos{ 0.0f };              // the pierce's swept segment starts here (the last tick's position)
     glm::vec3 origin{ 0.0f }; // where it started (the muzzle flash's light)
     float age = 0.0f;
     bool spent = false; // hit something - despawn queued, never damage twice
 
-    // THE IMPACT LIGHT of an ImpactPuff shell: the shell is gone at its impact, so `destroy` records the place (a small
+    // THE IMPACT LIGHT of an ImpactPuff / FireImpact shot: it is gone at its impact, so `destroy` records the place (a small
     // ring under a mutex: destroy may run off the main thread) and the game draws them every frame with this - a bright
     // point light that fades out. Main thread, where a light record survives the frame (GameMatch::update).
     static void drawImpactLights();

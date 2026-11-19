@@ -210,7 +210,7 @@ time** (cost / intake). The spawn check carries a 0.01 epsilon so a fill that la
 short of the cap still counts.
 
 It holds the type's "\<Type\> population" against the **POPULATION CAP = "Barracks population" (20) +
-"House population" (10) per linked house**. A spawn only happens while `population + cost <= cap`
+"House population" (5) per linked house**. A spawn only happens while `population + cost <= cap`
 (`BarracksData`, tallied by the spawn and death edges — the unit's `popCost` rides its DeathRecord).
 **The population rides GSt in the barracks' otherwise-unused output byte.** Spawns land on a free
 cell on a ring around the building, on a random side.

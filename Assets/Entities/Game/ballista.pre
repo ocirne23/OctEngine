@@ -1,0 +1,96 @@
+# Ballista: shoots a BOLT of light (ballistaBolt.pre) at the nearest demon (a shadow too) in its ARC - "Game/Ballista" "Arc (deg)"
+# around its facing (the entity's -Z; placed in eighths of a turn, R turns the ghost) - one munition a bolt
+# (StructureSystem::tickCannons). A gun like the Cannon: the same crew, munitions, turn and placement (one cell, on the
+# ground, a road piece, a walkway deck or a ship rail tile). Spawned origin 1.1 over its stand.
+# WALK-THROUGH like the Cannon: Layer Cable collides only with Projectile (its own bolt collides with the terrain only).
+# SHAPE (a placeholder; uniform scales of the baseshapes variants): a big crossbow on a post - a wooden STOCK along -Z, the
+# two ARMS of the bow across its front, the loaded BOLT on the stock - a thin wooden shaft with two fins
+# (Models/emplacementParts.obj's BallistaShaft: a prefab's Scale is uniform) and a glowing tip at its front (the muzzle:
+# tickCannons' muzzle height 0.45 / out 1.3, keep them in step), the CHARGE CRYSTAL at the back, on a post over a square
+# base plate. The child pieces are render-only.
+Prefab gameBallista
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Pillar3
+		Type StaticMesh
+		Color 0.45 0.3 0.15
+		Position 0 0.2 -0.2
+		Rotation -90 0 0
+		Scale 0.2
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
+		Shape Box
+		HalfExtents 1 1.1 1
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name ArmL
+			Position -0.5 0.28 -0.75
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.32 0.22 0.12
+				Rotation 0 0 90
+				Scale 0.13
+		Entity
+			Name ArmR
+			Position 0.5 0.28 -0.75
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.32 0.22 0.12
+				Rotation 0 0 90
+				Scale 0.13
+		Entity
+			Name Shaft
+			Position 0 0.45 -0.5
+			Component Render
+				ObjectContainer emplacementParts
+				Node BallistaShaft
+				Type StaticMesh
+				Color 0.72 0.62 0.45
+		Entity
+			Name Tip
+			Position 0 0.45 -1.3
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3
+				Scale 0.12
+		Entity
+			Name Charge
+			Position 0 0.55 0.45
+			Component Render
+				ObjectContainer gemsGlow
+				Node Diamond
+				Type StaticMesh
+				Color 0.6 0.95 1
+				Emissive 3.5
+				Scale 0.18
+		Entity
+			Name Post
+			Position 0 -0.55 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Color 0.4 0.27 0.15
+				Scale 0.15
+		Entity
+			Name Base
+			Position 0 -1.0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeQuarter
+				Type StaticMesh
+				Color 0.5 0.47 0.42
+				Scale 0.5

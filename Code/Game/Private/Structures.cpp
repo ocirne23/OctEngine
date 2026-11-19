@@ -25,7 +25,7 @@ static constexpr const char* structureNames[] = { "Lantern", "Hearth", "Lumberya
     "Wall", "Light tower", "Storehouse", "Builder's hut", "Beacon",
     "Light conduit", "Wood track", "Road", "Conduit crossing", "Wood crossing", "Road crossing",
     "House", "Healer's hut", "Quarry", "Bridge", "Gate", "Lens", "Searchlight", "Walkway", "Armory", "Mage tower",
-    "Ship rail", "Cannon", "Ammo works", "Ammo store", "Resist ward", "Absorb ward", "Retaliate ward" };
+    "Ship rail", "Cannon", "Ammo works", "Ammo store", "Resist ward", "Absorb ward", "Retaliate ward", "Watch post", "Ballista" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f, 0.5f, 2.0f,
     2.0f, 3.0f, 1.5f, 2.0f, 3.0f, 1.75f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, // (the Builder's hut: a 3.5 m pylon)
@@ -37,7 +37,9 @@ static constexpr float structureSpawnHeights[] = { 1.0f, 2.0f, 2.0f, 2.0f, 2.0f,
     1.1f,                                               // the Cannon (on the ground, a road piece, a walkway deck or a ship rail)
     1.5f,                                               // the Ammo works
     0.75f,                                              // the Ammo store
-    1.75f, 1.75f, 1.75f };                              // the three wards (the tower block's top at 2 m: a deck's height)
+    1.75f, 1.75f, 1.75f,                                // the three wards (the tower block's top at 2 m: a deck's height)
+    3.75f,                                              // the Watch post (a tower block twice a ward's height: its top at 4 m)
+    1.1f };                                             // the Ballista (like the Cannon)
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
@@ -195,9 +197,9 @@ oc::string StructureSystem::describeType(EStructureType type) const
         range(m_settings.armoryRange);
         break;
     case EStructureType::MageTower:
-        desc = "Staffs for the workers. While a demon is in its range, free workers come by road, take a staff and stand on the walkways (or on the road) nearest to the demons. Each turns a small cone of light on a demon: in it a demon is solid and burns. They go back to work when the demons are gone. It must touch a road.";
+        desc = "Staffs for the workers. While a demon is in its range, free workers come by road, take a staff and stand on the walkways (or on the road) nearest to the demons. Each lobs fireballs at the nearest demon, over the walls: a fireball burns every demon near where it lands, a shadow too. They go back to work when the demons are gone. It must touch a road.";
         line(oc::format("Up to {} mages", m_settings.mageCount));
-        line(oc::format("A mage: {:g} damage/s to each demon in its cone, {:g} m", m_settings.mageDps, m_settings.mageRange));
+        line(oc::format("A mage: a fireball every {:g} s, {:g} m", m_settings.mageFireInterval, m_settings.mageRange));
         line(oc::format("Mages stand within {:g} m of it", m_settings.armoryPostRange));
         range(m_settings.armoryRange);
         break;
@@ -209,6 +211,16 @@ oc::string StructureSystem::describeType(EStructureType type) const
         line(oc::format("Fires in a {:g} degree arc, every {:g} s", m_settings.cannonArcDeg, m_settings.cannonFireInterval));
         banks(m_settings.cannonAmmoCapacity, "munitions");
         range(m_settings.cannonRange);
+        break;
+    case EStructureType::Ballista:
+        desc = "Shoots a fast bolt of light at the nearest demon in front of it, a shadow too: the bolt goes through every demon in its line, over your own walls. One munition a bolt - the workers bring them and man it. Place it on a walkway behind a wall, or on a road; R turns it. Demons and units walk through it.";
+        line(oc::format("Fires in a {:g} degree arc, every {:g} s", m_settings.ballistaArcDeg, m_settings.ballistaFireInterval));
+        banks(m_settings.ballistaAmmoCapacity, "munitions");
+        range(m_settings.ballistaRange);
+        break;
+    case EStructureType::WatchPost:
+        desc = "A stone tower for the guards and mages: they take it as a post first, and from it they reach farther. Place it next to a road, a walkway or a ward: they climb up from there. It is no road - the workers do not walk through it.";
+        line(oc::format("Guards and mages on it: x{:g} range", m_settings.watchPostRangeMult));
         break;
     case EStructureType::AmmoWorks:
         desc = "Packs stone and light into munitions: light charges for the cannons. The workers bring the stone and take the munitions away. It needs a light store in reach and a road.";
@@ -613,13 +625,13 @@ bool StructureSystem::shareHarvest(bool lumber, oc::span<const glm::vec2> yards,
     for (int y = 0; y < count; ++y)
     {
         Visit visit{ &items, 1ull << y, lumber, glm::max(m_settings.harvestSizeExponent, 0.0f), glm::max(m_settings.harvestRockRef, 0.1f) };
-        const auto add = [](void* user, float x, float z, float wood, float stone)
+        const auto add = [](void* user, float x, float z, float wood, float stone, float weight)
         {
             const Visit& v = *static_cast<const Visit*>(user);
             const float size = v.lumber ? wood : stone / v.rockRef;
-            if (size <= 0.0f)
+            if (size <= 0.0f || weight <= 0.0f)
                 return;
-            const float amount = std::pow(size, v.exponent);
+            const float amount = std::pow(size, v.exponent) * weight; // (weight: a tree species' `Wood`)
             // The record's position is its identity (the source gives one record the same position in every survey).
             const uint64 key = ((uint64)(uint32)(int32)glm::round(x * 16.0f) << 32) | (uint64)(uint32)(int32)glm::round(z * 16.0f);
             v.items->push_back(Item{ key, amount, v.bit });
@@ -981,8 +993,8 @@ void StructureSystem::tickMirror(float deltaSec)
     poseAimHeads();
     drawBuilderStreams();
     tickWardLinks(deltaSec, false); // the wards' pieces on the walls (the work and the pay are the authority's)
-    for (Ref& ref : m_frame) // the cannons' guns turn toward the synced aim
-        if (ref.type == EStructureType::Cannon)
+    for (Ref& ref : m_frame) // the guns turn toward the synced aim
+        if (isGunType(ref.type))
             turnCannon(ref, deltaSec);
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it - the bubble animates as smoothly as the server's own.

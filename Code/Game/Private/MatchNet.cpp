@@ -198,10 +198,10 @@ void GameMatch::sendStats()
         writer.write<uint8>(frac8(m_structures.structureFuel(i), m_structures.structureFuelCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMinerals(i), m_structures.structureMineralCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMunitions(i), m_structures.structureMunitionCapacity(i)));
-        // The output byte doubles as the barracks' POPULATION tally and the Cannon's GUN TURN (no emitter there).
+        // The output byte doubles as the barracks' POPULATION tally and a gun's TURN (no emitter there).
         writer.write<uint8>(isBarracksType(m_structures.structureType(i))
             ? (uint8)glm::clamp(m_structures.structurePopulation(i), 0, 255)
-            : m_structures.structureType(i) == EStructureType::Cannon
+            : isGunType(m_structures.structureType(i))
             ? (uint8)glm::clamp(glm::round((m_structures.structureCannonAim(i) / glm::two_pi<float>() + 0.5f) * 255.0f), 0.0f, 255.0f)
             : frac8(m_structures.structureOutputFrac(i), 1.0f));
         writer.write<uint8>(frac8(m_structures.structureFlowUtil(i), 1.0f));
@@ -479,10 +479,13 @@ void GameMatch::handleNetEvent(oc::string_view name)
             const uint8 kind = reader.read<uint8>();
             const float fx = reader.read<float>(), fy = reader.read<float>(), fz = reader.read<float>();
             const float tx = reader.read<float>(), ty = reader.read<float>(), tz = reader.read<float>();
+            const float arc = reader.read<float>();
             if (!reader.overflowed())
                 m_npcs.addBeam(glm::vec3(fx, fy, fz), glm::vec3(tx, ty, tz),
                     kind == (uint8)NpcSystem::EBeamKind::MeleeHit ? NpcSystem::EBeamKind::MeleeHit
-                                                                  : NpcSystem::EBeamKind::Turret);
+                    : kind == (uint8)NpcSystem::EBeamKind::Arrow  ? NpcSystem::EBeamKind::Arrow
+                                                                  : NpcSystem::EBeamKind::Turret,
+                    std::isfinite(arc) ? glm::clamp(arc, 0.0f, 100.0f) : 0.0f);
         }
         else if (name == "GPz")
         {

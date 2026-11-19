@@ -33,7 +33,10 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST    // instanced_indirect_lit.inc.glsl: the sun's shadow at the top of main, before the material
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage cards' own bias (sunShadowFirstFoliage)
-#define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
+#define LIT_NO_RTAO         // instanced_indirect_lit.inc.glsl: no RTAO read on a card (its baked interior is its AO)
+#define LIT_NO_UNDERWATER   // instanced_indirect_lit.inc.glsl: a tree's billboard is never under the water
+#define LIT_DIELECTRIC      // instanced_indirect_lit.inc.glsl: a billboard material is never metal
+#define LIT_LIGHTS_DIFFUSE  // instanced_indirect_lit.inc.glsl: the local lights' diffuse only (a rough card seen from afar)
 #define LEAF_SKY_WRAP       // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky (as the mesh leaves)
 #define LIT_EXTRA_LIGHT     // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
 #include "instanced_indirect_lit.inc.glsl"
@@ -171,7 +174,6 @@ void main()
 	const MaterialInfo material         = in_materialInfos[materialIdx];
 	const uint16_t diffuseTexIdx        = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
 	const uint16_t normalTexIdx         = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
-	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
 	const vec2 uv                       = vec2(in_posU.w, in_normalV.w);
 	// The texture taps' coordinate: a whole-tree billboard's moves with the wind (the card frame and the crown keep `uv`).
 	const vec2 texUv = treeWindBillboardUv(uv, in_tangent.w, in_instanceOrigin, in_normalV.xyz);
@@ -198,9 +200,7 @@ void main()
 	// The cards fade out as they turn EDGE-ON: a near-grazing card smears its texture into bright streaks, and the
 	// crossed card faces the view right then. Its own decorrelated dither, so it composes with the distance fade. Over
 	// |N.V| from u_foliage_edgeFadeStart to End, both x edgeFadeCentreScale at the crossing axis (back to x1 at half the
-	// crown radius), and x edgeFadeTopCardScale on a whole tree's horizontal card. Not on MATERIAL_FLAG_NO_EDGE_FADE
-	// (the mid tier's branch cards).
-	if ((material.flags & MATERIAL_FLAG_NO_EDGE_FADE) == 0u)
+	// crown radius), and x edgeFadeTopCardScale on a whole tree's horizontal card.
 	{
 		const float facing = abs(dot(normalize(in_normalV.xyz), V));
 		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
@@ -223,33 +223,17 @@ void main()
 	// After the discard: a cut-out pixel pays no shadow.
 	sunShadowFirstFoliage(pos);
 
-	// The surface is HALF from the texture taps on (computeLitColor takes it half).
-	float16_t roughness = float16_t(0.65);
-	float16_t metalness = float16_t(0.0);
-	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
-	{
-		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
-		metalness = metalRoughness.x;
-		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
-	}
+	// The surface is HALF from the texture taps on (computeLitColor takes it half). EVERY LitFoliage material is a tree
+	// billboard (Procedural TreeSystem: MATERIAL_FLAG_BILLBOARD | MATERIAL_FLAG_LEAF, no metal-roughness texture, the
+	// CROWN normal layout - never BC5): no leaf test, no metalness, no format branch.
+	const float16_t roughness = float16_t(0.65);
 
 	// The crown's colour PATCHES as on the mesh leaves (the crossfade keeps them).
-	const f16vec3 materialColor = terrainFactionAlbedo(
-		f16vec3((material.flags & MATERIAL_FLAG_LEAF) != 0u ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz);
-	// BC5 normal maps store only X/Y, so .z reads 0 and would flip the normal into the surface: reconstruct Z. The
-	// billboards' CROWN layout (TreeImpostor bakeBillboards): A = the baked crown interior.
+	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leafPatchTint(diffuseSample.xyz, pos)), pos.xz);
+	// The billboards' CROWN layout (TreeImpostor bakeBillboards): RGB = the full normal WITH its sign (it may face away
+	// from the card's front), A = the baked crown interior.
 	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
-	const f16vec3 normalSample = normalTap.xyz;
-	f16vec3 tangentNormal;
-	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
-	{
-		const f16vec2 normalXY = normalSample.xy * float16_t(2.0) - float16_t(1.0);
-		tangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
-	}
-	else
-	{
-		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
-	}
+	const f16vec3 tangentNormal = normalize(normalTap.xyz * float16_t(2.0) - float16_t(1.0));
 	const f16vec3 geoN = f16vec3(in_normalV.xyz);
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
@@ -291,7 +275,6 @@ void main()
 			const vec3 n = vec3(N);
 			N = f16vec3(n * c + cross(k, n) * s + k * (dot(k, n) * (1.0 - c))); // a rotation about a unit axis: stays unit
 		}
-		g_noRtao = true;
 
 		// THE SUN through the crown: the interior fades out of it as the view lines up with the sun (x
 		// u_foliage_interiorViewFade x |V.L|) - from the back the whole crown is in its own shadow (the self-shadow) -
@@ -308,7 +291,6 @@ void main()
 	// LEAVES seen nearly edge-on: N bent toward the viewer until N.V reaches u_foliage_minNoV. The bent card normals let
 	// N.V approach 0 while N.L > 0, and the sun's GGX at grazing lit one leaf hundreds of times brighter than its
 	// diffuse (a blinding spot with bloom). Adding V x (min - N.V) gives N.V = min / |N'|, and N.L barely moves.
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
 		const float noV = dot(vec3(N), V);
 		if (noV < u_foliage_minNoV)
@@ -321,7 +303,6 @@ void main()
 	// shadow, which would leave the backlit view no glow), x the crown's own darkening. Formed BEFORE computeLitColor
 	// and added INSIDE it before its light loop, the register peak (g_litExtraLight, LIT_EXTRA_LIGHT): a transmission
 	// colour kept live across the loop cost 16 B of spill.
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);
@@ -333,8 +314,8 @@ void main()
 				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
 
-	g_leafSkyWrap = float16_t((material.flags & MATERIAL_FLAG_LEAF) != 0u ? u_foliage_leafSkyWrap : 0.0);
-	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
-	out_color = vec4(color, min(diffuseSample.a, material.opacity));
+	g_leafSkyWrap = float16_t(u_foliage_leafSkyWrap);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, float16_t(0.0), surfaceAO);
+	out_color = vec4(color, 1.0); // alpha 1: no blending, and the texture's alpha is not live across the lit core for it
 	out_motion = motionVector(in_prevWorldDelta);
 }

@@ -23,6 +23,7 @@ public:
         float turn = 0.0f;     // -1 (D, right) .. 1 (A, left)
         float climb = 0.0f;    // -1 (Ctrl) .. 1 (Space)
         bool piloted = false;  // nobody at the helm: the lever eases back to stop
+        bool brake = false;    // X: the lever goes to stop fast and the hull brakes at "Brake (m/s2)"
     };
 
     // BLOCKY: 28 x 11 grid tiles of 2 m (airship.obj; rowHalfTiles is the same outline). A CENTRE COLUMN of tiles: the
