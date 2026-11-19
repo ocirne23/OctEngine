@@ -44,10 +44,11 @@ export namespace Procedural
 		uint32 numMips = 1;
 	};
 	TreeBillboardLayout billboardLayout(uint32 size);
-	// THE MASK, one byte a texel, a level per mip (size x size, halving; numMips of the layout): 0 = empty, >= 128 = solid,
-	// and a solid texel's value says WHAT it is - `barkValue` (0.5..1, RendererVK TREE_CARD_BARK) = bark only .. 255 =
-	// leaves only (the leaf texture's alpha is tested). Every level keeps level 0's solid share (an alpha test at 0.5 covers
-	// as much at any distance); a level's leaf share is the cover-weighted mean of the texels under it.
+	// THE MASK, one byte a texel, a level per mip (size x size, halving; numMips of the layout): the texel's COVER up to
+	// `barkValue` (0.5..1, RendererVK TREE_CARD_BARK; the alpha test at 0.5 reads a continuous cover), and from there up -
+	// solid for certain - WHAT it is: `barkValue` = leaves only .. 255 = bark only (the leaf texture's alpha is tested).
+	// Every level keeps level 0's solid share (an alpha test at 0.5 covers as much at any distance); a level's leaf share is
+	// the cover-weighted mean of the texels under it.
 	void bakeBillboardMask(const TreePiece& piece, const TreeBakeImage& leaves, uint32 size, float barkValue, oc::vector<oc::vector<uint8>>& outMips);
 	// The cards (both faces), UVs into the strips. `topCardHeight`: the horizontal card's height in the box (0.5 = mid
 	// height; `Billboard TopCardHeight`). Every vertex's TANGENT = the crown shape's radii (the cards' half extents): a

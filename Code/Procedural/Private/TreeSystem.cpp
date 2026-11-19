@@ -66,6 +66,7 @@ namespace
 
 	constexpr uint32 TREE_TEXTURE_SIZE = 1024;
 	constexpr uint32 TREE_DENSITY_RES = 32; // the far-tree volume's per-variant extinction grid (bakeTreeDensity)
+	constexpr uint32 SHADOW_MASK_VERSION = 4; // in the shadow masks' cache key: bump when bakeBillboardMask's output changes
 
 	// A bush's `Climate` may list several names (space-separated): it grows around the trees of ANY of them (case-
 	// insensitive). A tree's climate is one name.
@@ -866,7 +867,7 @@ namespace Procedural
 		for (size_t v = 0; v < variants.size(); ++v)
 		{
 			const oc::string prefix = oc::format("{}_shadowmask{}_", name, v);
-			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(2u, (uint32)v)), 3u, size));
+			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(2u, (uint32)v)), SHADOW_MASK_VERSION, size));
 			const oc::string path = oc::format("{}/{}.tex", TREE_TEXTURE_DIR, stem);
 			const uint64 textureHash = meshCacheMix(meshCacheHash(stem), settings.compressTextures ? 1u : 0u);
 			VariantBillboard& billboard = out.variantBillboards[v];

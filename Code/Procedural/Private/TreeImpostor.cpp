@@ -156,14 +156,18 @@ namespace
 		return cover.empty() ? 0.0f : (float)solid / (float)cover.size();
 	}
 
-	// A mask level's bytes: an empty texel keeps its (scaled) cover below the test; a solid one says what it is.
+	// A mask level's bytes. THE VALUE IS THE (scaled) COVER up to `barkValue` - a texture filter blends it and the alpha test
+	// (0.5) then runs on a continuous cover. From `barkValue` up a texel is solid for certain, and the value says WHAT it is:
+	// `barkValue` = leaves .. 1 = bark. So leaves are the cover clamped (no step at all), and bark - opaque, its cover near
+	// 1 anyway - is about its cover too. A step AT the test (a texel of cover 0.51 stored as 1) made the filtered test
+	// solid over most of the way to a neighbour of cover 0.45: a speckled, too dense caster that flickered as it moved.
 	void encodeMaskLevel(const oc::vector<float>& cover, const oc::vector<float>& leaf, float scale, float barkValue, oc::vector<uint8>& out)
 	{
 		out.resize(cover.size());
 		for (size_t i = 0; i < cover.size(); ++i)
 		{
 			const float a = cover[i] * scale;
-			out[i] = a < 0.5f ? (uint8)glm::min((int)(a * 255.0f), 127) : toByte(glm::mix(barkValue, 1.0f, leaf[i]));
+			out[i] = toByte(a < barkValue ? a : glm::mix(1.0f, barkValue, leaf[i]));
 		}
 	}
 }

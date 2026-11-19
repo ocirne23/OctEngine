@@ -344,7 +344,7 @@ static oc::string buildLayoutPreamble()
     def("MATERIAL_FLAG_BC5_NORMAL", MATERIAL_FLAG_BC5_NORMAL, "u");
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");
     def("MATERIAL_FLAG_BILLBOARD", MATERIAL_FLAG_BILLBOARD, "u");
-    def("TREE_CARD_BARK", TREE_CARD_BARK); // a shadow billboard's mask value on bark (tree_card.inc.glsl)
+    def("TREE_CARD_BARK", TREE_CARD_BARK); // a shadow billboard's mask: where its bark share starts (tree_card.inc.glsl)
     def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
     def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
     def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");

@@ -425,9 +425,13 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   the cards' box, not from the flat card (RendererVK Scene.md, `MATERIAL_FLAG_BILLBOARD`).
 * **THE MASK** (`bakeBillboardMask`): ONE channel - no albedo, no normal. A small software rasterizer (2×2
   supersampled, back faces culled, the leaf texture's alpha tested) draws each card's view into its strip of one
-  square texture. A texel's value: **0 = empty, >= 128 = solid**, and a solid texel says WHAT it is - `TREE_CARD_BARK`
-  (0.625, RendererVK Layout.ixx) = bark only .. 1 = leaves only, the leaf share of its covered subsamples between.
-  The alpha test (0.5) reads cover; a ray hit reads the share (below). Cache: `<species>_shadowmask<v>_<hash>.tex`.
+  square texture. A texel's value (`encodeMaskLevel`): **its COVER up to `TREE_CARD_BARK`** (0.75, RendererVK
+  Layout.ixx), and from there to 1 - solid for certain - WHAT it is: `TREE_CARD_BARK` = leaves only .. 1 = bark only,
+  by the leaf share of its covered subsamples. So leaves are the cover, clamped, and bark (opaque: its cover is near 1)
+  is about its cover too: **the value is continuous across the alpha test (0.5)**, which the shadow pass runs on a
+  FILTERED tap. Do not store a solid texel's kind from the test up (RendererVK Scene.md, `MATERIAL_FLAG_BILLBOARD`).
+  A ray hit reads the bark share (below). Cache: `<species>_shadowmask<v>_<hash>.tex` (`SHADOW_MASK_VERSION` in its
+  key: bump it when the bake's output changes).
 * **Strip layout** (`billboardLayout`): 3 strips, each strip's height rounded DOWN to a multiple of the largest power
   of two p that leaves ≥ 4 px per strip at mip log2(p) — so every strip boundary lands on a texel boundary at every
   mip and no mip (and no BC block) mixes two cards. 512 / 3: p = 32, 160 rows a strip, 32 spare rows at the bottom.
@@ -441,8 +445,8 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   `.a` as any texture's. The normal slot holds a **2 x 1 texture of the species' two colours for the rays**: the bark
   texture's linear mean, then the leaves' (× `Billboard AlbedoScale`; a leafless species: its bark for both), stored
   as their square roots. A ray that shades a hit (GI, the water's and the film's reflections) mixes the two by the
-  mask's leaf share (`tree_card.inc.glsl`; an empty texel takes the leaf colour: those rays treat the whole card as
-  solid).
+  mask's bark share (`tree_card.inc.glsl`; an empty or thin texel takes the leaf colour: those rays treat the whole
+  card as solid).
 * **RT (GI, RT shadows, RTAO, reflections) sees only the shadow billboards** of TREE species: every tree mesh is
   created without a BLAS (`createMesh(..., raytraced = false)`), and BUSHES never get one (their billboard casts in
   the cascades only).
@@ -563,7 +567,7 @@ masks and the voxel grids): the finished mip chains are BC-compressed when gener
 | bark albedo | BC1 sRGB (opaque) |
 | bark normal | BC5 (XY; MATERIAL_FLAG_BC5_NORMAL rebuilds Z) |
 | leaf cluster atlas | BC3 sRGB (alpha-tested) |
-| shadow billboard mask | BC4 (one channel: cover + leaf share) |
+| shadow billboard mask | BC4 (one channel: cover, then the bark share) |
 | voxel opacity atlas / surface atlas | BC4 / BC3 linear |
 
 4x less VRAM than RGBA8 (BC1 and BC4: 8x for their one or three channels). Off = the uncompressed chains (the A/B for

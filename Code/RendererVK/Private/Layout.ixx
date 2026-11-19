@@ -775,12 +775,13 @@ export namespace RendererVKLayout
         return MATERIAL_FLAG_DISTANCE_FADE | (fadeIn ? MATERIAL_FLAG_FADE_IN : 0u) | start | (width << 12);
     }
     // A tree's SHADOW BILLBOARD (Procedural TreeSystem): crossed cards that stand for the tree in the shadow passes and
-    // the TLAS, NEVER in the main pass. Its albedo slot is a ONE-CHANNEL mask, read through `.a` like any alpha: 0 = empty,
-    // >= the cutoff = solid, and above it the LEAF SHARE (TREE_CARD_BARK = all bark .. 1 = all leaves). Its "normal" slot
+    // the TLAS, NEVER in the main pass. Its albedo slot is a ONE-CHANNEL mask, read through `.a` like any alpha: the COVER
+    // (continuous across the cutoff, so a filtered tap tests right) up to TREE_CARD_BARK, and from there to 1 the BARK
+    // SHARE of a texel that is solid for certain (TREE_CARD_BARK = all leaves .. 1 = all bark). Its "normal" slot
     // is a 2 x 1 texture of its two colours, bark then leaves (stored as their square roots): a ray hit takes its albedo
     // from them (tree_card.inc.glsl). The shadow cull shifts it toward the sun; RTAO's rays skip it (gi_tlas_instances).
     constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26;
-    constexpr float TREE_CARD_BARK = 0.625f; // the mask's value on bark; the leaf share runs from here to 1
+    constexpr float TREE_CARD_BARK = 0.75f; // the mask's cover ends here; the bark share runs from here to 1
 
     struct alignas(16) MaterialInfo
     {

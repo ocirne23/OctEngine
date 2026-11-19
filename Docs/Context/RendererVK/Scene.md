@@ -440,13 +440,18 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   **Never in the main pass: no lit variant draws it**, and it has no albedo and no normal map.
   * **Its albedo slot is a ONE-CHANNEL MASK** (BC4 / R8). `addTextureMaterial` shows a one-channel albedo in all four
     channels (the image view's component mapping, `Texture::initialize`'s `redAsAlpha`), so every alpha reader -
-    `shadow_depth.fs`, the far shadow casters, `rtsCandidateBlocks` - reads it through `.a` as any texture's. 0 = empty,
-    >= the cutoff (0.5) = solid, and above it the LEAF SHARE: `TREE_CARD_BARK` (0.625, Layout.ixx, a shader define) =
-    bark only .. 1 = leaves only.
+    `shadow_depth.fs`, the far shadow casters, `rtsCandidateBlocks` - reads it through `.a` as any texture's. **The value is the
+    COVER up to `TREE_CARD_BARK`** (0.75, Layout.ixx, a shader define), so the 0.5 test runs on a cover the texture
+    filter blended, as on any alpha; from there to 1 - a texel that is solid for certain - it is the BARK SHARE
+    (`TREE_CARD_BARK` = leaves only .. 1 = bark only). **No step may sit AT the test**: with a solid texel stored at its
+    kind's value (cover 0.51 -> 1), the filtered test was solid over most of the way to a neighbour of cover 0.45 - a
+    speckled, too dense caster that flickered with every sub-texel move (the wind, the sun), and PCSS's fixed per-pixel
+    disc turned the speckle into grain.
   * **Its normal slot is a 2 x 1 texture of its two colours**, bark then leaves, as their square roots. A ray that
     SHADES a hit (`gi_probe_trace`, `water_scene.inc`, `terrain_film.fs`) tests the flag and calls `treeCardAlbedo`
-    (`tree_card.inc.glsl`): one tap at u = 0.25 + 0.5 x the leaf share, squared. An EMPTY texel takes the leaf colour -
-    those rays run with the opaque flag, so the whole card is solid to them.
+    (`tree_card.inc.glsl`): one tap at u = 0.75 - 0.5 x the bark share, squared. An EMPTY or thin texel takes the leaf
+    colour - those rays run with the opaque flag, so the whole card is solid to them - and a filtered tap between leaves
+    and a gap stays below `TREE_CARD_BARK`: a crown's edge never reads as bark.
   * **A shaded hit's NORMAL is the CROWN SHAPE's, not the card's** (`treeCardNormal`): three flat cards shade as three
     planes (one faces the sun, the next is edge-on to it). The normal is the shape's where the RAY enters it (the ray in
     object space, from the ray query), so it depends on the ray alone and the three cards agree. The shape: an ellipsoid

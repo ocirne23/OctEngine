@@ -1,10 +1,12 @@
 // A tree's SHADOW BILLBOARD at a RAY HIT (MATERIAL_FLAG_BILLBOARD, Layout.ixx; Procedural TreeSystem). The card has no
-// albedo texture. Its albedo slot is a ONE-CHANNEL mask shown in all four channels, so `.a` reads it: 0 = empty, >= the
-// cutoff (0.5) = solid, and from TREE_CARD_BARK to 1 the LEAF SHARE of the texel. Its normal slot is a 2 x 1 texture of
-// the species' two colours - the bark's mean, then the leaves' - as their square roots (8 bits hold a dark colour
-// better). A hit's albedo = the two mixed by the leaf share; its normal = the crown shape's (treeCardNormal).
-// An EMPTY texel takes the leaf colour: the rays that shade a hit run with the opaque flag (the whole card is solid to
-// them), and a crown's gaps are among its leaves.
+// albedo texture. Its albedo slot is a ONE-CHANNEL mask shown in all four channels, so `.a` reads it: the texel's COVER
+// up to TREE_CARD_BARK (the alpha test at 0.5 runs on a continuous cover), and from TREE_CARD_BARK to 1 the BARK SHARE
+// of a texel that is solid for certain. Its normal slot is a 2 x 1 texture of the species' two colours - the bark's
+// mean, then the leaves' - as their square roots (8 bits hold a dark colour better). A hit's albedo = the two mixed by
+// the bark share; its normal = the crown shape's (treeCardNormal).
+// An EMPTY or thin texel takes the leaf colour: the rays that shade a hit run with the opaque flag (the whole card is
+// solid to them), and a crown's gaps are among its leaves. A filtered tap between leaves and a gap stays below
+// TREE_CARD_BARK, so a crown's edge never reads as bark.
 // The includer declares u_textures[] and enables GL_EXT_nonuniform_qualifier.
 #ifndef TREE_CARD_INC_GLSL
 #define TREE_CARD_INC_GLSL
@@ -12,9 +14,9 @@
 // diffuseNormalTexIdx = the material's packed word (the colours' texture in its high half), mask = its albedo tap's `.a`.
 vec3 treeCardAlbedo(uint diffuseNormalTexIdx, float mask)
 {
-	const float leafShare = mask < 0.5 ? 1.0 : clamp((mask - TREE_CARD_BARK) * (1.0 / (1.0 - TREE_CARD_BARK)), 0.0, 1.0);
-	// The two texels' centres lie at u = 0.25 and 0.75: the filter mixes them between.
-	const vec3 c = textureLod(u_textures[nonuniformEXT(diffuseNormalTexIdx >> 16)], vec2(0.25 + 0.5 * leafShare, 0.5), 0.0).rgb;
+	const float barkShare = clamp((mask - TREE_CARD_BARK) * (1.0 / (1.0 - TREE_CARD_BARK)), 0.0, 1.0);
+	// The two texels' centres lie at u = 0.25 (bark) and 0.75 (leaves): the filter mixes them between.
+	const vec3 c = textureLod(u_textures[nonuniformEXT(diffuseNormalTexIdx >> 16)], vec2(0.75 - 0.5 * barkShare, 0.5), 0.0).rgb;
 	return c * c;
 }
 
