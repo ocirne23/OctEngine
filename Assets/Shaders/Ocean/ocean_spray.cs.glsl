@@ -27,25 +27,17 @@ void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out 
     const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
     const vec2 fr = oceanFlowRotation(worldXZ);
     const vec2 sampleXZ = oceanFlowSamplePos(worldXZ, fr);
-    float sxx = 0.0, szz = 0.0, sxz = 0.0;
-    accel = 0.0;
+    vec4 fold = vec4(0.0); // the cascades' (dDx/dx, dDz/dz, dDx/dz, accel): one tap each
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
         const float L = u_ocean_cascadeSizes[c];
-        const vec3 uv = vec3(sampleXZ / L, 0.0);
-        const float lod = oceanVertexLod(cell, 0.0, L);
-        const vec4 g = textureLod(u_oceanMaps, uv + vec3(0.0, 0.0, float(OCEAN_CASCADES + c)), lod);
-        const vec4 d = textureLod(u_oceanMaps, uv + vec3(0.0, 0.0, float(c)), lod);
-        const vec4 m = textureLod(u_oceanMaps, uv + vec3(0.0, 0.0, float(2 * OCEAN_CASCADES + c)), lod);
-        sxx += g.z; szz += g.w; sxz += d.w;
-        accel += m.z;
+        fold += textureLod(u_oceanMaps, vec3(sampleXZ / L, float(2 * OCEAN_CASCADES + c)), oceanVertexLod(cell, 0.0, L));
     }
-    const float w = oceanSurfaceWeight(depth, shoreHW.y);
-    sxx *= w; szz *= w; sxz *= w;
-    accel *= w;
-    const float jxx = 1.0 + chop * sxx;
-    const float jzz = 1.0 + chop * szz;
-    const float jxz = chop * sxz;
+    fold *= oceanSurfaceWeight(depth, shoreHW.y);
+    accel = fold.w;
+    const float jxx = 1.0 + chop * fold.x;
+    const float jzz = 1.0 + chop * fold.y;
+    const float jxz = chop * fold.z;
     jacobian = jxx * jzz - jxz * jxz;
 }
 

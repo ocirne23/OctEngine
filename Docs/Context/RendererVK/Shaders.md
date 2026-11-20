@@ -344,8 +344,8 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
   `giIndirectOverPiH(worldPos, f16vec3 n)` and `giEvalSkySHH`. **The cascade walk inside stays fp32:** a half walk
   (half fetch results, half SH basis, half cascade blend - every combination tried) cost the lit FS 16 B/thread against
   the fp32 walk converted once. The reflection fog's blend is half on `giEvalSkySHH`.
-* **The ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x per frame,
-  memory-bound, so half storage pays here. The butterflies stay fp32 in shared memory.
+* **The ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): the passes are memory-bound, so half storage
+  pays here. The butterflies stay fp32 in shared memory.
 * **Where the peaks are (bisected):** there is NO single peak left in the lit core or the ocean - removing the PCSS
   search, the light shadow rays, the underwater sun transmittance, the relief sun gate or the two-cascade border PCSS,
   EACH ONE alone, leaves the demand (regs + local / 4) the same; the ocean likewise for its underside path, light loop

@@ -51,21 +51,17 @@ void main()
     // This texel's rest position: its drifted coordinate plus the drift.
     const vec2 restXZ = u_ocean_foamLevels[level].xy + (vec2(xy) + 0.5) * texel + u_ocean_foamDrift;
 
-    float sxx = 0.0, szz = 0.0, sxz = 0.0, accel = 0.0;
+    vec4 fold = vec4(0.0); // the cascades' (dDx/dx, dDz/dz, dDx/dz, accel): one tap each
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
         const float Lc = u_ocean_cascadeSizes[c];
-        const vec2 uv = restXZ / Lc;
         const float lod = max(log2(texel * N / Lc), 0.0); // texel footprint match: cascade texel -> field texel
-        const vec4 g = textureLod(u_oceanMaps, vec3(uv, float(OCEAN_CASCADES + c)), lod);
-        const vec4 d = textureLod(u_oceanMaps, vec3(uv, float(c)), lod);
-        sxx += g.z; szz += g.w; sxz += d.w;
-        accel += textureLod(u_oceanMaps, vec3(uv, float(2 * OCEAN_CASCADES + c)), lod).z;
+        fold += textureLod(u_oceanMaps, vec3(restXZ / Lc, float(2 * OCEAN_CASCADES + c)), lod);
     }
-    const float jxx = 1.0 + chop * sxx;
-    const float jzz = 1.0 + chop * szz;
-    const float jxz = chop * sxz;
-    const float instant = oceanInstantFoam(jxx * jzz - jxz * jxz, accel);
+    const float jxx = 1.0 + chop * fold.x;
+    const float jzz = 1.0 + chop * fold.y;
+    const float jxz = chop * fold.z;
+    const float instant = oceanInstantFoam(jxx * jzz - jxz * jxz, fold.w);
 
     // A texel that SCROLLED IN (outside last frame's grid) starts from the next coarser level's last-frame state there,
     // not empty: that level has covered this water for a while, so no emptier band trails the moving camera (softer, a

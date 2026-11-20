@@ -204,22 +204,21 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		const float L = u_ocean_cascadeSizes[c];
 		const float16_t lod = max(lodBase - float16_t(log2(L)), float16_t(0.0));
 		const vec2 uvc = worldPos.xz / L;
-		// The finest cascade's slopes FLOW: the ripple normal travels, the moments / Jacobian (shore-gated foam) stay
-		// put. Its phase 1 blends in AFTER the loop: inside it, the second tap cost 16 B/thread.
+		// The finest cascade's slopes FLOW: the ripple normal travels, the Jacobian (shore-gated foam) stays put. Its
+		// phase 1 blends in AFTER the loop: inside it, the second tap cost 16 B/thread.
 		const bool flows = c == OCEAN_CASCADES - 1;
-		const vec4 g32 = textureLod(u_uwOceanMaps, vec3(flows ? (worldPos.xz - flowOff0) / L : uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
+		const vec4 g32 = textureLod(u_uwOceanMaps, vec3(flows ? (worldPos.xz - flowOff0) / L : uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dhx^2, dhz^2)
 		if (flows)
 			lastSlope = f16vec2(g32.xy);
-		const vec4 m32 = textureLod(u_uwOceanMaps, vec3(uvc, float(2 * OCEAN_CASCADES + c)), lod); // LEAN moments, accel
-		const float16_t dxz = float16_t(textureLod(u_uwOceanMaps, vec3(uvc, float(c)), lod).w); // displacement layer w = dDx/dz
-		// Slope variance lost to mip filtering (Bruneton 2010): the cancelling difference in 32-bit.
-		varSum += f16vec2(max(m32.xy - g32.xy * g32.xy, vec2(0.0))) * (wc * wc);
-		const f16vec4 g = f16vec4(g32);
-		slopeSum += g.xy * wc;
-		rxx += g.z; rzz += g.w; rxz += dxz;
-		accel += float16_t(m32.z);
+		const f16vec4 j = f16vec4(textureLod(u_uwOceanMaps, vec3(uvc, float(2 * OCEAN_CASCADES + c)), lod)); // (dDx/dx, dDz/dz, dDx/dz, accel)
+		// Slope variance lost to mip filtering (Bruneton 2010): the cancelling difference in 32-bit. The moments ride the
+		// slopes' layer, so the finest cascade's travel with its flowing slope.
+		varSum += f16vec2(max(g32.zw - g32.xy * g32.xy, vec2(0.0))) * (wc * wc);
+		slopeSum += f16vec2(g32.xy) * wc;
+		rxx += j.x; rzz += j.y; rxz += j.z;
+		accel += j.w;
 		if (c == OCEAN_CASCADES - 1)
-			fineJ = f16vec3(g.z, g.w, dxz); // for the stuck foam's Jacobian ("Foam fine waves")
+			fineJ = j.xyz; // for the stuck foam's Jacobian ("Foam fine waves")
 	}
 
 	// The ocean's world-space foam field: the foam amount breaking left stuck to the water. At the film's own position

@@ -87,11 +87,10 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         {
             const float L = u_ocean_cascadeSizes[c];
             const float lod = max(log2(max(footprint, 1e-3) * float(OCEAN_FFT_SIZE) / L), 0.0) + defocusLod;
-            const vec2 uv = entryXZ / L;
-            const vec4 g = textureLod(u_uwOceanMaps, vec3(uv, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
-            sxx += g.z;
-            szz += g.w;
-            sxz += textureLod(u_uwOceanMaps, vec3(uv, float(c)), lod).w; // displacement layer w = dDx/dz
+            const vec3 j = textureLod(u_uwOceanMaps, vec3(entryXZ / L, float(2 * OCEAN_CASCADES + c)), lod).xyz; // (dDx/dx, dDz/dz, dDx/dz)
+            sxx += j.x;
+            szz += j.y;
+            sxz += j.z;
         }
 
         // The Jacobian terms are linear in the displacement, so the shore weight multiplies straight in. The entry

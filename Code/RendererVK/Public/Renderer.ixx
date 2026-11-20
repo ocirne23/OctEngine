@@ -193,7 +193,7 @@ public:
     void clearCameraWaterSurface() { m_oceanSimPipeline.clearCameraWaterSurface(); }
     void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
 
-    // RGBA16F (Dx, h, Dz, dDxz), outRes^2 per cascade, cascades packed consecutively. ~2 frames old. Copy between beginFrame and present.
+    // RGBA16F (Dx, h, Dz, -), outRes^2 per cascade, cascades packed consecutively. ~2 frames old. Copy between beginFrame and present.
     oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const;
 
     // "Ocean/World scale" (s), from the "Ocean" settings (the value the pushed OceanParams carries): the spray emitter's lengths / speeds / accelerations ride it.

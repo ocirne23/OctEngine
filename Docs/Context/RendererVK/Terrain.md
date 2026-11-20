@@ -318,11 +318,51 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   none: every wave crossing along an underwater ray would be rasterized, and shaded until a nearer
   one lands (there is no prepass early-Z to reject them). The underside shading (Snell's window, TIR, "Ocean/Shading/
   Underside transmission", `u_ocean_undersideTransmission`) lives in `ocean.fs.glsl`.
+* **THE OCEAN SIMULATION** (`OceanSimulationPipeline::record`, GPU scope "Ocean sim"; `OCEAN_FFT_SIZE` N = 512,
+  `OCEAN_CASCADES` = 3, `OCEAN_FOAM_LEVELS` = 3). A cached secondary: every input is in the frame UBO. Five steps, three
+  compute barriers:
+  1. **Spectrum** (`ocean_spectrum.cs.glsl`): the TMA spectrum + time evolution, 8 real signals as 4 complex ones = 2
+     RGBA16F layers per cascade. **Only the band is worked out and stored**: a cascade keeps k < HALF its Nyquist (the
+     band split; the 2x oversampling is what lets a bilinear tap rebuild the waves), so the lattice outside |m| < N/4 is
+     zero. The pass runs on that (N/2)² block. The wave at +k and the wave at -k share the radial part of the spectrum
+     (the spreading at -k is `((1 - cos θ) / 2)^s`, no `atan`); JONSWAP's alpha, its peak frequency and the spreading
+     exponent are per-frame terms of the wind and the fetch, in the UBO (`u_ocean_spectrumShape`).
+  2. **Row FFT, column FFT** (`ocean_fft.cs.glsl`, the column pass is its `OCEAN_FFT_COLUMNS` variant): radix-2,
+     in place in shared memory, one workgroup per line per cascade (both layers of the cascade: one twiddle serves four
+     complex values). The band makes three things free: a thread loads ONE texel per layer, not two (the other is
+     zero); the first stage is that load; and the row pass runs on the block's N/2 rows only (a zero row stays zero),
+     into an N x N/2 image. The last stage writes its pair straight to the image. So `log2(N) - 2` = 7 stages go through
+     shared memory.
+  3. **The column pass writes the maps** (mip 0) in the layout the samplers read - there is no assemble pass:
+
+     | Layer | Content | Read by |
+     |---|---|---|
+     | `c` | Dx, h, Dz, - | the geometry (ocean VS, river VS, the fog's wave taps, the wetness pass, the CPU readback) |
+     | `OCEAN_CASCADES + c` | dh/dx, dh/dz, and their squares (the LEAN second moments) | a normal |
+     | `2 * OCEAN_CASCADES + c` | dDx/dx, dDz/dz, dDx/dz (the fold Jacobian's terms), the vertical acceleration | a fold / foam test |
+     | `3 * OCEAN_CASCADES + l` | the foam field's level `l` | `oceanSampleFoamField` |
+
+     **One layer per use**: the foam pass, the spray and the caustics take ONE tap per cascade, the ocean FS and the film
+     two. A new signal goes into the layer of the readers that need it, not into a free channel elsewhere.
+     **The acceleration has no FFT signal**: `d2h/dt2` transforms `-w² h~ = -g k tanh(kD) h~`, and `dDx/dx + dDz/dz`
+     transforms `-k h~`, so the pass stores `g (dDx/dx + dDz/dz)`. Exact in deep water; too strong by `1 / tanh(kD)` for
+     a wave longer than ~2x "Depth" (3 % at 3x the depth), and such a wave has next to no acceleration. A ninth signal
+     would cost a third layer through both FFT passes.
+  4. **Foam field** (`ocean_foam.cs.glsl`, see [Ocean.md](../Procedural/Ocean.md)), then the **mip chain** (blits) and
+     the **CPU readback** (the displacement layers' mip 2).
+  5. **Spray** (below).
+
+  Work per frame: 0.2 M spectrum texels, 2,304 FFT workgroups of 256 threads x 8 butterfly stages, 9 map layers written
+  once. Registers: spectrum 35, FFT 33 (rows) / 34 (columns), foam 30, spray 40. **Tried and dropped:** one store per
+  layer inside the spectrum's band branch (2 registers more than two stores after it); one layer per thread in the FFT
+  (24 registers, but twice the threads and no shared twiddle).
+  **Not done on purpose:** a slow cascade at half rate. The large cascade's waves travel ~0.2 m per frame at 60 fps, so
+  a held frame shows as judder on near crests; it needs two snapshots and a blend in every reader.
 * **The particle GPU SPAWN PATH + ocean spray.** `ParticlePipeline` keeps one shared spawn-request
   buffer (`MAX_PARTICLE_GPU_SPAWNS` × `ParticleSpawnRequestGpu`) and a request counter in its counters
   block; a producer compute pass that runs BEFORE "Particle sim" binds both (`getCountersBuffer` /
   `getSpawnRequestBuffer`) and appends through `particle_spawn.inc.glsl` (the contract is in
-  [Particle](../Particle/CONTEXT.md)). `ocean_spray.cs.glsl` is step 6 of `OceanSimulationPipeline::record` (after the
+  [Particle](../Particle/CONTEXT.md)). `ocean_spray.cs.glsl` is the last step of `OceanSimulationPipeline::record` (after the
   mip chain; the maps' final barrier includes compute): an `OCEAN_SPRAY_GRID`² (128²) world grid around
   `u_sceneFocus` ("Ocean/Spray radius"), per cell the fold Jacobian + crest acceleration at explicit LOD (compute has
   no derivatives) through the water shader's own `oceanInstantFoam`, land skipped through the shore data (binding 2,
@@ -598,7 +638,8 @@ the sand, so the two can never disagree.
     (x (1 - shore)): the shore band carries the ocean's own waves.
   * A two-phase flow map on the finest cascade's slope tap and the detail tap. Each is sampled again half a cycle apart
     and crossfaded by a triangle, so neither phase's reset shows. The finest cascade's phase 1 is one slope-only tap
-    after the cascade loop. The moments and the Jacobian (shore foam) do not flow.
+    after the cascade loop. The Jacobian (shore foam) does not flow; the LEAN moments ride the slopes' layer, so the
+    finest cascade's travel with its phase-0 slope.
 * **The LOOK** is the ocean's own (`terrainFilmSurface` / `terrainFilmShade`): "Waviness", "Normal scale", "Wind
   ripples". The film's Beer-Lambert TINT runs on the SAME water depth as the coverage - a puddle deepens toward its
   middle.

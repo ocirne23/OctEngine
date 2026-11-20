@@ -2,10 +2,11 @@
 #define OCEAN_WAVE_INC_GLSL
 
 // Sampling helpers for the FFT ocean maps (OceanSimulationPipeline / ocean_*.cs.glsl), per cascade c:
-//   layer c                      : displacement (Dx, h, Dz, dDx/dz)
-//   layer   OCEAN_CASCADES + c   : gradients    (dh/dx, dh/dz, dDx/dx, dDz/dz)
-//   layer 2*OCEAN_CASCADES + c   : slope second moments (dhx^2, dhz^2, accel, -)
+//   layer c                      : displacement (Dx, h, Dz, -)
+//   layer   OCEAN_CASCADES + c   : slopes (dh/dx, dh/dz) + their second moments (dhx^2, dhz^2)
+//   layer 2*OCEAN_CASCADES + c   : the fold Jacobian's terms (dDx/dx, dDz/dz, dDx/dz) + the vertical acceleration
 //   layer 3*OCEAN_CASCADES + l   : the world-space foam field's level l (ocean_foam_field.inc.glsl)
+// One layer per USE: the geometry reads the first, a normal the second, a fold / foam test the third alone.
 // Shared by the displacement VS and ocean.fs.glsl, so the geometry and the shaded normals read the same field.
 // Requires ubo.inc.glsl; the includer may set OCEAN_MAPS_BINDING / TERRAIN_HEIGHT_BINDING first.
 
@@ -265,15 +266,14 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
         const vec2 uv = sampleXZ / u_ocean_cascadeSizes[c];
-        const vec4 g = texture(u_oceanMaps, vec3(uv, float(OCEAN_CASCADES + c)));
-        const vec4 d = texture(u_oceanMaps, vec3(uv, float(c)));
-        const vec4 m = texture(u_oceanMaps, vec3(uv, float(2 * OCEAN_CASCADES + c)));
+        const vec4 g = texture(u_oceanMaps, vec3(uv, float(OCEAN_CASCADES + c)));     // slopes, their second moments
+        const vec4 j = texture(u_oceanMaps, vec3(uv, float(2 * OCEAN_CASCADES + c))); // dDx/dx, dDz/dz, dDx/dz, accel
         slopeSum += g.xy;
-        varSum += max(m.xy - g.xy * g.xy, vec2(0.0));
-        sxx += g.z; szz += g.w; sxz += d.w;
-        accel += m.z;
+        varSum += max(g.zw - g.xy * g.xy, vec2(0.0));
+        sxx += j.x; szz += j.y; sxz += j.z;
+        accel += j.w;
         if (c == OCEAN_CASCADES - 1)
-            fine = vec3(g.z, g.w, d.w);
+            fine = j.xyz;
     }
     jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
 

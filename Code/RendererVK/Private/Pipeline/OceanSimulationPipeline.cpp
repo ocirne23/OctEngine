@@ -12,12 +12,11 @@ const OceanSprayParams& OceanSimulationPipeline::getSprayParams() const { return
 
 namespace
 {
-    // 2 complex values per texel. HALF: the passes are bound by memory traffic (512^2 x 9 layers streamed
-    // ~6x per frame), the butterflies run in fp32 shared memory, and the maps they feed are RGBA16F anyway.
+    // 2 complex values per texel. HALF: the passes are bound by memory traffic, the butterflies run in fp32
+    // shared memory, and the maps they feed are RGBA16F anyway.
     constexpr vk::Format SPECTRUM_FORMAT = vk::Format::eR16G16B16A16Sfloat;
     constexpr vk::Format MAPS_FORMAT = vk::Format::eR16G16B16A16Sfloat;
 
-    struct FftPC { uint32 axis; };        // 0 = horizontal (rows), 1 = vertical (columns)
     struct FoamPC { uint32 writeLayer; }; // foam ping/pong: write this layer, read the other
 
     vk::ImageSubresourceRange allSubresources(uint32 mipLevels, uint32 layers)
@@ -58,20 +57,12 @@ void OceanSimulationPipeline::buildSpectrumLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
-void OceanSimulationPipeline::buildFftLayout(ComputePipelineLayout& layout)
+void OceanSimulationPipeline::buildFftLayout(ComputePipelineLayout& layout, bool columns)
 {
     layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_fft.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    auto& b = layout.descriptorSetLayoutBindings;
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(FftPC) });
-}
-
-void OceanSimulationPipeline::buildAssembleLayout(ComputePipelineLayout& layout)
-{
-    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_assemble.cs.glsl";
-    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    if (columns)
+        layout.defines.push_back({ "OCEAN_FFT_COLUMNS", "1" });
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -121,7 +112,8 @@ void OceanSimulationPipeline::createImages()
         vk::ImageCreateInfo info{
             .imageType = vk::ImageType::e2D,
             .format = SPECTRUM_FORMAT,
-            .extent = { N, N, 1 },
+            .extent = { i == 0 ? N / 2 : N, N / 2, 1 }, // the spectrum's non-zero block; the row FFT's result
+
             .mipLevels = 1,
             .arrayLayers = SPECTRUM_LAYERS,
             .samples = vk::SampleCountFlagBits::e1,
@@ -299,12 +291,12 @@ void OceanSimulationPipeline::initialize()
     ComputePipelineLayout spectrumLayout;
     buildSpectrumLayout(spectrumLayout);
     m_spectrumPipeline.initialize(spectrumLayout);
-    ComputePipelineLayout fftLayout;
-    buildFftLayout(fftLayout);
-    m_fftPipeline.initialize(fftLayout);
-    ComputePipelineLayout assembleLayout;
-    buildAssembleLayout(assembleLayout);
-    m_assemblePipeline.initialize(assembleLayout);
+    ComputePipelineLayout fftRowsLayout;
+    buildFftLayout(fftRowsLayout, false);
+    m_fftRowsPipeline.initialize(fftRowsLayout);
+    ComputePipelineLayout fftColumnsLayout;
+    buildFftLayout(fftColumnsLayout, true);
+    m_fftColumnsPipeline.initialize(fftColumnsLayout);
     ComputePipelineLayout foamLayout;
     buildFoamLayout(foamLayout);
     m_foamPipeline.initialize(foamLayout);
@@ -315,9 +307,8 @@ void OceanSimulationPipeline::initialize()
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_spectrumSets[i].initialize(m_spectrumPipeline.getDescriptorSetLayout(), "Ocean.spectrum");
-        m_fftHorizontalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout(), "Ocean.fftHorizontal");
-        m_fftVerticalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout(), "Ocean.fftVertical");
-        m_assembleSets[i].initialize(m_assemblePipeline.getDescriptorSetLayout(), "Ocean.assemble");
+        m_fftRowsSets[i].initialize(m_fftRowsPipeline.getDescriptorSetLayout(), "Ocean.fftRows");
+        m_fftColumnsSets[i].initialize(m_fftColumnsPipeline.getDescriptorSetLayout(), "Ocean.fftColumns");
         m_foamSets[i].initialize(m_foamPipeline.getDescriptorSetLayout(), "Ocean.foam");
         m_spraySets[i].initialize(m_sprayPipeline.getDescriptorSetLayout(), "Ocean.spray");
     }
@@ -329,14 +320,14 @@ void OceanSimulationPipeline::reloadShaders()
     buildSpectrumLayout(spectrumLayout);
     if (!m_spectrumPipeline.reloadShaders(spectrumLayout))
         printf("OceanSimulationPipeline: spectrum shader reload failed, keeping previous pipeline\n");
-    ComputePipelineLayout fftLayout;
-    buildFftLayout(fftLayout);
-    if (!m_fftPipeline.reloadShaders(fftLayout))
-        printf("OceanSimulationPipeline: fft shader reload failed, keeping previous pipeline\n");
-    ComputePipelineLayout assembleLayout;
-    buildAssembleLayout(assembleLayout);
-    if (!m_assemblePipeline.reloadShaders(assembleLayout))
-        printf("OceanSimulationPipeline: assemble shader reload failed, keeping previous pipeline\n");
+    ComputePipelineLayout fftRowsLayout;
+    buildFftLayout(fftRowsLayout, false);
+    if (!m_fftRowsPipeline.reloadShaders(fftRowsLayout))
+        printf("OceanSimulationPipeline: fft (rows) shader reload failed, keeping previous pipeline\n");
+    ComputePipelineLayout fftColumnsLayout;
+    buildFftLayout(fftColumnsLayout, true);
+    if (!m_fftColumnsPipeline.reloadShaders(fftColumnsLayout))
+        printf("OceanSimulationPipeline: fft (columns) shader reload failed, keeping previous pipeline\n");
     ComputePipelineLayout foamLayout;
     buildFoamLayout(foamLayout);
     if (!m_foamPipeline.reloadShaders(foamLayout))
@@ -393,7 +384,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &barrier });
     };
 
-    { // Maps: sampled last frame -> compute-accessible (assemble writes mip 0, foam samples the mips).
+    { // Maps: sampled last frame -> compute-accessible (the column FFT writes mip 0, foam samples the mips).
         vk::ImageMemoryBarrier2 barrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader,
             .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
@@ -407,7 +398,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier });
     }
 
-    // ---- 1. Spectrum: TMA h0(k) + time evolution -> packed complex spectra (ping) ----
+    // ---- 1. Spectrum: TMA h0(k) + time evolution -> packed complex spectra, the non-zero (N/2)^2 block only ----
     {
         oc::array<DescriptorSetUpdateInfo, 2> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
@@ -419,48 +410,33 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_spectrumPipeline.getPipeline());
         commandBuffer.cmdUpdateDescriptorSets(m_spectrumPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set, updates);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_spectrumPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        cmd.dispatch(N / 8, N / 8, CASCADES);
+        cmd.dispatch(N / 16, N / 16, CASCADES);
     }
     computeBarrier();
 
-    // ---- 2. Inverse FFT: horizontal (ping -> pong), then vertical (pong -> ping) ----
+    // ---- 2. Inverse FFT, one workgroup per line per cascade (its two layers together): the block's N/2 rows
+    // (block -> row result), then all N columns (row result -> the maps' mip 0, in the samplers' layout) ----
     {
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_fftPipeline.getPipeline());
-
-        oc::array<DescriptorSetUpdateInfo, 2> horizontal{ storageImage(m_spectrumView[0]), storageImage(m_spectrumView[1]) };
-        horizontal[0].binding = 0; horizontal[1].binding = 1;
-        vk::DescriptorSet hSet = m_fftHorizontalSets[frameIdx].getDescriptorSet();
-        commandBuffer.cmdUpdateDescriptorSets(m_fftPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, hSet, horizontal);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_fftPipeline.getPipelineLayout(), 0, 1, &hSet, 0, nullptr);
-        FftPC pc{ .axis = 0 };
-        cmd.pushConstants(m_fftPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(FftPC), &pc);
-        cmd.dispatch(N, SPECTRUM_LAYERS, 1); // one workgroup per row per layer
+        oc::array<DescriptorSetUpdateInfo, 2> rows{ storageImage(m_spectrumView[0]), storageImage(m_spectrumView[1]) };
+        rows[0].binding = 0; rows[1].binding = 1;
+        vk::DescriptorSet rowsSet = m_fftRowsSets[frameIdx].getDescriptorSet();
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_fftRowsPipeline.getPipeline());
+        commandBuffer.cmdUpdateDescriptorSets(m_fftRowsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, rowsSet, rows);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_fftRowsPipeline.getPipelineLayout(), 0, 1, &rowsSet, 0, nullptr);
+        cmd.dispatch(N / 2, CASCADES, 1);
         computeBarrier();
 
-        oc::array<DescriptorSetUpdateInfo, 2> vertical{ storageImage(m_spectrumView[1]), storageImage(m_spectrumView[0]) };
-        vertical[0].binding = 0; vertical[1].binding = 1;
-        vk::DescriptorSet vSet = m_fftVerticalSets[frameIdx].getDescriptorSet();
-        commandBuffer.cmdUpdateDescriptorSets(m_fftPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vSet, vertical);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_fftPipeline.getPipelineLayout(), 0, 1, &vSet, 0, nullptr);
-        pc.axis = 1;
-        cmd.pushConstants(m_fftPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(FftPC), &pc);
-        cmd.dispatch(N, SPECTRUM_LAYERS, 1);
+        oc::array<DescriptorSetUpdateInfo, 2> columns{ storageImage(m_spectrumView[1]), storageImage(m_mapsMip0View) };
+        columns[0].binding = 0; columns[1].binding = 1;
+        vk::DescriptorSet columnsSet = m_fftColumnsSets[frameIdx].getDescriptorSet();
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_fftColumnsPipeline.getPipeline());
+        commandBuffer.cmdUpdateDescriptorSets(m_fftColumnsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, columnsSet, columns);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_fftColumnsPipeline.getPipelineLayout(), 0, 1, &columnsSet, 0, nullptr);
+        cmd.dispatch(N, CASCADES, 1);
         computeBarrier();
     }
 
-    // ---- 3. Assemble: permute sign, unpack the 8 signals -> displacement/gradient/moments maps (mip 0) ----
-    {
-        oc::array<DescriptorSetUpdateInfo, 2> updates{ storageImage(m_spectrumView[0]), storageImage(m_mapsMip0View) };
-        updates[0].binding = 0; updates[1].binding = 1;
-        vk::DescriptorSet set = m_assembleSets[frameIdx].getDescriptorSet();
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_assemblePipeline.getPipeline());
-        commandBuffer.cmdUpdateDescriptorSets(m_assemblePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set, updates);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_assemblePipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        cmd.dispatch(N / 8, N / 8, CASCADES);
-    }
-    computeBarrier();
-
-    // ---- 4. Foam: the world-space foam field's one amount, one dispatch layer per level (inject on
+    // ---- 3. Foam: the world-space foam field's one amount, one dispatch layer per level (inject on
     // breaking, decay, scroll; write the maps' foam layers). The injection samples the cascades mip-filtered to each level's
     // texel (binding 3; image is GENERAL here), so a texel reads the AVERAGE local folding under it, not one
     // aliased full-res sample. ----
@@ -484,7 +460,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.dispatch(N / 8, N / 8, FOAM_LEVELS);
     }
 
-    // ---- 5. Mip chain: blit-downsample so distant water reads prefiltered displacement/slopes ----
+    // ---- 4. Mip chain: blit-downsample so distant water reads prefiltered displacement/slopes ----
     {
         vk::ImageMemoryBarrier2 toSrc{
             .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
@@ -590,7 +566,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSampled });
     }
 
-    // ---- 6. Spray: breaking crests -> particle spawn requests (the particle GPU spawn path). Reads the
+    // ---- 5. Spray: breaking crests -> particle spawn requests (the particle GPU spawn path). Reads the
     // finished maps; writes the shared request buffer + counter, which the particle sim's head barrier
     // (compute -> compute) orders before the begin pass. UBO-gated (u_ocean_sprayEmitter = the emitter slot,
     // 0xFFFFFFFF = off), so it records once. ----

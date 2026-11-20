@@ -109,7 +109,8 @@ disc every frame.**
 ### What runs where
 
 Everything else is on the GPU: `OceanSimulationPipeline` (in RendererVK) simulates the spectrum and
-IFFT into displacement and gradient maps **each frame, so every parameter is live**; the Ocean pipeline
+IFFT into displacement, slope and fold maps **each frame, so every parameter is live** (the passes and the map
+layout: THE OCEAN SIMULATION in [`Terrain.md`](../RendererVK/Terrain.md)); the Ocean pipeline
 variant displaces this mesh and shades it (RT refraction, Beer-Lambert). Params push through
 `Renderer::setOceanParams`; **the mesh rebuilds only when ring params change.**
 

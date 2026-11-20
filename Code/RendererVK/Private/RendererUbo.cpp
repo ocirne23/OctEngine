@@ -1498,6 +1498,16 @@ void RendererState::registerUboValues(UboBlock& list)
                 const glm::vec2 dir = m_oceanSimPipeline.getOceanParams().windDirection;
                 return glm::length(dir) > 1e-4f ? glm::normalize(dir) : glm::vec2(1.0f, 0.0f);
             }, UboLive);
+        // The spectrum's per-frame terms of the wind and the fetch (ocean_spectrum.cs.glsl: JONSWAP's alpha and peak
+        // frequency, the directional spreading's exponent past the peak), so no texel works them out.
+        list.add("ocean_spectrumShape", [this, &o]
+            {
+                constexpr float g = 9.81f;
+                const float U = glm::max(m_oceanSimPipeline.getOceanParams().windSpeed, 0.01f);
+                const float F = glm::max(oceanWorldScaled(o).fetchKm, 1.0f) * 1000.0f;
+                const float peak = 22.0f * std::pow(g * g / (U * F), 1.0f / 3.0f);
+                return glm::vec3(0.076f * std::pow(U * U / (F * g), 0.22f), peak, -2.33f - 1.45f * (U * peak / g - 1.17f));
+            }, UboLive);
         list.add("ocean_foamDrift", [this] { return m_oceanSimPipeline.getFoamDrift(); }, UboLive); // the foam field's accumulated drift (m)
         list.add("ocean_shoreFoamDepth", [this] { return glm::max(m_oceanSimPipeline.getOceanParams().shoreFoamDepth, 0.0f); }, UboLive);
         // "Shore foam max" (floored: the lace's soft knee divides by it) and the knee's two per-frame factors: 1 / the cap
@@ -1539,7 +1549,6 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("ocean_foamColor", o.foamColor);
         list.add("ocean_foamBias", o.foamBias);
         list.add("ocean_choppiness", o.choppiness);
-        list.add("ocean_fetch", [ws] { return glm::max(ws().fetchKm, 1.0f) * 1000.0f; }, o.fetchKm, o.worldScale);
         list.add("ocean_depth", [ws] { return glm::max(ws().depth, 1.0f); }, o.depth, o.worldScale);
         list.add("ocean_normalStrength", o.normalStrength);
         list.add("ocean_horizonLevelOffset", [ws] { return ws().horizonLevelOffset; }, o.horizonLevelOffset, o.worldScale);
