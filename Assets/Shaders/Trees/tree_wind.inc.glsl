@@ -150,38 +150,49 @@ vec2 treeWindTrunkShare(float localY, float instScale)
     return vec2(t2, -0.5 * t2 * t2 / max(height, 1.0));
 }
 
-// THE TRUNK'S BEND ALONE, this frame's: the shadow casters (no payload attribute in that pass, no motion vectors).
-// trunkScale = the species' trunk scale. The same bend treeWindOfTree + treeWindVertex give a payload-0 vertex.
-vec3 treeWindTrunkOffset(vec3 localPos, vec3 instPos, float instScale, float trunkScale)
+// A TREE'S TRUNK VECTOR ALONE, this frame's (TreeWind::trunk, as treeWindOfTree gives it): for a caller that takes no
+// branch sway and no motion vector - the far voxel trees' cull (once per tree), the shadow casters (per vertex).
+// trunkScale = the species' trunk scale.
+vec2 treeWindTrunkOfTree(vec3 instPos, float trunkScale)
 {
     const float fade = treeWindTrunkFade(distance(instPos, u_views_viewPos[VIEW_CENTER].xyz));
     if (fade <= 0.0)
-        return vec3(0.0);
+        return vec2(0.0);
     const vec2 wind = vegetationWindVector(instPos.xz, u_timeSeconds);
-    const float treeRand = treeWindTreeRand(instPos.xz);
-    const vec2 trunk = treeWindTrunk(wind, u_timeSeconds, treeRand) * (trunkScale * fade);
-    const vec2 share = treeWindTrunkShare(localPos.y, instScale);
+    return treeWindTrunk(wind, u_timeSeconds, treeWindTreeRand(instPos.xz)) * (trunkScale * fade);
+}
+
+// THE TRUNK'S BEND of a vertex for a trunk vector: the vector x the vertex's share, and the drop.
+vec3 treeWindTrunkBend(vec2 trunk, float localY, float instScale)
+{
+    const vec2 share = treeWindTrunkShare(localY, instScale);
     return vec3(trunk * share.x, share.y * dot(trunk, trunk)).xzy;
 }
 
-// The TRUNK'S part of treeWindVertex's offset: what the shadow casters bend by too (treeWindTrunkOffset). The offset less
-// this = the vertex's own SWAY (its branch, its leaf).
-vec3 treeWindTrunkPart(TreeWind tree, vec3 localPos, float instScale)
+// The same with the motion vector (outPrevDelta = last frame's bend minus this frame's): ALL the wind of a vertex with
+// no branch and no leaf - the voxel box.
+vec3 treeWindTrunkVertex(vec2 trunk, vec2 trunkDelta, float localY, float instScale, out vec3 outPrevDelta)
 {
-    const vec2 share = treeWindTrunkShare(localPos.y, instScale);
-    return vec3(tree.trunk * share.x, share.y * dot(tree.trunk, tree.trunk)).xzy;
+    const vec2 share = treeWindTrunkShare(localY, instScale);
+    const vec2 prevTrunk = trunk + trunkDelta;
+    const float trunk2 = dot(trunk, trunk);
+    outPrevDelta = vec3(trunkDelta * share.x, share.y * (dot(prevTrunk, prevTrunk) - trunk2)).xzy;
+    return vec3(trunk * share.x, share.y * trunk2).xzy;
 }
 
-// The world-space offset of a tree vertex this frame; outPrevDelta = last frame's offset minus it (the motion vectors).
-// localPos = the mesh-local position, worldNormal = the vertex normal in world space (the leaf flutter).
-vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta)
+// THE TRUNK'S BEND ALONE, this frame's, the tree's wind worked out per vertex: the shadow casters (no payload attribute in
+// that pass, no motion vectors). The same bend treeWindOfTree + treeWindVertex give a payload-0 vertex.
+vec3 treeWindTrunkOffset(vec3 localPos, vec3 instPos, float instScale, float trunkScale)
 {
-    // TRUNK: the tree's vector x the vertex's share.
-    const vec2 share = treeWindTrunkShare(localPos.y, instScale);
-    const vec2 prevTrunk = tree.trunk + tree.trunkDelta;
-    const float trunk2 = dot(tree.trunk, tree.trunk);
-    vec3 offset = vec3(tree.trunk * share.x, share.y * trunk2).xzy;
-    outPrevDelta = vec3(tree.trunkDelta * share.x, share.y * (dot(prevTrunk, prevTrunk) - trunk2)).xzy;
+    return treeWindTrunkBend(treeWindTrunkOfTree(instPos, trunkScale), localPos.y, instScale);
+}
+
+// A vertex's OWN SWAY this frame (its branch, its leaf: everything but the trunk's bend, 0 for payload 0); outPrevDelta =
+// last frame's sway minus it. worldNormal = the vertex normal in world space (the leaf flutter).
+vec3 treeWindSway(TreeWind tree, vec3 instPos, vec3 worldNormal, uint payload, out vec3 outPrevDelta)
+{
+    vec3 offset = vec3(0.0);
+    outPrevDelta = vec3(0.0);
     if (payload == 0u)
         return offset;
 
@@ -227,11 +238,19 @@ vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale,
     return offset;
 }
 
-// The whole wind for a vertex of a caller WITHOUT a record (the far voxel trees: a few vertices a tree): the tree's wind
-// worked out here, per vertex.
-vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, vec2 scale, out vec3 outPrevDelta)
+// The world-space offset of a tree vertex this frame; outPrevDelta = last frame's offset minus it (the motion vectors).
+// outSway = the offset WITHOUT the trunk's bend (the shadow casters bend by the trunk alone, treeWindTrunkOffset).
+// localPos = the mesh-local position. The sway comes FIRST and the trunk's part last: nothing of the trunk is held across
+// the sway, and the caller's copy of the sway costs no second trunk term.
+vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta, out vec3 outSway)
 {
-    return treeWindVertex(treeWindOfTree(instPos, instScale, scale), localPos, instPos, instScale, worldNormal, payload, outPrevDelta);
+    outSway = treeWindSway(tree, instPos, worldNormal, payload, outPrevDelta);
+
+    // TRUNK: the tree's vector x the vertex's share.
+    vec3 trunkPrevDelta;
+    const vec3 trunkBend = treeWindTrunkVertex(tree.trunk, tree.trunkDelta, localPos.y, instScale, trunkPrevDelta);
+    outPrevDelta += trunkPrevDelta;
+    return outSway + trunkBend;
 }
 
 #endif

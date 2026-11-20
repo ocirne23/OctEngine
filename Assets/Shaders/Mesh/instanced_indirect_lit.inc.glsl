@@ -118,8 +118,8 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 #error "LIT_RT_LIGHT_SHADOWS must be defined by the pipeline"
 #endif
 
-// Terrain data cascades + FFT ocean maps: underwater sunlight (caustics) for EVERY lit material, and the terrain
-// variant's procedural colouring. Both bindings exist set-wide (StaticMeshGraphicsPipeline::buildPipelineLayout).
+// Terrain data cascades + FFT ocean maps: the underwater sunlight of every lit material (absorption; the caustics on the
+// terrain ground alone, LIT_CAUSTICS), and the terrain variant's procedural colouring. Both bindings exist set-wide (StaticMeshGraphicsPipeline::buildPipelineLayout).
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
 #include "canopy_occlusion.inc.glsl" // the trees' canopy map: the ambient's sky occlusion (computeLitColor)
@@ -285,9 +285,17 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
 #ifndef LIT_NO_UNDERWATER
-	// Underwater: caustic focus + Beer-Lambert absorption (underwater_light.inc.glsl).
+	// Underwater (underwater_light.inc.glsl): the Beer-Lambert absorption on every material, and the CAUSTIC focus on the
+	// terrain ground alone (LIT_CAUSTICS, an includer's define). The pattern is the surface's fold field projected down the
+	// sun's direction with no occlusion: right on the open seabed, wrong on a mesh (under a deck, inside a hull, on a wall).
 	if (depthBelow > 0.0)
+	{
+#ifdef LIT_CAUSTICS
 		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
+#else
+		lightRadiance *= underwaterSunAbsorption(depthBelow);
+#endif
+	}
 #endif
 #ifdef LEAF_SPEC_NORMAL
 	// A LEAF's sun specular from its own, more CURVED normal (g_leafSpecN): the diffuse keeps N, the highlight sweeps a

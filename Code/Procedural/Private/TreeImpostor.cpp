@@ -756,32 +756,37 @@ namespace Procedural
 		}
 	}
 
-	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out)
+	void treeVoxelBoxMesh(const TreeBillboardBox& box, uint32 slices, TreeMesh& out)
 	{
 		out = {};
+		// RINGS of four corners up the box, `slices` + 1 of them: the wind's trunk bend grows with the height SQUARED
+		// (tree_wind.inc.glsl), and a vertex shader bends the box only at its vertices. Two rings (1 slice) shear it straight -
+		// half the top's offset at mid height, where the mesh has a quarter; 4 slices are within 1/64 of the top's offset.
+		const uint32 SLICES = glm::max(slices, 1u);
 		const glm::vec3 size = box.max - box.min;
-		for (uint32 k = 0; k < 8; ++k)
+		for (uint32 r = 0; r <= SLICES; ++r)
+			for (uint32 c = 0; c < 4; ++c)
+			{
+				const glm::vec3 grid((float)(c & 1u), (float)r / (float)SLICES, (float)(c >> 1));
+				out.positions.push_back(box.min + grid * size);
+				out.normals.push_back(grid);
+				out.tangents.push_back(size);
+				out.bitangents.push_back(glm::vec3(0.0f, 0.0f, 1.0f));
+				out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_VOXEL_BOX_WIND_CODE));
+				out.bones.push_back(0);
+			}
+		// Vertex = ring x 4 + (x | z << 1); vertex 0 is the box's minimum corner (createVoxelMaterial reads the box from it).
+		// Counter-clockwise seen from outside (the engine's front faces).
+		const auto vertex = [](uint32 x, uint32 ring, uint32 z) { return ring * 4u + (x | (z << 1)); };
+		const auto quad = [&out](uint32 a, uint32 b, uint32 c, uint32 d) { out.indices.insert(out.indices.end(), { a, b, c, a, c, d }); };
+		quad(vertex(0, 0, 0), vertex(1, 0, 0), vertex(1, 0, 1), vertex(0, 0, 1));                               // -Y
+		quad(vertex(0, SLICES, 0), vertex(0, SLICES, 1), vertex(1, SLICES, 1), vertex(1, SLICES, 0));           // +Y
+		for (uint32 r = 0; r < SLICES; ++r)
 		{
-			const glm::vec3 grid((float)(k & 1u), (float)((k >> 1) & 1u), (float)(k >> 2));
-			out.positions.push_back(box.min + grid * size);
-			out.normals.push_back(grid);
-			out.tangents.push_back(size);
-			out.bitangents.push_back(glm::vec3(0.0f, 0.0f, 1.0f));
-			out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_VOXEL_BOX_WIND_CODE));
-			out.bones.push_back(0);
-		}
-		// Corner k = x | y << 1 | z << 2. Counter-clockwise seen from outside (the engine's front faces).
-		const uint32 faces[6][4] = {
-			{ 0, 4, 6, 2 }, // -X
-			{ 1, 3, 7, 5 }, // +X
-			{ 0, 1, 5, 4 }, // -Y
-			{ 2, 6, 7, 3 }, // +Y
-			{ 0, 2, 3, 1 }, // -Z
-			{ 4, 5, 7, 6 }, // +Z
-		};
-		for (const auto& f : faces)
-		{
-			out.indices.insert(out.indices.end(), { f[0], f[1], f[2], f[0], f[2], f[3] });
+			quad(vertex(0, r, 0), vertex(0, r, 1), vertex(0, r + 1, 1), vertex(0, r + 1, 0)); // -X
+			quad(vertex(1, r, 0), vertex(1, r + 1, 0), vertex(1, r + 1, 1), vertex(1, r, 1)); // +X
+			quad(vertex(0, r, 0), vertex(0, r + 1, 0), vertex(1, r + 1, 0), vertex(1, r, 0)); // -Z
+			quad(vertex(0, r, 1), vertex(1, r, 1), vertex(1, r + 1, 1), vertex(0, r + 1, 1)); // +Z
 		}
 	}
 

@@ -38,7 +38,9 @@ public:
     };
     struct BucketGpu { uint32 indexCount = 0; uint32 firstIndex = 0; int32 vertexOffset = 0; uint32 pad = 0; };
     // 32 B: the yaw only (a tree turns about up), the bucket and the index in it in one word (bucket << 26 | index).
-    struct InstanceGpu { glm::vec4 posScale; float yaw; uint32 materialMesh; float wind; uint32 bucketLocal; };
+    // wind: the view's list = the tree's trunk vector this frame, two halves (the cull works it out once per tree); the
+    // shadow casters' list = the trunk-bend scale, a float's bits.
+    struct InstanceGpu { glm::vec4 posScale; float yaw; uint32 materialMesh; uint32 wind; uint32 bucketLocal; };
     static_assert(sizeof(InstanceGpu) == 32);
 
     struct RecordParams

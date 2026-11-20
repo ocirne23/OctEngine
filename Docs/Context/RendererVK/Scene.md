@@ -305,8 +305,19 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   "The voxel tier"): a `RenderTreeSet::Type::voxel` record is the tree in the MAIN pass past its type's band
   (`treeCullMainPiece` in tree_cull.inc.glsl: slot 2; its material carries the band's fade-in);
   the shadows, the rain shelter, GI and RT take the shadow billboard.
-  * The mesh is the variant's GRID BOX (8 corners: normal = the corner's grid coordinate, tangent = the box size,
-    `|tangent w|` 2.5 = the trunk bend). The `TREE_VOXEL` VS hands on the camera in grid space, the face point's grid
+  * The mesh is the variant's GRID BOX in 5 RINGS of 4 corners up its height (normal = the vertex's grid coordinate,
+    tangent = the box size, `|tangent w|` 2.5 = the trunk bend). **THE TRUNK'S BEND MATCHES THE MESH'S** (the two tiers
+    crossfade): the bend grows with the height squared, so the rings follow the curve (a box of 8 corners sheared
+    straight: half the top's offset at mid height, where the mesh has a quarter), and the camera the VS hands on is
+    SHEARED BACK per vertex (`treeVoxelBoxShear`: camera - trunk x h (2 hc - h) / ref², h = the vertex's height, hc
+    = the camera's over the tree's base; in world space, before the camera's one transform into the tree's axes - a
+    tree turns about up only). The grid itself is not bent and the FS marches a straight ray: with the
+    plain camera a ray that looks down into the crown drew its hit at the ENTRY height's offset; the shear about the
+    entry height leaves trunk x (the height between entry and hit / ref)². **Only this tier has the rings and the
+    shear** (it is the one beside the meshes): the far voxel trees draw `Type::voxelFarMesh`, the same box with 8
+    corners, with the plain camera. The VS's wind is the trunk's bend alone, read from the tree's record with no
+    record test (`treeWindTrunkVertex`: every instance of the pipeline is a tree record). The `TREE_VOXEL` VS hands on
+    that camera in grid space (not flat), the face point's grid
     coordinate, the instance rotation, and - everything that is ONE value per tree, worked out per box vertex and not
     per pixel (`treeVoxelBoxInterface`, tree_voxel_box.inc.glsl, shared with `tree_voxel_far.vs.glsl`) - the box's
     world size + the cube root of its volume (a level's step = that / the level's voxels), the SUN's direction in grid
@@ -400,15 +411,21 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     changes per frame; off: `recordClear` empties the draws):
     * CULL, a workgroup per chunk: per record its tree exactly as `splatRecordPlant` / Procedural `expandChunk` place it
       (variant, scale, yaw from its seed; its chunk's ground grid), its variant's set type -> `FarTypeGpu` (bucket = its
-      voxel mesh, material, trunk-bend scale, box centre + radius at scale 1; built in `initTreeSetTypes`), the end
+      far voxel mesh - `Type::voxelFarMesh`, the box with 8 corners - material, trunk-bend scale, box centre + radius at
+      scale 1; built in `initTreeSetTypes`), the end
       distance and the frustum on the box sphere, appended with its bucket and its index in it (`MAX_INSTANCES` 2^20:
       ~200 trees per 256 m chunk and a quarter of the ring in view make ~1M at 20 km - 262144 overflowed at ~9 km). The
       chunks are listed NEAREST FIRST, so past the cap the farthest drop (in the table's order the overflow hit trees
       anywhere far out, different ones every frame). No bushes (`Type::farRing` off), no rocks (no voxel tier).
+      **A kept tree's WIND is worked out here, once** (`treeWindTrunkOfTree`: the gusts, the trunk's sines, the hash, the
+      fade) and goes into its record as the trunk vector, two halves; the VS only scales it by the vertex's height
+      (`treeWindTrunkBend`). Per vertex it was the larger part of the VS. No motion vector for that sway: past the near
+      set it is a few hundredths of a pixel a frame.
     * PREFIX, one thread: each bucket's first instance and its `VkDrawIndexedIndirectCommand` (`MAX_BUCKETS` 64, the
       unused ones 0 instances). SCATTER: each record into its bucket's range.
     * The draw: `StaticMeshGraphicsPipeline`'s far voxel pipeline (the main layout, the box's MeshVertex at binding 0, the
-      32 B record instance-rate at binding 1 - position + scale, the yaw, material, trunk-bend scale, bucket << 26 | index
+      32 B record instance-rate at binding 1 - position + scale, the yaw, material, the trunk vector (the shadow casters'
+      list: the trunk-bend scale), bucket << 26 | index
       - the voxel tier's FS), `drawIndexedIndirect` over the 64 buckets right after
       the near voxel list. Every buffer reaches the passes as a device address; the UBO is the set's one binding.
     * **THE FAR SHADOW CASTERS**: the same chunks within the cascades' reach (horizontally from the scene focus: the
@@ -503,7 +520,7 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
 * **A swaying point takes its sun shadow at its position BEFORE THE SWAY.** The shadow casters bend by the trunk alone
   (`treeWindTrunkOffset`), so a branch or a leaf that sways would move through its own tree's shadow. The lit VS
   (`instanced_indirect.vs.glsl`, every variant but the voxel box) outputs `out_windSway` at location 10: the wind's offset
-  less the trunk's part (`treeWindTrunkPart`) - the branch sway + the leaf flutter, 0 for a vertex with no wind payload.
+  without the trunk's part (`treeWindVertex`'s `outSway`) - the branch sway + the leaf flutter, 0 for a vertex with no wind payload.
   `sunShadowFirst` (the near bark on LitOpaque, LitMasked) and `sunShadowFirstTree` (LitTree) look the shadow up at
   `pos - in_windSway`. **The trunk's bend stays in the lookup**: the casters have it too. Nothing else uses the rest
   position (the shading, the fog, the GI stay on the swayed point).

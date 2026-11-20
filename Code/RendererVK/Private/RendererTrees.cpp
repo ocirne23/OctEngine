@@ -308,7 +308,8 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         const TreeInstanceRep& voxel = types[t].voxel;
         if (!types[t].farRing || gpuTypes[t].voxel.meshMaterial == TREE_RECORD_ABSENT || !voxel.mesh)
             continue;
-        const uint16 meshIdx = voxel.mesh->m_meshIdx;
+        const RenderMesh* farMesh = types[t].voxelFarMesh && types[t].voxelFarMesh->isValid() ? types[t].voxelFarMesh : voxel.mesh;
+        const uint16 meshIdx = farMesh->m_meshIdx;
         uint32 bucket = UINT32_MAX;
         for (uint32 b = 0; b < (uint32)set.farBuckets.size(); ++b)
             if (set.farBuckets[b].pad == meshIdx)
@@ -323,10 +324,10 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         }
         TreeVoxelFarPipeline::FarTypeGpu& far = set.farTypes[t];
         far.bucket = bucket;
-        far.materialMesh = gpuTypes[t].voxel.meshMaterial;
+        far.materialMesh = (gpuTypes[t].voxel.meshMaterial & 0xFFFF0000u) | meshIdx; // the voxel tier's material on the far mesh
         far.wind = types[t].windTrunk;
-        far.centreY = voxel.mesh->getBounds().pos.y;
-        far.radius = voxel.mesh->getBounds().radius;
+        far.centreY = farMesh->getBounds().pos.y;
+        far.radius = farMesh->getBounds().radius;
 
         // THE FAR SHADOW CASTERS: the same trees as their SHADOW BILLBOARD (its own buckets) with its mask.
         const TreeInstanceRep& billboard = types[t].shadowBillboard;

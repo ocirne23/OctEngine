@@ -421,8 +421,10 @@ tangent's w (RenderMeshData: texCoords.z in (1, 2) = a tree mesh vertex's payloa
 Procedural `TREE_VOXEL_BOX_WIND_CODE`), which means "tree" too; 1 = no wind). The layers:
 
 * **Trunk** - lean ("Bend" x speed²) + sway, x (local height / "Reference height (m)")², the vertex dropping so the
-  tree keeps its length. From the mesh-local height alone, so the mesh, the voxel box and the shadow billboard bend
-  alike (the crossfade stays aligned). The only layer of the voxel box and of the shadow pass.
+  tree keeps its length. From the mesh-local height alone, so the mesh and the voxel box bend alike (the crossfade
+  stays aligned: the box has rings up its height for the curve, and its march ray takes the bend as a shear - "THE
+  TRUNK'S BEND MATCHES THE MESH'S" in [Scene.md](Scene.md)). The shadow billboard's cards have no vertex between their
+  bottom and top: they shear straight. The only layer of the voxel box and of the shadow pass.
 * **Branch** - meshes, faded out between "Branch fade start (m)" and "Branch fade end (m)" (40 / 70 m): the module
   bends with the placement's phase, the level-1 sub-branch on top with its own (both weights 0 at their root:
   continuous joints).
@@ -453,8 +455,16 @@ trees work from the wind VECTOR (the direction x the speed is the vector: no nor
 * **A vertex** (`treeWindVertex`) scales the trunk vector by its height's share (`treeWindTrunkShare`: (height / ref
   height)², and the drop from the vector's squared length) and adds its branch's sway (`treeWindBranch`, 3 sines a
   time) x the amplitude - no gust, no trunk sine, no distance and no fade per vertex. The leaf flutter (TIP vertices
-  of the card species) is the one layer that still takes the tree's distance per vertex.
-* The far voxel trees (8 vertices a tree) and a node that is no record call `treeWindOfTree` per vertex (`treeWind`).
+  of the card species) is the one layer that still takes the tree's distance per vertex. **The sway (`treeWindSway`:
+  branch + leaf) comes FIRST and the trunk's part last**, and the sway alone goes out as `outSway` (the sun shadow's
+  lookup, Scene.md): nothing of the trunk is held across the sway (the register counts: "Statement order" in
+  [Shaders.md](Shaders.md)).
+* **The voxel box takes the trunk's bend alone** (`treeWindTrunkVertex`, with the motion vector; `treeWindTrunkBend`
+  without): the near tier from its tree's record, with no record test and no per-vertex wind path (every instance of
+  LitTreeVoxel is a tree record); the far voxel trees from the trunk vector their cull works out once per tree
+  (`treeWindTrunkOfTree`, tree_voxel_far.cs.glsl), with no motion vector.
+* A node with a wind payload that is no record calls `treeWindOfTree` per vertex; the shadow casters work the trunk
+  vector out per vertex (`treeWindTrunkOffset`).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond
 "Trunk fade end (m)" (3 km, a 100 m band) the trunk vector and the amplitude are zero. **The TLAS stays static**: RT
 shadows / GI / reflections see unswayed trees.

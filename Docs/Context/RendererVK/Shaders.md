@@ -111,7 +111,11 @@ calls `reloadShaders()`.
   never takes it:
   * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter and the tree voxels (a runtime flag kept the whole
     upsample compiled).
-  * `LIT_NO_UNDERWATER` - no water-level fetch, no caustics: the tree leaves and voxels.
+  * `LIT_NO_UNDERWATER` - no water-level fetch, no underwater sun at all: the tree leaves and voxels.
+  * `LIT_CAUSTICS` (the one define that compiles a path IN) - the underwater CAUSTIC pattern
+    (`underwaterSunTransmittance`): the terrain ground only. Every other material under the water takes the
+    Beer-Lambert absorption alone (`underwaterSunAbsorption`, no ocean-map taps). The pattern is the surface's fold
+    field projected down the sun's direction with no occlusion, which is right on the open seabed and wrong on a mesh.
   * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
     the light loop, the diffuse takes no (1 - metalness). The two tree shaders.
   * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided
@@ -141,10 +145,17 @@ calls `reloadShaders()`.
   DISTANCE to the tree's origin (one flat float: `treeDistanceFaded`), not the origin for every pixel to measure.
 * **Statement order sets a vertex shader's registers.** In instanced_indirect.vs.glsl the wind is worked out BEFORE the
   vertex's own transform: the transformed position and normal held across the wind were 15 registers of the generic
-  lit VS (63 -> 48; unlit 62 -> 48, tree 48 -> 40). The voxel box is the exception (its transform first: 40, the other
-  way 48), and its count follows its OUTPUTS: with the gust path compiled out its code shrank 40 % and its registers
-  went UP (45..47), so that path stays. Same rule in a helper: `treeWindOfTree` evaluates the gusts first and returns
-  no early zero, so nothing of the tree is held across them (the main cull 53 -> 50).
+  lit VS (63 -> 48; unlit 62 -> 48, tree 48 -> 40). Same rule in a helper: `treeWindOfTree` evaluates the gusts first
+  and returns no early zero, so nothing of the tree is held across them (the main cull 53 -> 50). And inside
+  `treeWindVertex`: the vertex's own sway (`treeWindSway`) first, the trunk's part last. The sway output for the shadow
+  lookup (`out_windSway`) as "offset minus the trunk's part" was 45 registers in the tree VS; in this order it is 44,
+  the unlit VS 46 and 30.
+* **The voxel box's two vertex shaders hold no wind path at all** (ALU, not registers: binary size is the measure). The
+  near tier reads the trunk's two fields from its tree's record (no record test, no per-vertex `treeWindOfTree`
+  fallback): 6.1 -> 3.6 KB, 40 registers with the sheared camera. The far voxel trees take the trunk vector their cull
+  works out once per tree: 7.9 -> 2.7 KB, 37 registers (the cull 6.1 -> 7.6 KB, once per tree and not per vertex).
+  `treeVoxelBoxInterface` takes ONE reciprocal of the box's world size for the camera and the sun. Still per vertex
+  there, and one value per tree: the cube root of the box's volume (a `pow`) and `exp2` of "Voxel LOD bias".
 * **A march whose loop sets the shader's register count reads its ray from the interpolants at each step.** An
   interpolant costs no register between two reads; a start point and a direction worked out before the loop are held
   across it. The voxel shadow caster (`shadow_depth.fs.glsl`, 40 registers) scales `in_voxelGrid + in_voxelDirG * t` to
@@ -273,13 +284,14 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 **`Tools/fp16conv.ps1 <shader>.glsl`** (every OpFConvert by source line - glslang never warns about an implicit
 `float16_t -> float` widening).
 
-**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0), tree FS 64/16
-(its VS 40/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 44/0; the voxel
-shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
+**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0, the unlit
+VS 30/0 and 46/0), tree FS 64/16
+(its VS 44/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 37/0; the voxel
+shadow caster FS 40/0), the shadow VS 31/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
-cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
-64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 80/32,
-river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 62, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+cull 46/0, the shadow cull 39/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
+64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
+river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 62, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its

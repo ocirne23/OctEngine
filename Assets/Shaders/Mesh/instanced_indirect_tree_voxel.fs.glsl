@@ -24,7 +24,7 @@
 layout (location = 0) in vec4 in_posU;                 // xyz = the box face's world position (with the trunk bend)
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta;       // the wind's motion (instanced_indirect.vs.glsl)
-layout (location = 5) in flat vec3 in_voxelCam;        // the camera in grid space
+layout (location = 5) in vec3 in_voxelCam;             // the camera in grid space, sheared back by the trunk's bend (tree_voxel_box.inc.glsl)
 layout (location = 6) in vec3 in_voxelGrid;            // the face point in grid space
 layout (location = 7) in flat vec4 in_voxelQuat;       // grid (tree) axes -> world
 layout (location = 8) in flat vec4 in_voxelWorldSize;  // xyz = the box in world metres, w = the cube root of its volume

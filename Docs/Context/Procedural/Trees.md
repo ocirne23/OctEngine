@@ -551,7 +551,9 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   bindless id** (its first two 4 x 4 blocks = the id's low and high byte, written at upload: a BC4 block of two equal
   endpoints decodes exactly): the shadow casters get ONE texture index (the cull's alpha index), and both passes find
   the index through it (`voxelGrid`). It takes the band's fade-in in `applyFadeBands`; the box mesh
-  (`treeVoxelBoxMesh`) has no BLAS.
+  (`treeVoxelBoxMesh`: `TREE_VOXEL_BOX_SLICES` + 1 = 5 rings of 4 corners up the box, so the wind's trunk bend follows its
+  curve as the mesh does) has no BLAS. A second box per variant with 8 corners (`voxelFarBox`, `Type::voxelFarMesh`) is
+  the far voxel trees': up to a million boxes, none beside a mesh.
 * Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel sharp cells" (on;
   `u_foliage_voxelSharp`: each voxel covers its OWN cell - a sample reads the nearest voxel's texel, ONE fetch, no blend,
   in every opacity tap: the view, the self-shadow, the mesh leaves' self-shadow and the shadow casters. Off = the

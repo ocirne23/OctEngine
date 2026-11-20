@@ -18,6 +18,7 @@
 #include "shared.inc.glsl"
 #define TREE_RECORD_GROUND
 #include "tree_record.inc.glsl"
+#include "tree_wind.inc.glsl" // the cull: a tree's trunk vector, once per tree (treeWindTrunkOfTree)
 
 layout (local_size_x = 64) in;
 
@@ -59,8 +60,9 @@ struct FarType
     float pad0;
 };
 struct FarBucket { uint indexCount; uint firstIndex; int vertexOffset; uint pad; };
-// bucketLocal = bucket << 26 | its index. FAR_SHADOW: materialMesh = the alpha-mask texture | the cascade mask << 16.
-struct FarInstance { vec4 posScale; float yaw; uint materialMesh; float wind; uint bucketLocal; };
+// bucketLocal = bucket << 26 | its index. wind = the tree's TRUNK VECTOR this frame, two halves (packHalf2x16).
+// FAR_SHADOW: materialMesh = the alpha-mask texture | the cascade mask << 16, wind = the trunk-bend scale (a float's bits).
+struct FarInstance { vec4 posScale; float yaw; uint materialMesh; uint wind; uint bucketLocal; };
 
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { RecordType t[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ChunkList { FarChunk c[]; };
@@ -194,7 +196,14 @@ void main()
         if (idx >= pc.maxInstances)
             continue;
         const uint local = atomicAdd(pc.state.v[1u + bucket], 1u);
-        pc.appended.i[idx] = FarInstance(vec4(base, scale), yaw, data, farType.wind, bucket << 26u | local);
+#ifdef FAR_SHADOW
+        const uint wind = floatBitsToUint(farType.wind); // the billboard's VS works the bend out itself (shadow_depth.vs.glsl)
+#else
+        // THE TREE'S WIND ONCE, HERE, for all the vertices of its box (the gusts, the trunk's sines, the hash, the fade:
+        // per vertex they were the larger part of tree_voxel_far.vs.glsl). Two halves: a millimetre at a metre of bend.
+        const uint wind = packHalf2x16(treeWindTrunkOfTree(base, farType.wind));
+#endif
+        pc.appended.i[idx] = FarInstance(vec4(base, scale), yaw, data, wind, bucket << 26u | local);
     }
 #elif FAR_PASS == 1
     if (gl_LocalInvocationID.x != 0u)

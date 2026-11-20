@@ -20,12 +20,12 @@ layout (location = 0) in vec4 in_posU;    // MeshVertex: the box corner, w = uv.
 layout (location = 1) in vec4 in_normalV; // the corner's GRID coordinate (Procedural treeVoxelBoxMesh)
 layout (location = 2) in vec4 in_tangent; // xyz = the box size, w = the trunk-bend code
 layout (location = 4) in vec4 inst_posScale;
-layout (location = 5) in uvec4 inst_data;   // the yaw, meshIdx | materialIdx << 16, the trunk-bend scale (floats as bits), bucket | index
+layout (location = 5) in uvec4 inst_data;   // the yaw (a float's bits), meshIdx | materialIdx << 16, the tree's trunk vector (two halves), bucket | index
 
 layout (location = 0) out vec4 out_posU;
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 layout (location = 4) out vec3 out_prevWorldDelta;
-layout (location = 5) out flat vec3 out_voxelCam;
+layout (location = 5) out vec3 out_voxelCam;
 layout (location = 6) out vec3 out_voxelGrid;
 layout (location = 7) out flat vec4 out_voxelQuat;
 layout (location = 8) out flat vec4 out_voxelWorldSize;
@@ -42,20 +42,23 @@ void main()
     const float instScale = inst_posScale.w;
     const float yaw = uintBitsToFloat(inst_data.x);
     const vec4 inst_quat = vec4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)); // about up
-    vec3 pos = quat_transform(in_posU.xyz * instScale, inst_quat) + instPos;
-    vec3 windPrevDelta = vec3(0.0);
-    uint windPayload;
-    if (treeWindPayload(in_tangent.w, windPayload))
-        pos += treeWind(in_posU.xyz, instPos, instScale, vec3(0.0, 1.0, 0.0), windPayload, vec2(uintBitsToFloat(inst_data.z), 1.0), windPrevDelta);
+    // THE WIND: the trunk's bend only, x the tree's trunk vector the cull worked out once (tree_voxel_far.cs.glsl) - no
+    // gust, no sine and no fade per vertex. NO MOTION VECTOR for it: these trees stand past the near set (hundreds of
+    // metres), where a trunk's sway is a few hundredths of a pixel a frame.
+    const vec3 pos = quat_transform(in_posU.xyz * instScale, inst_quat) + instPos
+                   + treeWindTrunkBend(unpackHalf2x16(inst_data.z), in_posU.y, instScale);
 
-    out_posU = vec4(pos, in_posU.w);
+    out_posU = vec4(pos, 0.0); // the box has no texture coordinate
     out_meshIdxMaterialIdx = inst_data.y;
-    out_prevWorldDelta = windPrevDelta; // the trees never move
+    out_prevWorldDelta = vec3(0.0); // the trees never move
 
     out_voxelGrid = in_normalV.xyz;
     out_voxelQuat = inst_quat;
-    treeVoxelBoxInterface(in_posU.xyz, in_normalV.xyz, in_tangent.xyz, instPos, instScale, inst_quat, out_voxelCam, out_voxelWorldSize, out_voxelSunLod);
-    out_treeDistance = distance(u_viewPos, instPos);
+    // The camera as it is: no shear for the trunk's bend (instanced_indirect.vs.glsl has it: only that tier crossfades
+    // with the meshes).
+    const vec3 toCam = u_viewPos - instPos;
+    treeVoxelBoxInterface(in_posU.xyz, in_normalV.xyz, in_tangent.xyz, toCam, instScale, inst_quat, out_voxelCam, out_voxelWorldSize, out_voxelSunLod);
+    out_treeDistance = length(toCam);
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w;

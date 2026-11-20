@@ -33,6 +33,8 @@ public:
         // The VOXEL tier (LitTreeVoxel; none = mesh nullptr: the meshes draw at every distance): past farDistance it takes the meshes' place in the MAIN
         // pass, on a material with the band's fade-IN.
         Rep voxel;
+        // The FAR VOXEL TREES' mesh for this type's voxel tier, on the voxel material (nullptr = voxel.mesh): the same box with fewer vertices.
+        const RenderMesh* voxelFarMesh = nullptr;
         float farDistance = 0.0f; // the mesh -> voxels switch distance (m); 0 = always the mesh
         float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
         // The SHADOW BILLBOARD (none = mesh nullptr: the meshes cast): crossed cards on a MATERIAL_FLAG_BILLBOARD material - the tree's sun-shadow caster

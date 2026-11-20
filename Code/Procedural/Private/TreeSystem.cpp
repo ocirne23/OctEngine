@@ -842,6 +842,8 @@ namespace Procedural
 				meshes.voxelMaterial = createVoxelMaterial(load.voxelTextures[v], load.voxelIndex[v], load.voxelBoxes[v], meshes.voxelIndex,
 					oc::format("TreeVoxel/{}_{}", name, v).c_str(), RendererVKLayout::MATERIAL_FLAG_LEAF);
 				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
+				if (v < load.voxelFarBoxes.size())
+					meshes.voxelFarBox = uploadTreeMesh(renderer, load.voxelFarBoxes[v], false);
 			}
 			// The crossfade's fade-out copy of the bark material (bands set by applyFadeBands).
 			species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
@@ -946,6 +948,7 @@ namespace Procedural
 			out.voxelTextures.resize(variants.size());
 			out.voxelIndex.resize(variants.size());
 			out.voxelBoxes.resize(variants.size());
+			out.voxelFarBoxes.resize(variants.size());
 			for (size_t v = 0; v < variants.size(); ++v)
 			{
 				const oc::string prefix = oc::format("{}_treevoxel{}r{}_", name, v, res);
@@ -975,7 +978,9 @@ namespace Procedural
 						100.0f * (float)bricks / (float)glm::max(bricksTotal, 1u),
 						(float)(texture.albedo[0].size() + texture.normal[0].size() + index.albedo[0].size()) / (1024.0f * 1024.0f)));
 				}
-				treeVoxelBoxMesh(treeVoxelBox(variants[v], res), out.voxelBoxes[v]);
+				const TreeBillboardBox box = treeVoxelBox(variants[v], res);
+				treeVoxelBoxMesh(box, TREE_VOXEL_BOX_SLICES, out.voxelBoxes[v]);
+				treeVoxelBoxMesh(box, 1, out.voxelFarBoxes[v]);
 			}
 		}
 	}
@@ -1009,6 +1014,7 @@ namespace Procedural
 					&& variant < species.variantLeafFadeMaterials.size() && species.variantLeafFadeMaterials[variant].isValid())
 				{
 					type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
+					type.voxelFarMesh = meshes.voxelFarBox.isValid() ? &meshes.voxelFarBox : nullptr;
 					type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 					type.leavesFade = { leaves, species.variantLeafFadeMaterials[variant].index(), RendererVKLayout::EPipelineIndex::LitTree };
 					type.farDistance = farDistance(species);

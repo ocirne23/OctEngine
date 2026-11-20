@@ -1,6 +1,7 @@
 // Sunlight transmittance through the wavy water surface, for points BELOW the local water level. Shared by the froxel fog
-// (vol_scatter.cs.glsl: volumetric light shafts) and the lit surface pass (instanced_indirect.fs.glsl: caustics on
-// underwater geometry). Two terms, both from existing data:
+// (vol_scatter.cs.glsl: volumetric light shafts) and the lit surface pass (instanced_indirect_lit.inc.glsl: the caustics
+// on the TERRAIN GROUND alone - LIT_CAUSTICS - and the absorption on every underwater surface). Two terms, both from
+// existing data:
 //   - CAUSTIC FOCUS: the FFT field's fold Jacobian where the sun ray crossed the surface (entryXZ = worldXZ + sunDir.xz /
 //     sunDir.y * depth). Converging wavefronts (J -> 0) focus light into bright moving filaments; diverging ones dim it.
 //     The whitecap foam's Jacobian terms, so the pattern matches the drawn surface.
@@ -65,6 +66,13 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
     return rawY * surfaceW;
 }
 
+// The BEER-LAMBERT term alone: the sun through `depth` metres of water above the point (its path is longer by 1 / sun.y,
+// u_fog_causticSunStep.z). What a lit surface that takes no caustic pattern uses (every material but the terrain ground).
+vec3 underwaterSunAbsorption(float depth)
+{
+    return exp(-u_ocean_absorption * (depth * u_fog_causticSunStep.z));
+}
+
 // worldXZ / depthBelow locate the point below the water; depthBelow is the LIVE depth (path length + entry point).
 // footprint = world size of one receiver sample (froxel width for fog, ~0 for surface pixels): it floors the mip so the
 // pattern never aliases. reach (>= 1) divides the depth the ATTENUATION terms see (absorption, contrast fade, defocus), so
@@ -75,7 +83,6 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
 {
     // u_fog_causticSunStep: xy = sun.xz / sy, z = 1 / sy, sy = max(sun.y, 0.08) (grazing sun: caps the path-length blow-up)
     const float dEff = depthBelow / max(reach, 1.0);
-    const float pathLen = dEff * u_fog_causticSunStep.z;
 
     float focus = 1.0;
     {
@@ -109,7 +116,7 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         focus = pow(max(1.0 / max(J, 0.125), 0.02), 1.5 * u_fog_causticStrength * depthFade * shoreFade);
     }
 
-    return exp(-u_ocean_absorption * pathLen) * focus;
+    return underwaterSunAbsorption(dEff) * focus;
 }
 
 #endif
