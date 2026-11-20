@@ -55,10 +55,9 @@ void Settings::registerOcean(OceanSettings& s)
 	// Sharper sun glints: sharpness biases the shading-normal mips finer (some shimmer past ~1.5),
 	// filtering scales the roughness-widening variance terms (0 = raw sharp GGX, 1 = fully filtered).
 	Tweak::floatVar("Ocean/Shading", "Glint filtering", &s.glintFilter, 0.0f, 2.0f, 0.05f);
-	// The capillary band below the finest cascade: slope variance the FFT can never carry, added to
-	// the microfacet roughness at every distance. Without it the LEAN variance is 0 at mip 0 and the
-	// near water falls onto the 0.02 roughness clamp - a sky mirror, the "plastic" look. Raise it for
-	// a duller, wetter near field; 0 restores the mirror.
+	// The capillary band below the last detail octave: slope variance nothing carries, added to the
+	// microfacet roughness at every distance. Raise it for a duller, wetter near field; 0 = a mirror
+	// where the detail is resolved.
 	Tweak::floatVar("Ocean/Shading", "Micro roughness", &s.microRoughness, 0.0f, 0.05f, 0.0005f);
 	// The shading slope's fold-over soft limit. It also compresses the steep crest faces, so LOWER =
 	// sharper crests (and creases at real folds), 0 = no limit at all.
@@ -66,15 +65,31 @@ void Settings::registerOcean(OceanSettings& s)
 	// Sub-band detail: the finest cascade's own gradients re-sampled at "Detail scale" x its patch
 	// size, in a domain rotated by "Detail rotation" so the borrowed field cannot line up with the
 	// cascade it came from. Shading slope only - the geometry and the buoyancy mirror never see it.
-	// It fades out past "Detail fade" because this band is absent from the LEAN moments, so what the
-	// mips filter away would just disappear instead of turning into roughness.
+	// "Detail octaves": each octave repeats the step (scale and rotation) once more; what the mips
+	// filter out of an octave turns into roughness. "Detail fade" is the terrain film's copy only (one
+	// octave, no roughness hand-over).
 	Tweak::floatVar("Ocean/Shading", "Detail strength", &s.detailStrength, 0.0f, 2.0f, 0.01f);
 	Tweak::floatVar("Ocean/Shading", "Detail scale", &s.detailScale, 0.02f, 1.0f, 0.01f);
+	Tweak::intVar("Ocean/Shading", "Detail octaves", &s.detailOctaves, 1, 3, 1.0f);
 	Tweak::floatVar("Ocean/Shading", "Detail fade (m)", &s.detailFadeDist, 5.0f, 500.0f, 5.0f);
 	Tweak::floatVar("Ocean/Shading", "Detail rotation (rad)", &s.detailRotation, 0.0f, 3.14159265f, 0.01f);
-	// Crest SSS (Sea of Thieves-style): sun shining through back-lit crests, scaled by wave height.
-	Tweak::floatVar("Ocean/Shading", "SSS strength", &s.sssStrength, 0.01f, 4.0f, 0.01f);
+	// Crest SSS: on a face turned from the sun, the sun's light comes through the wave - the scatter
+	// colour, lost over the water between the point and where the sun's ray leaves the wave ("SSS
+	// falloff" on top of the absorption: lower = a wider band under the crest), toward the viewer in a
+	// forward lobe ("SSS power").
+	Tweak::floatVar("Ocean/Shading", "SSS strength", &s.sssStrength, 0.0f, 16.0f, 0.05f);
 	Tweak::floatVar("Ocean/Shading", "SSS power", &s.sssPower, 1.0f, 16.0f, 0.1f);
+	Tweak::floatVar("Ocean/Shading", "SSS falloff (1/m)", &s.sssFalloff, 0.0f, 8.0f, 0.01f);
+	// The wave march: two short marches per pixel over the wave heights (toward the sun, along the
+	// mirror ray). "Wave shadow" = the waves' own shadow on the sun glint and the foam, "Reflection
+	// occlusion" = a wave in front replaces the reflected sky with that wave. Cost: 2 x (steps + 1) x
+	// 3 taps per pixel inside "Wave march distance".
+	Tweak::floatVar("Ocean/Shading", "Wave shadow", &s.waveShadow, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Ocean/Shading", "Reflection occlusion", &s.mirrorOcclusion, 0.0f, 1.0f, 0.01f);
+	Tweak::intVar("Ocean/Shading", "Wave march steps", &s.marchSteps, 2, 24, 1.0f);
+	Tweak::floatVar("Ocean/Shading", "Wave march range (m)", &s.marchRange, 5.0f, 300.0f, 1.0f);
+	Tweak::floatVar("Ocean/Shading", "Wave march softness", &s.marchSoftness, 0.01f, 0.5f, 0.005f);
+	Tweak::floatVar("Ocean/Shading", "Wave march distance (m)", &s.marchDistance, 0.0f, 5000.0f, 10.0f);
 	Tweak::floatVar("Ocean/Shading", "Underside transmission", &s.undersideTransmission, 0.0f, 1.0f, 0.01f); // sky through Snell's window from below; less = more internal reflection
 	Tweak::boolean("Ocean/Shading", "Hit lighting", &s.hitLighting); // lights on geometry seen through/mirrored in the water
 	Tweak::color3("Ocean/Shading", "Foam color", &s.foamColor);

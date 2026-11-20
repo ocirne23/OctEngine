@@ -43,17 +43,27 @@ export struct OceanSettings
 	float scatterStrength = 1.0f;
 	float roughness = 0.07f;
 	float glintFilter = 1.0f;      // scale on the roughness-widening variance (spec AA + LEAN)
-	// Slope variance below the FINEST cascade's Nyquist (the capillary band). NOT world scaled: dimensionless.
-	float microRoughness = 0.01f;
+	// Slope variance below the LAST detail octave (the capillary band). NOT world scaled: dimensionless.
+	float microRoughness = 0.002f;
 	float crestSlopeLimit = 0.0f;  // the shading slope's soft limit, s /= 1 + k * |s|; 0 = off
 	// Sub-band detail: the finest cascade's gradients re-sampled at a fraction of its patch size in a rotated domain,
 	// added to the SHADING slope only.
 	float detailStrength = 0.66f;
-	float detailScale = 0.33f;     // fraction of the finest cascade's patch size
-	float detailFadeDist = 60.0f;  // MODEL metres
-	float detailRotation = 0.9f;   // radians
-	float sssStrength = 0.75f;     // crest SSS: back-lit crests glow the scatter color, per meter of height
-	float sssPower = 1.0f;         // crest SSS toward-the-sun view lobe exponent
+	float detailScale = 0.33f;     // fraction of the finest cascade's patch size, per octave
+	int   detailOctaves = 3;       // 1..3: each one more step of the scale and the rotation (the ocean; the film has one)
+	float detailFadeDist = 60.0f;  // MODEL metres (the film's copy; the ocean's octaves turn into roughness instead)
+	float detailRotation = 0.9f;   // radians, per octave
+	// Crest SSS: the sun's light through the pixel's own wave, on its face turned from the sun (the wave march's water path).
+	float sssStrength = 4.0f;      // scale on the scatter colour
+	float sssPower = 2.0f;         // toward-the-sun view lobe exponent (higher = only when looking toward the sun)
+	float sssFalloff = 0.5f;       // 1/m (model): the light's loss through the wave, on top of the absorption (lower = a wider glow)
+	// The wave march (ocean_wave.inc.glsl oceanWaveMarch): the waves' own sun shadow and their occlusion of the mirror ray.
+	int   marchSteps = 8;          // per march (two per pixel), 3 taps each
+	float marchRange = 60.0f;      // MODEL metres: the longest march
+	float marchSoftness = 0.08f;   // the penumbra cone (tan of its half-angle)
+	float marchDistance = 1000.0f; // MODEL metres from the camera: no march past it (fades over the last half)
+	float waveShadow = 1.0f;       // 0..1: the waves' shadow on the sun glint and the foam
+	float mirrorOcclusion = 1.0f;  // 0..1: a wave in front hides the reflected sky
 	float undersideTransmission = 1.0f; // sky through Snell's window from below (1 = Fresnel; less = more internal reflection)
 	bool  hitLighting = false;     // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
 	// Foam: one instant-foam response draws the crest foam AND injects the world-space foam field.
@@ -115,7 +125,9 @@ export struct OceanWorldScaled
 	float horizonDepth;
 	float horizonDepthRange;
 	float detailFadeDist;
-	float sssStrength;        // per metre of crest height
+	float sssFalloff;         // 1/m
+	float marchRange;
+	float marchDistance;
 	float bubbleDepth;
 	float bubbleBlur;
 	float foamTexel;
@@ -140,7 +152,9 @@ export inline OceanWorldScaled oceanWorldScaled(const OceanSettings& o)
 		.horizonDepth = o.horizonDepth * s,
 		.horizonDepthRange = o.horizonDepthRange * s,
 		.detailFadeDist = o.detailFadeDist * s,
-		.sssStrength = o.sssStrength / s,
+		.sssFalloff = o.sssFalloff / s,
+		.marchRange = o.marchRange * s,
+		.marchDistance = o.marchDistance * s,
 		.bubbleDepth = o.bubbleDepth * s,
 		.bubbleBlur = o.bubbleBlur * s,
 		.foamTexel = o.foamTexel * s,

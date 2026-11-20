@@ -18,8 +18,8 @@ never the tweak members**, so the two cannot disagree about the scale.
 |---|---|---|
 | fetch, depth, cascade patch sizes | × s | Froude similarity: with gravity untouched this is the ONE scaling of the JONSWAP/TMA inputs under which wavelengths AND heights both come out × s — the scaled sea is a shrunk copy, not the full-size spectrum aliased into small patches. |
 | wind speed | × √s | The velocity half of the same similarity (`U²/(F g)` and the wave-age ratio stay invariant). |
-| every other metre (shore depths, cull slack, RT ranges, horizon offset, steer range, bubble depth / blur, foam texel, **ring cell**) and the foam drift speed | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
-| absorption, SSS strength (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
+| every other metre (shore depths, cull slack, RT ranges, the wave march's range / distance, horizon offset, steer range, bubble depth / blur, foam texel, **ring cell**) and the foam drift speed | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
+| absorption, "SSS falloff" (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
 | dimensionless ratios (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
 | sea level | — | The world datum, owned by the terrain. |
 | **outside the ocean tweaks:** the "Ocean/Spray *" metres and m/s, the spray `.pfx` size / gravity / turbulence and "Fog/Caustic shore fade (m)" | × s (spray rate per m² ÷ s², "Fog/Caustic depth fade" per m ÷ s) | The renderer reads `OceanParams::worldScale` (`Renderer::getOceanWorldScale`): the sea keeps its model PERIODS, so a speed or an acceleration scales like a length. Applied in the UBO value list (`Renderer::registerUboValues`, RendererUbo.cpp) and, for the emitter, in `ParticleSystem::update`. The underwater fog boundary's offset is NOT a scaled tweak: "Fog/Underwater wave offset" (a ratio) lowers it by × the deepest LIVE wave trough (`getWaveTrough`, world metres already): a higher sea needs a lower boundary, or the murk peeks through the troughs the fog's coarse froxels miss. |
@@ -160,33 +160,90 @@ slews the SIM wind toward the baked shore flow so waves roll inland ("Ocean/Wave
 The FFT band ends at the finest cascade's Nyquist, and the mesh band-limits the displacement well
 above that, so what is left near the camera is a normal map on a smooth surface — the "plastic" look.
 
-* **"Ocean/Shading/Micro roughness"** — the slope variance of everything BELOW that Nyquist (the
+* **"Ocean/Shading/Micro roughness"** — the slope variance of everything BELOW the last detail octave (the
   capillary band), added straight into the GGX `alpha²` as `2σ²`. **The LEAN term cannot cover it**:
-  LEAN returns the variance the MIP CHAIN removed, which is exactly 0 at mip 0, so without it the near field falls
-  back on the capped screen-derivative AA and then onto the 0.02 alpha clamp — a sky mirror. Deliberately **not**
+  LEAN returns the variance the MIP CHAIN removed, which is exactly 0 at mip 0. Deliberately **not**
   scaled by "Glint filtering": that knob trades away filtered variance, and this band was never in the spectrum to
-  filter. 0 restores the mirror.
+  filter. 0 = a mirror where the detail is resolved.
 * **"Ocean/Shading/Crest slope limit"** — `k` in the shading slope's soft limit `s /= 1 + k·|s|`
   (`oceanSampleSurface`). It keeps the near-fold division from exploding into dark creases, but it compresses exactly
   the steep crest faces, so **lower = sharper crests**, 0 = no limit. Only the SHADING slope: `oceanSampleDisplacement`
   has no such limit, so the CPU buoyancy mirror is untouched by this knob.
-* **"Ocean/Shading/Detail strength / scale / fade (m) / rotation (rad)"** — `oceanDetailSlope`: the FINEST
-  cascade's own gradient field re-sampled at `scale ×` its patch size and added to the shading slope.
-  Wave statistics at a shorter wavelength than the FFT band holds, for **one fetch — no extra memory,
-  no extra FFT**.
+* **"Ocean/Shading/Detail strength / scale / octaves / rotation (rad)"** — `oceanDetailSlope`: the FINEST
+  cascade's own slope field re-sampled at `scale ×` its patch size and added to the shading slope.
+  Wave statistics at a shorter wavelength than the FFT band holds, for **one fetch per octave — no extra memory,
+  no extra FFT**. "Detail octaves" (1..3, default 3): octave `o` applies the scale and the rotation `o + 1` times
+  (`u_ocean_detailOctaves[o]` = cos, sin, 1 / patch, on; the frame's trig is in the UBO).
   * The domain is **rotated**, because an unrotated copy is the same field scaled: its crest lines run
     parallel to the parent's at every point and read as a fractal repeat rather than as ripples. The
     slope is rotated back before `oceanFlowToWorld`.
   * It is **shading only** — never in `oceanSampleDisplacement` — so geometry and
     the CPU buoyancy mirror are untouched, and the shader/mirror rule is not broken.
   * Implicit LOD: a smaller patch makes the uv derivatives correspondingly larger, so the mip chain
-    filters this band the way it filters the cascades. It still **fades out with distance**, because
-    this band is absent from the LEAN moments — what the mips remove would simply vanish instead of
-    becoming roughness. "Micro roughness" is what covers that band.
+    filters this band the way it filters the cascades. **What the mips remove comes back as roughness**: the
+    slopes' layer holds their second moments too, so each octave's tap returns its own lost variance (LEAN), added
+    to `slopeVar`. No distance fade in the ocean.
+  * **The terrain film has its own copy: the FIRST octave only**, with "Detail fade (m)" and no variance
+    (`terrain_film.fs.glsl`).
   * It is scaled by the shore surface weight, so it dies into the beach with every other wave term.
 
 The first two are dimensionless (a variance and a slope ratio) and so is the detail strength, scale and
-rotation — `pushOceanParams` world-scales only "Detail fade (m)".
+rotation — only "Detail fade (m)" rides the world scale.
+
+### The wave march (`oceanWaveMarch`, ocean_wave.inc.glsl; "Ocean/Shading/Wave *", "Reflection occlusion", "SSS *")
+
+The water is not in the TLAS, so no scene ray sees a wave. The ocean FS marches the cascades' HEIGHT FIELD itself,
+twice per pixel, and that is where the surface gets its depth: without it every wave is lit and mirrors the sky as if it
+stood alone (the "sheet" look).
+
+* **The march**: from the pixel's rest position along a direction, "Wave march steps" (8) steps that grow
+  quadratically, up to where the ray is above the highest crest (`u_ocean_waveExcursion`) or "Wave march range (m)".
+  Each step reads the three displacement layers (Dx, h, Dz: one tap per cascade). It returns three values: the soft
+  visibility along the ray ("Wave march softness" = the penumbra cone), the METRES OF WATER on the ray, and how
+  steeply the ray starts into the water (0 on a face turned to the direction).
+  * **EVERY OUTPUT MUST BE CONTINUOUS in the samples.** A value that jumps between two neighbouring pixels draws a
+    line on the water, and a value that takes only a few levels draws bands. Check a new term from a HIGH camera
+    looking down and from a low grazing one.
+  * The origin's height is the sampled field's, not the mesh's band-limited height.
+  * **ONE mip per cascade for every sample, the origin's too** (the first step's length, never finer than the pixel).
+    Tried and dropped: a mip per step. The origin and the first step then read two different fields, and that
+    difference alone, over the first step's centimetres of tolerance, puts the ray "under water" in hard-edged patches.
+  * **The path is ALL the water on the ray, integrated exactly**: per step, the part of the step where the surface is
+    above the ray, with the surface taken as linear between the two samples. Tried and dropped, each for a visible
+    artifact: a sum of whole steps (a few values: bands); a soft "still inside the first wave" weight (a short path
+    at the trough edge of a back face, where the true one is the longest: a glowing outline); the distance to the
+    FIRST exit (it jumps where one ray comes out of the water for a sample and its neighbour does not: a hard edge
+    across a back face).
+  * Water of ANOTHER wave counts in the path. The start weight (below) is what keeps a point that is only shadowed
+    by another wave dark.
+  * **The start weight is a WIDE ramp** (`OCEAN_MARCH_START_SLOPE`, 0.35: the surface's slope past the ray's at which
+    it is full), not the visibility's narrow cone: over that one it switched on at once and the trough edge of each
+    back face showed as a line. A face that is only just turned from the sun gets almost no glow, which is also the
+    physics: light that enters at a grazing angle refracts steeply down, it does not cross the wave.
+  * A step's rest coordinate = its world XZ minus the choppy offset of the step before.
+  * The pixel-footprint floor on the mip makes the occlusion fade out by itself where the waves go below a pixel;
+    "Wave march distance (m)" (1000) only saves the taps past it. In the far field the BRDF's own masking term stands
+    in.
+* **Toward the sun - "Wave shadow"** (0..1): the visibility multiplies the scene's sun visibility, so the glint, the
+  foam's sun and the bubble cloud's sun go dark behind a wave. The body's in-scatter does not take it (it is lit over
+  metres of water, not at the surface point).
+* **Toward the sun - the crest SSS** ("SSS strength" 4, "SSS power" 2, "SSS falloff (1/m)" 0.5): on a face turned
+  FROM the sun, its light comes through the pixel's own wave: scatter colour x sun x
+  `exp(-(absorption + falloff) x path) x (1 - exp(-4 path)) x start` x a forward lobe `(V . -L)^power`. The result is a
+  soft glow on the steep shadow side of a crest, seen when looking toward the sun: zero on the crest line (no water
+  on the ray), brightest at ~0.3 m of water, dark at the foot of the wave, and close to nothing from above (the lobe).
+  A lower falloff widens it down the face; a higher power narrows the views that show it. A point that another wave
+  only shadows (its own face is turned to the sun: start = 0) gets NO glow: the light that reaches it through that
+  wave is refracted away (without the start weight every shadowed trough was a teal patch). It replaced a
+  height x back-slope estimate (no thickness: every tall wave glowed alike).
+* **Along the mirror ray - "Reflection occlusion"** (0..1): a mirror ray that meets another wave shows THAT WAVE as
+  the ray sees it - a face turned to the ray at a grazing angle: 35 % the sky above the horizon (the blur's lobe),
+  the rest its body colour. The body colour alone drew dark lines: the other wave mirrors the sky too. It scales the
+  traced mirror's weight and the blurred sky share. The ray takes the normal WITHOUT the sub-band detail: the
+  march's field does not hold those ripples, and a ripple facet's own ray tests a surface it is not on (thin streaks).
+* **Cost**: 2 x (steps + 1) x 3 trilinear taps per ocean pixel inside the distance. Done before the half-float block,
+  where only its three results stay live: the ocean FS's registers did not change (96, local 64).
+* The top side only (after the underside's early return and the edge fade).
 
 ### Foam and bubbles
 

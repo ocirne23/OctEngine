@@ -1563,8 +1563,26 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("ocean_foamBreakAccel", [&] { return glm::max(o.foamBreakAccel, 0.01f); }, o.foamBreakAccel);
         list.add("ocean_farCullError", [ws, &o] { return glm::max(o.farCullError, 0.25f) * ws().s; }, o.farCullError, o.worldScale); // the tweak min, scaled
         list.add("ocean_glintFilter", [&] { return glm::max(o.glintFilter, 0.0f); }, o.glintFilter);
-        list.add("ocean_sssStrength", [ws, &o] { return glm::max(o.sssStrength, 0.01f) / ws().s; }, o.sssStrength, o.worldScale); // the tweak min, scaled
+        list.add("ocean_sssStrength", [&] { return glm::max(o.sssStrength, 0.0f); }, o.sssStrength);
         list.add("ocean_sssPower", [&] { return glm::max(o.sssPower, 1.0f); }, o.sssPower);
+        // The sun's loss through a wave, per metre of water on its ray: the absorption + "SSS falloff" (both / s).
+        list.add("ocean_sssExtinction", [ws] { return ws().absorption + glm::vec3(glm::max(ws().sssFalloff, 0.0f)); }, o.absorption, o.sssFalloff, o.worldScale);
+        // The wave march (ocean_wave.inc.glsl oceanWaveMarch). The step count rides as a float.
+        list.add("ocean_marchSteps", [&] { return (float)glm::clamp(o.marchSteps, 2, 24); }, o.marchSteps);
+        list.add("ocean_marchRange", [ws] { return glm::max(ws().marchRange, 1.0f); }, o.marchRange, o.worldScale);
+        list.add("ocean_marchInvSoftness", [&] { return 1.0f / glm::max(o.marchSoftness, 0.01f); }, o.marchSoftness);
+        list.add("ocean_marchDistance", [ws] { return glm::max(ws().marchDistance, 0.0f); }, o.marchDistance, o.worldScale);
+        list.add("ocean_waveShadow", [&] { return glm::clamp(o.waveShadow, 0.0f, 1.0f); }, o.waveShadow);
+        list.add("ocean_mirrorOcclusion", [&] { return glm::clamp(o.mirrorOcclusion, 0.0f, 1.0f); }, o.mirrorOcclusion);
+        // The detail octaves (ocean_wave.inc.glsl oceanDetailSlope): octave i repeats "Detail scale" and "Detail rotation"
+        // i + 1 times. (cos, sin, 1 / its patch size, 1 while the octave is on). UboLive: a baked ARRAY is not declared as
+        // one (UboDeclaration.cpp bakes an entry as a single const), so an array stays out of the locks.
+        list.addArray("ocean_detailOctaves", 3, [&](uint32 i)
+            {
+                const float angle = o.detailRotation * (float)(i + 1);
+                const float patch = oceanCascadeSizes(o).z * std::pow(glm::max(o.detailScale, 0.001f), (float)(i + 1));
+                return glm::vec4(std::cos(angle), std::sin(angle), 1.0f / patch, (int)i < o.detailOctaves ? 1.0f : 0.0f);
+            }, UboLive);
         list.add("ocean_cullMargin", [ws] { return glm::max(ws().cullMargin, 0.0f); }, o.cullMargin, o.worldScale);
         list.add("ocean_swashAmp", [this] { return getOceanSwashAmp(); }, o.swashAmp);
         list.add("ocean_swashFlow", [&] { return glm::max(o.swashFlow, 0.0f); }, o.swashFlow);

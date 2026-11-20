@@ -65,9 +65,9 @@ export struct OceanParams
     float detailScale      = 0.18f; // fraction of the finest cascade's patch size (smaller = finer)
     float detailFadeDist   = 60.0f; // m from the camera (a world metre: scaled); >= 5 model metres
     float detailRotation   = 0.9f;  // radians; keeps the borrowed field off the parent's crest lines
-    // Crest subsurface scattering (Sea of Thieves-style): back-lit wave crests glow the scatter color,
-    // scaled by height above the calm water line. Power shapes the toward-the-sun view lobe.
-    float sssStrength      = 0.75f;  // per meter of crest height; >= 0.01 (scaled)
+    // Crest subsurface scattering: the sun's light through a wave in front of it glows the scatter color
+    // (the wave march's water path). Power shapes the toward-the-sun view lobe.
+    float sssStrength      = 4.0f;   // scale on the scatter colour
     float sssPower         = 1.0f;
     float undersideTransmission = 1.0f; // scale on the sky seen through Snell's window from below (1 = Fresnel
                                         // transmission; less = more internal reflection, a darker ceiling)

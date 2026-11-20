@@ -13,6 +13,8 @@
 // pass through) and the RAY-TRACED mirror (sky fallback). GGX/Smith sun glint widened by spec AA + LEAN-filtered slope
 // variance (Bruneton 2010: the elongated glitter at distance), Jacobian whitecap foam with the world-space stuck-foam
 // field + its bubble cloud (ocean_foam.cs.glsl), one RT sun shadow ray. Ray budgets: "Ocean/RT" tweaks.
+// The waves themselves are in no TLAS: THE WAVE MARCH (oceanWaveMarch) gives their own sun shadow, the sun's light through
+// a crest (the SSS) and their occlusion of the mirror ray.
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -420,6 +422,31 @@ void main()
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
         N = -N;
 
+    // THE WAVE MARCH (oceanWaveMarch), twice: toward the sun - the waves' own shadow, and the water its light crosses on
+    // the way (a crest it shines through: the SSS below) - and along the mirror ray - a wave in front hides the sky.
+    // Faded out over the last half of "Wave march distance" (the mips have flattened the field long before).
+    // Here, before the half block: only the two results stay live.
+    vec3 waveSun = vec3(1.0, 0.0, 0.0); // (sun visibility past the waves, metres of water on its ray, how steeply it starts into the water)
+    float mirrorVis = 1.0;
+    {
+        const float marchFade = 1.0 - smoothstep(0.5 * u_ocean_marchDistance, u_ocean_marchDistance, viewDist);
+        if (marchFade > 0.0)
+        {
+            waveSun = mix(waveSun, oceanWaveMarch(in_uv, shoreHW, L, uvFootprint), marchFade);
+            if (u_ocean_mirrorOcclusion > 0.0)
+            {
+                // The mirror direction of the normal WITHOUT the sub-band detail: the march's field does not hold those
+                // ripples, so a ripple facet's own ray would test a surface it is not on (thin dark streaks).
+                vec3 Nm = normalize(vec3(-(slope.x - detailSlope.x) * ns, 1.0, -(slope.y - detailSlope.y) * ns));
+                if (dot(Nm, V) < 0.0)
+                    Nm = -Nm;
+                vec3 Rm = reflect(-V, Nm);
+                Rm.y = max(Rm.y, 0.02); // as the mirror ray below
+                mirrorVis = mix(1.0, oceanWaveMarch(in_uv, shoreHW, normalize(Rm), uvFootprint).x, marchFade * u_ocean_mirrorOcclusion);
+            }
+        }
+    }
+
     // Microfacet roughness = base + spec AA + LEAN slope variance (both x "Glint filtering") + the sub-grid capillary band
     // + the churn's micro-roughness (the foam amount). The variance terms stretch the sun glitter toward the horizon.
     // "Micro roughness": the slope variance BELOW the finest cascade's Nyquist. LEAN returns only what the mips removed
@@ -457,9 +484,10 @@ void main()
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). The crest SSS (always on, >= 0.01 on the CPU) needs it too.
     const bool sunUp = L.y > 0.0;
-    const float16_t sunVis = float16_t(!sunUp ? 0.0
+    const float16_t sceneSunVis = float16_t(!sunUp ? 0.0
         : (u_rt_sunShadow > 0.5 ? rtShadowVisibility(in_pos + vec3(Nh) * 0.1, L, 0.05, 10000.0)
                                : sampleSunShadowHard(in_pos, vec3(Nh)))); // one tap: the moving water hides a penumbra
+    const float16_t sunVis = sceneSunVis * float16_t(mix(1.0, waveSun.x, u_ocean_waveShadow)); // "Wave shadow"
     const f16vec3 ambientSky = f16vec3(skyAmbientUp(up));
     // The GI's sky visibility on the SKY reflections (the blurred share in C, the mirror's sky fallback): water under a
     // roof mirrors no sky. A traced mirror hit is geometry and keeps its full weight.
@@ -477,7 +505,8 @@ void main()
     const float16_t reflBlur = clamp(alphaF * float16_t(2.0) - float16_t(0.05), float16_t(0.0), float16_t(0.6));
     const float16_t clearW = float16_t(1.0) - foamH;
     const float16_t bodyWeight = (float16_t(1.0) - F) * (float16_t(1.0) - milk) * clearW;
-    const float16_t mirrorWeight = F * (float16_t(1.0) - reflBlur) * clearW;
+    const float16_t mirrorVisH = float16_t(mirrorVis); // the mirror ray past the waves in front of it (oceanWaveMarch)
+    const float16_t mirrorWeight = F * (float16_t(1.0) - reflBlur) * clearW * mirrorVisH;
 
     // The pixel is LINEAR in the two traced radiances: body * bodyWeight + mirror * mirrorWeight + C.
     //   color = mix(mix(body, bubbles, milk) + sss, mix(mirror, ambientSky, reflBlur), F) + glint
@@ -489,13 +518,16 @@ void main()
     if (milk > float16_t(0.003))
         C = oceanBubbleRadianceFrame(NoV, sunTintH * sunVis, ambientSky + f16vec3(u_ambientColor), inscatter) * milk;
 
-    // Crest SSS: sun through back-lit crests glows the scatter color, x height above the calm line. In the transmitted
-    // body, so Fresnel fades it at grazing like all subsurface light.
+    // Crest SSS: where a wave stands between the surface and the sun, the sun's light comes THROUGH it - the scatter
+    // colour, absorbed over the water the wave march measured on the sun's ray (u_ocean_sssExtinction = the absorption +
+    // "SSS falloff"), toward the viewer in a forward lobe ("SSS power"). A thin crest glows, the foot of a wave stays
+    // dark. In the transmitted body, so Fresnel fades it at grazing like all subsurface light.
     {
-        const float16_t waveH = float16_t(max(in_pos.y - shoreHW.y, 0.0));
         const float16_t towardSun = pow(clamp(dot(Vh, -Lh), float16_t(0.0), float16_t(1.0)), float16_t(u_ocean_sssPower));
-        const float16_t backSlope = float16_t(0.5) - float16_t(0.5) * dot(Lh, Nh);
-        C += f16vec3(u_ocean_scatterColor) * sunTintH * (float16_t(u_ocean_sssStrength) * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
+        // 0 where the ray has no water on it (the crest line), full after ~0.25 m of it, then the extinction; x how steeply
+        // the ray starts into the wave (0 on a face turned to the sun, so a point another wave only shadows stays dark).
+        const f16vec3 through = f16vec3(exp(-u_ocean_sssExtinction * waveSun.y) * ((1.0 - exp(-waveSun.y * (4.0 / u_ocean_worldScale))) * waveSun.z));
+        C += f16vec3(u_ocean_scatterColor) * sunTintH * through * (float16_t(u_ocean_sssStrength) * towardSun * sceneSunVis);
     }
 
     // Sun glint: Cook-Torrance specular, shadow-gated. D * (Vis * NoL) stays <= ~2e4 at the 0.02 alpha floor; the tinted
@@ -514,7 +546,11 @@ void main()
         Rb.y = max(Rb.y, 0.0);
         blurSky = max(giEvalSkySHH(f16vec3(normalize(normalize(Rb) + up))) * float16_t(INV_PI), f16vec3(0.0));
     }
-    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur * skyVis) * blurSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
+    // A mirror ray that meets another wave shows that wave as the ray sees it: a face turned to the ray, at a grazing
+    // angle - about a third mirror (the sky above the horizon: the blur's lobe), the rest its body.
+    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur * skyVis * mirrorVisH) * blurSky
+                  + (F * (float16_t(1.0) - mirrorVisH)) * mix(inscatter, blurSky * skyVis, float16_t(0.35))
+                  + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
       + foamH * whitewater;
 
     // Refracted body: the traced water column (Beer-Lambert both ways).

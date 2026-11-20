@@ -384,7 +384,7 @@ namespace Procedural
 		params.detailScale = m_settings.detailScale;         // a fraction of a patch size, which is already scaled
 		params.detailFadeDist = w.detailFadeDist;
 		params.detailRotation = m_settings.detailRotation;   // an angle
-		params.sssStrength = w.sssStrength;
+		params.sssStrength = m_settings.sssStrength;         // a scale on the scatter colour
 		params.sssPower = m_settings.sssPower;
 		params.undersideTransmission = m_settings.undersideTransmission;
 		params.hitLighting = m_settings.hitLighting;

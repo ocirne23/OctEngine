@@ -170,28 +170,35 @@ float oceanSurfaceWeight(float depth, float waterLevel)
 //     rotated into the sample domain.
 //   - SHADING ONLY: never in oceanSampleDisplacement, so the geometry, the depth prepass and the CPU buoyancy mirror are
 //     untouched.
-//   - Implicit LOD: the smaller patch scales the uv derivatives, so the mips filter it like the cascades. It still fades
-//     out past "Detail fade (m)": its variance is not in the LEAN moments ("Micro roughness" covers it).
-// The terrain water film carries an inlined copy (instanced_indirect_terrain.fs.glsl) - keep them in step.
-vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
+//   - Implicit LOD: the smaller patch scales the uv derivatives, so the mips filter it like the cascades, and what they
+//     filter out comes back as `variance` (the tap's own second moments): the band turns into roughness with distance,
+//     no fade.
+//   - "Detail octaves" (1..OCEAN_DETAIL_OCTAVES): octave o repeats the step at scale^(o + 1) and rotation x (o + 1).
+//     u_ocean_detailOctaves[o] = (cos, sin, 1 / patch size, 1 while the octave is on).
+// The terrain water film carries an inlined copy of the FIRST octave, with a distance fade and no variance
+// (terrain_film.fs.glsl) - keep them in step.
+#define OCEAN_DETAIL_OCTAVES 3
+vec2 oceanDetailSlope(vec2 sampleXZ, float surfaceWeight, out float variance)
 {
-    const float strength = u_ocean_detailStrength;
-    if (strength <= 0.0)
-        return vec2(0.0);
+    variance = 0.0;
+    const float gain = u_ocean_detailStrength * surfaceWeight; // dies into the beach with every other wave term
+    vec2 slope = vec2(0.0);
+    if (gain <= 0.0)
+        return slope;
 
-    float fade = surfaceWeight; // dies into the beach with every other wave term
-    const float fadeDist = u_ocean_detailFadeDistance;
-    fade *= 1.0 - smoothstep(0.5 * fadeDist, fadeDist, distance(worldXZ, u_viewPos.xz));
-    if (fade <= 0.0)
-        return vec2(0.0);
-
-    const int c = OCEAN_CASCADES - 1; // the finest cascade: the shortest waves there are to borrow
-    const float L = u_ocean_cascadeSizes[c] * u_ocean_detailScale;
-    const vec2 rot = vec2(cos(u_ocean_detailRotation), sin(u_ocean_detailRotation));
-    const vec2 p = vec2(rot.x * sampleXZ.x + rot.y * sampleXZ.y, -rot.y * sampleXZ.x + rot.x * sampleXZ.y);
-    const vec2 g = texture(u_oceanMaps, vec3(p / L, float(OCEAN_CASCADES + c))).xy; // (dh/dx, dh/dz)
-    const vec2 s = g * (strength * fade);
-    return vec2(rot.x * s.x - rot.y * s.y, rot.y * s.x + rot.x * s.y); // back into the sample domain
+    const float layer = float(2 * OCEAN_CASCADES - 1); // the finest cascade's slopes: the shortest waves there are to borrow
+    for (int o = 0; o < OCEAN_DETAIL_OCTAVES; ++o)
+    {
+        const vec4 oct = u_ocean_detailOctaves[o];
+        if (oct.w <= 0.0)
+            break;
+        const vec2 p = vec2(oct.x * sampleXZ.x + oct.y * sampleXZ.y, -oct.y * sampleXZ.x + oct.x * sampleXZ.y);
+        const vec4 g = texture(u_oceanMaps, vec3(p * oct.z, layer)); // (dh/dx, dh/dz, their squares)
+        slope += vec2(oct.x * g.x - oct.y * g.y, oct.y * g.x + oct.x * g.y); // back into the sample domain
+        variance += 0.5 * max(g.z + g.w - dot(g.xy, g.xy), 0.0);
+    }
+    variance *= gain * gain;
+    return slope * gain;
 }
 
 // Cascade displacement sum at an undisplaced (morphed) world XZ. Choppy lambda applied here so it stays live (the maps
@@ -237,6 +244,87 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
     // No waterline floor: the DEPTH BUFFER cuts the wave against the sand per pixel - a trough under the seabed exposes
     // (wet) sand, which is what a receding swash looks like.
     return disp;
+}
+
+// THE WAVE MARCH: a short march from a surface point along `dir` (unit, dir.y > 0) over the cascades' height field. The
+// water is not in the TLAS, so no ray sees a wave: this is the waves' own shadow (dir = the sun) and their occlusion of a
+// mirror ray. Returns (the visibility along dir past the waves in front, soft; the metres of WATER on the ray; how
+// steeply the ray starts into the water - 0 on a face turned to dir).
+// "Ocean/Shading/Wave march *": steps, range, softness.
+//   - In the sampled field's own frame: the origin's height is the field's (not the mesh's band-limited one).
+//   - The steps grow quadratically up to where the ray is above the highest crest (u_ocean_waveExcursion), or the range.
+//   - EVERY sample, the origin's too, reads the cascades at ONE mip: the first step's length, never finer than the
+//     pixel (footprint, m). A mip per step was tried: the origin and the first step then read two different fields, and
+//     their difference alone, over the first step's centimetres of tolerance, put the ray "under water" in hard-edged
+//     patches. Far water marches a smooth field, so the occlusion fades out where the waves go below a pixel.
+//   - Each step's rest coordinate is its world XZ minus the choppy offset of the step before (one fixed-point turn of the
+//     displacement's inverse; the displacement layer gives both in one tap).
+//   - Soft: a step counts by how far the ray is under the surface, over the cone "Wave march softness" x the distance.
+#define OCEAN_MARCH_START_SLOPE 0.35 // the surface's slope past the ray's at which `start` is full
+vec3 oceanWaveMarch(vec2 restXZ, vec2 shoreHW, vec3 dir, float footprint)
+{
+    const float w = oceanSurfaceWeight(oceanEffectiveDepth(restXZ, shoreHW.y - shoreHW.x), shoreHW.y);
+    const float crest = u_ocean_waveExcursion * w;
+    if (dir.y <= 0.0 || crest <= 0.0)
+        return vec3(1.0, 0.0, 0.0);
+    const float chop = u_ocean_choppiness * w;
+    const float invSteps = 1.0 / u_ocean_marchSteps;
+    const float invRise = 1.0 / max(dir.y, 0.03);
+    const float tFull = min(2.0 * crest * invRise, u_ocean_marchRange);
+    // ONE mip per cascade for every sample of the march, the origin's too: the first step's length, never finer than the
+    // pixel.
+    vec3 lods;
+    {
+        const float lod = log2(max(tFull * invSteps * invSteps, footprint));
+        for (int c = 0; c < OCEAN_CASCADES; ++c)
+            lods[c] = max(lod + log2(float(OCEAN_FFT_SIZE) / u_ocean_cascadeSizes[c]), 0.0);
+    }
+
+    vec3 d = vec3(0.0);
+    for (int c = 0; c < OCEAN_CASCADES; ++c)
+        d += textureLod(u_oceanMaps, vec3(restXZ / u_ocean_cascadeSizes[c], float(c)), lods[c]).xyz;
+    const float y0 = w * d.y;
+    const float tEnd = min(tFull, (crest - y0) * invRise);
+    if (tEnd <= 0.0)
+        return vec3(1.0, 0.0, 0.0);
+    vec2 off = chop * d.xz;
+    const vec2 x0 = restXZ + off;
+
+    // EVERY OUTPUT IS CONTINUOUS in the samples: a value that jumps between two pixels draws a line on the water.
+    //   start : how steeply the ray starts into the water: the first step's depth over a WIDE cone
+    //           (OCEAN_MARCH_START_SLOPE) - 0 on a face turned to dir, 1 only on a face well turned from it. Over the
+    //           visibility's narrow cone it switched on at once, and the trough edge of every back face showed as a line.
+    //   path  : ALL the water on the ray: per step, the part of it where the surface is above the ray, with the surface
+    //           taken as linear between the two samples (the origin is on the surface: 0). Tried and dropped:
+    //           - a sum of whole steps: a few values only, and what reads the path changes in bands;
+    //           - the distance to the FIRST exit: it jumps where a ray comes out of the water for one sample and its
+    //             neighbour does not (a hard edge across a back face).
+    //           Water of ANOTHER wave counts too. `start` is what keeps a point that is only shadowed by one dark.
+    float occl = 0.0, path = 0.0, tPrev = 0.0, start = 0.0, prevAbove = 0.0;
+    const int steps = int(u_ocean_marchSteps);
+    for (int k = 1; k <= steps; ++k)
+    {
+        const float f = float(k) * invSteps;
+        const float t = tEnd * f * f;
+        const float dt = t - tPrev;
+        const vec2 q = x0 + dir.xz * t - off;
+        d = vec3(0.0);
+        for (int c = 0; c < OCEAN_CASCADES; ++c)
+            d += textureLod(u_oceanMaps, vec3(q / u_ocean_cascadeSizes[c], float(c)), lods[c]).xyz;
+        off = chop * d.xz;
+        const float above = w * d.y - y0 - dir.y * t; // the surface above the ray (m): > 0 = the ray is under water
+        const float under = clamp(above * u_ocean_marchInvSoftness / t, 0.0, 1.0); // the same, over the soft cone
+        occl = max(occl, under);
+        if (k == 1)
+            start = clamp(above / (t * OCEAN_MARCH_START_SLOPE), 0.0, 1.0);
+        {
+            const float lo = min(prevAbove, above), hi = max(prevAbove, above);
+            path += dt * clamp(hi / max(hi - lo, 1e-6), 0.0, 1.0); // lo >= 0: all of the step; hi <= 0: none of it
+        }
+        prevAbove = above;
+        tPrev = t;
+    }
+    return vec3(1.0 - occl, path, start);
 }
 
 // Combined surface data for the water FS (implicit LOD: the mip chain prefilters distant slopes):
@@ -308,10 +396,11 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     // also compresses the steep crest faces: lower sharpens crests at the risk of creases; 0 = off.
     slope = slopeSum / max(vec2(jxx, jzz), vec2(0.6));
     slope /= 1.0 + u_ocean_crestSlopeLimit * length(slope);
-    const vec2 detailSample = oceanDetailSlope(sampleXZ, worldXZ, w);
+    float detailVar;
+    const vec2 detailSample = oceanDetailSlope(sampleXZ, w, detailVar);
     slope = oceanFlowToWorld(slope + detailSample, fr);
     detail = oceanFlowToWorld(detailSample, fr);
-    slopeVar = varSum;
+    slopeVar = varSum + vec2(detailVar);
 }
 
 // Instant crest foam from the fold Jacobian + downward acceleration (Longuet-Higgins). ONE function shared by the water
