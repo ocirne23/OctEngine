@@ -21,7 +21,7 @@ The cue sites:
 | Sound (`EGameSound`) | Site |
 |---|---|
 | `MeleeHit`, `TurretFire` | `NpcSystem::addBeam` (every role: a client adds the server's beams there) |
-| `UnitDeath` | `GameUnitComponent::tickHurtLight` / `kill` |
+| `UnitDeath` | `GameUnitComponent::tickDeathCue` / `kill` |
 | `UnitReveal` | `GameUnitComponent::setSolid`, with the reveal smoke (the authority only): a shadow that the light or a field makes solid sizzles |
 | `ShotFired`, `LobFired`, `ShotImpact`, `SplashImpact` | `GameProjectileComponent::spawn` / `destroy` |
 | `StructurePlaced` | `spawnStructure`, a blueprint only (a load or a join replay spawns built structures: silent) |

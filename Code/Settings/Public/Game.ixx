@@ -487,7 +487,7 @@ export struct GameUnitParams
     float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
     float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
-    float pushGain = 20000.0f;     // shared by the emitter readback path AND the shield-less path
+    float pushGain = 20000.0f;     // the field push on a unit with its own bubble (its emitter's readback); a shield-less unit is never pushed
     float shieldedPushMult = 0.2f; // x the push on a unit with its own bubble while its battery holds (the Bulwark, the Aegis, the Titan)
     float retargetInterval = 5.0f;
     float wanderSpeedMult = 0.25f;
@@ -508,7 +508,7 @@ export struct GameUnitParams
                                    // void floor and no bite height window, which all assume the y = 0 plane
     // Runtime (GameMatch, the co-op sandbox world's light rules; the other modes keep the defaults):
     bool fieldPush = true;         // false = an enemy field does not push a unit (it walks in and burns); a prefab's
-                                   // `FieldBlocked true` keeps the push for that type
+                                   // `FieldBlocked true` keeps the push for that type. Only a unit with its own bubble is pushed.
     uint32 revealPuff = 0xFFFFFFFFu; // runtime (GameMatch): the particle system's puff stream for the smoke of a shadow that
                                      // turns solid (ParticleSystem::createPuffStream); UINT32_MAX = none
     uint32 deathPuff = 0xFFFFFFFFu;  // runtime (GameMatch): the same for the burst of an enemy unit that dies
@@ -546,10 +546,6 @@ export struct GameUnitParams
     float sunShare = 0.0f;         // ... + this share of its max health per second: "Sunlight damage (share of health/s)" x the daylight
     float sunBurn(float healthMax) const { return sunDps + sunShare * healthMax; } // health/s a unit of sunBurnTeam loses now
     bool navEnabled = true;
-    float hurtLightIntensity = 8.0f;
-    float hurtLightDecay = 0.25f;  // seconds from full to dark
-    float lightArea = 8.0f;        // m: hurt-flash budget bucket size (lock-free hashed slots)
-    float hurtFlashRate = 4.0f;    // flashes per second per area
     // steerHeading score: free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
     //   - Pressure*gpW*dot(gradP) + Wall*dot(wallAway) - clipped*CornerClip
     float steerGoal = 0.3f;

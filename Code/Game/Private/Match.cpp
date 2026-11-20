@@ -1077,7 +1077,7 @@ void GameMatch::tickPlayerMelee(float deltaSec)
             // the same measure the units' own melee probes use).
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
             if (glm::dot(d, d) <= m_settings.meleeRadius * m_settings.meleeRadius)
-                u->damage(m_settings.meleeDps * deltaSec, team);
+                u->damage(m_settings.meleeDps * deltaSec);
         });
     };
     meleeAround(m_player.bodyPos(), (uint8)m_team);

@@ -140,7 +140,7 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
             const float reach = unit->bodyRadius + c_boltRadius;
             if (d.x * d.x + d.z * d.z > reach * reach || glm::abs(d.y) > unit->bodyRadius + 1.0f)
                 return;
-            unit->damage(unitDamage, team, hitsShadows);
+            unit->damage(unitDamage, hitsShadows);
             pierceHits[pierced++] = unit;
         });
         lastPos = pos;
@@ -243,7 +243,7 @@ void GameProjectileComponent::onContact(Entity& self, Entity* other, bool begin)
             // THE FALLOFF: the full damage at the centre, splashEdge of it at the edge, linear between.
             const float share = glm::mix(1.0f, splashEdge, std::sqrt(glm::dot(d, d)) / splashRadius);
             if (GameUnitComponent* unit = getComponent<GameUnitComponent>(victim); unit && unit->team != team)
-                unit->damage(unitDamage * share, team, hitsShadows);
+                unit->damage(unitDamage * share, hitsShadows);
             else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(victim); sc && sc->team != team)
                 sc->damage(structureDamage * share);
         });
@@ -252,7 +252,7 @@ void GameProjectileComponent::onContact(Entity& self, Entity* other, bool begin)
     {
     }
     else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(other); unit && unit->team != team)
-        unit->damage(unitDamage, team, hitsShadows);
+        unit->damage(unitDamage, hitsShadows);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(other); sc && sc->team != team)
         sc->damage(structureDamage);
     spent = true; // any contact spends the shot, own team and ground included

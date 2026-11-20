@@ -184,7 +184,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             {
                 store[0] = glm::max(store[0] - capacity[0], 0.0f);
                 if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
-                    victim->damage(params.turretDamage, team);
+                    victim->damage(params.turretDamage);
                 const std::lock_guard<std::mutex> lock(g_structureEventMutex);
                 g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, c_turretMuzzle, 0.0f),
                     target->pos, team });

@@ -840,7 +840,7 @@ void StructureSystem::tickArrowHits(float deltaSec)
         if (hit.timeLeft > 0.0f)
             continue;
         if (GameUnitComponent* unit = hit.victim ? getComponent<GameUnitComponent>(hit.victim.get()) : nullptr; unit && unit->alive())
-            unit->damage(hit.damage, hit.team);
+            unit->damage(hit.damage);
     }
     oc::erase_if(m_arrowHits, [](const ArrowHit& hit) { return hit.timeLeft <= 0.0f; });
 }
@@ -1194,7 +1194,7 @@ void StructureSystem::tickCarriers(float deltaSec)
                         aim += glm::vec3(vel.x, 0.0f, vel.z) * arrowFlightTime(eyes, victimPos);
                     }
                     const float arc = arrowArc(eyes, aim);
-                    m_arrowHits.push_back({ EntityPtr(victimEntity), m_settings.guardDamage, team, arrowFlightTime(eyes, aim, arc) });
+                    m_arrowHits.push_back({ EntityPtr(victimEntity), m_settings.guardDamage, arrowFlightTime(eyes, aim, arc) });
                     m_guardShots.push_back({ eyes, aim, arc });
                 }
                 if (w.entity && d.x * d.x + d.z * d.z > 1e-6f)

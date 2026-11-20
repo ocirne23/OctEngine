@@ -88,7 +88,7 @@ export struct GameUnitComponent
         float fireInterval = 3.0f;
         uint8 shotKind = 0;           // 0 direct, 1 splash lob
         bool alwaysDisplayHealth = false;
-        bool fieldBlocked = false;    // an enemy field pushes this unit even where params.fieldPush is off
+        bool fieldBlocked = false;    // an enemy field pushes this unit even where params.fieldPush is off (a unit with a bubble only)
         float heightLimit = 0.0f;     // 0 = params.heightLimit, > 0 = own ceiling, < 0 = NONE (flying)
         glm::vec3 color{ -1.0f };     // x >= 0: the unit's colour on EVERY render node of its subtree (a shared model prefab has none)
     };
@@ -163,9 +163,8 @@ export struct GameUnitComponent
     bool farHeading(const Entity& entity, glm::vec2& dir, float& speed, float& dist, bool spread = true);
     glm::vec3 wakeVelocity(const Entity& entity); // World's SIM LOD wake edge -> PhysicsComponent::unpark
     void kill(Entity& entity); // health to 0 + the one-shot death report
-    static constexpr uint32 UnknownTeam = UINT32_MAX;
-    // atomic; sourceTeam colours the hurt light. throughShadow: it hurts the unit even while it is a shadow (not solid).
-    void damage(float amount, uint32 sourceTeam = UnknownTeam, bool throughShadow = false);
+    // atomic. throughShadow: it hurts the unit even while it is a shadow (not solid).
+    void damage(float amount, bool throughShadow = false);
     float takePendingDamage(); // main thread: drain the puppet inbox (both parts)
     bool alive() const { return health > 0.0f; }
     // The bubble is GONE: the battery is empty and the collapse has shrunk it to nothing (authority; a client never
@@ -222,7 +221,7 @@ private:
     // strongest there and over the iso value) - no enemy field or light cone reveals it there. With no bake: its own
     // bubble while its battery holds. Asked lazily, once a tick (one bake sample).
     bool isSheltered(Tick& t);
-    void tickHurtLight(const Entity& entity, float deltaSec); // every role, before the client gate
+    void tickDeathCue(const Entity& entity);                  // every role, before the client gate
     void tickModel(Entity& entity, float deltaSec);           // every role too: works off the position delta
     void applyHeightLimit(Tick& t);
     bool applyDamageAndHeal(Tick& t); // false = the unit died this tick
@@ -232,7 +231,9 @@ private:
     void tickCombat(Tick& t);        // ONE probe: structure bite, emitter strain, melee sweep, ranged shots
     void tickSteering(Tick& t);
     glm::vec2 steerHeading(Tick& t, glm::vec2 goalDir, const Nav::TeamField& raster);
-    void tickField(Tick& t);         // shield battery + push (emitter readbacks), or the baked-field stand-in
+    void tickField(Tick& t);         // tickShieldBubble for a live bubble, else tickBakedField
+    void tickShieldBubble(Tick& t);  // the battery, the collapse and the field push (the emitter's readbacks)
+    void tickBakedField(Tick& t);    // the reveal and the burn off the baked field: no push
     void applyPush(Tick& t);
     void setSolid(Tick& t, float opposing, float iso); // the shadow form's state + its dark tint, from tickField
 
@@ -240,11 +241,7 @@ private:
     float m_retargetTimer = 0.0f;
     float m_fireTimer = 0.0f;
     float m_attackTimer = 0.0f; // clamps at 0 with no victim in reach, so the first hit on arrival lands at once
-    float m_lastHealth = 0.0f;  // hurt light: compared on EVERY role (replicated drops count too)
-    float m_hurtGlow = 0.0f;
-    uint8 m_hurtTeam = 0xFF;    // the last attacker's team (0xFF = unknown)
-    void noteHurtTeam(uint32 sourceTeam) { m_hurtTeam = sourceTeam == UnknownTeam ? 0xFF : (uint8)glm::min(sourceTeam, 254u); }
-    uint32 opposingTeamGuess() const;
+    float m_lastHealth = 0.0f;  // the death cue: compared on EVERY role (replicated drops count too)
     float m_bodyTop = 1.0f;     // the collider's top over the entity origin
     glm::vec2 m_modelLastPos{ 0.0f }; // tickModel: the MODEL is the child with a HumanoidAnimatorComponent
     float m_modelYaw = 0.0f;

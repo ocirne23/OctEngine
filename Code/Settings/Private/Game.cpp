@@ -448,10 +448,6 @@ static void registerNpc(GameNpcSettings& s, GameUnitParams& up)
     Tweak::floatVar("Game/Friendlies", "Turret beam radius (m)", &s.beamRadius, 0.02f, 5.0f, 0.01f);
     Tweak::floatVar("Game/Combat", "Melee hit lifetime", &s.hitLifetime, 0.02f, 2.0f, 0.01f);
     Tweak::floatVar("Game/Combat", "Muzzle flash intensity", &s.flashIntensity, 0.0f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Combat", "Hurt light intensity", &up.hurtLightIntensity, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Combat", "Hurt light decay (s)", &up.hurtLightDecay, 0.02f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Combat", "Light area (m)", &up.lightArea, 1.0f, 64.0f, 1.0f);
-    Tweak::floatVar("Game/Combat", "Hurt flashes/s per area", &up.hurtFlashRate, 0.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Lobber shot speed", &s.lobberShotSpeed, 2.0f, 80.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Spitter shot speed", &s.spitterShotSpeed, 2.0f, 80.0f, 0.5f);
     Tweak::floatVar("Game/Sim LOD", "Far tick interval (s)", &s.farInterval, 0.05f, 5.0f, 0.05f, {}, ETweakFlags::None);

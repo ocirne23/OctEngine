@@ -145,14 +145,8 @@ its chain, a finished demolish. Tab does not close it. The HUD counter "Build" n
   > record) with the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash
   > intensity" — so it lives and dies with the bolt. GLt carries the kind byte; melee hit beams
   > are relayed at most `c_maxHitBroadcast` 64 per service, turret strikes always.
-  > **There is NO impact flash: the VICTIM lights itself** — `GameUnitComponent::tickHurtLight`
-  > (every role, before the client gate) compares health against the last tick's and pushes a red
-  > point light over the collider's top while it drops, decaying over "Hurt light decay (s)" after
-  > the last drop. So a melee hit, a turret strike, a shell AND force-field exposure all light the
-  > unit, and clients see it off the replicated health. "Hurt light intensity" scales it.
-  > **Flash counts never scale with the crowd:** "Light area (m)" buckets the world and "Hurt
-  > flashes/s per area" caps the flashes in each bucket (see the Entity CONTEXT's
-  > GameUnitComponent notes). The shield/emitter GLOW is the Force system's bubble light
+  > **There is NO impact flash and no hurt light:** a hit unit does not light itself. The shield/emitter GLOW is the
+  > Force system's bubble light
   > ("Force/Glow/Bubble light …" tweaks): one light per bubble, sized by the bubble radius.
   > **THE ENERGY STORE IS THE RELOAD BAR** (the barracks rule; there is no fire timer):
   > `stampTuning` sets its energy capacity to "Turret shot energy" (0.5: light on beams fills it in

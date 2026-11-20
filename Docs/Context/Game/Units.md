@@ -61,8 +61,7 @@ once, and it starts at a random phase so a barracks batch never swings in lockst
 lands on ONE victim: the melee enemy unit or player first, else the structure it is biting. Each
 landed swing is reported as a `GameUnitComponent::HitRecord` (striker + victim position), drained by
 `NpcSystem::service` into a `MeleeHit` beam — a line striker → victim over "Melee hit lifetime"
-0.25 s; the victim lights itself through the hurt light (see the turret section
-([Hotbar.md](Hotbar.md)) for beams, flashes and the hurt light). Ranged units never swing.
+0.25 s (see the turret section ([Hotbar.md](Hotbar.md)) for beams and flashes). Ranged units never swing.
 
 **There is NO published player list.** Units find enemy players — puppet GameUnitComponents,
 spatially registered like everything else — in the SAME queries as structures: the auto-target sweep
@@ -71,8 +70,8 @@ takes the nearest enemy puppet as fallback, and the short melee probe chews any 
 ### Damage
 
 **ALL UNIT DAMAGE GOES THROUGH `GameUnitComponent::damage()`** — the ONE entry point for every
-victim, unit or puppet: it atomically banks into the `pendingDamage` inbox (and notes the attacker's
-team for the hurt light).
+victim, unit or puppet: it atomically banks into the `pendingDamage` inbox (`throughShadow`: the
+`pendingShadowDamage` inbox).
 
 * A UNIT drains its inbox in its own tick (`applyDamageAndHeal`): the shield battery absorbs first
   ("Game/Enemies/Damage absorb (energy per hp)", energy per hp; an emptied battery collapses), the

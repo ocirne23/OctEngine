@@ -906,7 +906,7 @@ private:
         const glm::vec3* sightFrom = nullptr, Entity** outEntity = nullptr) const;
     // THE GUARDS' ARROWS in flight (authority): the hit is a hitscan, but it LANDS when the drawn arrow arrives (the
     // flight time: the distance / "Arrow speed (m/s)"). The victim is held, so a dead or removed one is simply skipped.
-    struct ArrowHit { EntityPtr victim; float damage; uint8 team; float timeLeft; };
+    struct ArrowHit { EntityPtr victim; float damage; float timeLeft; };
     oc::vector<ArrowHit> m_arrowHits;
     void tickArrowHits(float deltaSec);
     float arrowArc(const glm::vec3& from, const glm::vec3& to) const; // the arrow's drawn arc: over a wall in the way

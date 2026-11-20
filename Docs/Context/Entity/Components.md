@@ -195,12 +195,13 @@ ID 9/10/11, one partition each under `Components/Game/`: `GameUnitComponent`,
 copies of the small helpers (the client early-out, the atomic CAS adds, the spawn-info readback),
 like every other component.
 
-**`GameUnitComponent::update`** first runs `tickHurtLight` and `tickModel` (every role), then returns on a network
+**`GameUnitComponent::update`** first runs `tickDeathCue` and `tickModel` (every role), then returns on a network
 client. The simulation is a step sequence over a per-tick `Tick` context (private, declared in the `.ixx`):
 `applyHeightLimit` → the puppet gate → `applyDamageAndHeal` (damage, death, heal) → `resolveWalkTarget` (route /
 order / `resolveNavTarget` / `searchLocalTarget`) → `tickCombat` (the one probe) → `tickSteering` (`steerHeading`
-= the context steering, brake, the hard cap) → `tickField` (shield battery + push, or the baked-field stand-in —
-both BANK the push into `Tick::impulse`) → `applyPush` (**the tick's ONE `ApplyImpulse`**). The body's velocity is
+= the context steering, brake, the hard cap) → `tickField` (`tickShieldBubble` for a unit with a live bubble: the
+battery, the collapse and the push, BANKED into `Tick::impulse`; else `tickBakedField`: the reveal and the burn off the
+baked field, NO push) → `applyPush` (**the tick's ONE `ApplyImpulse`**). The body's velocity is
 read ONCE into the context and every queued command builds on it. **The push speed limiter is on the impulse
 itself:** the steering's `SetLinearVelocity` lands first, the impulse on top, so `applyPush` scales the impulse by
 the largest `s` in [0, 1] keeping `|vel + s * impulse / mass|` under `params.maxSpeed` (the positive root of the
@@ -216,20 +217,10 @@ body to; there is no per-unit multiplier. A body already over the cap only takes
   of non-puppet instances alive — a relaxed atomic incremented in `spawn` and decremented in
   `destroy` (both worker-side in the batch paths), so the game's "units alive" is a load, never a
   walk.
-* **THE HURT LIGHT** (`tickHurtLight`, at the top of `update` on every role, before the client gate): a health
-  drop since the last tick pushes a point light over the collider's top (`addLightInfo` with a `PointLight`, a per-frame record) at
-  full brightness, decaying over `params.hurtLightDecay` after the last drop, off whatever wrote `health` (the sim
-  or the blob). **Its colour is the ATTACKER's team** (the Force team colours): `damage(amount, sourceTeam)` tags
-  the victim (melee, shells, the turret, the player aura pass their team), field exposure tags the burning field's
-  owner off the bake sample or, where the sample names no team, the next team over (`opposingTeamGuess`);
-  untagged damage (the script thunk) keeps the neutral red. Clients never receive the tag, so a replicated unit's
-  flash is red there. **AREA-BUDGETED** (a lock-free hashed slot table in the `.cpp`, world XZ bucketed into
-  `params.lightArea` squares): a hurt unit flashes only when its area's flash slot has been quiet for
-  `1 / hurtFlashRate` seconds (CAS on a timestamp — a lone hit unit always flashes, a swarm in a field shows random
-  flashes across it). Tweaks under "Game/Combat". **The shield GLOW is not here:** it is the Force system's bubble
-  light (see [`Docs/Context/Force/CONTEXT.md`](../Force/CONTEXT.md)) — a collapsed shield has no bubble and so no
-  light, and a merged crowd is one light.
-* **THE MODEL** (`tickModel`, right after the hurt light, every role): the unit's body is a CHILD — the first child
+* **NO HURT LIGHT:** a hit unit does not light itself. The only light on a unit is the shield glow, the Force
+  system's bubble light (see [`Docs/Context/Force/CONTEXT.md`](../Force/CONTEXT.md)) — a collapsed shield has no
+  bubble and so no light, and a merged crowd is one light. `damage(amount, throughShadow)` carries no attacker team.
+* **THE MODEL** (`tickModel`, right after `tickDeathCue`, every role): the unit's body is a CHILD — the first child
   with a `HumanoidAnimatorComponent`, a shared model prefab (`Debug/CubeGuy.pre`). The collider has `LockRotation`
   and the root's `rot` is the physics pose, so the FACING goes on the model: a yaw about Y that turns the model's
   +X to the heading, at 12 rad/s, only above 0.25 m/s (a slower move is a shove, not a heading). The same distance
@@ -268,7 +259,7 @@ parameter tables and the steering are in [`Docs/Context/Nav/CONTEXT.md`](../Nav/
 
 `GameUnitComponent::reportSound(kind, pos, size)` is the components' side of the game's sound
 ([`Docs/Context/Game/Sound.md`](../Game/Sound.md)): any thread, every role. The kinds (`ESoundCue`): `UnitReveal` from
-`setSolid`, with the reveal smoke (the authority: `tickField` runs there); `UnitDeath` from `tickHurtLight` (it
+`setSolid`, with the reveal smoke (the authority: `tickField` runs there); `UnitDeath` from `tickDeathCue` (it
 compares the health on every role, so a replicated drop to 0 counts) and from `kill`; **there is no hurt cue** (a hit
 that does not kill makes no sound of the unit's own); `ShotFired` / `LobFired` from
 `GameProjectileComponent::spawn`; `ShotImpact` / `SplashImpact` from its `destroy` (not when the shot ran out in the
@@ -286,7 +277,8 @@ structure for `StructureDamage` (not authored = `AttackDamage`) x `GameUnitParam
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,
 `FieldBlocked`, `HeightLimit`, `Color`.
 
-**The field push has a gate:** `tickField` banks the push only when `params.fieldPush` (runtime, stamped by `GameMatch`:
+**The field push is for units with a bubble only** (a shield-less body, or one whose bubble is gone, is never pushed),
+and it has a gate: `tickShieldBubble` banks the push only when `params.fieldPush` (runtime, stamped by `GameMatch`:
 false in the co-op sandbox world) or the prefab's `FieldBlocked true`. The exposure damage and the battery drain do not
 depend on it. **The shadow form:** `params.shadowTeam` (runtime) makes that team's units `solid` only in an opposing
 field (half the iso value up) or in daylight; `setSolid` (from `tickField`) also swaps the subtree's tint to
