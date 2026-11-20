@@ -233,6 +233,7 @@ protected:
     void buildUboWeather(const Camera& camera);
     void buildUboRayTracing();
     void buildUboClouds(const Camera& camera);
+    void buildUboSky();
     void buildUboSunShadow(const Camera& camera);
     void buildUboForce();
     void buildUboTerrain();
@@ -262,6 +263,12 @@ protected:
     glm::vec3 m_cloudShadowAxis0{ 1.0f, 0.0f, 0.0f };
     glm::vec3 m_cloudShadowAxis1{ 0.0f, 0.0f, 1.0f };
     bool m_cloudShadowRendered = false;
+    // The sky's multiple-scattering light (buildUboSky), [0] = at the low altitude, [1] = at the high one:
+    glm::vec3 m_skyMultiScatter[2]{};         // the radiance the shaders add per unit scattering (both lights, the gains)
+    glm::vec3 m_skyMsSun[2]{};                // per unit light: the sun at m_skyMsSunCos ...
+    glm::vec3 m_skyMsUp[2]{};                 // ... and the light from straight up (the Sky Radiance)
+    float m_skyMsSunCos = 2.0f;               // the sun's height the sun part holds (2 = none yet)
+    oc::array<float, 10> m_skyMsAtmosphere{}; // the atmosphere both parts hold (SkyAtmosphere::key)
     struct GrassNearCascade
     {
         glm::mat4 viewProj{ 1.0f };

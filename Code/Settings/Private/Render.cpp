@@ -45,6 +45,8 @@ void Settings::registerSky(SkyParams& s)
     // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
     Tweak::floatVar("Sky/Atmosphere", "Air scattering", &s.rayleighScatter, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Sky/Atmosphere", "Haze scattering", &s.mieScatter, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Sky/Atmosphere", "Humidity", &s.humidity, 0.0f, 0.9f, 0.005f); // x the haze: 1 / (1 - humidity)^2
+    Tweak::floatVar("Sky/Atmosphere", "Multiple scattering", &s.multiScatter, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Sky/Atmosphere", "Haze forward scatter", &s.mieG, 0.0f, 0.99f);
     Tweak::floatVar("Sky/Atmosphere", "Air height", &s.rayleighHeight, 1000.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Sky/Atmosphere", "Haze height", &s.mieHeight, 200.0f, 5000.0f, 5.0f);

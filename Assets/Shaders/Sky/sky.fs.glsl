@@ -96,13 +96,6 @@ float fbmR(vec3 p, int octaves)
 	return v / norm;
 }
 
-vec3 adjustSaturation(vec3 color, float saturation)
-{
-	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-	vec3 grayscale = vec3(dot(color, luminosity));
-	return mix(grayscale, color, saturation);
-}
-
 void main()
 {
 #ifdef STEREO
@@ -141,16 +134,15 @@ void main()
 		const float sunMoonAngle = dot(L, moonDir);
 		const bool moonCovered = cosM < u_sky_moonCos * 2.00 - cosM;
 
-		color = atmosphereScatter(dir, L, up, VIEW_STEPS, observerHeight, transmittance) * sunSurfaceColor.rgb;
-		color = adjustSaturation(color, u_sky_saturation * (2.0 - eclipseFactor)) * eclipseFactor; // "Saturation", more in an eclipse: no flat grey haze
+		// The sun's light scattered once, through "Saturation" (more in an eclipse: no flat grey haze).
 		sunSurfaceColor *= eclipseFactor;
+		color = atmosphereScatter(dir, L, u_sky_mieG, sunSurfaceColor, u_sky_saturation * (2.0 - eclipseFactor), false, up, VIEW_STEPS, observerHeight, transmittance);
 
-		// Sky radiance (moonlight / space light) from the up axis: the night glow GI / fog get from skyRadiance().
-		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
-		{
-			vec3 skyLTrans;
-			color += atmosphereScatter(dir, up, up, 4, observerHeight, skyLTrans) * u_sky_radiance;
-		}
+		// Sky radiance (moonlight / space light) from the up axis: the night glow GI / fog get from skyRadiance(). THE
+		// MULTIPLE-SCATTERING LIGHT rides this march, not the sun's (atmosMarch has why: 64 registers there, 56 here), so
+		// it runs with a sky radiance of 0 too.
+		vec3 skyLTrans;
+		color += atmosphereScatter(dir, up, 0.0, u_sky_radiance, 1.0, true, up, 4, observerHeight, skyLTrans);
 		airColor = color;
 
 		// Sun halo: a tight Henyey-Greenstein lobe (smooth peak, long tail); the transmittance keeps it warm near the horizon.
@@ -292,9 +284,9 @@ void main()
 	if (cosUpDir < cosHorizon)
 	{
 		vec3 grazeDir = normalize(dir - up * (cosUpDir - 0.02));
-		vec3 skyAmb = atmosphereScatterCheap(grazeDir, L, up, 4) * u_sunColor.rgb * eclipseFactor;
+		vec3 skyAmb = atmosphereScatterRising(grazeDir, L, u_sky_mieG, sunSurfaceColor, true, up, 4);
 		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
-			skyAmb += atmosphereScatterCheap(grazeDir, up, up, 2) * u_sky_radiance;
+			skyAmb += atmosphereScatterRising(grazeDir, up, 0.0, u_sky_radiance, false, up, 2);
 		vec3 groundLit = u_sky_groundAlbedo * (sunSurfaceColor * atmosTransmittanceToLight(0.0, L, up) * (max(sunElev, 0.0) / PI) + skyAmb);
 		color = airColor + transmittance * (groundLit + u_ambientColor);
 	}

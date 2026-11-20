@@ -36,7 +36,10 @@ namespace
 {
     // Earth sea-level scattering coefficients, scaled by the atmosphere tweaks.
     glm::vec3 skyBetaRayleigh(const SkyParams& sky) { return glm::vec3(5.802e-6f, 13.558e-6f, 33.1e-6f) * sky.rayleighScatter; }
-    float skyBetaMie(const SkyParams& sky) { return 3.996e-6f * sky.mieScatter; }
+    // The haze: x "Humidity"'s growth. The water the particles take up only scatters, so the extinction / scattering ratio
+    // ("Haze extinction": the dry particles' absorption) goes toward 1 as the haze grows.
+    float skyBetaMie(const SkyParams& sky) { return 3.996e-6f * sky.mieScatter * sky.humidityHazeScale(); }
+    float skyMieExtinction(const SkyParams& sky) { return 1.0f + (glm::max(sky.mieExtinction, 1.0f) - 1.0f) / sky.humidityHazeScale(); }
     glm::vec3 skyMoonDirection(const SkyParams& sky) { return glm::normalize(sky.moonDirection); }
     float skyMoonCos(const SkyParams& sky) { return cosf(glm::radians(sky.moonSizeDeg)); }
     // The sun direction and the up axis as the shaders get them: unit vectors (the shaders never normalize them).
@@ -117,15 +120,34 @@ namespace
 
     float forceIsoThreshold(const ForceFieldParams& f) { return glm::max(f.isoThreshold, 1e-3f); }
 
-    // Sun transmittance at ground level: the CPU mirror of atmosphere.inc.glsl's atmosTransmittanceToLight(0, sunDir, up)
-    // - Chapman optical depth (r = planet radius, h = 0), atmosTau, exp. Constant per frame, so the lit fragment shaders
-    // read u_sunTransmittance instead of evaluating it per pixel. KEEP IN SYNC with the GLSL constants (ATMOS_R_PLANET,
-    // ATMOS_BETA_OZONE).
-    glm::vec3 sunTransmittance(const SkyParams& sky)
+    // THE ATMOSPHERE ON THE CPU: the mirror of atmosphere.inc.glsl (the Chapman optical depths, atmosTau, the ray's optical
+    // depth), for the per-frame values no shader should evaluate per pixel: the sun's transmittance at the ground and the
+    // multiple-scattering light. KEEP IN SYNC with the GLSL (ATMOS_R_PLANET, ATMOS_R_ATMOS, ATMOS_BETA_OZONE,
+    // atmosChapman, atmosRayOD, ATMOS_MS_LOW / ATMOS_MS_HIGH).
+    struct SkyAtmosphere
     {
-        constexpr float c_planetRadius = 6371e3f;
-        const glm::vec3 c_betaOzone(0.650e-6f, 1.881e-6f, 0.085e-6f);
-        const auto chapman = [](float X, float cosChi) // Schüler's grazing-incidence closed form
+        static constexpr float c_planetRadius = 6371e3f;
+        static constexpr float c_atmosRadius = 6451e3f;
+        glm::vec3 betaRayleigh;
+        glm::vec3 betaOzone; // x "Ozone"
+        float betaMie;
+        float mieExtinction;
+        float rayleighHeight;
+        float mieHeight;
+
+        explicit SkyAtmosphere(const SkyParams& sky)
+            : betaRayleigh(skyBetaRayleigh(sky)), betaOzone(glm::vec3(0.650e-6f, 1.881e-6f, 0.085e-6f) * sky.ozone)
+            , betaMie(skyBetaMie(sky)), mieExtinction(skyMieExtinction(sky)), rayleighHeight(sky.rayleighHeight), mieHeight(sky.mieHeight)
+        {
+        }
+
+        // Every value above: two atmospheres with the same key scatter the same.
+        oc::array<float, 10> key() const
+        {
+            return { betaRayleigh.x, betaRayleigh.y, betaRayleigh.z, betaOzone.x, betaOzone.y, betaOzone.z, betaMie, mieExtinction, rayleighHeight, mieHeight };
+        }
+
+        static float chapman(float X, float cosChi) // Schüler's grazing-incidence closed form; X = (planet radius + height) / scale height
         {
             const float c = std::sqrt(1.5707963f * X);
             if (cosChi >= 0.0f)
@@ -133,11 +155,138 @@ namespace
             const float sinChi = std::sqrt(glm::max(1.0f - cosChi * cosChi, 1e-6f));
             const float X0 = X * sinChi;
             return 2.0f * std::sqrt(1.5707963f * X0) * std::exp(glm::min(X - X0, 60.0f)) - c / ((c - 1.0f) * (-cosChi) + 1.0f);
-        };
+        }
+
+        // The (Rayleigh, Mie) densities at a height, 1 at the ground.
+        glm::vec2 density(float height) const { return glm::vec2(std::exp(-height / rayleighHeight), std::exp(-height / mieHeight)); }
+
+        // (Rayleigh, Mie) optical depth from pos (planet-centred) to space along dir.
+        glm::vec2 lightOpticalDepth(const glm::vec3& pos, const glm::vec3& dir) const
+        {
+            const float r = glm::length(pos);
+            const float cosChi = glm::dot(pos, dir) / r;
+            return density(glm::max(r - c_planetRadius, 0.0f))
+                * glm::vec2(rayleighHeight * chapman(r / rayleighHeight, cosChi), mieHeight * chapman(r / mieHeight, cosChi));
+        }
+
+        // The optical thickness per colour of (Rayleigh, Mie) optical depths; of the two densities at a point, its extinction (1/m).
+        glm::vec3 tau(const glm::vec2& od) const { return betaRayleigh * od.x + glm::vec3(betaMie * mieExtinction * od.y) + betaOzone * od.x; }
+        // The scattering (1/m) at a point of those densities.
+        glm::vec3 scattering(const glm::vec2& dens) const { return betaRayleigh * dens.x + glm::vec3(betaMie * dens.y); }
+    };
+
+    // The (Rayleigh, Mie) optical depth along a ray from its origin: atmosphere.inc.glsl's AtmosRay / atmosRayOD (a descending
+    // ray is measured backwards, one that dips and rises again is split at its lowest point).
+    struct SkyRay
+    {
+        const SkyAtmosphere& atm;
+        glm::vec3 ro;
+        glm::vec3 dir;
+        float tLow;                 // the ray's lowest point (<= 0: rising all the way)
+        glm::vec2 odFwd;            // the rising part: origin -> space along dir; for a ray that descends first, origin -> lowest point -> space
+        glm::vec2 odRoBack{ 0.0f }; // the descending part: origin -> space along -dir
+
+        SkyRay(const SkyAtmosphere& atmosphere, const glm::vec3& origin, const glm::vec3& direction)
+            : atm(atmosphere), ro(origin), dir(direction), tLow(-glm::dot(origin, direction))
+        {
+            if (tLow <= 0.0f)
+                odFwd = atm.lightOpticalDepth(ro, dir);
+            else
+            {
+                odRoBack = atm.lightOpticalDepth(ro, -dir);
+                const glm::vec3 lowest = ro + dir * tLow;
+                odFwd = glm::max(atm.lightOpticalDepth(lowest, -dir) - odRoBack, glm::vec2(0.0f)) + atm.lightOpticalDepth(lowest, dir);
+            }
+        }
+
+        glm::vec2 opticalDepth(float t) const
+        {
+            const glm::vec3 p = ro + dir * t;
+            if (t < tLow) // still descending: measured from p back up to the origin
+                return glm::max(atm.lightOpticalDepth(p, -dir) - odRoBack, glm::vec2(0.0f));
+            return glm::max(odFwd - atm.lightOpticalDepth(p, dir), glm::vec2(0.0f));
+        }
+    };
+
+    // Near / far distances of a ray from `height` above the planet's surface with the sphere of `radius`. In double: the
+    // float form subtracts two squares of ~6.4e6.
+    glm::vec2 skyRaySphere(float height, const glm::vec3& dir, float radius)
+    {
+        const double r0 = (double)SkyAtmosphere::c_planetRadius + (double)height;
+        const double b = r0 * (double)dir.y;
+        const double d = b * b - (r0 - (double)radius) * (r0 + (double)radius);
+        if (d < 0.0)
+            return glm::vec2(1e20f, -1e20f);
+        const double root = std::sqrt(d);
+        return glm::vec2((float)(-b - root), (float)(-b + root));
+    }
+
+    // THE MULTIPLE-SCATTERING LIGHT at `height`, per unit light from lightCos above the horizon (the shaders add it x the
+    // scattering at a point: atmosphere.inc.glsl atmosMultiScatter). After Hillaire 2020: the light scattered ONCE, gathered
+    // from every direction with an isotropic phase, plus the lit ground, x 1 / (1 - the share of the light scattered at the
+    // point that scatters again) for every further order. Up = +Y, the light in the XY plane. The march is the shaders'
+    // (atmosMarch): quadratic steps, each step's light = (source / extinction) at its sample x the transmittance it takes.
+    glm::vec3 skyMultiScatter(const SkyAtmosphere& atm, float height, float lightCos)
+    {
+        constexpr int c_cosSteps = 8, c_phiSteps = 4, c_steps = 12; // within 4 % of 32 x 16 directions x 64 steps
+        constexpr float c_groundAlbedo = 0.15f;                    // land and sea, the visible band
+        const glm::vec3 light(std::sqrt(glm::max(1.0f - lightCos * lightCos, 0.0f)), lightCos, 0.0f);
+        const glm::vec3 ro(0.0f, SkyAtmosphere::c_planetRadius + height, 0.0f);
+
+        glm::vec3 once(0.0f);  // x 4 pi: the light scattered once (+ the ground's), summed over the directions
+        glm::vec3 again(0.0f); // the share that scatters again, summed
+        for (int a = 0; a < c_cosSteps; ++a)
+        {
+            const float cosUp = 1.0f - 2.0f * ((float)a + 0.5f) / (float)c_cosSteps;
+            const float sinUp = std::sqrt(1.0f - cosUp * cosUp);
+            for (int b = 0; b < c_phiSteps; ++b)
+            {
+                // Half the circle: the other half mirrors it across the light's plane.
+                const float phi = glm::pi<float>() * ((float)b + 0.5f) / (float)c_phiSteps;
+                const glm::vec3 dir(sinUp * std::cos(phi), cosUp, sinUp * std::sin(phi));
+                float tFar = glm::max(skyRaySphere(height, dir, SkyAtmosphere::c_atmosRadius).y, 0.0f);
+                const glm::vec2 tGround = skyRaySphere(height, dir, SkyAtmosphere::c_planetRadius);
+                const bool hitsGround = tGround.x > 0.0f && tGround.x < tGround.y;
+                if (hitsGround)
+                    tFar = glm::min(tFar, tGround.x);
+
+                const SkyRay ray(atm, ro, dir);
+                glm::vec3 through(1.0f); // the transmittance to the step's start
+                for (int i = 0; i < c_steps; ++i)
+                {
+                    const float sEnd = (float)(i + 1) / (float)c_steps;
+                    const float sMid = ((float)i + 0.5f) / (float)c_steps;
+                    const glm::vec3 p = ro + dir * (tFar * sMid * sMid);
+                    const glm::vec2 dens = atm.density(glm::max(glm::length(p) - SkyAtmosphere::c_planetRadius, 0.0f));
+                    const glm::vec3 next = glm::exp(-atm.tau(ray.opticalDepth(tFar * sEnd * sEnd)));
+                    const glm::vec3 scattered = (through - next) * atm.scattering(dens) / glm::max(atm.tau(dens), glm::vec3(1e-30f));
+                    again += scattered;
+                    once += scattered * glm::exp(-atm.tau(atm.lightOpticalDepth(p, light)));
+                    through = next;
+                }
+                if (hitsGround) // a diffuse ground: albedo / pi x its irradiance, x 4 pi as the rest
+                {
+                    const glm::vec3 ground = ro + dir * tFar;
+                    const float cosLight = glm::max(glm::dot(ground, light) / glm::length(ground), 0.0f);
+                    once += through * glm::exp(-atm.tau(atm.lightOpticalDepth(ground, light))) * (4.0f * c_groundAlbedo * cosLight);
+                }
+            }
+        }
+
+        const float invCount = 1.0f / (float)(c_cosSteps * c_phiSteps);
+        return once * (invCount / (4.0f * glm::pi<float>())) / (glm::vec3(1.0f) - glm::min(again * invCount, glm::vec3(0.99f)));
+    }
+    // The two altitudes the shaders blend that light between (atmosphere.inc.glsl ATMOS_MS_LOW / ATMOS_MS_HIGH).
+    constexpr float c_skyMultiScatterHeights[2] = { 500.0f, 8000.0f };
+
+    // Sun transmittance at ground level: atmosphere.inc.glsl's atmosTransmittanceToLight(0, sunDir, up). Constant per
+    // frame, so the lit fragment shaders read u_sunTransmittance instead of evaluating it per pixel.
+    glm::vec3 sunTransmittance(const SkyParams& sky)
+    {
+        const SkyAtmosphere atm(sky);
         const float cosChi = glm::dot(skyUpAxis(sky), skySunDirection(sky)); // pos = up * R, so cos(chi) = up . L
-        const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
-        const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
-        const glm::vec3 tau = skyBetaRayleigh(sky) * odR + glm::vec3(skyBetaMie(sky) * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
+        const glm::vec3 tau = atm.tau(glm::vec2(atm.rayleighHeight * SkyAtmosphere::chapman(SkyAtmosphere::c_planetRadius / atm.rayleighHeight, cosChi),
+                                                atm.mieHeight * SkyAtmosphere::chapman(SkyAtmosphere::c_planetRadius / atm.mieHeight, cosChi)));
         // THE HORIZON: the planet hides the sun once its disc has set - the visible share of the disc, a smooth step over
         // +- its angular radius about the horizon. The Chapman form gives a large but FINITE depth below it: a dim red sun
         // kept lighting the world after sunset (a glint on the ocean where the sun would be).
@@ -218,6 +367,7 @@ void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, 
     buildUboWeather(camera);
     buildUboRayTracing();
     buildUboClouds(camera);
+    buildUboSky();
     buildUboSunShadow(camera);
     // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that carries its world
     // center/sizes - descriptors (refreshed per frame in recordCommandBuffers) and params stay coherent.
@@ -237,6 +387,41 @@ void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, 
 // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the weather volumes'
 // streaks are motion blur relative to the eye. A teleport (first frame, scene load) reads as zero rather than one huge
 // streak.
+// THE SKY'S MULTIPLE-SCATTERING LIGHT (u_sky_multiScatterLow / High; atmosphere.inc.glsl atmosMultiScatter): the radiance
+// the air and the haze get from the rest of the sky and the lit ground, at two altitudes. Per unit light it depends only
+// on the atmosphere and the light's height, so the part from straight up (the Sky Radiance light) is computed when an
+// atmosphere tweak changes, and the sun's part again once the sun has moved ~0.02 degrees (~0.1 ms then). Every frame:
+// x the two lights, "Scatter Boost" and "Multiple scattering".
+void RendererState::buildUboSky()
+{
+    const SkyParams& s = m_skyParams;
+    const SkyAtmosphere atm(s);
+    const oc::array<float, 10> key = atm.key();
+    const bool newAtmosphere = key != m_skyMsAtmosphere;
+    const float sunCos = glm::dot(skyUpAxis(s), skySunDirection(s));
+    if (newAtmosphere)
+    {
+        m_skyMsAtmosphere = key;
+        for (int i = 0; i < 2; ++i)
+            m_skyMsUp[i] = skyMultiScatter(atm, c_skyMultiScatterHeights[i], 1.0f);
+    }
+    if (newAtmosphere || std::abs(sunCos - m_skyMsSunCos) > 3.5e-4f)
+    {
+        m_skyMsSunCos = sunCos;
+        for (int i = 0; i < 2; ++i)
+            m_skyMsSun[i] = skyMultiScatter(atm, c_skyMultiScatterHeights[i], sunCos);
+    }
+
+    const glm::vec3 sun = s.sunColor * (s.sunIntensity * skySunVisible(s));
+    const glm::vec3 skyLight = skyRadianceNow(s);
+    const float gain = glm::max(s.scatterBoost, 0.0f) * glm::max(s.multiScatter, 0.0f);
+    // The low altitude lies under the clouds: the sun's part x the layer's mean shadow (the clouds' own rough mean).
+    const CloudParams& c = m_cloudParams;
+    const float underClouds = cloudsEnabled() && c.shadows ? glm::mix(1.0f, glm::mix(1.0f, 0.3f, cloudCoverage(c)), glm::clamp(c.shadowStrength, 0.0f, 1.0f)) : 1.0f;
+    m_skyMultiScatter[0] = (m_skyMsSun[0] * sun * underClouds + m_skyMsUp[0] * skyLight) * gain;
+    m_skyMultiScatter[1] = (m_skyMsSun[1] * sun + m_skyMsUp[1] * skyLight) * gain;
+}
+
 void RendererState::buildUboWeather(const Camera& camera)
 {
     const float dt = (float)Globals::time.getDeltaSec();
@@ -791,7 +976,10 @@ void RendererState::registerUboValues(UboBlock& list)
             }, UboLive);
         list.add("ambientColor", [&s] { return s.ambientColor * s.ambientIntensity; }, UboLive);
         list.add("sky_betaRayleigh", [&] { return skyBetaRayleigh(s); }, s.rayleighScatter);
-        list.add("sky_betaMie", [&] { return skyBetaMie(s); }, s.mieScatter);
+        list.add("sky_betaMie", [&] { return skyBetaMie(s); }, s.mieScatter, s.humidity);
+        // The multiple-scattering light at ATMOS_MS_LOW / ATMOS_MS_HIGH (buildUboSky): the sun and the sky-radiance light in it.
+        list.add("sky_multiScatterLow", [this] { return m_skyMultiScatter[0]; }, UboLive);
+        list.add("sky_multiScatterHigh", [this] { return m_skyMultiScatter[1]; }, UboLive);
         // Its sources include the Runtime sun-cycle tweaks: live, so the day / night scale reaches the shaders every frame.
         list.add("sky_radiance", [&] { return skyRadianceNow(s); }, s.skyRadianceColor, s.skyRadianceIntensity, s.sunCycle, s.nightSkyRadiance);
         list.add("sky_sunAngularCos", s.sunAngularCos);
@@ -819,7 +1007,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("sky_nebulaDust", s.nebulaDust);
         list.add("sky_rayleighHeight", s.rayleighHeight);
         list.add("sky_mieHeight", s.mieHeight);
-        list.add("sky_mieExtinction", s.mieExtinction);
+        list.add("sky_mieExtinction", [&] { return skyMieExtinction(s); }, s.mieExtinction, s.humidity);
         list.add("sky_ozone", s.ozone);
     }
     {

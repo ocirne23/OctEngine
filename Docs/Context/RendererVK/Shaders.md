@@ -39,8 +39,10 @@ calls `reloadShaders()`.
   target env, the entry format or the form `buildUboDeclaration` writes an entry in change.** A cache hit writes no `Local/Shaders/*.spv` dump. Delete
   `Local/ShaderCache/` to force a full recompile.
 * **Per-pixel work hoisted to the UBO / per pixel:**
-  * `u_sunTransmittance` is the CPU mirror of `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; **keep the
-    constants in sync with atmosphere.inc.glsl**) — no shader runs the Chapman function per pixel or per ray for it.
+  * `u_sunTransmittance` is the CPU mirror of `atmosTransmittanceToLight(0, sun, up)` (`sunTransmittance` over
+    `SkyAtmosphere`, RendererUbo.cpp; **keep it in sync with atmosphere.inc.glsl**) — no shader runs the Chapman
+    function per pixel or per ray for it. The sky's multiple-scattering light is the same kind of value
+    (`u_sky_multiScatterLow` / `High`, `buildUboSky`; "The atmosphere" in [Lighting.md](Lighting.md)).
     It is x the sun disc's VISIBLE share above the horizon (a smooth step over +- the disc radius, "Sun Angle Cos"):
     the Chapman form gives a large but finite depth below the horizon, and a dim red sun lit the world after sunset
     (an ocean glint where the sun would be). The clouds' own sun terms do not use it (they still glow after sunset).
@@ -154,6 +156,17 @@ calls `reloadShaders()`.
   did not, and holding the struct across the step RAISED the register counts (sky FS 56 -> 64, cloud_sky 64 -> 72) and
   slowed the cloud march 0.33 -> 0.36 ms. What pays is less WORK: an earlier test (the clutter cull's climate fit), a
   cull by what the view can see (the far shadow casters), fewer waits (the next rule).
+* **The atmosphere marches** (atmosphere.inc.glsl `atmosMarch`, the aerial LUT, `cloudAerialScatter`), each measured:
+  * **Two calls under an `if` are both worked out** (flattened). `atmosRayOD` is ONE Chapman evaluation with its
+    direction and sign selected, and `AtmosRay` holds two constants, not four: aerial_lut 73 -> 64 registers, every
+    sky binary 8 - 30 % smaller. A ray that only rises takes `atmosRayBeginRising` (one evaluation at the origin, not
+    three).
+  * **A term that needs a SECOND vector across the widest point of a step costs a register step.** The
+    multiple-scattering light in the saturated sun march (the saturation needs the once-scattered light apart): sky
+    FS 64. On the unsaturated sky-light march it adds into the same vector: 56.
+  * **Where the colour goes is not predictable: measure both.** `atmosMarch` colours its light IN the step (one sum:
+    56; a sum per species, coloured after: 72). `cloudAerialScatter` is the opposite (sums per light and species,
+    coloured after: 64; the colours in the step: 72 - the compiler held every colour x phase product across it).
 * **A march that waits for each fetch takes TWO samples a wait.** Where the next sample's place does not depend on this
   one's result (only the march's END does), both taps go out together and are taken in turn: the same samples, about
   half the waits. The tree voxels' view and sun marches (`voxelOpacityPair`, tree_voxel.inc.glsl; "TWO STEPS A WAIT" in
@@ -265,9 +278,9 @@ shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
 cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 80/32,
-river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 73, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 64, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 39/0 (54/0 with the
-vortex on), cloud_temporal 48/0, gi_sky_map 54/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
+vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.
 

@@ -117,20 +117,23 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
 #endif
 }
 
-// Single-scattered atmosphere from a camera-relative origin to origin + dir * tEnd and its transmittance: the aerial
-// perspective in front of a cloud. Returns the sun part per unit sun radiance (multiply by the sun colour); skyLight =
-// the SKY-LIGHT part (the "Sky Radiance" light from straight up, as aerial_lut.cs.glsl: most of the blue), radiance.
-// Each step's sun is cloud-shadowed (cloudAirSunVis); the sky light is not, as in the LUT. The 8 steps sit at the ray's
+// The atmosphere's light from a camera-relative origin to origin + dir * tEnd (a RADIANCE) and its transmittance: the
+// aerial perspective in front of a cloud. Three lights, as aerial_lut.cs.glsl: the sun (lightDir, u_sunColor x the
+// eclipse), the SKY LIGHT (the "Sky Radiance" light from straight up: most of the blue; its haze part with no forward
+// lobe - atmosphere.inc.glsl atmosMarch) and the multiple-scattering light (atmosMultiScatter: the haze's white).
+// Each step's sun is cloud-shadowed (cloudAirSunVis); the other two are not, as in the LUT. The 8 steps sit at the ray's
 // per-pixel / per-frame JITTER, which the temporal pass averages into soft shafts (fixed points stamped the openings'
 // lit air onto the clouds as blobs).
-vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 lightDir, float jitter, out vec3 transmittance, out vec3 skyLight)
+// REGISTERS (this loop sets cloud_sky's count, 64): the sums are per light and per species, coloured AFTER the loop -
+// with the colours in the step the compiler holds every colour x phase product across it (72). THE
+// MULTIPLE-SCATTERING LIGHT has no sum and no step work of its own: it comes from the sky light's sums (the scattering
+// along the ray behind the view transmittance, x the transmittance toward the zenith), that upward transmittance
+// divided out at the segment's middle. A sum of its own, or its term in the step, was 72 too.
+vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 lightDir, float jitter, out vec3 transmittance)
 {
     const int steps = 8;
     const vec3 ro = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // planet-centred
     const float mu = dot(dir, lightDir);
-    const float pR = phaseRayleigh(mu);
-    const float pM = phaseHG(mu, u_sky_mieG);
-    const bool sky = dot(u_sky_radiance, u_sky_radiance) > 0.0; // uniform: a UBO value
     const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
     const vec2 densExp2 = -CLOUD_LOG2E / vec2(ATMOS_H_RAY, ATMOS_H_MIE); // exp(-h / H) as exp2(h * densExp2)
     const float dt = tEnd / float(steps);
@@ -150,24 +153,22 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
                          * cloudAirSunVis(origin + dir * t, camAlt, lightDir);
         sumR += atten * dens.x;
         sumM += atten * dens.y;
-        if (sky)
-        {
-            const vec3 skyAtt = exp(-atmosTau(viewOD + atmosLightOpticalDepth(p, p / length(p))));
-            skyR += skyAtt * dens.x;
-            skyM += skyAtt * dens.y;
-        }
+        const vec3 skyAtt = exp(-atmosTau(viewOD + atmosLightOpticalDepth(p, p / length(p))));
+        skyR += skyAtt * dens.x;
+        skyM += skyAtt * dens.y;
         t += dt;
     }
 
     transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
-    skyLight = vec3(0.0);
-    if (sky)
-    {
-        const float muSky = dir.y;
-        skyLight = (skyR * u_sky_betaRayleigh * phaseRayleigh(muSky) + skyM * vec3(u_sky_betaMie) * phaseHG(muSky, u_sky_mieG))
-                 * u_sky_scatterBoost * u_sky_radiance;
-    }
-    return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
+    skyR *= u_sky_betaRayleigh;
+    skyM *= u_sky_betaMie;
+    const vec3 mid = ro + dir * (0.5 * tEnd);
+    const float midR = length(mid);
+    const vec3 multi = (skyR + skyM) * atmosMultiScatter(max(midR - ATMOS_R_PLANET, 0.0)) / exp(-atmosTau(atmosLightOpticalDepth(mid, mid / midR)));
+    // The sky light's haze part has no forward lobe: a diffuse glow (atmosphere.inc.glsl atmosMarch).
+    return (sumR * u_sky_betaRayleigh * phaseRayleigh(mu) + sumM * vec3(u_sky_betaMie) * phaseHG(mu, u_sky_mieG)) * (u_sky_scatterBoost * u_sunVisible) * u_sunColor
+         + (skyR * phaseRayleigh(dir.y) + skyM * phaseHG(dir.y, 0.0)) * u_sky_scatterBoost * u_sky_radiance
+         + multi;
 }
 
 struct CloudMarchResult
@@ -469,8 +470,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 
     // The air in front lies in the CLOUDS' SHADOW where the sun is behind them; unshadowed, its Mie forward peak drew a
     // sun glow on top of any cloud.
-    vec3 airT, airSky;
-    const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, abs(jitter), airT, airSky) * sunColor + airSky;
+    vec3 airT;
+    const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, abs(jitter), airT);
     // u_clouds_aerialStrength scales the added air light; "Aerial dimming" the air's optical depth on the cloud's own light
     // (per colour: the far cloud warms and darkens). "Aerial fade" takes the air's MEAN optical depth off the cloud's
     // opacity: the world is flat, so far clouds never sink under a horizon - they fade into the sky behind instead.

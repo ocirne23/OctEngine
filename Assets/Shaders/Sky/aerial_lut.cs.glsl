@@ -4,7 +4,8 @@
 // between the CENTRE view's camera and every point of its frustum, so distant terrain takes the blue of the sky behind
 // it. vol_apply.fs.glsl lays it BEHIND the fog (the height fog sits near the camera; the air fills the distance).
 //
-// ONE WORKGROUP PER (x, y) COLUMN, one lane per slice: rgb = in-scatter (sun + sky-radiance light), a = the view ray's
+// ONE WORKGROUP PER (x, y) COLUMN, one lane per slice: rgb = in-scatter (sun + sky-radiance light + the
+// multiple-scattering light, atmosMultiScatter - under the clouds its sun part takes their mean shadow), a = the view ray's
 // mean transmittance (the apply's blend is scalar). Slice k holds the value at its FAR edge, t = maxDist * ((k + 1) / Z)^2
 // (quadratic: most slices where the haze changes fastest). Each step is independent (the view optical depth is closed
 // form, atmosRayOD), so a slice is a PREFIX SUM: each lane marches its own substeps and a subgroup scan adds the slices
@@ -49,14 +50,16 @@ void main()
     const bool skyLight = dot(u_sky_radiance, u_sky_radiance) > 0.0;
     const float muSky = dot(dir, up);
     const float pRSky = phaseRayleigh(muSky);
-    const float pMSky = phaseHG(muSky, u_sky_mieG);
+    const float pMSky = phaseHG(muSky, 0.0); // a diffuse glow, no forward lobe (atmosphere.inc.glsl atmosMarch)
 
     const float eclipse = u_sunVisible;
     const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
 
-    // This slice's substeps: per unit light, sum(attenuation * density * dt).
-    vec3 sunR = vec3(0.0), sunM = vec3(0.0);
-    vec3 skyR = vec3(0.0), skyM = vec3(0.0);
+    // This slice's substeps. TWO sums (registers, and one subgroup scan each): the sun's part per unit sun colour (the
+    // saturation curve and its clamp come after the scan), and the rest as a radiance - the sky-radiance light and the
+    // multiple-scattering light (atmosMultiScatter: both lights in it).
+    vec3 sun = vec3(0.0);
+    vec3 rest = vec3(0.0);
     const float sPrev = float(k) / float(AERIAL_LUT_Z), s = float(k + 1) / float(AERIAL_LUT_Z);
     const float tPrev = maxDist * sPrev * sPrev;
     const float tNext = maxDist * s * s;
@@ -65,33 +68,24 @@ void main()
     {
         const float t = tPrev + (float(j) + 0.5) * dt;
         const vec3 p = ro + dir * t;
-        const float h = length(p) - ATMOS_R_PLANET;
-        const vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * (dt * strength);
+        const float h = max(length(p) - ATMOS_R_PLANET, 0.0);
+        const vec2 dens = exp(-h / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * (dt * strength);
         const vec3 viewTau = atmosTau(atmosRayOD(ray, t)) * strength;
-        const vec3 sunAtt = exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, L)))) * cloudSunTransmittanceBilinear(u_viewPos + dir * t);
-        sunR += sunAtt * dens.x;
-        sunM += sunAtt * dens.y;
+        sun += exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, L)))) * cloudSunTransmittanceBilinear(u_viewPos + dir * t)
+             * (u_sky_betaRayleigh * (dens.x * pRSun) + vec3(u_sky_betaMie * dens.y * pMSun));
+        rest += exp(-viewTau) * atmosScattering(dens) * atmosMultiScatter(h);
         if (skyLight)
-        {
-            const vec3 skyAtt = exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, up))));
-            skyR += skyAtt * dens.x;
-            skyM += skyAtt * dens.y;
-        }
+            rest += exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, up))))
+                  * (u_sky_betaRayleigh * (dens.x * pRSky) + vec3(u_sky_betaMie * dens.y * pMSky)) * (u_sky_scatterBoost * u_sky_radiance);
     }
 
     // The slices in front, added: the scattered light from the camera to this slice's far edge.
-    sunR = subgroupInclusiveAdd(sunR);
-    sunM = subgroupInclusiveAdd(sunM);
-    if (skyLight) // uniform: a UBO value
-    {
-        skyR = subgroupInclusiveAdd(skyR);
-        skyM = subgroupInclusiveAdd(skyM);
-    }
+    sun = subgroupInclusiveAdd(sun);
+    rest = subgroupInclusiveAdd(rest);
 
-    vec3 color = (sunR * u_sky_betaRayleigh * pRSun + sunM * vec3(u_sky_betaMie) * pMSun) * (u_sky_scatterBoost) * u_sunColor.rgb;
+    vec3 color = sun * (u_sky_scatterBoost * u_sunColor.rgb);
     color = max(mix(vec3(dot(color, luminosity)), color, u_sky_saturation * (2.0 - eclipse)), vec3(0.0)) * eclipse; // sky.fs.glsl's curve
-    if (skyLight)
-        color += (skyR * u_sky_betaRayleigh * pRSky + skyM * vec3(u_sky_betaMie) * pMSky) * u_sky_scatterBoost * u_sky_radiance;
+    color += rest; // past the saturation, as the sky
     const vec3 T = exp(-atmosTau(atmosRayOD(ray, tNext)) * strength);
     imageStore(u_outAerial, ivec3(cell, k), vec4(color, dot(T, vec3(1.0 / 3.0))));
 }

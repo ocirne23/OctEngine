@@ -293,9 +293,14 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
       (every multiple-scattering octave under 0.1 %).
   * **The aerial perspective in front of the cloud** (`cloudAerialScatter`): an 8-step single-scatter segment
     from the camera altitude, x "Lighting/Aerial perspective strength" (`u_clouds_aerialStrength`, min 0.01:
-    scales the ADDED air light only; the dimming has its own tweak below). Two lights, as the
-    terrain's aerial LUT: the sun, and the SKY LIGHT ("Sky Radiance" from the local up, not cloud-shadowed - most of
-    the blue; without it the air in the clouds' shadow added nothing). The air thins with height, so a cloud gets
+    scales the ADDED air light only; the dimming has its own tweak below). Three lights, as the
+    terrain's aerial LUT: the sun, the SKY LIGHT ("Sky Radiance" from the local up, not cloud-shadowed - most of
+    the blue; without it the air in the clouds' shadow added nothing), and the MULTIPLE-SCATTERING light
+    (`atmosMultiScatter`: the haze's white - see "The atmosphere" in [Lighting.md](Lighting.md)). **That one has no sum
+    and no step work:** it is the sky light's two sums (the scattering along the ray, behind the view transmittance x
+    the transmittance toward the zenith) x `atmosMultiScatter` / the upward transmittance, both at the segment's
+    middle. **This loop sets cloud_sky's register count (64):** the sums are per light and per species and coloured
+    AFTER the loop; a sum for the multiple-scattering light, its term in the step, or the colours in the step were 72. The air thins with height, so a cloud gets
     less of it than terrain at the same distance. **"Aerial dimming"** scales the air's optical depth on the
     cloud's own light (per colour: warmer and darker far out; 1 = physical). **"Aerial fade"** takes the air's MEAN
     optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them.
@@ -519,7 +524,8 @@ at the ground, so the pixel is the haze in front of it plus the lit ground throu
 transmittance; the sun disc, moon and stars are left out there. The view optical depth is
 `atmosSegmentOD` / `atmosRayBegin` + `atmosRayOD` (atmosphere.inc.glsl; the per-ray form keeps the
 origin's Chapman values, so a march pays one evaluation per step), stable for descending rays (a "to space"
-depth through the planet is float noise). The sky MAP and every indirect path keep the ground observer.
+depth through the planet is float noise). The sky MAP and every indirect path keep the ground observer. The march, the
+humidity haze and the multiple-scattering light: "The atmosphere" in [Lighting.md](Lighting.md).
 
 ### Shader defines and the register budget
 

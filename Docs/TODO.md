@@ -138,8 +138,13 @@ See [RendererVK](Context/RendererVK/CONTEXT.md).
 * GI: sky-visibility occlusion not applied under the ocean; L1 ratio filter unweighted; no
   half-Lambert weight in the volume (leaks through thin geometry); sun from above is outside the
   cloud-dimming model; sun fraction is one scalar for RGB.
-* Aerial perspective: no multiple scattering (shadowed haze too dark); no reflection fog on mirror
-  rays; the fog-off path carries no air for the cloud and far-tree apply stages.
+* Aerial perspective: no reflection fog on mirror rays; the fog-off path carries no air for the cloud and far-tree
+  apply stages.
+* Atmosphere: "Humidity" is one global value - the terrain's climate humidity at the camera could drive it (the App
+  feeds the renderer, as the focus ground); the haze has no top that is not exponential (an inversion layer); the
+  clouds past "Max distance (km)" have no far stand-in but the haze; the clouds' air march (8 equal steps) is
+  under-sampled in a very thick haze ("Humidity" above ~0.85) - the taken-transmittance rule of `atmosMarch` would fix
+  it, at cloud_sky's register limit (64).
 * Particles and transparents inside a cloud / fog get the opaque pixel's cloud.
 * POM silhouettes (`TERRAIN_POM_SILHOUETTE`) do not work (holes behind ridges, a sky strip).
 * Biplanar rock AO comes from the top plane only (stretched on steep faces).
@@ -410,3 +415,5 @@ Values that must be kept in step by hand; a shared source would remove the risk.
 * NetFuzz mirrors `GameProtocolId` / `GameNetVersion` (NetFuzz/main.cpp).
 * `loadUnits` fallbacks ↔ the save's omitted-default keys.
 * The Game `Gq*` chat filter repeats App's 256-byte cap.
+* The atmosphere on the CPU (`SkyAtmosphere` / `SkyRay` / `skyMultiScatter`, RendererUbo.cpp) mirrors
+  `atmosphere.inc.glsl` (Chapman, `atmosTau`, `atmosRayOD`, the march, the `ATMOS_MS_*` heights).

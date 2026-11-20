@@ -1,13 +1,14 @@
-// Shared single-scattering Rayleigh + Mie atmosphere. The coefficients come from the UBO (u_sky_*), so the visible sky
-// (sky.fs.glsl) and all indirect sky light (GI miss rays, fog ambient, the surface fallback) use the same settings, and
-// the in-scatter is sourced by the same u_sunColor as direct lighting: no extra intensity multipliers in this path.
-// Requires ubo.inc.glsl and PI (include via shared.inc.glsl).
+// The shared Rayleigh (air) + Mie (haze) atmosphere: the sun's and the sky-radiance light's single scattering marched,
+// every further order from the CPU (atmosMultiScatter). The coefficients come from the UBO (u_sky_*; "Humidity" is in
+// u_sky_betaMie / u_sky_mieExtinction), so the visible sky (sky.fs.glsl) and all indirect sky light (GI miss rays, fog
+// ambient, the surface fallback) use the same settings, and the in-scatter is sourced by the same u_sunColor as direct
+// lighting. Requires ubo.inc.glsl and PI (include via shared.inc.glsl).
 
 #ifndef ATMOSPHERE_INC_GLSL
 #define ATMOSPHERE_INC_GLSL
 
-// ATMOS_R_PLANET and ATMOS_BETA_OZONE are MIRRORED on the CPU (RendererUbo.cpp, the ground sun transmittance in
-// buildUboSky): keep in sync.
+// THE MODEL IS MIRRORED on the CPU (RendererUbo.cpp SkyAtmosphere / SkyRay: the radii, ATMOS_BETA_OZONE, atmosChapman,
+// atmosTau, atmosRayOD, the ATMOS_MS_* heights) for u_sunTransmittance and the multiple-scattering light: keep in sync.
 const float ATMOS_R_PLANET = 6371e3;
 const float ATMOS_R_ATMOS  = 6451e3;
 const float ATMOS_OBSERVE_HEIGHT = 2.0;
@@ -84,16 +85,15 @@ vec3 atmosTransmittanceToLight(float height, vec3 lightDir, vec3 up)
 // (up to ~e^60), and a difference of two of those is float noise: a descending ray is measured backwards, and one that
 // dips and rises again is split at its lowest point.
 // AtmosRay is the per-ray part, for a march that asks many distances along one ray: the Chapman values at the origin
-// and the lowest point are constant, so each distance costs ONE evaluation.
+// and the lowest point are constant, so each distance costs ONE evaluation. TWO constants only (a march holds them
+// across its loop: registers): the rising and the past-the-lowest-point cases share odFwd.
 struct AtmosRay
 {
 	vec3 ro;
 	vec3 dir;
-	float tLow;     // the ray's lowest point (<= 0: rising all the way)
-	vec2 odRoFwd;   // rising: origin -> space along dir
-	vec2 odRoBack;  // descending: origin -> space along -dir
-	vec2 odLowPart; // descending: origin -> lowest point
-	vec2 odLowFwd;  // descending: lowest point -> space along dir
+	float tLow;    // the ray's lowest point (<= 0: rising all the way)
+	vec2 odFwd;    // the rising part: origin -> space along dir; for a ray that descends first, origin -> lowest point -> space
+	vec2 odRoBack; // the descending part: origin -> space along -dir
 };
 
 AtmosRay atmosRayBegin(vec3 ro, vec3 dir)
@@ -102,32 +102,39 @@ AtmosRay atmosRayBegin(vec3 ro, vec3 dir)
 	r.ro = ro;
 	r.dir = dir;
 	r.tLow = -dot(ro, dir);
-	r.odRoFwd = vec2(0.0);
 	r.odRoBack = vec2(0.0);
-	r.odLowPart = vec2(0.0);
-	r.odLowFwd = vec2(0.0);
 
 	if (r.tLow <= 0.0)
-		r.odRoFwd = atmosLightOpticalDepth(ro, dir);
+		r.odFwd = atmosLightOpticalDepth(ro, dir);
 	else
 	{
 		r.odRoBack = atmosLightOpticalDepth(ro, -dir);
 		const vec3 m = ro + dir * r.tLow;
-		r.odLowPart = max(atmosLightOpticalDepth(m, -dir) - r.odRoBack, vec2(0.0));
-		r.odLowFwd = atmosLightOpticalDepth(m, dir);
+		r.odFwd = max(atmosLightOpticalDepth(m, -dir) - r.odRoBack, vec2(0.0)) + atmosLightOpticalDepth(m, dir);
 	}
 	return r;
 }
 
-// (Rayleigh, Mie) optical depth from the ray's origin to distance t (atmosSegmentOD's three cases).
+// A ray that only RISES (dir above the horizon at ro): one Chapman evaluation here in place of three (the general
+// form's cases are flattened: all worked out), and atmosRayOD's descending case folds away.
+AtmosRay atmosRayBeginRising(vec3 ro, vec3 dir)
+{
+	AtmosRay r;
+	r.ro = ro;
+	r.dir = dir;
+	r.tLow = -1.0;
+	r.odFwd = atmosLightOpticalDepth(ro, dir);
+	r.odRoBack = vec2(0.0);
+	return r;
+}
+
+// (Rayleigh, Mie) optical depth from the ray's origin to distance t (atmosSegmentOD's cases).
 vec2 atmosRayOD(AtmosRay r, float t)
 {
-	const vec3 p = r.ro + r.dir * t;
-	if (r.tLow <= 0.0) // rising all the way
-		return max(r.odRoFwd - atmosLightOpticalDepth(p, r.dir), vec2(0.0));
-	if (t <= r.tLow) // still descending: measured from p back up to the origin
-		return max(atmosLightOpticalDepth(p, -r.dir) - r.odRoBack, vec2(0.0));
-	return r.odLowPart + max(r.odLowFwd - atmosLightOpticalDepth(p, r.dir), vec2(0.0));
+	// ONE Chapman evaluation, its direction and sign selected: two calls under an if are both worked out (flattened).
+	const bool descending = t < r.tLow; // still descending: measured from p back up to the origin
+	const vec2 od = atmosLightOpticalDepth(r.ro + r.dir * t, descending ? -r.dir : r.dir);
+	return max(descending ? od - r.odRoBack : r.odFwd - od, vec2(0.0));
 }
 
 vec2 atmosSegmentOD(vec3 ro, vec3 dir, float tEnd)
@@ -135,76 +142,116 @@ vec2 atmosSegmentOD(vec3 ro, vec3 dir, float tEnd)
 	return atmosRayOD(atmosRayBegin(ro, dir), tEnd);
 }
 
-// In-scattered radiance along dir for one directional light of unit radiance (the caller multiplies the light colour),
-// plus the view ray's total transmittance (for the sun disc / stars), for an observer `observerHeight` metres above the
-// ground (the visible sky passes the camera altitude: the sky darkens and the horizon dips). The ray ends at the
-// atmosphere edge or the ground. The sky uses 12 steps.
-vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observerHeight, out vec3 transmittance)
+// The scattering (1/m) at a point of (Rayleigh, Mie) densities; atmosTau of the same densities is its extinction.
+vec3 atmosScattering(vec2 dens)
 {
-	vec3 ro = up * (ATMOS_R_PLANET + observerHeight);
+	return u_sky_betaRayleigh * dens.x + vec3(u_sky_betaMie) * dens.y;
+}
+
+// THE MULTIPLE-SCATTERING LIGHT at height h (m): the radiance the air and the haze get from the rest of the sky and from
+// the lit ground - every scattering order past the first. A march adds it x the scattering at each sample, with no phase
+// (isotropic) and no light transmittance (it holds them). The CPU computes it per frame at two altitudes for the sun AND
+// the sky-radiance light together, x "Scatter Boost" x "Multiple scattering" (RendererUbo.cpp buildUboSky, which mirrors
+// the two heights): add it ONCE per ray, with no light colour. It is what keeps a thick haze bright: the sun's own light
+// alone leaves the horizon away from the sun DARKER the more haze there is.
+const float ATMOS_MS_LOW = 500.0;
+const float ATMOS_MS_HIGH = 8000.0;
+vec3 atmosMultiScatter(float h)
+{
+	return mix(u_sky_multiScatterLow, u_sky_multiScatterHigh, clamp((h - ATMOS_MS_LOW) * (1.0 / (ATMOS_MS_HIGH - ATMOS_MS_LOW)), 0.0, 1.0));
+}
+
+// THE MARCH to the atmosphere's edge (or the ground) for one directional light: returns the RADIANCE it scatters toward
+// the viewer - the light scattered once, plus (multiScatter, a constant) the multiple-scattering light. A ray marches
+// ONE of its two lights with it, so it is added once: the sky-radiance light where the sun's march is saturated (the
+// sky, the mirror layer), else the sun.
+// * lightColor = the light's radiance (the eclipse in it); mieG = the haze's forward lobe toward THIS light: u_sky_mieG
+//   for the sun, 0 for the sky-radiance light - that one stands for a diffuse glow, and a lobe would draw a bright spot
+//   round the zenith in a thick haze. saturation = the "Saturation" curve on the once-scattered light (1 = none); the
+//   multiple-scattering light does not take it (the haze's white).
+// * REGISTERS: ONE accumulator. The light colour and the saturation (linear, so per step = on the sum) are applied in
+//   the step; summed per species and coloured after the loop, the march held three sums (sky FS 56 -> 72 registers).
+//   The multiple-scattering light on a SATURATED march is a second vector across the step's widest point (gain apart
+//   from grey: 64); with saturation 1 it adds into gain (56).
+// * The step ENDS are quadratic, tFar * (i / steps)^2: the haze is a layer ~1 km thick, and a ray to the edge is 80 km
+//   (zenith) to 1000 km (horizon) long. Equal steps put the first sample kilometres up or tens of kilometres out.
+// * Each step's light = (source / extinction) at its sample x the transmittance the step TAKES AWAY, the transmittances
+//   in closed form (atmosRayOD, exact for an exponential atmosphere, so no hue drift at grazing angles). A step of any
+//   optical thickness then scatters the right amount: 12 steps are within 1 % of the integral in every direction, 4
+//   within ~3 %, a thick haze included. The midpoint rule over equal steps lost 20 % at the horizon with 12 steps and
+//   60 % with 4, and more the thicker the haze.
+vec3 atmosMarch(AtmosRay ray, float tFar, vec3 lightDir, float mieG, vec3 lightColor, float saturation, bool multiScatter, int steps,
+                out vec3 transmittance)
+{
+	// u_sky_scatterBoost scales the in-scatter without the transmittance; here, so every consumer scales the same.
+	const float mu = dot(ray.dir, lightDir);
+	const float pR = phaseRayleigh(mu) * u_sky_scatterBoost;
+	const float pM = phaseHG(mu, mieG) * u_sky_scatterBoost;
+	const float invSteps = 1.0 / float(steps);
+
+	vec3 sum = vec3(0.0);
+	vec3 through = vec3(1.0); // the view transmittance to the step's start
+	for (int i = 0; i < steps; ++i)
+	{
+		const float sEnd = float(i + 1) * invSteps;
+		const float sMid = (float(i) + 0.5) * invSteps;
+		const vec3 p = ray.ro + ray.dir * (tFar * sMid * sMid);
+		const float h = max(length(p) - ATMOS_R_PLANET, 0.0);
+		const vec2 dens = exp(-h / vec2(ATMOS_H_RAY, ATMOS_H_MIE));
+		// The step's light per unit of transmittance it takes: (source / extinction) at the sample. gain = its
+		// per-colour part, grey = the luminance part of the saturation: saturate(taken * once) = taken * (once *
+		// saturation) + dot(taken, once * luminosity * (1 - saturation)).
+		const vec3 invExt = 1.0 / max(atmosTau(dens), vec3(1e-30));
+		const vec3 once = exp(-atmosTau(atmosLightOpticalDepth(p, lightDir)))
+		                * (u_sky_betaRayleigh * (dens.x * pR) + vec3(u_sky_betaMie * dens.y * pM)) * lightColor * invExt;
+		vec3 gain = once * saturation;
+		vec3 grey = vec3(0.0);
+		if (saturation != 1.0)
+			grey = once * (vec3(0.2126, 0.7152, 0.0722) * (1.0 - saturation));
+		if (multiScatter)
+			gain += atmosScattering(dens) * atmosMultiScatter(h) * invExt;
+		// x the transmittance taken, (through - next), as its two halves: `through` is dead before the next one's
+		// optical depth is worked out (the widest point of the step), and only gain and grey cross it.
+		sum += through * gain + dot(through, grey);
+		through = exp(-atmosTau(atmosRayOD(ray, tFar * sEnd * sEnd)));
+		sum -= through * gain + dot(through, grey);
+	}
+
+	transmittance = through;
+	return sum;
+}
+
+// The sky along dir for an observer `observerHeight` metres above the ground (the visible sky passes the camera altitude:
+// the sky darkens and the horizon dips), plus the view ray's total transmittance (for the sun disc / stars). The ray
+// ends at the atmosphere edge or the ground. The sky uses 12 steps.
+vec3 atmosphereScatter(vec3 dir, vec3 lightDir, float mieG, vec3 lightColor, float saturation, bool multiScatter, vec3 up, int steps,
+                       float observerHeight, out vec3 transmittance)
+{
+	const vec3 ro = up * (ATMOS_R_PLANET + observerHeight);
 	float tFar = max(atmosRaySphere(ro, dir, ATMOS_R_ATMOS).y, 0.0);
 	const vec2 tGround = atmosRaySphere(ro, dir, ATMOS_R_PLANET);
 	if (tGround.x > 0.0 && tGround.x < tGround.y)
 		tFar = min(tFar, tGround.x);
-
-	float mu = dot(dir, lightDir);
-	float pR = phaseRayleigh(mu);
-	float pM = phaseHG(mu, u_sky_mieG);
-
-	// View optical depth per sample in closed form (atmosRayOD), exact for an exponential atmosphere: an accumulated one
-	// diverges per channel at grazing angles (rainbow / green hues), worse with fewer steps.
-	const AtmosRay ray = atmosRayBegin(ro, dir);
-	vec3 sumR = vec3(0.0), sumM = vec3(0.0);
-	float dt = tFar / float(steps);
-	float t = 0.5 * dt;
-	for (int i = 0; i < steps; ++i)
-	{
-		vec3 p = ro + dir * t;
-		float h = length(p) - ATMOS_R_PLANET;
-		vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-		vec2 odView = atmosRayOD(ray, t);
-		vec2 odSun = atmosLightOpticalDepth(p, lightDir);
-		vec3 atten = exp(-atmosTau(odView + odSun));
-		sumR += atten * dens.x;
-		sumM += atten * dens.y;
-		t += dt;
-	}
-
-	transmittance = exp(-atmosTau(atmosRayOD(ray, tFar)));
-	// u_sky_scatterBoost scales the in-scatter without the transmittance; here, so every consumer scales the same.
-	return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
+	return atmosMarch(atmosRayBegin(ro, dir), tFar, lightDir, mieG, lightColor, saturation, multiScatter, steps, transmittance);
 }
 
-// Low-step scatter for the indirect paths, from the ground observer (ATMOS_OBSERVE_HEIGHT), the ray to the atmosphere
-// edge only. The view optical depth is closed form as in atmosphereScatter, so the quadrature error only touches the
-// smooth source term and a handful of samples stays hue-stable.
-vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
+// The same for the indirect paths: from the ground observer (ATMOS_OBSERVE_HEIGHT), the ray to the atmosphere edge
+// only (a ray under the horizon goes through the ground's air: the horizon's colour).
+vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, float mieG, vec3 lightColor, float saturation, bool multiScatter, vec3 up, int steps)
 {
-	vec3 ro = up * (ATMOS_R_PLANET + ATMOS_OBSERVE_HEIGHT);
-	float tFar = max(atmosRaySphere(ro, dir, ATMOS_R_ATMOS).y, 0.0);
+	const vec3 ro = up * (ATMOS_R_PLANET + ATMOS_OBSERVE_HEIGHT);
+	vec3 transmittance;
+	return atmosMarch(atmosRayBegin(ro, dir), max(atmosRaySphere(ro, dir, ATMOS_R_ATMOS).y, 0.0), lightDir, mieG, lightColor, saturation,
+	                  multiScatter, steps, transmittance);
+}
 
-	float mu = dot(dir, lightDir);
-	float pR = phaseRayleigh(mu);
-	float pM = phaseHG(mu, u_sky_mieG);
-
-	vec2 odViewFull = atmosLightOpticalDepth(ro, dir); // ro -> space along the view ray, closed form
-	vec3 sumR = vec3(0.0), sumM = vec3(0.0);
-	float dt = tFar / float(steps);
-	float t = 0.5 * dt;
-	for (int i = 0; i < steps; ++i)
-	{
-		vec3 p = ro + dir * t;
-		float h = length(p) - ATMOS_R_PLANET;
-		vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-		vec2 odView = max(odViewFull - atmosLightOpticalDepth(p, dir), vec2(0.0)); // ro -> p, exact
-		vec2 odSun = atmosLightOpticalDepth(p, lightDir);
-		vec3 atten = exp(-atmosTau(odView + odSun));
-		sumR += atten * dens.x;
-		sumM += atten * dens.y;
-		t += dt;
-	}
-
-	return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
+// ... and for a dir that RISES (above the horizon), with no saturation: the least work per ray.
+vec3 atmosphereScatterRising(vec3 dir, vec3 lightDir, float mieG, vec3 lightColor, bool multiScatter, vec3 up, int steps)
+{
+	const vec3 ro = up * (ATMOS_R_PLANET + ATMOS_OBSERVE_HEIGHT);
+	vec3 transmittance;
+	return atmosMarch(atmosRayBeginRising(ro, dir), max(atmosRaySphere(ro, dir, ATMOS_R_ATMOS).y, 0.0), lightDir, mieG, lightColor, 1.0,
+	                  multiScatter, steps, transmittance);
 }
 
 // The below-horizon ground's direct sun, albedo / PI * E_sun (constant over directions). The GI trace counts it as SUN
@@ -216,7 +263,8 @@ vec3 skyGroundSun(vec3 up)
 }
 
 // Sky radiance for indirect lighting (GI miss rays, fog ambient, surface fallback): a low-step version of the sky's
-// integral, sourced by the sun plus the sky-radiance light (moonlight / space light, along u_skyUp). Below the horizon
+// integral, sourced by the sun plus the sky-radiance light (moonlight / space light, along u_skyUp) and the
+// multiple-scattering light. Below the horizon
 // a Lambertian ground stands in: a grazing sky sample x the ground albedo, PLUS the direct sun (skyGroundSun), the
 // dominant daytime term - without it downward GI rays sit well below the sunlit ground the probes see.
 vec3 skyRadiance(vec3 dir)
@@ -232,25 +280,22 @@ vec3 skyRadiance(vec3 dir)
 		groundSun = skyGroundSun(up);
 	}
 
-	vec3 radiance = atmosphereScatterCheap(dir, u_sunDirection.xyz, up, 4) * u_sunColor.rgb * u_sunVisible;
+	vec3 radiance = atmosphereScatterRising(dir, u_sunDirection.xyz, u_sky_mieG, u_sunColor.rgb * u_sunVisible, true, up, 4);
 	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
-		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_sky_radiance;
+		radiance += atmosphereScatterRising(dir, up, 0.0, u_sky_radiance, false, up, 2);
 	return radiance * groundAtten + groundSun;
 }
 
 // Sky for a MIRROR ray (ocean, terrain wet film): matched to sky.fs.glsl (12 view steps + the eclipse saturation
-// curve); skyRadiance() under-samples the long grazing paths reflections look along. No sun disc (the GGX glint is its
-// reflection), no ground term.
+// curve, which the multiple-scattering light does not take). No sun disc (the GGX glint is its reflection), no ground
+// term.
 vec3 mirrorSkyRadiance(vec3 dir)
 {
 	const vec3 up = u_skyUp;
 	const float eclipse = u_sunVisible;
-	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-	vec3 color = atmosphereScatterCheap(dir, u_sunDirection.xyz, up, 12) * u_sunColor.rgb;
-	color = mix(vec3(dot(color, luminosity)), color, u_sky_saturation * (2.0 - eclipse)) * eclipse;
-	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
-		color += atmosphereScatterCheap(dir, up, up, 4) * u_sky_radiance;
-	return color;
+	// The multiple-scattering light rides the sky-light march, as in sky.fs.glsl.
+	return atmosphereScatterCheap(dir, u_sunDirection.xyz, u_sky_mieG, u_sunColor.rgb * eclipse, u_sky_saturation * (2.0 - eclipse), false, up, 12)
+	     + atmosphereScatterCheap(dir, up, 0.0, u_sky_radiance, 1.0, true, up, 4);
 }
 
 // THE SKY MAP (gi_sky_map.cs.glsl, GIProbePipeline): both functions above baked once per frame into a lat-long layer

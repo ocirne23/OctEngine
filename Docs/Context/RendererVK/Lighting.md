@@ -444,6 +444,72 @@ raster-bound: with every terrain triangle made degenerate it still cost ~70% of 
   the wind bend (a third of its code) took the same time. Bushes and rocks cost nothing here.
 * What is left: caching the static casters' cascades.
 
+## The atmosphere (`atmosphere.inc.glsl`, "Sky/Atmosphere" tweaks)
+
+ONE model for the visible sky (`sky.fs.glsl`), the sky map (GI, reflections, the clouds' ambient), the aerial
+perspective LUT and the air in front of the clouds: AIR (Rayleigh, + ozone absorption) and HAZE (Mie: a layer of
+"Haze height" scale height), both exponential in height, so every optical depth is closed form (Chapman:
+`atmosLightOpticalDepth`, `atmosRayOD`). Three lights reach a point of it: the sun, the sky-radiance light (from
+straight up) and the multiple-scattering light.
+
+* **THE MARCH to the atmosphere's edge** (`atmosMarch`, for ONE light: it returns a radiance; `atmosphereScatter` =
+  from the camera altitude, with the ground; `atmosphereScatterCheap` = from the ground observer, any direction - the
+  mirror layer; `atmosphereScatterRising` = the same for a direction above the horizon, the least work - `skyRadiance`
+  and the sky's ground). Two rules, both for the haze - a layer ~1 km thick on a ray 80 km (zenith) to 1000 km
+  (horizon) long:
+  * the step ENDS are quadratic, `tFar x (i / steps)^2`: the first samples lie inside the haze;
+  * a step's light = (source / extinction) at its sample x **the transmittance the step takes away** (both
+    transmittances closed form). A step of any optical thickness then scatters the right amount.
+
+  12 steps (the sky, the mirror layer) are within 1 % of the integral in every direction, 4 (the GI layer) within ~3 %
+  (~10 % near the sun), a thick haze included. **Tried and dropped: the midpoint rule over equal steps** - 20 % too dark
+  at the horizon with 12 steps and 60 % with 4, and worse the thicker the haze.
+  * **Its form is set by the register counts** (the comments in `atmosMarch`; the measured rules in "The atmosphere
+    marches", [Shaders.md](Shaders.md)): ONE sum, the light colour and the "Saturation" curve applied in the step (the
+    curve is linear, so per step = on the sum); the taken transmittance as its two halves (`sum += through x gain`,
+    then the next transmittance, then `sum -= next x gain`), so the old transmittance is dead while the next one's
+    optical depth is worked out.
+* **"Humidity"** (0 .. 0.9, `SkyParams::humidityHazeScale`): the haze particles take up water - "Haze scattering" x
+  `1 / (1 - humidity)^2` (0.5 = x 4, 0.7 = x 11, 0.8 = x 25, 0.9 = x 100). The base coefficient is very clean air (an
+  optical depth of 0.005 straight up); x 11 is a clear day with a soft band at the horizon, x 25 a hazy one, x 100 a
+  white murk. The water only scatters: `u_sky_mieExtinction` = 1 + ("Haze extinction" - 1) / the scale. CPU only
+  (`skyBetaMie`, `skyMieExtinction`), so `u_sunTransmittance` and every shader see the same haze: a humid low sun is dim
+  and red, far terrain and far clouds go into the haze.
+* **THE MULTIPLE-SCATTERING LIGHT** (`atmosMultiScatter(h)`, "Multiple scattering" = its gain, 1 = physical): the
+  radiance the air and the haze get from the rest of the sky and from the lit ground - every order past the first. A
+  march adds it x the scattering at each sample: no phase (isotropic), no light transmittance. **It is what makes a
+  thick haze a bright, white band:** with the sun's own light alone the horizon away from the sun gets DARKER the more
+  haze there is (the extinction wins). At "Humidity" 0.7 it is about 60 % of the horizon's light, at 0.9 about 90 %.
+  * **Computed on the CPU** (`RendererState::buildUboSky`, `skyMultiScatter`; after Hillaire 2020): the once-scattered
+    light gathered over 32 directions x 12 steps of the same march, plus a diffuse ground (albedo 0.15), x
+    `1 / (1 - the share that scatters again)`. Per unit light it depends only on the atmosphere and the light's
+    height: the part for the light from straight up is computed when an atmosphere tweak changes, the sun's part again
+    when the sun has moved ~0.02 degrees (~0.1 ms then; within 4 % of 512 directions x 64 steps).
+  * **Two altitudes** (`ATMOS_MS_LOW` 500 m, `ATMOS_MS_HIGH` 8000 m, mirrored in `c_skyMultiScatterHeights`), linear
+    between: `u_sky_multiScatterLow` / `High` (live). Each is ALREADY a radiance: x the sun (colour, eclipse) + x the
+    Sky Radiance, x "Scatter Boost" x "Multiple scattering". **Add it ONCE per ray, with no light colour**:
+    `atmosMarch`'s `multiScatter` argument is true for ONE of a ray's two marches. **The sky and the mirror layer put
+    it on the SKY-LIGHT march** (4 steps, unsaturated, so it runs with a Sky Radiance of 0 too): on their saturated sun
+    march it cost the sky FS 56 -> 64 registers. `skyRadiance` (no saturation) has it on the sun march.
+  * **The LUT and the clouds add it in their own marches:** the LUT per substep; `cloudAerialScatter` with no step
+    work - from the sky light's sums, the upward transmittance divided out at the segment's middle (within ~8 % of the
+    integral at "Humidity" 0.7; see "Aerial perspective in front of the cloud" in [Clouds.md](Clouds.md)).
+  * The LOW value's sun part takes the clouds' mean shadow (`mix(1, 0.3, coverage)`, x "Shadows/Strength"): the haze
+    lies under them. The high one does not.
+  * **It does not take "Saturation"** (only the sun's once-scattered light does, in the sky, the mirror layer and the
+    LUT): it is the haze's white.
+* **The sky-radiance light has NO forward lobe in the haze** (`mieG` 0 for it in every march): it stands for a diffuse
+  glow, and with the sun's lobe a thick haze drew a bright spot round the zenith at night.
+* **"Scatter Boost"** x all the scattered light (the multiple-scattering light too), not the transmittance; 1 =
+  physical.
+* **The CPU mirror** (`SkyAtmosphere`, `SkyRay` in RendererUbo.cpp: the same Chapman form, `atmosTau`, the ray's
+  cases) serves `u_sunTransmittance` and the multiple-scattering light. **A change of the GLSL model goes there
+  too.**
+* Not covered: the humidity of the place (the terrain's climate does not drive it), a haze top that is not
+  exponential (an inversion), the fog-off path's air. **The clouds' air march is 8 EQUAL steps** (the midpoint rule):
+  in a very thick haze ("Humidity" above ~0.85) the air in front of far clouds is under-sampled - up to ~45 % too
+  dark at 0.9, and noisy with the jitter. The "Aerial fade" hides most of it (those clouds fade into the sky).
+
 ## Aerial perspective ("Fog/Aerial perspective" tweaks)
 
 The blue haze on distant geometry: the SKY'S OWN Rayleigh + Mie + ozone atmosphere (atmosphere.inc.glsl) between the
@@ -453,7 +519,7 @@ on the ground, so tinting it turns the near valley mist blue and still never mat
 * **The LUT** (`aerial_lut.cs.glsl`, pass 3 of `VolumetricFogPipeline::record`, so it exists only while the fog
   records - fog on AND RT on): `AERIAL_LUT_X x Y x Z` (64 x 36 x 32, Layout.ixx) RGBA16F per frame slot over the
   CENTRE view's frustum. ONE WORKGROUP PER COLUMN, one lane per slice (`AERIAL_SUBSTEPS` 2 steps each), and every
-  slice written: rgb = the in-scatter (sun + the sky-radiance light), a = the view ray's MEAN transmittance (the
+  slice written: rgb = the in-scatter (sun + the sky-radiance light + the multiple-scattering light), a = the view ray's MEAN transmittance (the
   apply's blend is scalar, so the scene behind dims grey; the blue is all in-scatter). Slice z holds the value at its
   far edge, `t = maxDist * ((z + 1) / Z)^2`. **A slice is a PREFIX SUM**: every step's contribution is independent
   (the view optical depth is closed-form, `atmosRayOD`), so each lane marches its own slice and a
@@ -461,7 +527,7 @@ on the ground, so tinting it turns the near valley mist blue and still never mat
   keep it there.** (One thread per column marching every step was latency-bound: too few threads on the whole GPU.)
 * **Matched to sky.fs.glsl:** observer at the camera altitude along `u_skyUp`, the scatter boost, the "Sky/Atmosphere/
   Saturation" curve on the sun part (`u_sky_saturation` x (2 - sun visible): more in an eclipse; the mirror sky has
-  it too). A level ray far out goes to the horizon sky's own colour. Each step's sun is
+  it too), the multiple-scattering light past that curve (see "The atmosphere" above). A level ray far out goes to the horizon sky's own colour. Each step's sun is
   cloud-shadowed (`cloudSunTransmittanceBilinear`; past the far cascade, the layer's mean). No jitter: no temporal
   pass averages the LUT, and a texel covers many pixels.
 * **Apply** (`vol_apply.fs.glsl` `aerialTo` / `withAerial`, binding 11): the air goes BEHIND the fog (`fog + fog.a x
@@ -471,5 +537,5 @@ on the ground, so tinting it turns the near valley mist blue and still never mat
 * **"Strength"** (`u_fog_aerialStrength`, default 1, min 0.05: always on) scales the air density along the VIEW ray
   only (the sun still reaches each point through the unscaled atmosphere, as in the sky). **"Max distance (km)"**
   (`u_fog_aerialMaxDistance`, default 40): the LUT's depth; past it the scene keeps the last slice.
-* Not covered: multiple scattering (the shadowed haze is too dark, as in the sky), the mirror rays' reflection fog,
-  the fog-off path (the Cloud apply / Far trees apply stages carry no air).
+* Not covered: the mirror rays' reflection fog, the fog-off path (the Cloud apply / Far trees apply stages carry no
+  air).
