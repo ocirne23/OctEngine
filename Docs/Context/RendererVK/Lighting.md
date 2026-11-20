@@ -41,10 +41,22 @@ and the TLAS range stay on the terrain below, not in empty sky. **"Editor/Freeze
   member build arrays. Keep it that way: a per-frame `oc::vector` temporary in that scope shows up as memory churn in
   the profiler.
 * **GI clipmap + TLAS range.** `giCascadeOrigin(c, u_sceneFocus.xyz)` centres every probe cascade on the focus
-  (sample, trace and debug sides alike), the trace's previous-window freshness test uses last frame's focus
-  (`m_giPrevFocusPos`, advanced in `buildUbo` only while GI traces, published as `u_gi_prevFocus`), and the TLAS
+  (sample, trace and debug sides alike), the trace's previous-window freshness test uses the focus of the last frame
+  whose trace RAN (`m_giTracedFocus`, published as `u_gi_prevFocus`), and the TLAS
   instance range bound ("RT/TLAS Range", `u_rt_giTlasRange`) is measured from `u_sceneFocus` too, so the ray-traced
   set is the geometry around the player.
+* **Whether GI runs in a frame is known only in `present()`** (no instances = no GI at all; RT or GI off; no TLAS
+  yet), after the UBO build. So `buildUboRayTracing` consumes nothing: `noteGiFrameRan` (`recordCommandBuffers`, with
+  the primary) moves the traced focus and ends the full-bake request on the frames whose cached GI secondary holds
+  the trace (`PerFrameData::giTraceRecorded`). A request consumed on a frame with no GI is lost: probes that scrolled
+  in are never replaced, and they hold the data of the probe that scrolled out.
+* **A CLEARED probe buffer (start-up, a grid change) gets one WARM-UP frame** (`u_gi_skyOnly`, `m_giWarmup`: no trace
+  ran since the clear). The trace projects the sky SH and the levels only, the bake copies the sky SH only (the images
+  keep W = 0). The frame after it has no traced focus (`GI_NO_FOCUS`), so EVERY probe is fresh and replaced, and the
+  bake is full. Two reasons: the misses read LAST frame's sky SH (black on the first traced frame), and a cleared probe
+  that is not fresh waits for its wave's regular visit - minutes in the far field, far longer under a finer cascade -
+  while every reader takes it for a live BLACK probe with sky visibility 0 (a black band at the outer cascades, black
+  sky reflections on the water there).
 * **RTAO** "Fade Start" / "Max Distance": the fade and the trace early-out in `rtao.cs.glsl`, and the forward pass's
   upsample-skip gate, all measure from `u_sceneFocus`. The ray-origin distance bias stays on the CAMERA distance — it
   compensates a depth-reconstruction error that lies along the view ray, and so do the upsample's depth weights.
@@ -296,8 +308,8 @@ which is a baked define).
     `giWaveUpdateInterval` itself, so it cannot drift from the schedule. The stamp is written before the trace's
     dead-probe skip, so dead waves re-bake more often than they trace (harmless). **A new trace skip condition before
     the stamp must keep the stamp exact; a fresh-probe change goes through `giProbeFresh`.** `u_gi_fullBake` = one full
-    bake: `takeVisibilityParams` sets it after `createVolume` and when a Chebyshev knob moves (the baked value depends
-    on them), held until a frame with RT + GI on. **The trace forces a full bake too** (`GI_SKY_REF_V4.z`) when it moves
+    bake: `fullBakeDue` asks for it after `createVolume` and when a Chebyshev knob moves (the baked value depends
+    on them), held until a frame whose bake ran with it (`markFullBakeDone`, from `noteGiFrameRan`). **The trace forces a full bake too** (`GI_SKY_REF_V4.z`) when it moves
     the sun / sky rescale's reference levels (below).
   * **The two volume tweaks reload through their own listener** (`resizeVolume` + reload): they never re-allocate
     the probe buffer, so the traced history survives a volume toggle.

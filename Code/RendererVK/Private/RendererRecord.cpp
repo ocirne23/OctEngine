@@ -1169,6 +1169,7 @@ void RendererState::recordGlobalIllum(uint32 frameIdx)
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
     CommandBuffer& globalIllumCommandBuffer = frameData.globalIllumCommandBuffer;
+    frameData.giTraceRecorded = false;
     vk::CommandBufferInheritanceInfo globalIllumInheritanceInfo;
     vk::CommandBuffer vkGlobalIllumCommandBuffer = globalIllumCommandBuffer.begin(false, &globalIllumInheritanceInfo);
 
@@ -1208,11 +1209,12 @@ void RendererState::recordGlobalIllum(uint32 frameIdx)
 
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
     // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
-    // player in game mode, else the camera); probes that scrolled in since last frame (relative to
-    // u_gi_prevFocus, last frame's focus, written by buildUbo) are full-replaced rather than blended.
+    // player in game mode, else the camera); probes that scrolled in since the last TRACED frame (relative
+    // to u_gi_prevFocus, buildUboRayTracing) are full-replaced rather than blended.
     // Gated by the GI toggle - the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
+    frameData.giTraceRecorded = true;
     GIProbePipeline::TraceParams traceParams{
         .ubo = frameData.ubo,
         .lightInfos = submission.lightInfos,
@@ -2026,6 +2028,7 @@ void RendererState::recordCommandBuffers()
             recordPrimaryVR(frameIdx, commandBuffer);
         else
             recordPrimaryDesktop(frameIdx, vkCommandBuffer);
+        noteGiFrameRan(frameIdx);
     }
     // Outside the instance gate above: the preview draws nothing of the scene, so it works in an empty world too.
     for (PreviewSlot& slot : m_previews)

@@ -342,8 +342,11 @@ void main()
         return;
     }
 
+    // THE WARM-UP FRAME of a cleared probe buffer (u_gi_skyOnly, RendererState::buildUboRayTracing): the sky SH the
+    // misses read is last frame's, not projected yet - a visit now would store black misses, which a far probe keeps for
+    // minutes. The frame after it, every probe is fresh.
     const uint id = gl_GlobalInvocationID.x;
-    if (id >= numProbes)
+    if (id >= numProbes || u_gi_skyOnly > 0.5)
         return;
 
     // A WAVE (64 lanes) IS A COMPACT 4x4x4 PROBE BLOCK, not 64 consecutive x-row probes (every dim is a power of two

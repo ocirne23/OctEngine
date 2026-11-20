@@ -47,8 +47,10 @@ void main()
         for (int k = 0; k < GI_VOLUME_SKY_TEXELS; ++k)
             imageStore(u_volumeSky, ivec3(k, 0, 0), GI_GRID_DATA_NAME[GI_SKY_SH_BASE + uint(k)]);
 
+    // The warm-up frame of a cleared probe buffer (u_gi_skyOnly): no probe is traced yet, and a cleared probe bakes as a
+    // live BLACK one with no sky visibility. The images keep W = 0 (no data).
     const int   cascade = gid.z / GI_VOLUME_DIMS.z;
-    if (cascade >= GI_NUM_CASCADES)
+    if (cascade >= GI_NUM_CASCADES || u_gi_skyOnly > 0.5)
         return;
 
     const ivec3 vslot   = ivec3(gid.xy, gid.z - cascade * GI_VOLUME_DIMS.z);

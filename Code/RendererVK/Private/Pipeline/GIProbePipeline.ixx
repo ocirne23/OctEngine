@@ -186,13 +186,13 @@ public:
     // The u_rt_gi* entries (Renderer::registerUboValues, inside its rt block): its tweaks are private. rtEnabled /
     // giEnabled are long-lived RTParams members: the lambdas keep the references.
     void registerUboFields(UboBlock& list, const bool& rtEnabled, const bool& giEnabled) const;
-    // x = Chebyshev variance floor (fraction of probe spacing), y = FULL volume bake this frame (1/0), z = probe
-    // weight floor, w = mean scale. Uploaded to the frame UBO (u_rt_giVis*, u_gi_fullBake) for every probe-sampling shader.
-    // Called ONCE per frame by the UBO build: y is 1 for the one frame after the volume images were (re)created
-    // or a Chebyshev knob changed - the bake is otherwise partial (only voxels whose probes the trace visits),
-    // and a far probe can go hundreds of frames without a visit. bakeRuns = this frame records the bake (RT and
-    // GI on): the request is held until such a frame, so a knob moved while GI is off still lands.
-    glm::vec4 takeVisibilityParams(bool bakeRuns);
+    // A FULL volume bake is due (u_gi_fullBake): the volume images were (re)created or a Chebyshev knob changed (the
+    // baked value depends on them) - the bake is otherwise partial (only voxels whose probes the trace visits), and a
+    // far probe can go hundreds of frames without a visit. Called ONCE per frame by the UBO build. The request is held
+    // until markFullBakeDone: present() calls it on the frame whose bake RAN with the flag (a frame with no instances,
+    // or with RT / GI off, runs no bake).
+    bool fullBakeDue();
+    void markFullBakeDone() { m_volumeFullBake = false; }
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);
@@ -245,7 +245,7 @@ private:
     oc::vector<vk::ImageView> m_volumeViews;
     vk::ImageView m_volumeSkyView;
     vk::Sampler m_volumeSampler; // linear, REPEAT on every axis (the toroidal wrap), no mips
-    bool m_volumeFullBake = true;   // see takeVisibilityParams: set by createVolume, consumed by the next UBO build
+    bool m_volumeFullBake = true;   // see fullBakeDue: set by createVolume, cleared by markFullBakeDone
     glm::vec3 m_lastVisKnobs{ -1.0f };
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_volumeBakeSets;
 

@@ -68,7 +68,7 @@ void GIProbePipeline::registerUboFields(UboBlock& list,const bool& rtEnabled, co
     list.add("rt_giStrength", [&rtEnabled, &giEnabled] { return rtEnabled && giEnabled ? Globals::settings.gi.strength : 0.0f; },
         rtEnabled, giEnabled, gi.strength);
     list.add("rt_giTlasRange", gi.tlasRange);
-    // takeVisibilityParams' x / z / w (its y, the full bake, is live).
+    // The Chebyshev knobs (a change asks for a full volume bake: fullBakeDue).
     list.add("rt_giVisVarianceFloor", gi.visVarianceFloor);
     list.add("rt_giVisWeightFloor", gi.visWeightFloor);
     list.add("rt_giVisMeanScale", gi.visMeanScale);
@@ -102,16 +102,13 @@ bool GIProbePipeline::isDebugEnabled() const { return Globals::settings.gi.debug
 
 float GIProbePipeline::getStrength() const { return Globals::settings.gi.strength; }
 
-glm::vec4 GIProbePipeline::takeVisibilityParams(bool bakeRuns)
+bool GIProbePipeline::fullBakeDue()
 {
     const GiSettings& gi = Globals::settings.gi;
     const glm::vec3 knobs(gi.visVarianceFloor, gi.visWeightFloor, gi.visMeanScale);
     m_volumeFullBake = m_volumeFullBake || knobs != m_lastVisKnobs;
     m_lastVisKnobs = knobs;
-    const bool fullBake = m_volumeFullBake && bakeRuns;
-    if (bakeRuns)
-        m_volumeFullBake = false;
-    return glm::vec4(knobs.x, fullBake ? 1.0f : 0.0f, knobs.y, knobs.z);
+    return m_volumeFullBake;
 }
 
 void GIProbePipeline::resizeGrid()
@@ -512,8 +509,9 @@ void GIProbePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, v
 void GIProbePipeline::recordClearPersistent(CommandBuffer& commandBuffer)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    // Zero the persistent clipmap SH so reads before the first trace are well-defined. The trace replaces
-    // (alpha=1) every probe on its first visit anyway, so this is just initial-frame hygiene.
+    // Zero the persistent clipmap SH so reads before the first trace are well-defined. The frame that records
+    // this is GI's warm-up frame (RendererState::buildUboRayTracing): only the sky SH is projected, and the
+    // next frame replaces (alpha = 1) every probe.
     cmd.fillBuffer(m_giGridData.getBuffer(), 0, vk::WholeSize, 0);
     cmd.fillBuffer(m_waveStamps.getBuffer(), 0, vk::WholeSize, 0);
 

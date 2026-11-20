@@ -458,16 +458,39 @@ RendererState::RainOcclusionView RendererState::rainOcclusionView() const
     return RainOcclusionView{ proj * view, 1.0f / range, true };
 }
 
-// GI's per-frame state: the full-bake flag is a one-frame request (takeVisibilityParams), and the previous focus
-// advances only while GI traces, so probes that scrolled in during a GI-off spell still read as fresh (full replace) on
-// the first traced frame.
+// GI's per-frame state. Whether GI RUNS this frame is known only in present() (no instances = no GI at all), so nothing
+// is consumed here: recordCommandBuffers moves the traced focus and ends the full-bake request (noteGiFrameRan) on the
+// frames whose trace ran.
+// * The previous focus is the last TRACED frame's, so probes that scrolled in while GI did not run (GI off, an empty
+//   world) still read as fresh (full replace) on the first traced frame.
+// * A CLEARED probe buffer (start-up, a grid change) gets one WARM-UP frame (u_gi_skyOnly): the trace projects the sky
+//   SH and the levels only, the bake copies the sky SH. The sky SH the misses read is last frame's, so a probe traced on
+//   that frame stored black misses; a cleared probe that is not fresh waits for its wave's regular visit (minutes in the
+//   far field) and until then counts as a live BLACK probe with no sky visibility. The frame after it every probe is
+//   fresh (no traced focus) and the bake is full.
 void RendererState::buildUboRayTracing()
 {
-    const bool giOn = m_rtParams.enabled && m_rtParams.giEnabled;
-    m_giFullBake = m_giProbePipeline.takeVisibilityParams(giOn).y;
-    m_giUboPrevFocus = m_giPrevFocusPos;
-    if (giOn)
-        m_giPrevFocusPos = self().sceneFocusOrCamera();
+    if (m_giProbePipeline.needsClear())
+        m_giSkyValid = false;
+    m_giWarmup = !m_giSkyValid;
+    if (m_giWarmup)
+        m_giTracedFocus = glm::vec3(GI_NO_FOCUS);
+    m_giFullBake = m_giProbePipeline.fullBakeDue() && !m_giWarmup ? 1.0f : 0.0f;
+    m_giUboPrevFocus = m_giTracedFocus;
+    m_giFrameFocus = self().sceneFocusOrCamera();
+}
+
+// The frame's GI secondary is in the primary (recordCommandBuffers). A warm-up frame traced no probe.
+void RendererState::noteGiFrameRan(uint32 frameIdx)
+{
+    if (!m_perFrameData[frameIdx].giTraceRecorded)
+        return;
+    m_giSkyValid = true;
+    if (m_giWarmup)
+        return;
+    m_giTracedFocus = m_giFrameFocus;
+    if (m_giFullBake > 0.5f)
+        m_giProbePipeline.markFullBakeDone();
 }
 
 // THE NEAR GRASS CASCADE's frame state (m_grassNear): its matrix, centre and range come out of one calculation.
@@ -1387,6 +1410,7 @@ void RendererState::registerUboValues(UboBlock& list)
         // This frame's blend: "GI/Temporal Alpha" compounded over the WALL delta (GI converges through a sim pause).
         list.add("gi_temporalAlpha", [this] { return m_giProbePipeline.getTraceParams0((float)Globals::time.getDeltaSec()).y; }, UboLive);
         list.add("gi_fullBake", [this] { return m_giFullBake; }, UboLive); // a full irradiance-volume bake this frame (0/1)
+        list.add("gi_skyOnly", [this] { return m_giWarmup ? 1.0f : 0.0f; }, UboLive); // the warm-up frame of a cleared probe buffer (0/1)
         list.add("rt_sunShadow", [&] { return rtSunShadowActive(r) ? 1.0f : 0.0f; }, r.enabled, r.rtSunShadow);
         list.add("rt_lightShadows", [&] { return r.enabled && r.rtLightShadows ? 1.0f : 0.0f; }, r.enabled, r.rtLightShadows);
         list.add("rt_skyRadiance", [&] { return r.enabled && r.rtSkyRadiance ? 1.0f : 0.0f; }, r.enabled, r.rtSkyRadiance);

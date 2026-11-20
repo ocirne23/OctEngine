@@ -232,6 +232,7 @@ protected:
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
     void buildUboWeather(const Camera& camera);
     void buildUboRayTracing();
+    void noteGiFrameRan(uint32 frameIdx);
     void buildUboClouds(const Camera& camera);
     void buildUboSky();
     void buildUboSunShadow(const Camera& camera);
@@ -255,8 +256,11 @@ protected:
     float m_frameTime = 0.0f;               // u_timeSeconds (sim)
     float m_prevFrameTime = 0.0f;           // last frame's (the grass and tree wind motion vectors)
     glm::vec3 m_cameraVelocity{ 0.0f };
-    float m_giFullBake = 0.0f;              // takeVisibilityParams' one-frame request
+    float m_giFullBake = 0.0f;              // a full volume bake this frame (GIProbePipeline::fullBakeDue)
+    bool m_giSkyValid = false;              // the trace ran since the probe buffer's last clear: its sky SH is projected
+    bool m_giWarmup = false;                // not yet: this frame projects the sky SH only (u_gi_skyOnly)
     glm::vec3 m_giUboPrevFocus{ 0.0f };     // the focus GI traced from last
+    glm::vec3 m_giFrameFocus{ 0.0f };       // this frame's focus: m_giTracedFocus once present() ran the trace with it
     glm::vec4 m_cascadeSunSizeTexels{ 0.0f };
     glm::vec4 m_cascadePlanes[RendererVKLayout::NUM_SHADOW_CASCADES * 6] = {}; // normalized, cascade c at [c * 6]
     glm::dvec2 m_cloudWindStep{ 0.0 };      // this frame's cloud field displacement
@@ -756,7 +760,10 @@ protected:
     glm::vec3 m_cameraPos = glm::vec3(0.0f);
     glm::vec3 m_prevCameraPos = glm::vec3(0.0f);
     bool m_havePrevCameraPos = false;
-    glm::vec3 m_giPrevFocusPos = glm::vec3(0.0f);
+    // The focus of the last frame whose probe trace RAN (present() sets it). GI_NO_FOCUS = none yet: a window that far
+    // away holds no probe of the real one, so every probe is fresh (giProbeFresh).
+    static constexpr float GI_NO_FOCUS = -1.0e7f;
+    glm::vec3 m_giTracedFocus = glm::vec3(GI_NO_FOCUS);
     float m_mipPixelScale = 0.0f; // viewportHeight / tan(fovY/2): projected diameter px = radius * scale / dist
     Clock::time_point m_eyeAdaptLastTime;
     bool m_haveEyeAdaptTime = false;
@@ -886,6 +893,7 @@ protected:
         CommandBuffer compositeCommandBuffer;
 
         bool updated = false;
+        bool giTraceRecorded = false; // this slot's cached GI secondary holds the probe trace (recordGlobalIllum)
         Buffer ubo;
         Buffer lodStatsBuffer;
         oc::span<uint32> mappedLodStats;
