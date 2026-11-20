@@ -201,11 +201,14 @@ export namespace Procedural
 
 		// Dry-sector cull: sectors whose whole footprint is buried under land per the baked terrain data
 		// are skipped before anything reaches the GPU (a camera deep inland then renders no water at all).
-		// Conservative by construction - a per-block MAX of (water level - height) over the COARSEST
-		// cascade, rebuilt once per adopted bake, and a sector only skips when every block it overlaps is
-		// dry beyond the same burial terms the vertex cull demands; footprints leaving the baked range
-		// always count as wet (unknown terrain = open-ocean fallback in the shaders). "Dry sector cull" toggles it.
+		// A per-block MAX of (water level - height) over the COARSEST cascade, rebuilt once per adopted bake,
+		// and a sector only skips when every block it overlaps is dry beyond the vertex cull's margin + swash
+		// reach + DRY_COARSE_ERROR; footprints leaving the baked range always count as wet (unknown terrain =
+		// open-ocean fallback in the shaders). "Dry sector cull" toggles it.
+		// That cascade is the generator's COARSE stage, not the drawn mesh: DRY_COARSE_ERROR (m) is how far
+		// under it the real ground may lie. A narrow inlet between hills higher than this can still lose a sector.
 		static constexpr uint32 DRY_BLOCKS = 32;
+		static constexpr float DRY_COARSE_ERROR = 20.0f;
 		oc::array<float, DRY_BLOCKS * DRY_BLOCKS> m_blockMaxDepth{};
 		bool  m_dryGridValid = false;
 		const BakedTerrainData* m_dryGridSource = nullptr; // bake identity the block grid was built from

@@ -50,8 +50,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain", "Ocean swash depth", &s.waterReach.swashDepth, 0.0f, 20.0f, 0.1f);
 	Tweak::floatVar("Terrain", "Ocean reach (m)", &s.waterReach.radius, 0.0f, 100.0f, 0.1f);
 	Tweak::floatVar("Terrain", "Ocean reach feather (m)", &s.waterReach.feather, 1.0f, 100.0f, 0.1f);
-	Tweak::floatVar("Terrain", "Ocean reach drop (m)", &s.waterReach.drop, 0.0f, 50.0f, 0.5f);
-	// Baked per-texel flow direction (the data map's 8 packed bits + the ocean shore map's B channel):
+	Tweak::floatVar("Terrain", "Ocean reach drop (m)", &s.waterReach.drop, 0.0f, 50.0f, 0.5f);	// Baked per-texel flow direction (the data map's 8 packed bits + the ocean shore map's B channel):
 	// toward the nearest land through the surf zone - the waves' travel direction at the coast - and
 	// downhill everywhere else (future rivers/water simulation). See applyFlowField for each knob's
 	// role; changing one re-bakes both maps, like the reach settings above.

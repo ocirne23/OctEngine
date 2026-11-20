@@ -111,8 +111,8 @@ export struct OceanParams
     // beach and flows back, and a surf/foam band forms where the water column vanishes at the waterline.
     float shoalScale     = 0.005f; // approach band depth as a fraction of the mid cascade's patch size
                                 // (floored at two swash reaches; scaled down with the cascade sizes)
-    // Horizon depth: past horizonDepthRange the waves assume AT LEAST horizonDepth of water, whatever
-    // the baked map says. Every distant depth error runs shallow - coarse texels average shore slopes
+    // Horizon depth: past horizonDepthRange, and wherever the far data cascade answers, the waves and
+    // the surf band assume AT LEAST horizonDepth of water, whatever the baked map says. Every distant depth error runs shallow - coarse texels average shore slopes
     // into the water, the generator reports depth exactly 0 for samples it could not resolve, and the
     // vertical scale compresses real shelves - and shallow is the ruinous direction: it fades the waves
     // out AND (via fade^2) the LEAN variance, leaving a mirror that reflects the sky exactly like wind 0.
@@ -140,15 +140,8 @@ export struct OceanParams
     float swashFlow      = 0.33f;  // backflow: scale on the raw horizontal chop riding the swash weight -
                                   // the tongue visibly flows back seaward as the wave recedes (0 = off)
     float cullMargin     = 1.0f;  // land cull: clipmap triangles whose whole footprint is buried deeper
-                                  // than this under the local water level are VS-culled (0 = off)
-    float farCullError = 4.0f;    // land cull from the FAR terrain cascade (beyond the near cascade's
-                                  // ~860 m): flat burial error allowance in METERS, covering how far
-                                  // the far mesh LODs stray from the bake. Deliberately NOT scaled by
-                                  // the far texel - that left everything under tens of meters of
-                                  // terrain alive (a visible band of buried water past the near
-                                  // handover). Narrow rivers the coarse point-sampled bake cannot
-                                  // resolve may lose triangles out there (speed over accuracy);
-                                  // 0 = never cull from far data
+                                  // than this under the local water level are VS-culled (0 = off). Inside
+                                  // the NEAR terrain-data cascade only (the far one is not the drawn mesh)
 
     // Ray tracing budget (ocean.fs.glsl traces the scene TLAS per pixel for refraction + reflection).
     float rtRefractionRange = 35.0f;  // max refracted-ray length (m): how far underwater geometry stays

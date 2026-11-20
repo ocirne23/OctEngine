@@ -11,7 +11,9 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
 * **`setTerrainParams(meshRadius, seaLevel, lapseRate)`.** `meshRadius` is the radius inside which
   streamed chunks are guaranteed resident — **the fence for the ocean's land cull, and CPU-side ocean
   culling must fence on the SAME value its vertex shaders do**, or it deletes water the VS would have
-  drawn (`getTerrainMeshRadius()`). `lapseRate` is the other half of the temperature reconstruction:
+  drawn (`getTerrainMeshRadius()`). **The VS land cull (`oceanVertexCulled`, "Ocean/Shore/Cull margin (m)") runs only
+  where a vertex's whole footprint reads the NEAR data cascade at full weight**: the far cascade is not the drawn mesh
+  (tried: a far cull with a flat error allowance - it removed water along distant shores). `lapseRate` is the other half of the temperature reconstruction:
   the map bakes the SEA-LEVEL baseline and the shaders multiply this by the height THEY shade
   (`terrainTemperatureAt`) — **ONE value for the world, so no consumer can disagree with another.**
 * **`setTerrainSplatMaterials`** registers the textures AND each material's climate box in one call,
@@ -422,7 +424,7 @@ the GGX glint, the light-grid lights. **Its RT toggles and ranges are the ocean'
 * **In the transparent family** (`PIPELINE_TRANSPARENT_MASK`), composited DUAL-SOURCE like the ocean (`dualSourceAlpha`,
   depth write on, no back-face cull): a ribbon fades out over its last "Edge softness" of half-width, a lake over its
   last "Lake edge fade (m)" of water column (the baked height map) - **inside the NEAR data cascade only**
-  (`nearMapWeight`): the far cascade is the generator's coarse stage, uncarved and smoothed, standing above most lakes;
+  (`nearMapWeight`, = `terrainNearWeight` in `terrain_height.inc.glsl`, the ocean's edge fade uses it too): the far cascade is the generator's coarse stage, uncarved and smoothed, standing above most lakes;
   out there the lake is opaque and the terrain mesh cuts its shore (the body trace's height-map fallback is near-only
   too). **Writes alpha 0** - TAA's animated-surface flag, as the ocean (the ripples move without motion vectors).
 * **The body trace starts 1 m BACK along the refracted ray** (`traceRiverBody`; the water path counts from the
@@ -622,6 +624,10 @@ the sand, so the two can never disagree.
     `terrain_wetness.inc.glsl`), at the pixel's own position, not `in_uv`'s undisplaced lattice point. The pool level's
     slope term takes the ground normal's y from the baked map's forward gradient over 4 m (two more taps). The whole
     fade is `oceanEdgeCover`.
+    **NEAR DATA CASCADE ONLY** (x `terrainNearWeight`, `terrain_height.inc.glsl`): the far cascade is the generator's
+    coarse stage, a different surface from the mesh. A fade from it made the ocean transparent wherever that surface
+    stands above the sea - a band of bare seabed along every distant shore, which moved with "Terrain/Data map range
+    (m)". Past the near cascade the ocean is opaque and the depth test cuts it against the mesh.
     * **Edge foam was tried and REMOVED**: foam across the fade band made the fading edge opaque and showed the
       ocean's own LOD'd, clipmap-snapped edge stepping as the clipmap scrolls.
     * **Not a dither:** an IGN discard (TAA-resolved) stayed as flickering noise, because TAA caps the history on ocean

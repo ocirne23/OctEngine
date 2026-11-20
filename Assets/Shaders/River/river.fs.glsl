@@ -40,10 +40,7 @@ layout (location = 0, index = 1) out vec4 out_factor;
 // the generator's coarse stage, uncarved and smoothed, and stands above most lakes.
 float nearMapWeight(vec2 xz)
 {
-    if (!terrainHeightMapPresent())
-        return 0.0;
-    const vec2 uv = (xz - u_terrain_mapCentre) * u_terrain_mapInvNearSize + 0.5;
-    return u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, max(abs(uv.x - 0.5), abs(uv.y - 0.5))) : 1.0;
+    return terrainHeightMapPresent() ? terrainNearWeight(xz) : 0.0;
 }
 
 // The bed (water_scene.inc.glsl's bed hook): the terrain splat with the river bed's beach layer (river = 1) and the

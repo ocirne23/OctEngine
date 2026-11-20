@@ -424,7 +424,6 @@ namespace Procedural
 		params.shoreFoamBias = m_settings.shoreFoamBias;
 		params.swashFlow = m_settings.swashFlow;
 		params.cullMargin = w.cullMargin;
-		params.farCullError = glm::max(m_settings.farCullError, 0.25f) * s; // the tweak min, as the UBO's
 		params.rtRefractionRange = w.rtRefractionRange;
 		params.rtReflectionRange = w.rtReflectionRange;
 		params.rtReflectionMaxRough = m_settings.rtReflectionMaxRough;
@@ -540,8 +539,8 @@ namespace Procedural
 		const Transform xf(glm::vec3(px, m_seaLevel, pz), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
 
 		// Dry-sector test: skippable only when every block the footprint overlaps is buried deeper than
-		// the same terms the vertex cull demands (margin + swash reach + far error + slack) - so a
-		// skipped sector could never have contributed geometry. Out-of-range footprints count as wet.
+		// the vertex cull's margin + swash reach, plus DRY_COARSE_ERROR: the grid is the COARSE-stage
+		// cascade, not the drawn mesh. Out-of-range footprints count as wet.
 		//
 		// FENCED ON THE STREAMED MESH RADIUS, exactly like oceanVertexCulled: past the terrain mesh
 		// nothing is drawn to hide the water, so the VS deliberately never culls out there and the sea
@@ -553,7 +552,7 @@ namespace Procedural
 		// ever grew out to cover it, being under real mesh is exactly when dropping it is right).
 		const float meshRadius = renderer.getTerrainMeshRadius();
 		const glm::vec2 camXZ(camera.position.x, camera.position.z);
-		const float wetNeed = glm::max(m_params.cullMargin, 0.0f) + swashReach() + glm::max(m_params.farCullError, 0.0f) + 2.0f;
+		const float wetNeed = glm::max(m_params.cullMargin, 0.0f) + swashReach() + DRY_COARSE_ERROR;
 
 		// Re-center every sector's spatial entry (and node transform) on the snapped position, padded by
 		// this frame's displacement extent - but only when one of those CHANGED: the snap moves the
@@ -636,9 +635,8 @@ namespace Procedural
 	}
 
 	// Dry-sector test: skippable only when every block the footprint overlaps is buried deeper than
-	// the same terms the vertex cull demands (margin + swash reach + far error + slack) - so a skipped
-	// sector could never have contributed geometry. Out-of-range footprints count as wet. The horizon
-	// band is the caller's to exclude (it is the horizon itself: never dropped for terrain).
+	// wetNeed (the vertex cull's margin + swash reach + DRY_COARSE_ERROR). Out-of-range footprints count
+	// as wet. The horizon band is the caller's to exclude (it is the horizon itself: never dropped for terrain).
 	bool OceanGenerator::sectorDry(const Sector& s, float px, float pz, glm::vec2 camXZ, float meshRadius, float wetNeed) const
 	{
 		const glm::vec2 center(px + s.localCenter.x, pz + s.localCenter.z);
@@ -849,8 +847,8 @@ namespace Procedural
 			}
 			// The raw sum times the ONE depth weight (mirrors oceanSurfaceWeight): 1 in open water,
 			// easing to the swash base across the approach band (the same fade-in swashWeight uses).
-			// The shader's "Horizon depth" floor is knowingly omitted: it only engages a kilometre out,
-			// and nothing floats there.
+			// The shader's "Horizon depth" floor is knowingly omitted: it only engages a kilometre out or
+			// past the near data cascade (this mirror reads the near cascade only), and nothing floats there.
 			const float fadeIn = 1.0f - glm::smoothstep(0.0f,
 				glm::max(2.0f * reach, glm::max(m_params.shoalScale, 0.0f) * glm::max(m_params.cascadeSizes.y, 1.0f)), depth);
 			const float base = swashBase(depth, shoreHW.y);

@@ -65,59 +65,57 @@ vec2 oceanFlowSamplePos(vec2 worldXZ, vec2 fr) { return vec2(fr.x * worldXZ.x + 
 vec2 oceanFlowToWorld(vec2 v, vec2 fr) { return vec2(fr.x * v.x - fr.y * v.y, fr.y * v.x + fr.x * v.y); }
 
 // Land cull: true when the whole triangle footprint is buried under land (the VS then emits a NaN position). Decided by
-// the vertex's own shoreHW alone: near-cascade footprints must be buried deeper than their own radius (a 45-degree slope
-// bound - smoother terrain can't reach water at any co-triangle vertex); far/blend-band data uses the flat "Far cull
-// error (m)" (0 = no far cull; mistakes out there are sub-pixel). Cliffs steeper than 45 degrees can clip a sliver.
+// the vertex's own shoreHW alone: the footprint must be buried deeper than its own radius (a 45-degree slope bound -
+// smoother terrain can't reach water at any co-triangle vertex). Cliffs steeper than 45 degrees can clip a sliver.
+// ONLY where the whole footprint reads the NEAR data cascade at full weight: the far cascade is the generator's coarse
+// stage, not the drawn mesh, and a cull from it removed water along every distant shore. Past the near cascade the depth
+// test alone cuts the water against the ground.
 // Both displacement passes MUST apply the same test or their geometry diverges.
 bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
 {
+#ifdef TERRAIN_HEIGHT_BINDING
     const float margin = u_ocean_cullMargin;
-    if (margin <= 0.0)
-        return false;
+    if (margin <= 0.0 || !terrainHeightMapPresent())
+        return false; // no baked terrain data: open-ocean fallback, always water
     const float reach = 3.0 * cellSize; // after the CDLOD morph no co-triangle vertex lies further away
 
-    // Never cull past the streamed terrain mesh: the cull is only invisible while a rendered mesh stands above the water
-    // (the clamp-to-edge bakes report "land" forever).
+    // Never cull past the streamed terrain mesh: the cull is only invisible while a rendered mesh stands above the water.
     if (distance(worldXZ, u_viewPos.xz) + reach >= u_terrain_meshRadius)
         return false;
 
-    float err = -1.0; // burial slack on top of margin + swash reach
-#ifdef TERRAIN_HEIGHT_BINDING
-    if (terrainHeightMapPresent())
-    {
-        const vec2 rel = worldXZ - u_terrain_mapCentre;
-        const float cheb = max(abs(rel.x), abs(rel.y));
-        const float invNear = u_terrain_mapInvNearSize;
-        if ((cheb + reach) * invNear < 0.42) // full-weight near region (blend starts at 0.42)
-            err = reach + 0.5 / (float(textureSize(u_terrainHeight, 0).x) * invNear);
-        else
-        {
-            const float invFar = u_terrain_mapInvFarSize;
-            if (invFar <= 0.0 || (cheb + reach) * invFar >= 0.48)
-                return false; // no far map / footprint reaches the far map's clamp-to-edge border
-            err = u_ocean_farCullError;
-        }
-    }
-#endif
-    if (err < 0.0)
-        return false; // no baked terrain data: open-ocean fallback, always water
+    const vec2 rel = abs(worldXZ - u_terrain_mapCentre);
+    const float invNear = u_terrain_mapInvNearSize;
+    if ((max(rel.x, rel.y) + reach) * invNear >= 0.42) // terrainDataAt's blend to the far cascade starts at 0.42
+        return false;
 
-    // Swash reach keeps the wet band above the waterline alive.
+    // Burial slack: the footprint's radius + half a near texel. The swash reach keeps the wet band above the waterline alive.
+    const float err = reach + 0.5 / (float(textureSize(u_terrainHeight, 0).x) * invNear);
     return shoreHW.y - shoreHW.x < -(margin + u_ocean_swashReach + err);
+#else
+    return false;
+#endif
 }
 
-// The depth the WAVES use: the baked depth, floored at "Ocean/Shore/Horizon depth" past "Horizon depth range" (0 = off).
-// At range the depth field errs SHALLOW (the far cascade's coarse texels average shore slopes into the water, TerrainGenV3
-// returns depth EXACTLY 0 where it could not resolve, the vertical scale compresses shelves). Shallow is the dangerous
-// direction: the shoal fade scales the slopes and (as fade^2) the LEAN variance, so the surface loses its roughness and
-// mirrors the sky like wind 0. Too DEEP out there costs nothing visible.
+// The depth the WAVES and the surf band use: the baked depth, floored at "Ocean/Shore/Horizon depth" (0 = no floor)
+//   - past "Horizon depth range" (0 = this part off), and
+//   - wherever the FAR data cascade answers (1 - terrainNearWeight), at any distance: its depth is the generator's coarse
+//     stage, which stands above the sea over real water along most shores. The depth test draws that water (the mesh is
+//     under it), and a depth <= 0 there is a flat mirror covered in surf foam: a white sheet with the coarse contour's
+//     straight edges, which comes and goes as the near cascade re-centres.
+// Shallow is the dangerous direction: the shoal fade scales the slopes and (as fade^2) the LEAN variance, so the surface
+// loses its roughness and mirrors the sky like wind 0, and the surf band's waterline term goes full. Too DEEP costs
+// nothing visible.
 // Only the assumed SEABED moves, never the surface, so no water over land. The land cull keeps reading the RAW depth.
 float oceanEffectiveDepth(vec2 worldXZ, float depth)
 {
+    float t = 0.0;
     const float range = u_ocean_horizonDepthRange;
-    if (range <= 0.0)
-        return depth;
-    const float t = smoothstep(range * 0.5, range, distance(worldXZ, u_viewPos.xz));
+    if (range > 0.0)
+        t = smoothstep(range * 0.5, range, distance(worldXZ, u_viewPos.xz));
+#ifdef TERRAIN_HEIGHT_BINDING
+    if (terrainHeightMapPresent())
+        t = max(t, 1.0 - terrainNearWeight(worldXZ));
+#endif
     return max(depth, u_ocean_horizonDepth * t);
 }
 

@@ -39,7 +39,11 @@ export namespace Procedural
 	// ocean in world metres. A per-point generator query cannot do this - it would have to search its own
 	// field per sample - and the coarse detail level has no fine elevation to search at all.
 	//
-	// Both cascades measure the same world distance (just at their own texel size), so near and far agree.
+	// The FAR cascade cannot answer it to the radius's precision: it is the generator's coarse stage on ~130 m
+	// texels, so every far texel that is not a seed (coarse depth under swashDepth) takes the full drop. That
+	// agrees with the near rule on a gentle shelf (the near rule drains it past radius + feather of deep water
+	// too) and is wrong only where the coarse "deep water" line is off the mesh's. Tried and dropped: a wider
+	// radius on a Coarse cascade (one coarse pixel) - it left water on every distant shelf the near cascade drains.
 	//
 	// This applies to SUBMERGED ground as much as to dry land: a plateau at -0.05 m is under water by
 	// definition, so a land-only rule could never drain one, and those are exactly what V3 produces -

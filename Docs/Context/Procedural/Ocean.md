@@ -81,7 +81,9 @@ disc every frame.**
   Only the index count doubles. **So `gl_FrontFacing` is always true on the water**; the ocean shader takes the side
   from the triangle's plane instead.
 * The Spatial Main gate skips off-screen sectors (ocean is `PASS_MAIN` only), and "Ocean/Shore/Dry sector cull"
-  skips sectors fully buried AND inside the streamed-mesh radius. **The dry test is the node's pass
+  skips sectors fully buried AND inside the streamed-mesh radius. Its grid is the map's COARSEST cascade (the coarse
+  generator stage), so "buried" is the vertex cull's margin + swash reach + `DRY_COARSE_ERROR` (20 m); a narrow inlet
+  between hills higher than that can still lose a sector. **The dry test is the node's pass
   mask**, set per sector every `update` on main (`PASS_MAIN`, or 0 = the push skips it), so whoever
   pushes the node needs no ocean logic.
 * **`update` never walks the grid for the push, and mostly not at all.** The re-centering of the
@@ -117,6 +119,17 @@ variant displaces this mesh and shades it (RT refraction, Beer-Lambert). Params 
 **The ocean bakes NOTHING itself** — the shore's surface weight, surf, swash and the land cull all read
 the streamer's terrain-data map, and the GPU passes read the SAME bake the CPU copy comes from, **so
 the drawn water and the simulated water agree by construction.**
+
+> **THE FAR FIELD'S SHORELINE IS THE DEPTH TEST, NOT THE MAP.** The map's far cascade is the generator's COARSE stage
+> (one coarse pixel = 256 x "Meters per pixel", on ~130 m texels): its shoreline lies hundreds of metres off the
+> mesh's. What CUTS the water at the ground must not read it: the VS land cull and the edge fade (`oceanEdgeCover`) run
+> inside the near cascade only. Past the near cascade the map gives the water LEVEL (the reach rule's drop, on the
+> coarse data: [TerrainStreamer.md](TerrainStreamer.md), `applyWaterReach`) and the waves' DEPTH, **floored at
+> "Ocean/Shore/Horizon depth (m)"** (`oceanEffectiveDepth`: past "Horizon depth range (m)", and wherever the far
+> cascade answers). Without the floor, real water over coarse "land" (depth <= 0) is a flat mirror under full surf
+> foam: a white sheet with the coarse contour's straight edges, which comes and goes as the near cascade re-centres.
+> The same floor feeds the displacement, the shading, the surf band, the wave march and the spray. The CPU buoyancy
+> mirror reads the near cascade only and has no floor.
 
 **The shore is ONE depth weight on the raw cascade sum** (`oceanSurfaceWeight`, ocean_wave.inc.glsl):
 1 in open water, easing to "Swash amplitude" (× sea-connection × land-height fades) across an approach

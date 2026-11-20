@@ -127,9 +127,11 @@ void Settings::registerOcean(OceanSettings& s)
 	// swash reaches): the depth over which open water eases to the swash amplitude. See
 	// oceanSwashFadeIn / oceanSurfaceWeight in ocean_wave.inc.glsl.
 	Tweak::floatVar("Ocean/Shore", "Shoal depth scale", &s.shoalScale, 0.0f, 0.1f, 0.001f);
-	// Past "range" the waves assume at least "Horizon depth" of water whatever the map says (see the
-	// header): distant depth readings all err shallow, and shallow reads as a dead mirror sea. Only
-	// the assumed seabed moves - the surface stays put, so this cannot put water over land.
+	// Past "range", and wherever the far data cascade answers (the near one ends 700 m to 2.7 km out),
+	// the waves and the surf band assume at least "Horizon depth" of water whatever the map says (see
+	// the header): distant depth readings all err shallow, and shallow reads as a dead mirror sea under
+	// a sheet of surf foam. Only the assumed seabed moves - the surface stays put, so this cannot put
+	// water over land. Higher = fuller waves and less surf foam on distant water.
 	Tweak::floatVar("Ocean/Shore", "Horizon depth (m)", &s.horizonDepth, 0.0f, 200.0f, 1.0f);
 	Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &s.horizonDepthRange, 0.0f, 8000.0f, 50.0f);
 	Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &s.shoreFoamDepth, 0.0f, 8.0f, 0.05f);
@@ -139,12 +141,9 @@ void Settings::registerOcean(OceanSettings& s)
 	Tweak::floatVar("Ocean/Shore", "Swash backflow", &s.swashFlow, 0.0f, 3.0f, 0.01f);
 	// Land cull: clipmap triangles buried deeper than this under the local water level (over their
 	// whole footprint) are discarded in the vertex shaders - no displacement sampling, no raster.
+	// Inside the NEAR terrain-data cascade only: past it the map is not the drawn mesh, and the depth
+	// test alone cuts the water against the ground.
 	Tweak::floatVar("Ocean/Shore", "Cull margin (m)", &s.cullMargin, 0.0f, 4.0f, 0.05f);
-	// Beyond the near terrain cascade (~860 m) the cull uses the FAR cascade with this flat burial
-	// error allowance in meters (covers the far mesh LODs' drift off the bake). Narrow rivers the
-	// coarse far bake cannot resolve may lose triangles out there - speed over accuracy; raise it
-	// if that shows, 0 = never cull from far data.
-	Tweak::floatVar("Ocean/Shore", "Far cull error (m)", &s.farCullError, 0.25f, 20.0f, 0.25f);
 	// Whole-sector skip when the baked terrain buries a sector's entire footprint (see the header):
 	// deep inland the ocean then costs nothing at all.
 	Tweak::boolean("Ocean/Shore", "Dry sector cull", &s.drySectorCull);

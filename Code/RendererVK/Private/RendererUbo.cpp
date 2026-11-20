@@ -1585,7 +1585,6 @@ void RendererState::registerUboValues(UboBlock& list)
             o.shoalScale, o.cascadeSizes, o.worldScale);
         list.add("ocean_foamSoftness", [&] { return glm::max(o.foamSoftness, 0.02f); }, o.foamSoftness);
         list.add("ocean_foamBreakAccel", [&] { return glm::max(o.foamBreakAccel, 0.01f); }, o.foamBreakAccel);
-        list.add("ocean_farCullError", [ws, &o] { return glm::max(o.farCullError, 0.25f) * ws().s; }, o.farCullError, o.worldScale); // the tweak min, scaled
         list.add("ocean_glintFilter", [&] { return glm::max(o.glintFilter, 0.0f); }, o.glintFilter);
         list.add("ocean_sssStrength", [&] { return glm::max(o.sssStrength, 0.0f); }, o.sssStrength);
         list.add("ocean_sssPower", [&] { return glm::max(o.sssPower, 1.0f); }, o.sssPower);

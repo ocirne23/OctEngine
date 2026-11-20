@@ -193,7 +193,15 @@ Handed out, never duplicated:
 Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainHeightMap`.
 
 **Two cascades, RGBA32F, cascade-major** (`BakedTerrainData`; the layout matches
-`terrain_height.inc.glsl`). "Data map range (m)" (4096) near, "Data map far range (m)" (8192) far, same texel count:
+`terrain_height.inc.glsl`). "Data map range (m)" (4096) near, "Data map far range (m)" (8192) far, same texel count
+(512²). The far range is a FLOOR: it is raised to cover the mesh ring (~66 km at the defaults: ~130 m texels).
+
+> **THE TWO CASCADES ARE TWO DIFFERENT SURFACES.** The near one is the mesh's own field (Full detail, 8 m texels). The
+> far one is the generator's COARSE stage (one coarse pixel = 256 x "Meters per pixel" = 1.28 km at the defaults): no
+> shoreline, river or peak of the mesh is in it. It serves what is km-scale (the fog, the climate, the far sun march,
+> the waves' depth). **A consumer that needs the DRAWN ground scales its use by `terrainNearWeight`**
+> (`terrain_height.inc.glsl`): the ocean's edge fade and land cull, the lakes' edge fade. The near cascade's edge is
+> 700 m to 2.7 km from the camera (the map re-centres after a drift of range / 4).
 
 | Channel | Contents |
 |---|---|
@@ -252,8 +260,7 @@ or rule change on a known sampler goes straight to Full (its tiles are what the 
 `sampleGrid`, so at most one band of tile fetches is wasted), and teardown cancels before it waits.
 
 **Centres snap to the COARSEST cascade's texel lattice**, so no cascade's features ever swim as the
-camera moves. Both cascades measure the same world distance at their own texel size, **so near and far
-agree.**
+camera moves.
 
 **The water-level channel bakes EXACTLY what the sampler reports** (no land-burial dive): the ocean clipmap's coarse
 outer rings vertex-sample it, and a triangle bridging a flat water texel to a sunk land texel sags the far sea.
@@ -281,6 +288,12 @@ existing gate does the rest. The terrain shader's beach overlay keys on the same
 * **A real shelving bay is kept wet by the RADIUS**: its apron is too shallow to seed itself, but it
   sits close to water that does. A radius shorter than the apron makes the sea retreat off it.
 * **LAKES are never touched** — a lake's surface already differs from sea level.
+* **On a COARSE cascade** (the far one, and both in the quick pass) the texels are ~130 m, so with the 4 m radius every
+  texel that is not a seed (coarse depth under "Ocean swash depth") takes the full drop. This agrees with the near
+  rule on a gentle shelf, which the near rule also drains past radius + feather of deep water; it is wrong only where
+  the coarse stage's "deep water" line is off the mesh's (up to a coarse pixel, 256 x "Meters per pixel").
+  Tried and dropped: a wider radius on a coarse cascade (one coarse pixel) - every distant shallow shelf then held
+  water that the near cascade drains.
 
 ### `applyFlowField`
 

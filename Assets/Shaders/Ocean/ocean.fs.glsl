@@ -164,11 +164,18 @@ vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunT
 // own position (in_pos.xz), not in_uv's lattice point. Ease-out 1 - (1 - t)^2: transparent at the bottom, mostly opaque
 // above. Computed from nothing main has, so no value of main's stays live for it (the no-map fallback is
 // oceanSampleShoreData's open-ocean floor, re-derived from the UBO).
+// NEAR CASCADE ONLY (terrainNearWeight): past it the map's height is not the drawn ground, and a fade from it removes the
+// water wherever the coarse surface stands above the sea. There the ocean is opaque and the depth test alone cuts it
+// against the mesh (no film that far out to hand over to).
 float oceanEdgeCover()
 {
     float filmY = u_ocean_seaLevel - u_ocean_depth;
+    float nearW = 1.0;
     if (terrainHeightMapPresent())
     {
+        nearW = terrainNearWeight(in_pos.xz);
+        if (nearW <= 0.0)
+            return 1.0;
         filmY = terrainHeightAt(in_pos.xz);
         float reliefDepth = 0.0;
         if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
@@ -185,7 +192,7 @@ float oceanEdgeCover()
         filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), normalY) - 0.5) * reliefDepth;
     }
 
-    const float s = 1.0 - clamp((in_pos.y - filmY) / u_terrainWater_oceanEdgeFade, 0.0, 1.0);
+    const float s = (1.0 - clamp((in_pos.y - filmY) / u_terrainWater_oceanEdgeFade, 0.0, 1.0)) * nearW;
     return 1.0 - s * s;
 }
 

@@ -179,6 +179,10 @@ See [Procedural](Context/Procedural/CONTEXT.md), [RendererVK Terrain](Context/Re
 * Cache-only terrain: a missing tile is re-read from disk on every fetch.
 * The streamer ring is limited by the 16-bit mesh index (~51k chunk meshes at 128 chunks).
 * Per-pixel wind domain rotation in `ocean_wave.inc.glsl` is off (creases).
+* The terrain-data map's far cascade is the coarse generator stage (not the mesh): past the near cascade the waves'
+  depth, the reach rule, the beach overlay and the ocean's dry-sector grid read a surface with another shoreline.
+  Idea: clipmap levels filled from the streamed nodes' own sample grids (a LOD n node has Full-detail heights and water
+  levels at 2 x 2^n m), so the map equals the drawn mesh at every distance.
 
 ## Trees
 

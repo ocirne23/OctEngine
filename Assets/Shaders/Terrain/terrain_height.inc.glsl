@@ -11,8 +11,9 @@
 //         bits 24-31 humidity [0,1]
 //       Read via terrainClimateAt (manual bilinear of decoded texels) / terrainClimateNearestAt.
 //   A = MACRO ALTITUDE (m above sea level): splits "mountain" (height far above it) from "high flatland"; bilinear-safe
-// Consumers: the fog (vol_scatter.cs.glsl), the ocean's depth/water-level fallback outside its shore map
-// (ocean_wave.inc.glsl), and the long-range sun shadow march below (shared by the fog and every lit surface).
+// Consumers: the fog (vol_scatter.cs.glsl), the ocean's depth / water level (ocean_wave.inc.glsl), and the long-range sun
+// shadow march below (shared by the fog and every lit surface).
+// Layer 0 is the mesh's own field (Full detail); layer 1 is the generator's COARSE stage (terrainNearWeight).
 //
 // UBO (requires ubo.inc.glsl): u_terrain_mapCentre = world center XZ, mapInvNearSize = 1 / near cascade size (0 = no
 // map), mapInvFarSize = 1 / far cascade size (0 = near only). The includer defines TERRAIN_HEIGHT_BINDING.
@@ -42,6 +43,15 @@ vec4 terrainDataAt(vec2 worldXZ)
 
 // Raw terrain surface height (world Y, m) at worldXZ.
 float terrainHeightAt(vec2 worldXZ) { return terrainDataAt(worldXZ).x; }
+
+// The NEAR cascade's weight at worldXZ: 1 inside it, 0 past it (terrainDataAt's blend band). The far cascade is the
+// generator's COARSE stage: a different surface from the drawn mesh, with its shoreline hundreds of metres off. A
+// consumer that needs the DRAWN ground (a waterline) scales its use of the height by this.
+float terrainNearWeight(vec2 worldXZ)
+{
+    const vec2 d = abs((worldXZ - u_terrain_mapCentre) * u_terrain_mapInvNearSize);
+    return 1.0 - smoothstep(0.42, 0.48, max(d.x, d.y));
+}
 
 // Sun visibility marched off the height cascades, for receivers past the PCSS cascades and the RT/TLAS range (the
 // terrain mesh ring runs to ~33 km); distant ground would otherwise sit uniformly lit behind a hard terminator.

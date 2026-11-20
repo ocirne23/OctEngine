@@ -68,8 +68,8 @@ export struct OceanSettings
 	bool  hitLighting = false;     // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
 	// Foam: one instant-foam response draws the crest foam AND injects the world-space foam field.
 	glm::vec3 foamColor = glm::vec3(0.88f, 0.92f, 0.94f);
-	float foamBias = 0.9f;         // fold threshold (Jacobian below this foams)
-	float foamBreakAccel = 0.4f;   // breaking threshold (downward crest accel, g units)
+	float foamBias = 0.85f;        // fold threshold (Jacobian below this foams)
+	float foamBreakAccel = 0.33f;  // breaking threshold (downward crest accel, g units)
 	float foamSoftness = 1.0f;     // edge width of both thresholds
 	float foamWindFull = 15.0f;    // model U10 (m/s) from which the surf band has its full width (off in a calm)
 	float bubbleDepth = 0.5f;      // m under the surface (model metre): deeper = darker, more turquoise
@@ -88,8 +88,9 @@ export struct OceanSettings
 
 	// --- Shore interaction (driven by the terrain streamer's baked terrain-data map) ---
 	float shoalScale = 0.005f;     // the shore's APPROACH BAND depth, x the mid cascade's patch size
-	// Past horizonDepthRange the waves assume at least horizonDepth of water, whatever the baked map says (distant
-	// depth errors all run SHALLOW). Only the seabed moves, never the surface. 0 range = off.
+	// Past horizonDepthRange, and wherever the FAR data cascade answers (the coarse generator stage), the waves and the
+	// surf band assume at least horizonDepth of water, whatever the baked map says (distant depth errors all run
+	// SHALLOW). Only the seabed moves, never the surface. 0 range = the distance part off; 0 depth = no floor.
 	float horizonDepth = 2.0f;
 	float horizonDepthRange = 3000.0f;
 	float shoreFoamDepth = 8.0f;   // surf band: water-column height (m) that churns white; 0 = off
@@ -97,8 +98,7 @@ export struct OceanSettings
 	float swashAmp = 0.5f;         // swash run-up: the fraction of the raw wave height that runs up the beach (>= 0.04)
 	float shoreFoamBias = 0.1f;    // surf fold-threshold shift: negative = sparser/more transparent surf
 	float swashFlow = 0.5f;        // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
-	float cullMargin = 1.0f;       // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)
-	float farCullError = 4.0f;     // land cull from the FAR terrain cascade: flat error allowance (m); >= 0.25
+	float cullMargin = 1.0f;       // VS land cull (near data cascade only): footprint buried deeper than this = triangle discarded (0 = off)
 	bool  drySectorCull = true;    // whole-sector skip where the baked terrain buries a sector's entire footprint
 
 	// --- Ray tracing budget (ocean.fs.glsl per-pixel refraction/reflection rays; all live) ---
@@ -132,7 +132,6 @@ export struct OceanWorldScaled
 	float bubbleBlur;
 	float foamTexel;
 	float cullMargin;
-	float farCullError;
 	float rtRefractionRange;
 	float rtReflectionRange;
 	float rtRayCutoffDist;
@@ -159,7 +158,6 @@ export inline OceanWorldScaled oceanWorldScaled(const OceanSettings& o)
 		.bubbleBlur = o.bubbleBlur * s,
 		.foamTexel = o.foamTexel * s,
 		.cullMargin = o.cullMargin * s,
-		.farCullError = o.farCullError * s,
 		.rtRefractionRange = o.rtRefractionRange * s,
 		.rtReflectionRange = o.rtReflectionRange * s,
 		.rtRayCutoffDist = o.rtRayCutoffDist * s,
