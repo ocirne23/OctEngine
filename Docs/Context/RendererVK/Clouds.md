@@ -120,8 +120,9 @@ variant (`sky.fs.glsl`) draws NO clouds.
     The band offsets and the tornado lift still scale with the strength, so the clouds move UP / DOWN while it changes.
   * "Reverse spin" mirrors the frame (`u_clouds_vortexHand`): the spin and the spiral's hand together, so the arms
     always trail.
-  * **Keep the spin slow:** the temporal pass reprojects by the wind only, and the far shadow cascade renders each
-    texel once in 64 frames, so a fast band motion ghosts in the clouds and lags in the shadows.
+  * **Keep the spin slow:** the temporal pass reprojects by the wind only, and a shadow snapshot is up to 2 x its
+    tile count in frames old (far: 128; the lookup follows only the wind and the sun), so a fast band motion ghosts in
+    the clouds and lags in the shadows.
   * **THE EYE LIGHT** ("Vortex/Eye light" colour x intensity, "Eye light reach (km)", "Eye light falloff curve", "Eye
     light forward scatter"; Runtime rows, live: `u_clouds_vortexLight`, `u_clouds_vortexLightInvReach`,
     `u_clouds_vortexLightCurve`, `u_clouds_vortexLightForward`; "Eye light shadow steps" is baked): a vertical LINE LIGHT
@@ -385,29 +386,63 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
 
 ### The cloud shadow map
 
-A Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl` reads. Two sun-aligned ortho
-cascades ("Sky/Clouds/Shadows": "Near cascade (km)", "Far cascade (km)") in ONE 2-layer RGBA32F array
-(`SHADOW_RESOLUTION` 1024), recorded straight into the primary after the pre-scene stages (before GI, fog and
-the scene).
+A Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl` reads. Two ortho cascades
+("Sky/Clouds/Shadows": "Near cascade (km)" 2, "Far cascade (km)" 40) in ONE 4-layer RGBA32F array
+(`SHADOW_RESOLUTION` 512, two layers per cascade: 16 MB), recorded straight into the primary after the pre-scene
+stages (before GI, fog and the scene). **Cloud shadows are large and soft: the pass is built to cost little, not to
+be exact.**
 
-* A texel = one line along the sun through the MAIN layer's band (not the union shell): x = the along-light
-  coordinate `dot(p - centre, L)` of the first cloud coming from the sun, y = the mean extinction to the last
-  cloud, z = the whole optical depth. A receiver's optical depth is `min(y * max(x - a, 0), z)`, so ONE fetch
-  serves the ground, a mountain or fog froxel inside a cloud, and the clouds' own samples. Because x is a
-  coordinate and not a distance from a start plane, the map needs no per-cascade start distance.
-* **PROGRESSIVE UPDATES, one buffer, no toroidal addressing.** Each frame a cascade renders 1 / split of
-  its texels ("Near update split", default 1/4; "Far update split", default 1/64): one texel of each 2x2 /
-  4x4 / 8x8 block, the rotating phase's (`shadowTexel` in cloud_shadow.cs.glsl), one thread per rendered texel
-  - a constant cost per frame instead of a spike every Nth frame. A 64-frame cycle moves the clouds ~11 m at
-  10 m/s, under a third of the far cascade's ~39 m texel. That needs ONE texel-to-world mapping for all of
-  them, so `buildUboClouds` FREEZES each centre (snapped to whole texels in light space, double, world space)
-  and re-centres only when the camera is 1/8 of the extent away (125 m near, 5 km far at the defaults), or the
-  sun, the extent or the enable changed: that frame renders the whole cascade (a rare spike; a CONTINUOUSLY
-  moving sun re-renders every frame). The lookup is unchanged: only the frozen centre's camera-relative
-  offset is rebuilt each frame. **Tried and reverted:** a frozen centre travelling WITH the wind - it fixed
-  no visible artefact, and made a still camera re-centre in wind. **Steps per cascade** ("Near steps", "Far
-  steps"). **So the map is ONE image, not per frame slot.** It is cleared to "no cloud" at creation and stays
-  bound while the clouds are off (`u_clouds_shadowRendered = 0` makes the lookup return 1).
+* **THE MAP IS A HORIZONTAL GRID FIXED TO THE CLOUDS.** A texel is a column of NOISE space (world - the wind) at the
+  main layer's middle, on whole texels (4 m near, 78 m far - on the ground too, at any sun height). Its LINE runs
+  through that point along the snapshot's sun, through the MAIN layer's band (not the union shell): x = the along-light
+  coordinate of the first cloud coming from the sun (0 at the grid point), y = the mean extinction to the last cloud,
+  z = the whole optical depth. A receiver's optical depth is `min(y * max(x - a, 0), z)`, so ONE fetch serves the
+  ground, a mountain or fog froxel inside a cloud, and the clouds' own samples.
+  * **Every snapshot samples the SAME columns of the cloud field**, so a swap changes only what really changed (the
+    clouds' shape, the sun's tilt of the lines). A grid on a plane across the sun, centred on the camera without a
+    snap, was a new sampling of the clouds in every snapshot: with 78 m texels the far shadows shifted at each swap.
+  * The map drifts with the wind by itself: a tile is rendered where its columns lie NOW (the push block's centre),
+    and the lookup takes the wind out of a point's place. No time is frozen: tiles rendered many frames apart fit,
+    because the clouds only move in noise space by the detail's vertical drift (metres over a snapshot's life).
+* **SNAPSHOTS, A TILE PER FRAME** (`RendererState::buildUboClouds`, `CloudShadowSnapshot`). The consumers read a
+  cascade's FRONT snapshot; its BACK one is rendered ONE TILE per frame (`CloudPipeline::ShadowDraw`) in the cascade's
+  other layer, and becomes the front with its last tile - the pass runs ahead of every reader, so the swap is in the
+  same frame. A map is 4^split tiles: "Near update split" (default 1/16: 128 x 128 texels a frame), "Far update split"
+  (default 1/64: 64 x 64), up to 1/256. **The cost is small and the same every frame, whatever moves** - the sun cycle
+  included. A whole map in one frame happens only for the first snapshot (also after a sunrise), a changed extent, and
+  a camera that left the front (below).
+  * **The snapshot's own frame rides the push block** (where the map lies now, its sun, the texel size): the UBO holds
+    the FRONT's lookup and today's sun.
+  * **A TILE, not an interleaved pattern:** a workgroup's threads are neighbours, so over clear sky all of them leave
+    the density at its coverage test (most of the map at a low coverage) and in a cloud's core all end at the opaque
+    test (`odOpaque`, a transmittance of e^-10). Interleaved texels were hundreds of metres apart: every warp paid for
+    its one cloudy column. The snapshots make the order invisible.
+  * **Tried and replaced: one buffer with a frozen centre** (1/N of the texels a frame, interleaved, in the map the
+    consumers read). Every change of the mapping rendered the whole cascade at once - a re-centre, and ANY change of
+    the sun: with the sun cycle on that was both whole cascades in every frame.
+* **THE LOOKUP IS THREE PLANES per cascade** over a point p relative to the centre view's camera
+  (`cloudShadowUV` / `cloudShadowAlong`; the CPU builds them in double, so none of this costs a shader anything):
+  * `u_clouds_shadowU` / `V`: the map's uv = `dot(p, xyz) + w` - the grid point where **TODAY's sun ray** from p meets
+    the layer's middle (p.xz + the sun's slope x p's depth below the middle), the wind taken out; w = the CAMERA's own
+    uv. So the shadows follow the wind and the sun every frame, between snapshots too - on the ground and inside the
+    clouds alike (a point at the layer's height gets no shift). Exact for a thin layer;
+  * `u_clouds_shadowA`: the along-light coordinate = p's height over the middle along the SNAPSHOT's sun.
+* **THE LOOKUP'S WINDOW IS AROUND THE CAMERA, not the map** (`u_clouds_shadowWindow`: x = the front's layer, y = the
+  window's half size, z = 1 / its fade band; the weight is over the distance from the camera's own uv). The map is
+  larger than the window by a MARGIN (150 m + 2 % of the extent, at most 20 %: near 190 m, far 950 m), and the camera
+  moves inside it. A window at the map's border moved in a step at every swap - the border between the sharp near
+  cascade and the coarse far one snapped while flying.
+  * **A new snapshot is centred AHEAD of the camera**: the camera's place in the map (its sun ray's point at the
+    layer's middle) + its speed there x 1.5 build times, at most the margin. The speed is the map place's own (the
+    camera, the wind, the sun), not `m_cameraVelocity` (that one is 0 above 200 m/s).
+  * With half the window off the map (a teleport, or faster than the margin allows: about 1400 m/s near at 60 fps) the
+    front is rendered whole at once; until then the weight also fades at the map's own border.
+* **The detail:** the near cascade fetches it (its texels show the lumps, and the clouds' own self-shadow reads them);
+  the far cascade erodes by the detail's MEAN (`CLOUD_DETAIL_FETCH_MIN`: no curl or detail fetches) - at its texel size
+  the detail mip is near that mean. With no erosion at all the far cascade shadows darker and its border shows as a box.
+* **Steps per cascade** ("Near steps", "Far steps": 16 each). **The map is ONE image, not per frame slot.** It is
+  cleared to "no cloud" at creation and stays bound while the clouds are off (`u_clouds_shadowRendered = 0` makes the
+  lookup return 1).
 * **THE FAR CASCADE IS FILTERED ON THE RESULT** (`cloudShadowFarODFiltered`): its texels are tens of
   metres, and the OD is non-linear in the stored terms, so the sampler's bilinear blend of (x, y, z) stays
   blocky. Instead it `texelFetch`es the 2x2 texels, computes each one's transmittance and blends those

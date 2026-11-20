@@ -184,7 +184,7 @@ GPU Frame
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
     → Far voxel trees                      (desktop: the far record chunks' trees as voxel boxes - cull, prefix, scatter; off: emptied; Scene.md)
     → Grass near shadow                    (desktop, its own 2048 map; after the grass and clutter culls)
-    → Cloud shadow                         (the cloud shadow map; only the cascades due this frame; see "Volumetric clouds")
+    → Cloud shadow                         (the cloud shadow map: one tile of each cascade's next snapshot; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
     → GI                                   (BLAS builds + THIS frame's TLAS, then the probe trace)
     → Rain occlusion                       (ray query on that TLAS; only while a weather volume requested the map; see Particle)

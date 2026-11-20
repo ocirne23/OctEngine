@@ -697,58 +697,127 @@ void RendererState::buildUboClouds(const Camera& camera)
     if (c.vortexEnabled)
         m_cloudVortexAngle = std::fmod(m_cloudVortexAngle + glm::radians((double)glm::max(c.vortexSpinDegPerMin, 0.0f)) / 60.0 * dt, glm::two_pi<double>());
 
-    // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
-    // texels in light space (in double, world space) so the map does not swim when the camera moves.
-    // PROGRESSIVE UPDATES in ONE buffer: each frame a cascade renders 1 / split of its texels, interleaved
-    // (a rotating phase of a 2x2 or 4x4 pattern), so its cost is the same every frame; neighbouring texels
-    // then differ in age by a few frames, well under a texel of cloud motion. That needs ONE texel-to-world
-    // mapping for all of them, so the centre is FROZEN and re-centres only when the camera is 1/8 of the
-    // extent away from it (or the sun / the extent changed, or the map was off) - that frame renders the
-    // whole cascade, a rare spike. The shaders' lookup is unchanged: only the camera-relative offset of the
-    // frozen centre is rebuilt each frame.
+    // THE CLOUD SHADOW MAP: two ortho cascades around the camera, each as SNAPSHOTS (CloudShadowSnapshot). The consumers
+    // read a cascade's FRONT snapshot; its BACK one is rendered ONE TILE PER FRAME (4^split tiles: "Near / Far update
+    // split") in the cascade's other layer and becomes the front with its last tile. So the cost is small and the same
+    // every frame, whatever moves: no event renders a whole map (the first one, a changed extent and a camera that left
+    // the front aside).
+    // * THE MAP IS A HORIZONTAL GRID FIXED TO THE CLOUDS: a texel is a column of NOISE space (world - the wind) at the
+    //   main layer's middle, on whole texels, and its line runs along the snapshot's sun through that point. So every
+    //   snapshot samples the SAME columns of the cloud field - a swap changes only what really changed (the clouds'
+    //   shape, the sun) - and the map drifts with the wind by itself: a tile is rendered where the column lies NOW.
+    // * The sun moves on (the sun cycle). The lookup takes a point along TODAY's sun to the layer's middle and reads the
+    //   column there, so the shadows follow the sun between snapshots; a snapshot's own direction only tilts its lines.
+    // * THE LOOKUP'S WINDOW IS AROUND THE CAMERA, not the map: the map is larger than the window by a margin, and the
+    //   camera moves inside it. The border between the cascades (and to the mean past the far one) then moves with the
+    //   camera every frame, not in a step at each swap.
+    // All of it is in the lookup's planes (m_cloudShadowU / V / A / Window), worked out here in double: the shaders pay
+    // nothing for it.
     const glm::dvec3 sun = glm::normalize(glm::dvec3(m_skyParams.sunDirection));
     const bool shadowOn = enabled && c.shadows && sun.y > 0.01;
-    m_cloudShadowMask = 0;
+    m_cloudShadowDrawCount = 0;
     m_cloudShadowRendered = shadowOn;
+    m_cloudShadowWind += m_cloudWindStep;
     if (!shadowOn)
     {
-        m_cloudShadowValid = {};
+        for (CloudShadowCascade& cascade : m_cloudShadow)
+        {
+            cascade.frontValid = false;
+            cascade.tile = 0;
+        }
+        m_cloudShadowCamMapValid = false;
         return;
     }
-    const glm::dvec3 e0 = glm::abs(sun.y) < 0.999 ? glm::normalize(glm::cross(glm::dvec3(0.0, 1.0, 0.0), sun)) : glm::dvec3(1.0, 0.0, 0.0);
-    const glm::dvec3 e1 = glm::cross(sun, e0);
-    m_cloudShadowAxis0 = glm::vec3(e0);
-    m_cloudShadowAxis1 = glm::vec3(e1);
     const glm::dvec3 camPos(camera.position);
     const double extents[2] = { glm::max((double)c.shadowNearKm, 0.1) * 1000.0, glm::max((double)c.shadowFarKm, 0.2) * 1000.0 };
-    const int splits[2] = { glm::clamp(c.shadowNearSplit, 0, 3), glm::clamp(c.shadowFarSplit, 0, 3) };
-    const bool sunChanged = sun != m_cloudShadowSun;
-    m_cloudShadowSun = sun;
-    for (uint32 cascade = 0; cascade < CloudPipeline::SHADOW_CASCADES; ++cascade)
+    const int splits[2] = { glm::clamp(c.shadowNearSplit, 0, (int)CloudPipeline::SHADOW_MAX_SPLIT), glm::clamp(c.shadowFarSplit, 0, (int)CloudPipeline::SHADOW_MAX_SPLIT) };
+    const double layerMiddle = 0.5 * ((double)cloudMainBottom(c) + (double)cloudMainTop(c));
+    const double frameSec = glm::clamp(Globals::time.getDeltaSec(), 1.0 / 240.0, 0.1);
+    // A point's place in the map: where the sun ray from it meets the layer's middle - its xz + the slope x its depth
+    // below the middle - in noise space. The camera's, and how fast that moves (the camera, the wind, the sun).
+    const double lever = layerMiddle - camPos.y;
+    const glm::dvec2 sunSlope = glm::dvec2(sun.x, sun.z) / glm::max(sun.y, 0.02);
+    const glm::dvec2 camMap = glm::dvec2(camPos.x, camPos.z) + sunSlope * lever - m_cloudShadowWind;
+    glm::dvec2 camMapSpeed(0.0);
+    if (m_cloudShadowCamMapValid && glm::length(camMap - m_cloudShadowCamMap) < 0.1 * extents[0]) // else a teleport
+        camMapSpeed = (camMap - m_cloudShadowCamMap) / frameSec;
+    m_cloudShadowCamMap = camMap;
+    m_cloudShadowCamMapValid = true;
+    for (uint32 i = 0; i < CloudPipeline::SHADOW_CASCADES; ++i)
     {
-        const double extent = extents[cascade];
+        CloudShadowCascade& cascade = m_cloudShadow[i];
+        const double extent = extents[i];
         const double texel = extent / CloudPipeline::SHADOW_RESOLUTION;
-        const glm::dvec2 camLight(glm::dot(camPos, e0), glm::dot(camPos, e1));
-        const glm::dvec2 centreLight(glm::dot(m_cloudShadowCenter[cascade], e0), glm::dot(m_cloudShadowCenter[cascade], e1));
-        const glm::dvec2 offset = glm::abs(camLight - centreLight);
-        const bool recentre = !m_cloudShadowValid[cascade] || sunChanged || extent != m_cloudShadowExtent[cascade]
-            || glm::max(offset.x, offset.y) > extent * 0.125;
-        if (recentre)
+        // The map's margin around the lookup's window (uv): how far the camera may be from a snapshot's middle.
+        const double margin = glm::min(150.0 + 0.02 * extent, 0.2 * extent) / extent;
+        const double window = 0.5 - margin;
+        const auto begin = [&](CloudShadowSnapshot& s, uint32 layer, const glm::dvec2& centre)
         {
-            const glm::dvec2 snapped = glm::floor(camLight / texel + 0.5) * texel;
-            m_cloudShadowCenter[cascade] = e0 * snapped.x + e1 * snapped.y + sun * glm::dot(camPos, sun);
-            m_cloudShadowExtent[cascade] = extent;
-            m_cloudShadowValid[cascade] = true;
-            m_cloudShadowSplit[cascade] = 0; // this frame: every texel
-            m_cloudShadowPhase[cascade] = 0;
+            s = CloudShadowSnapshot{ .centre = glm::floor(centre / texel + 0.5) * texel, .sun = sun, .extent = extent, .layer = layer };
+        };
+        // One tile of a snapshot, where its columns lie now.
+        const auto draw = [&](const CloudShadowSnapshot& s, uint32 split, uint32 tile)
+        {
+            const uint32 tileSize = CloudPipeline::SHADOW_RESOLUTION >> split;
+            const uint32 tilesPerSide = 1u << split;
+            const glm::dvec2 world = s.centre + m_cloudShadowWind;
+            m_cloudShadowDraws[m_cloudShadowDrawCount++] = CloudPipeline::ShadowDraw{
+                .centre = glm::vec4((float)(world.x - camPos.x), (float)lever, (float)(world.y - camPos.z), (float)texel),
+                .sun = glm::vec4(glm::vec3(s.sun), 0.0f),
+                .layer = s.layer,
+                .cascade = i,
+                .tileX = (tile % tilesPerSide) * tileSize,
+                .tileY = (tile / tilesPerSide) * tileSize,
+                .tileSize = tileSize };
+        };
+
+        bool frontLost = !cascade.frontValid || cascade.front.extent != extent;
+        if (!frontLost) // half the window is off the map (a teleport, or faster than the margin allows)
+        {
+            const glm::dvec2 off = glm::abs(camMap - cascade.front.centre) / extent;
+            frontLost = glm::max(off.x, off.y) > 0.5 - 0.5 * window;
+        }
+        if (frontLost)
+        {
+            begin(cascade.front, i * 2, camMap);
+            draw(cascade.front, 0, 0); // whole, now
+            cascade.frontValid = true;
+            cascade.tile = 0;
         }
         else
         {
-            m_cloudShadowSplit[cascade] = (uint32)splits[cascade];
-            const uint32 phases = 1u << (2 * splits[cascade]); // 1, 4, 16 or 64
-            m_cloudShadowPhase[cascade] = (m_cloudShadowPhase[cascade] + 1) % phases;
+            if (cascade.tile == 0)
+            {
+                cascade.split = (uint32)splits[i];
+                // Centred AHEAD of the camera: where it is halfway through the time this snapshot is shown (built over
+                // `tiles` frames, then shown while the next one is built) - at most the margin ahead.
+                const double tiles = (double)(1u << (2 * cascade.split));
+                glm::dvec2 lead = camMapSpeed * (1.5 * tiles * frameSec);
+                const double leadLength = glm::length(lead);
+                if (leadLength > margin * extent)
+                    lead *= margin * extent / leadLength;
+                begin(cascade.back, cascade.front.layer ^ 1u, camMap + lead);
+            }
+            draw(cascade.back, cascade.split, cascade.tile);
+            if (++cascade.tile >= (1u << (2 * cascade.split)))
+            {
+                cascade.front = cascade.back; // complete before this frame's first reader: the pass runs ahead of them all
+                cascade.tile = 0;
+            }
         }
-        m_cloudShadowMask |= 1u << cascade;
+
+        // The lookup of the front, as planes over a camera-relative point p: the map's u and v at the place where
+        // TODAY's sun ray from p meets the layer's middle (p.xz + the slope x p's depth below the middle, - the wind), and
+        // the along-light coordinate = p's height over the middle along the SNAPSHOT's sun. The window: the lookup fades
+        // out around the CAMERA's place in the map, not at the map's border.
+        const CloudShadowSnapshot& f = cascade.front;
+        const double invExtent = 1.0 / f.extent;
+        const glm::dvec2 uvCam = (camMap - f.centre) * invExtent + 0.5;
+        const double invFrontUp = 1.0 / glm::max(f.sun.y, 0.02);
+        m_cloudShadowU[i] = glm::vec4((float)invExtent, (float)(-sunSlope.x * invExtent), 0.0f, (float)uvCam.x);
+        m_cloudShadowV[i] = glm::vec4(0.0f, (float)(-sunSlope.y * invExtent), (float)invExtent, (float)uvCam.y);
+        m_cloudShadowA[i] = glm::vec4(0.0f, (float)invFrontUp, 0.0f, (float)(-lever * invFrontUp));
+        m_cloudShadowWindow[i] = glm::vec4((float)f.layer, (float)window, (float)(1.0 / glm::min(1.0 / 6.0, 0.5 * window)), 0.0f);
     }
 }
 
@@ -1013,15 +1082,15 @@ void RendererState::registerUboValues(UboBlock& list)
     {
         // ---- Clouds ("Sky/Clouds")
         const CloudParams& c = Globals::settings.clouds;
-        // Live (buildUboClouds: the wind, the evolve drift, the shadow cascades' frozen centres). The Beer shadow map's
-        // cascades: xyz = the frozen centre relative to the centre view's camera (m), w = 1 / the extent.
-        list.addArray("clouds_shadowCascade", 2, [this](uint32 i)
-            {
-                return glm::vec4(glm::vec3(m_cloudShadowCenter[i] - glm::dvec3(m_cameraPos)), m_cloudShadowExtent[i] > 0.0 ? (float)(1.0 / m_cloudShadowExtent[i]) : 0.0f);
-            }, UboLive);
-        list.add("clouds_shadowAxis0", [this] { return m_cloudShadowAxis0; }, UboLive); // the light-space axes
+        // Live (buildUboClouds: the wind, the evolve drift, the shadow cascades' snapshots). The Beer shadow map's lookup
+        // per cascade (cloud_shadow.inc.glsl): planes over a point relative to the centre view's camera, xyz . p + w -
+        // the map's u and v, and the along-light coordinate (m) - and the window: x = the array layer of the front
+        // snapshot, y = the half size of the lookup's window around the camera (uv), z = 1 / its fade band.
+        list.addArray("clouds_shadowU", CloudPipeline::SHADOW_CASCADES, [this](uint32 i) { return m_cloudShadowU[i]; }, UboLive);
+        list.addArray("clouds_shadowV", CloudPipeline::SHADOW_CASCADES, [this](uint32 i) { return m_cloudShadowV[i]; }, UboLive);
+        list.addArray("clouds_shadowA", CloudPipeline::SHADOW_CASCADES, [this](uint32 i) { return m_cloudShadowA[i]; }, UboLive);
+        list.addArray("clouds_shadowWindow", CloudPipeline::SHADOW_CASCADES, [this](uint32 i) { return m_cloudShadowWindow[i]; }, UboLive);
         list.add("clouds_enabled", [this] { return cloudsEnabled(); }, UboLive);        // the march runs this frame
-        list.add("clouds_shadowAxis1", [this] { return m_cloudShadowAxis1; }, UboLive);
         list.add("clouds_shadowRendered", [this] { return m_cloudShadowRendered; }, UboLive);
         list.add("clouds_windStep", [this] { return glm::vec3((float)m_cloudWindStep.x, 0.0f, (float)m_cloudWindStep.y); }, UboLive); // the field's world displacement this frame
         // The sky-map clouds' history weight per march of a texel: exp(-3 dt / T) reaches 95 % of a change in T seconds,

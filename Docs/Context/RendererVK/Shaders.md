@@ -278,8 +278,8 @@ shadow caster FS 40/0), the shadow VS 30/0 (the tree variants 40/0), tree_volume
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
 cull 50/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 80/32,
-river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 64, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
-vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 39/0 (54/0 with the
+river FS 72/16, rock 64/16, sky.fs 56, aerial_lut 62, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.

@@ -290,16 +290,16 @@ export struct CloudParams
     // for a 1.5 km cloud), so a slowly moving low sun swept the shadows across the world: fast flicker.
     float shadowLowSunStartDeg = 15.0f;
     float shadowLowSunEndDeg = 3.0f;
-    float shadowNearKm = 1.0f;         // near cascade extent (km)
+    float shadowNearKm = 2.0f;         // near cascade extent (km): the lookup uses it less a margin for the camera's travel
     float shadowFarKm = 40.0f;       // far cascade extent (km)
     int   shadowNearSteps = 16;        // map march steps per texel, near cascade
-    int   shadowFarSteps = 32;         // map march steps per texel, far cascade
-    float shadowFarSoftness = 1.5f;    // far cascade lookup jitter per pixel and frame, in texels (TAA-resolved penumbra)
-    // PROGRESSIVE UPDATES: each frame a cascade renders 1 / split of its texels (interleaved), so the cost is
-    // the same every frame. 0 = every texel every frame, 1 = 1/4 (2x2), 2 = 1/16 (4x4), 3 = 1/64 (8x8).
-    // The far cascade at 1/64: a full cycle is 64 frames, and the wind moves the clouds ~11 m in that time
-    // at 10 m/s - under a third of a far texel (~39 m at 40 km).
-    int   shadowNearSplit = 1;
+    int   shadowFarSteps = 16;         // map march steps per texel, far cascade
+    float shadowFarSoftness = 1.0f;    // far cascade lookup jitter per pixel and frame, in texels (TAA-resolved penumbra)
+    // UPDATES OVER FRAMES: a cascade's map is a SNAPSHOT of the clouds, rendered one TILE per frame in a second layer
+    // and shown when it is complete, so the cost is the same every frame. 0 = the whole map every frame, 1 = 4 tiles,
+    // 2 = 16, 3 = 64, 4 = 256 (a snapshot is that many frames in the making, and shown as long again). The wind and the
+    // sun's motion since a snapshot are corrected in the lookup, so a slow update only loses the clouds' change of shape.
+    int   shadowNearSplit = 2;
     int   shadowFarSplit = 3;
     bool  selfShadowFromMap = true;    // the clouds' own sun shadow from the map (else the light march)
     // Below selfShadowMapMinSunDeg the self-shadow hands over from the map to the sun march (fully the march at half of

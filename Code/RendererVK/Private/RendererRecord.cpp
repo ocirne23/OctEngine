@@ -2009,10 +2009,10 @@ void RendererState::recordCommandBuffers()
     {
         recordPrimaryPreScene(frameIdx, vkCommandBuffer);
         // The cloud shadow map, before every reader (the sky clouds, fog scatter, the scene, the cloud march).
-        if (m_cloudShadowMask != 0)
+        if (m_cloudShadowDrawCount != 0)
         {
             m_gpuProfiler.beginScope(vkCommandBuffer, "Cloud shadow");
-            m_cloudPipeline.recordShadow(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, m_cloudShadowMask, m_cloudShadowSplit, m_cloudShadowPhase);
+            m_cloudPipeline.recordShadow(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, oc::span<const CloudPipeline::ShadowDraw>(m_cloudShadowDraws.data(), m_cloudShadowDrawCount));
             m_gpuProfiler.endScope(vkCommandBuffer);
         }
         // The clouds of the GI sky map (reflections, GI miss rays, sky SH), before GI bakes the sky map.

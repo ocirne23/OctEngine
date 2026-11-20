@@ -163,4 +163,5 @@ temporal / upsample). The others are still hand-written blocks with mirrored C++
   * all in `TreeVolumePipeline::prepare` (before any recording; GPU idle), `reloadBakePasses` / `reloadMarchPasses`.
 * Code that writes a lockable push value calls `Tweak::notifyChanged`.
 * Not lockable yet: the eye adaptation's `GpuParams` (a mapped per-frame UBO: "Post/Adapt *"), the bloom chain's
-  per-level weights, the cloud shadow split - values that also depend on runtime state.
+  per-level weights, the cloud shadow's tile (its push block is the snapshot's own frame) - values that also depend on
+  runtime state.

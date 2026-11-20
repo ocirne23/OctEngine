@@ -1,11 +1,15 @@
 #version 460
 
-// Cloud Beer shadow map: one invocation per rendered texel of one cascade (push constant). The texel's line along the
-// sun direction L starts where it leaves the main layer's top toward the sun and marches down through the band (both
-// intervals; the ground ends it) in a fixed step count. The layout and the lookup are in cloud_shadow.inc.glsl.
-// PROGRESSIVE (Renderer::buildUboClouds): a frame renders one texel of every 2x2 (split 1), 4x4 (split 2) or 8x8
-// (split 3) block. The phase order spreads each frame's texels evenly (the 2x2 order (0,0) (1,1) (1,0) (0,1), applied
-// at every level of the block).
+// Cloud Beer shadow map: one invocation per texel of ONE TILE of one snapshot (RendererState::buildUboClouds: a
+// cascade's map is rendered a tile per frame in its back layer and shown when it is complete). A texel is a point of
+// a HORIZONTAL grid at the main layer's middle; its line runs through that point along the snapshot's sun direction,
+// from where it leaves the main layer's top toward the sun down through the band (both intervals; the ground ends
+// it) in a fixed step count. The layout and the lookup are in cloud_shadow.inc.glsl.
+// THE SNAPSHOT'S OWN FRAME comes in the push block, not from the UBO (that holds the FRONT snapshot's lookup, and
+// today's sun). The grid is fixed to the CLOUDS (noise space) and the push block says where it lies now, so tiles
+// rendered many frames apart show the same cloud field.
+// A TILE is a block of neighbouring texels, so a workgroup's threads agree: over clear sky all of them leave the
+// density after its coverage test (most of the map at a low coverage), and none waits for a neighbour's noise fetches.
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -17,39 +21,23 @@ layout (binding = 1, rgba32f) uniform writeonly image2DArray u_outShadow;
 
 layout (push_constant) uniform CloudShadowPC
 {
+    vec4 u_centre; // xyz = the map's middle as it lies now, relative to the centre view's camera (m), w = the texel size (m)
+    vec4 u_sun;    // xyz = the snapshot's light direction
+    uint u_layer;
     uint u_cascade;
-    uint u_resolution;
-    uint u_split; // 0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4, 3 = one of each 8x8
-    uint u_phase;
+    uvec2 u_tile;  // the tile's first texel
 };
-
-ivec2 phaseOffset2(uint p) { return ivec2(int((p & 1u) ^ ((p >> 1u) & 1u)), int(p & 1u)); }
-
-ivec2 shadowTexel()
-{
-    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
-    if (u_split == 0u)
-        return id;
-    if (u_split == 1u)
-        return id * 2 + phaseOffset2(u_phase);
-    if (u_split == 2u)
-        return id * 4 + phaseOffset2(u_phase & 3u) * 2 + phaseOffset2(u_phase >> 2u);
-    return id * 8 + phaseOffset2(u_phase & 3u) * 4 + phaseOffset2((u_phase >> 2u) & 3u) * 2 + phaseOffset2(u_phase >> 4u);
-}
 
 void main()
 {
-    const ivec2 px = shadowTexel();
-    if (px.x >= int(u_resolution) || px.y >= int(u_resolution))
-        return;
-    const ivec3 dst = ivec3(px, int(u_cascade));
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy + u_tile);
+    const ivec3 dst = ivec3(px, int(u_layer));
     const vec4 noCloud = vec4(-1e30, 0.0, 0.0, 0.0);
 
-    const vec4 cascade = u_clouds_shadowCascade[u_cascade];
-    const vec3 L = u_sunDirection;
-    const float texel = 1.0 / (cascade.w * float(u_resolution));
-    const vec2 local = (vec2(px) + 0.5 - 0.5 * float(u_resolution)) * texel;
-    const vec3 origin = cascade.xyz + u_clouds_shadowAxis0 * local.x + u_clouds_shadowAxis1 * local.y; // on the plane through the centre
+    const vec3 L = u_sun.xyz;
+    const float texel = u_centre.w;
+    const vec2 local = (vec2(px) + 0.5 - 0.5 * float(imageSize(u_outShadow).x)) * texel;
+    const vec3 origin = u_centre.xyz + vec3(local.x, 0.0, local.y); // the texel's point at the layer's middle
     const float camAlt = u_viewPos.y; // centre view (g_viewIndex 0)
 
     // THE MAIN LAYER ONLY: the upper layer (thin, low-density sheets) casts no map shadow, so all steps go to the main
@@ -68,8 +56,14 @@ void main()
         return;
     }
 
-    const int steps = int(u_cascade == 0u ? u_clouds_shadowNearSteps : u_clouds_shadowFarSteps);
+    // THE DETAIL: the near cascade fetches it (its texels show the lumps; the clouds' own self-shadow reads them). The
+    // far cascade erodes by the detail's MEAN, no fetches: at its texel size the detail mip is near that mean. With no
+    // erosion at all it shadows far darker, and its border shows as a box.
+    const bool nearCascade = u_cascade == 0u;
+    const int steps = int(nearCascade ? u_clouds_shadowNearSteps : u_clouds_shadowFarSteps);
+    const float detail = nearCascade ? 1.0 : CLOUD_DETAIL_FETCH_MIN;
     const float dt = total / float(steps);
+    const float odOpaque = 10.0 / u_clouds_extinction; // in density x metres: the march ends at a transmittance of e^-10
     const vec2 noiseOffset = cloudNoiseOffset();
     const float lodBase = max(log2(texel * u_clouds_baseFrequency * CLOUD_BASE_RES), 0.0);
     const float lodDetail = max(log2(texel * u_clouds_detailFrequency * CLOUD_DETAIL_RES), 0.0);
@@ -83,16 +77,16 @@ void main()
         const float u = (float(i) + 0.5) * dt;
         const float t = (u < len0 ? seg0.x : seg1Shift) + u;
         const vec3 p = start - L * t;
-        // The detail erosion in BOTH cascades: it removes much of the base density, so a base-only far cascade shadows
-        // far darker and its border shows as a box. At the far texel size the detail mip is near its mean.
-        const float dens = cloudMainDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
+        const float dens = cloudMainDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, detail, lodBase, lodDetail);
         if (dens <= 0.0)
             continue;
         od += dens * dt;
-        const float a = aStart - t; // = dot(p - centre, L): origin - centre is perpendicular to L
+        const float a = aStart - t; // the distance along L from the texel's point: p = origin + L * a
         if (aFront == -1e30)
             aFront = a + 0.5 * dt;
         aBack = a - 0.5 * dt;
+        if (od > odOpaque) // nothing below changes a receiver's light (a tile's threads end together in a cloud's core)
+            break;
     }
 
     od *= u_clouds_extinction;

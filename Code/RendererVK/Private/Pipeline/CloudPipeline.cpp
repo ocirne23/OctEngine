@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import Core.glm;
 import File;
 import :Device;
 import :Allocator;
@@ -22,12 +23,14 @@ namespace
         uint32 mode;
         uint32 size;
     };
-    struct ShadowPC
+    struct ShadowPC // cloud_shadow.cs.glsl's push block: CloudPipeline::ShadowDraw without the tile size
     {
+        glm::vec4 centre;
+        glm::vec4 sun;
+        uint32 layer;
         uint32 cascade;
-        uint32 resolution;
-        uint32 split; // 0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4
-        uint32 phase; // which texel of the pattern this frame
+        uint32 tileX;
+        uint32 tileY;
     };
     // x = the front's along-light coordinate, y = mean extinction, z = whole optical depth (cloud_shadow.inc.glsl).
     constexpr vk::Format SHADOW_FORMAT = vk::Format::eR32G32B32A32Sfloat;
@@ -101,7 +104,7 @@ void CloudPipeline::createShadowMap()
         .format = SHADOW_FORMAT,
         .extent = { SHADOW_RESOLUTION, SHADOW_RESOLUTION, 1 },
         .mipLevels = 1,
-        .arrayLayers = SHADOW_CASCADES,
+        .arrayLayers = SHADOW_LAYERS,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
@@ -113,7 +116,7 @@ void CloudPipeline::createShadowMap()
         .image = m_shadow.image,
         .viewType = vk::ImageViewType::e2DArray,
         .format = SHADOW_FORMAT,
-        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = SHADOW_CASCADES },
+        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = SHADOW_LAYERS },
     };
     auto viewResult = Globals::device.getDevice().createImageView(viewInfo);
     assert(viewResult.result == vk::Result::eSuccess);
@@ -123,7 +126,7 @@ void CloudPipeline::createShadowMap()
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary, "Clouds.shadowInit");
     vk::CommandBuffer cmd = init.begin(true);
-    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, SHADOW_CASCADES };
+    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, SHADOW_LAYERS };
     vk::ImageMemoryBarrier2 toGeneral{
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
         .dstStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -697,10 +700,9 @@ void CloudPipeline::recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, u
     }
 }
 
-void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask,
-    const oc::array<uint32, SHADOW_CASCADES>& split, const oc::array<uint32, SHADOW_CASCADES>& phase)
+void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, oc::span<const ShadowDraw> draws)
 {
-    if (cascadeMask == 0)
+    if (draws.empty())
         return;
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     // WAR: the previous frames' consumers (lit / terrain / ocean fragments, fog + GI + clouds compute, the
@@ -727,14 +729,11 @@ void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, 
     commandBuffer.cmdUpdateDescriptorSets(m_shadowPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_shadowPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_shadowPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    for (uint32 c = 0; c < SHADOW_CASCADES; ++c)
+    for (const ShadowDraw& draw : draws)
     {
-        if (!(cascadeMask & (1u << c)))
-            continue;
-        // Progressive: one thread per texel of THIS frame's phase, so the dispatch shrinks with the split.
-        const uint32 stride = 1u << split[c]; // 1, 2 or 4 texels per axis
-        const uint32 groups = (SHADOW_RESOLUTION / stride + 7) / 8;
-        const ShadowPC pc{ .cascade = c, .resolution = SHADOW_RESOLUTION, .split = split[c], .phase = phase[c] };
+        // One thread per texel of the tile (whole 8 x 8 workgroups: SHADOW_MAX_SPLIT's assert).
+        const uint32 groups = draw.tileSize / 8;
+        const ShadowPC pc{ .centre = draw.centre, .sun = draw.sun, .layer = draw.layer, .cascade = draw.cascade, .tileX = draw.tileX, .tileY = draw.tileY };
         cmd.pushConstants(m_shadowPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(groups, groups, 1);
     }

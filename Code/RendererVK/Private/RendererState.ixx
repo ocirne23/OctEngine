@@ -260,8 +260,13 @@ protected:
     glm::vec4 m_cascadeSunSizeTexels{ 0.0f };
     glm::vec4 m_cascadePlanes[RendererVKLayout::NUM_SHADOW_CASCADES * 6] = {}; // normalized, cascade c at [c * 6]
     glm::dvec2 m_cloudWindStep{ 0.0 };      // this frame's cloud field displacement
-    glm::vec3 m_cloudShadowAxis0{ 1.0f, 0.0f, 0.0f };
-    glm::vec3 m_cloudShadowAxis1{ 0.0f, 0.0f, 1.0f };
+    // The cloud shadow lookup of each cascade's FRONT snapshot (buildUboClouds; cloud_shadow.inc.glsl): planes over a
+    // camera-relative point (xyz . p + w) for the map's u and v and for the along-light coordinate, and the window:
+    // x = the snapshot's layer, y = the half size of the lookup's window around the camera (uv), z = 1 / its fade band.
+    oc::array<glm::vec4, CloudPipeline::SHADOW_CASCADES> m_cloudShadowU{};
+    oc::array<glm::vec4, CloudPipeline::SHADOW_CASCADES> m_cloudShadowV{};
+    oc::array<glm::vec4, CloudPipeline::SHADOW_CASCADES> m_cloudShadowA{};
+    oc::array<glm::vec4, CloudPipeline::SHADOW_CASCADES> m_cloudShadowWindow{};
     bool m_cloudShadowRendered = false;
     // The sky's multiple-scattering light (buildUboSky), [0] = at the low altitude, [1] = at the high one:
     glm::vec3 m_skyMultiScatter[2]{};         // the radiance the shaders add per unit scattering (both lights, the gains)
@@ -700,14 +705,31 @@ protected:
     // the same glow, drawn per beam by the "Beam cards" scene stage (uploaded in present).
     RendererVKLayout::LightInfo m_beamCards[BeamCardPipeline::MAX_CARDS]{};
     uint32 m_beamCardCount = 0;
-    // The cloud shadow map cascades (buildUboClouds): world-space centres + extents of what each layer holds.
-    oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
-    oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};
-    glm::dvec3 m_cloudShadowSun = glm::dvec3(0.0);
-    oc::array<bool, CloudPipeline::SHADOW_CASCADES> m_cloudShadowValid{};    // the centre is set (else: re-centre + full)
-    oc::array<uint32, CloudPipeline::SHADOW_CASCADES> m_cloudShadowSplit{};  // THIS frame: 0 = all texels, 1 = 1/4, 2 = 1/16
-    oc::array<uint32, CloudPipeline::SHADOW_CASCADES> m_cloudShadowPhase{};  // THIS frame's texel of the 2x2 / 4x4 pattern
-    uint32 m_cloudShadowMask = 0; // the cascades the primary renders this frame (bit per cascade)
+    // THE CLOUD SHADOW MAP's cascades (buildUboClouds). A SNAPSHOT is one complete map: the clouds along one sun
+    // direction, on a horizontal grid that is fixed to the CLOUDS (noise space: world - the wind). The consumers read
+    // the FRONT one; the BACK one is rendered a tile per frame in the cascade's other layer and becomes the front when
+    // its last tile is in.
+    struct CloudShadowSnapshot
+    {
+        glm::dvec2 centre{ 0.0 };           // the map's middle in noise space (x, z), on a whole texel
+        glm::dvec3 sun{ 0.0, 1.0, 0.0 };    // its light direction
+        double extent = 0.0;                // m
+        uint32 layer = 0;                   // the array layer that holds it
+    };
+    struct CloudShadowCascade
+    {
+        CloudShadowSnapshot front;
+        CloudShadowSnapshot back;
+        bool frontValid = false;            // else: the front is rendered whole, in one frame
+        uint32 split = 0;                   // the back's: 4^split tiles
+        uint32 tile = 0;                    // the back's next tile (0 = not started)
+    };
+    oc::array<CloudShadowCascade, CloudPipeline::SHADOW_CASCADES> m_cloudShadow{};
+    glm::dvec2 m_cloudShadowWind{ 0.0 };    // the cloud field's wind displacement, accumulated (m; not wrapped)
+    glm::dvec2 m_cloudShadowCamMap{ 0.0 };  // last frame's camera place in the map (noise space): its speed there
+    bool m_cloudShadowCamMapValid = false;
+    oc::array<CloudPipeline::ShadowDraw, CloudPipeline::SHADOW_CASCADES> m_cloudShadowDraws{}; // this frame's tiles
+    uint32 m_cloudShadowDrawCount = 0;
     TerrainResources m_terrain;
     glm::vec4 m_terrainStitch{ 0.0f };      // setTerrainStitch: x = chunk size (0 = off), yz = the draw camera in chunks
     glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks), w = LOD0's quad size (m)

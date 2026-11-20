@@ -1,6 +1,7 @@
 export module RendererVK:CloudPipeline;
 
 import Core;
+import Core.glm;
 import :VK;
 import :Allocator;
 import :Buffer;
@@ -20,14 +21,30 @@ import :Layout;
 // The noise textures (base / detail / weather / curl) are generated on the GPU at initialize and on every
 // shader reload (cloud_noise.cs.glsl). Every image stays in GENERAL for life.
 // THE CLOUD SHADOW MAP (Beer shadow map, cloud_shadow.cs.glsl / cloud_shadow.inc.glsl): two sun-aligned
-// cascades in one 2-layer array, written before GI in the primary. ONE image, not per frame slot: the far
-// cascade is refreshed only every few frames and must survive between its updates. It exists (cleared to
-// "no cloud") even while the clouds are off, so every consumer can keep it bound.
+// cascades, written before GI in the primary. ONE image, not per frame slot: a cascade's map is rendered a TILE per
+// frame and must survive between its updates. TWO layers per cascade: the snapshot the consumers read and the one
+// being rendered (RendererState::buildUboClouds swaps them when it is complete). It exists (cleared to "no cloud")
+// even while the clouds are off, so every consumer can keep it bound.
 export class CloudPipeline final
 {
 public:
-    static constexpr uint32 SHADOW_RESOLUTION = 1024;
+    static constexpr uint32 SHADOW_RESOLUTION = 512;
     static constexpr uint32 SHADOW_CASCADES = 2;
+    static constexpr uint32 SHADOW_LAYERS = SHADOW_CASCADES * 2; // cascade c: layers 2 c and 2 c + 1
+    // A cascade's map is 4^split tiles, one per frame: 0 = the whole map, 4 = 256 tiles of 32 x 32 texels.
+    static constexpr uint32 SHADOW_MAX_SPLIT = 4;
+    static_assert((SHADOW_RESOLUTION >> SHADOW_MAX_SPLIT) % 8 == 0, "a tile is whole 8 x 8 workgroups");
+    // One tile of one snapshot, this frame (cloud_shadow.cs.glsl's push block: the snapshot's own frame, not the UBO's).
+    struct ShadowDraw
+    {
+        glm::vec4 centre{ 0.0f }; // xyz = the map's middle as it lies NOW (drifted with the wind), relative to the centre view's camera (m), w = the texel size (m)
+        glm::vec4 sun{ 0.0f };    // xyz = the snapshot's light direction
+        uint32 layer = 0;
+        uint32 cascade = 0;       // the step count and the detail (near: fetched, far: its mean)
+        uint32 tileX = 0;         // the tile's first texel
+        uint32 tileY = 0;
+        uint32 tileSize = 0;      // texels per side (not pushed: the dispatch size)
+    };
     // The sky clouds march one texel of every 2x2 block per frame (cloud_sky.cs.glsl): a texel's history
     // weight covers this many frames.
     static constexpr uint32 SKY_UPDATE_FRAMES = 4;
@@ -73,10 +90,8 @@ public:
     // The fullscreen apply draw; the caller is inside the scene-colour render pass with the viewport set.
     void recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const ApplyParams& params);
 
-    // The shadow map cascades in cascadeMask (bit c = cascade c), recorded straight into the primary. Per cascade
-    // split (0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4) and the phase = which texel of the pattern.
-    void recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask,
-        const oc::array<uint32, SHADOW_CASCADES>& split, const oc::array<uint32, SHADOW_CASCADES>& phase);
+    // This frame's shadow map tiles (one per cascade), recorded straight into the primary.
+    void recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, oc::span<const ShadowDraw> draws);
     // The clouds of the GI sky map (cloud_sky.cs.glsl), recorded straight into the primary after the shadow map
     // and before GI's sky-map bake. skyMap = the sky map itself (last frame's clear layer: the ambient).
     void recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyMapView, vk::Sampler skyMapSampler);
