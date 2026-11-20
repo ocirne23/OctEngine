@@ -13,7 +13,7 @@
 // shader marches the tree's PREFILTERED voxel grid (sparse bricks: tree_voxel.inc.glsl, Procedural TreeImpostor.ixx "The VOXEL tier") from the
 // face along the view ray at the level whose voxel is about a pixel, stops where the ray's coverage passes this pixel's
 // threshold (stochastic coverage: TAA / DLSS resolve it), writes that point's depth and lights it with the foliage
-// terms - the leaf transmission, the N.V bend, the sky wrap, the interior as AO - and a real self-shadow: the sun
+// terms - the leaf transmission, the N.V bend, the sky wrap - and a real self-shadow: the sun
 // marched through the tree's own voxels. The cascades' shadow is looked up where that sun path LEAVES the box, so the
 // tree's own shadow caster (its billboard) does not shadow it twice.
 // Drawn from its own command list (StaticMeshGraphicsPipeline::record): it writes FragDepth, which no pipeline of the
@@ -44,12 +44,14 @@ layout (depth_less) out float gl_FragDepth;
 #define SUN_SHADOW_FIRST    // instanced_indirect_lit.inc.glsl: the sun's shadow before the material
 #define LIT_SUN_SHADOW_HARD // instanced_indirect_lit.inc.glsl: one shadow tap (a voxel pixel is noise that TAA / DLSS resolves)
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage's constant depth bias
-#define LIT_NO_RTAO         // instanced_indirect_lit.inc.glsl: no RTAO read (the depth is a point inside a crown; the interior is its AO)
+#define LIT_NO_RTAO         // instanced_indirect_lit.inc.glsl: no RTAO read (the depth is a point inside a crown, not a surface)
 #define LIT_NO_UNDERWATER   // instanced_indirect_lit.inc.glsl: a tree's crown is never under the water
 #define LIT_DIELECTRIC      // instanced_indirect_lit.inc.glsl: a voxel is never metal
 #define LIT_LIGHTS_DIFFUSE  // instanced_indirect_lit.inc.glsl: the local lights' diffuse only (a rough crown seen from afar)
 #define LEAF_SKY_WRAP
 #define LIT_EXTRA_LIGHT     // the leaves' transmitted sun, added inside computeLitColor
+float g_canopyHeight = 0.0;
+#define LIT_CANOPY_HEIGHT g_canopyHeight // the hit's height up the tree's box: the canopy map's occlusion above it
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
@@ -178,18 +180,14 @@ void main()
 	voxelSurface(grid, level, surfaceTex, hitC, marchBrick, albedo, normalTap, interiorTap, leafShare);
 	const vec3 hitG = hitC / n;
 
-	// THE NORMAL: the voxel's mean leaf normal; where its leaves face every way (a short mean) toward the crown's outward
-	// direction ("Trees/Voxel normal hull"). Stored in the tree's axes.
+	// THE NORMAL: the voxel's mean leaf normal, stored in the tree's axes.
 	const vec3 meanN = normalTap * 2.0 - 1.0;
 	const float meanLength = min(length(meanN), 1.0);
 	// 0 = the voxel's leaves face every way, 1 = all one way. Trusted by the voxel's cover: a sparse voxel (a thin tip) holds
-	// a leaf or two, whose mean is long though the tip around it faces every way. "Voxel transmission spread" takes off more.
-	const float leafAgree = meanLength * smoothstep(0.05, 0.5, hitOpacity) * (1.0 - u_foliage_voxelTransmissionSpread);
-	// A zero vector (the box's exact centre; a mean that cancels the hull term) stays zero: no NaN, no select.
-	const vec3 hull = (hitG - 0.5) * in_voxelWorldSize.xyz;
-	const vec3 hullN = hull * inversesqrt(max(dot(hull, hull), 1e-8));
-	const vec3 rawN = meanN + hullN * ((1.0 - meanLength) * u_foliage_voxelNormalHull);
-	const vec3 localN = rawN * inversesqrt(max(dot(rawN, rawN), 1e-8));
+	// a leaf or two, whose mean is long though the tip around it faces every way.
+	const float leafAgree = meanLength * smoothstep(0.05, 0.5, hitOpacity);
+	// A zero vector (a voxel whose leaves cancel) stays zero: no NaN, no select.
+	const vec3 localN = meanN * inversesqrt(max(dot(meanN, meanN), 1e-8));
 	f16vec3 N = f16vec3(quat_transform(localN, in_voxelQuat));
 
 	// THE SUN through the tree's own voxels (one level coarser), to where its path leaves the box. Its direction in grid
@@ -239,21 +237,17 @@ void main()
 	}
 
 	// EVERYTHING OF THE SURFACE IS FORMED HERE, before the cascades' shadow search (the register peak): across it stay the
-	// position, the colour, the normal and three scalars (the AO, the transmission's back + glow, the sun march's result).
+	// position, the colour, the normal and two scalars (the transmission's back + glow, the sun march's result).
 	// A voxel material is always a LEAF material (Procedural createVoxelMaterial): no leaf test.
 
-	// THE INTERIOR (the surface atlas's colour A): an AO on the ambient, remapped by "Foliage interior depth
-	// start / end" x "Foliage interior shadow". The sun takes the real self-shadow instead.
-	const float16_t surfaceAO = float16_t(1.0 - u_foliage_interiorShadow * smoothstep(u_foliage_interiorStart, u_foliage_interiorEnd, interiorTap));
+	g_canopyHeight = hitG.y * in_voxelWorldSize.y; // the box stands on the ground: the canopy map's occlusion above the hit
 
-	// "Trees/Voxel saturation": about the colour's luminance (linear) - the bake's averages read greyer than the mesh leaves.
-	// Then x "Trees/Voxel brightness".
-	if (u_foliage_voxelSaturation != 1.0) // a constant while its row is locked
-	{
-		const float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-		albedo = max(vec3(luma) + (albedo - vec3(luma)) * u_foliage_voxelSaturation, vec3(0.0));
-	}
-	albedo *= u_foliage_voxelBrightness;
+	// THE CROWN'S INSIDE DARKER ("Trees/Voxel interior darkening"): the colour x 2 ^ (-2 x that x the hit's baked interior,
+	// 0 on the crown's surface .. 1 at its core). On the COLOUR, so every light takes it - the sun, the ambient, the
+	// transmission: on the ambient alone it did not show in sunlight. An exponential, NEVER TO BLACK (a quarter at the
+	// core at 1): the deepest voxels are the SOLID bark bodies (a branch inside the crown, opaque - every pixel of the
+	// voxel stops there), and x (1 - the interior) drew them as black voxels among the leaves.
+	albedo *= exp2(-2.0 * u_foliage_voxelInteriorDarkening * interiorTap);
 	// The crown's colour patches on the LEAVES only: by the voxel's leaf share, so the trunk and the bare branches keep
 	// their bark colour.
 	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(mix(albedo, leafPatchTint(albedo, pos), leafShare)), pos.xz, 1.0);
@@ -266,9 +260,9 @@ void main()
 			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
 	}
 
-	// LEAF TRANSMISSION, as the foliage cards': a diffuse back term + the forward glow, x the sun's shadow by "Foliage
-	// transmission shadow" and the self-shadow at "Voxel transmission self shadow"'s share. The "Foliage transmission"
-	// strength, glow and focus x the voxel tier's own "Voxel transmission ..." factors.
+	// LEAF TRANSMISSION, as the foliage cards' and through the same "Foliage transmission" settings (strength, glow,
+	// focus, shadow): a diffuse back term + the forward glow, x the sun's shadow and the self-shadow, each at "Foliage
+	// transmission shadow"'s share.
 	// THE BACK TERM by the voxel's leaves: its mean normal points out of the crown, so -N.L alone lit only the crown's
 	// underside (under a high sun the top and the sides face it), while a mesh crown's leaves face every way and glow all
 	// over. Leaves facing every way (two-sided, the face the viewer sees): on average 0.25 x (1 - V.L) - 0 with the sun
@@ -278,8 +272,7 @@ void main()
 	{
 		const float VoL = dot(V, L);
 		const float back = mix(0.25 - 0.25 * VoL, max(-dot(vec3(N), L), 0.0), leafAgree);
-		const float glow = pow(max(-VoL, 0.0), u_foliage_transmissionFocus * u_foliage_voxelTransmissionFocus)
-			* (u_foliage_transmissionGlow * u_foliage_voxelTransmissionGlow);
+		const float glow = pow(max(-VoL, 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		// x the voxel's LEAF SHARE: no sun comes through bark (the trunk, the bare branches).
 		throughNoShadow = (back + glow) * leafShare;
 		// The sky wrap too is a leaf's (a downward leaf's ambient mirrored toward the sky): set here, so the share itself
@@ -289,28 +282,27 @@ void main()
 
 	// The cascades' shadow (and the terrain's, the clouds'). With the SELF-SHADOW on ("Voxel self shadow" > 0): where the
 	// sun path leaves the box - the march above already darkens by the tree's own leaves, and its own caster (the voxel
-	// grid with "Trees/Voxel shadows", else the shadow billboard, shifted toward the sun by "Billboard shadow shift") lies
-	// inside the box: it would shadow it twice. With it OFF: at the hit itself, so the tree takes its own caster's shadow
-	// from the cascades.
-	const float casterShift = u_foliage_voxelShadows > 0.5 ? 0.0 : max(u_foliage_billboardShadowShift, 0.0);
-	const vec3 shadowPos = u_foliage_voxelSelfShadow > 0.0 ? pos + L * (exitDist + casterShift + 0.5) : pos;
+	// grid with "Trees/Voxel shadows", else the shadow billboard) lies inside the box: it would shadow it twice. With it
+	// OFF: at the hit itself, so the tree takes its own caster's shadow from the cascades.
+	const vec3 shadowPos = u_foliage_voxelSelfShadow > 0.0 ? pos + L * (exitDist + 0.5) : pos;
 	g_shadowFoliage = true;
 	g_sunShadowFirst = u_sunLit > 0.5 ? sunShadowVisibility(shadowPos, L) : 0.0; // no search at night
 	g_shadowFoliage = false;
 	// The self-shadow's two strengths are two powers of the sun march's result: ONE logarithm for both.
 	const float sunLog = log2(max(sunTransmit, 1e-4)) * u_foliage_voxelSelfShadow;
 	{
-		// The transmission takes the cascades' shadow by "Foliage transmission shadow" and the self-shadow at its own share.
-		const float selfTransmit = exp2(sunLog * u_foliage_voxelTransmissionSelfShadow);
+		// The transmission takes the cascades' shadow and the self-shadow by "Foliage transmission shadow": light scattered
+		// forward through the leaves loses less than the direct sun.
+		const float selfTransmit = exp2(sunLog * u_foliage_transmissionShadow);
 		const float through = throughNoShadow * mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * selfTransmit;
 		if (through > 0.0)
-			g_litExtraLight = f16vec3(min(leafTransmitColor(vec3(materialColor))
-				* (through * u_foliage_transmission * u_foliage_voxelTransmission * INV_PI)
+			g_litExtraLight = f16vec3(min(vec3(materialColor)
+				* (through * u_foliage_transmission * INV_PI)
 				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
 	g_sunShadowFirst *= exp2(sunLog);
 
-	const vec3 color = computeLitColor(pos, V, N, materialColor, float16_t(0.65), float16_t(0.0), surfaceAO);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, float16_t(0.65), float16_t(0.0), float16_t(1.0));
 	out_color = vec4(color, 1.0);
 
 	// THE DEPTH and the motion vector at the hit, formed AFTER the lighting from `pos` (which the light loop keeps live
@@ -318,5 +310,9 @@ void main()
 	const vec4 clip = u_mvp * vec4(pos, 1.0);
 	const float depth = min(clip.z / clip.w, gl_FragCoord.z); // never nearer than the face (depth_less)
 	gl_FragDepth = depth;
-	out_motion = voxelMotionVector(in_prevWorldDelta, depth, 1.0 / clip.w);
+	// Flagged NO-AO (shared.inc.glsl motionNoAo, as motionVectorNoAo): this shader reads no RTAO, so the trace spends no
+	// ray on its pixels and leaves a hole.
+	vec4 motion = voxelMotionVector(in_prevWorldDelta, depth, 1.0 / clip.w);
+	motion.w = motion.w > 0.5 ? 2.0 : -1.0;
+	out_motion = motion;
 }

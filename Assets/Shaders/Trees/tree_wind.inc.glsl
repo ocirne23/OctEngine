@@ -164,6 +164,14 @@ vec3 treeWindTrunkOffset(vec3 localPos, vec3 instPos, float instScale, float tru
     return vec3(trunk * share.x, share.y * dot(trunk, trunk)).xzy;
 }
 
+// The TRUNK'S part of treeWindVertex's offset: what the shadow casters bend by too (treeWindTrunkOffset). The offset less
+// this = the vertex's own SWAY (its branch, its leaf).
+vec3 treeWindTrunkPart(TreeWind tree, vec3 localPos, float instScale)
+{
+    const vec2 share = treeWindTrunkShare(localPos.y, instScale);
+    return vec3(tree.trunk * share.x, share.y * dot(tree.trunk, tree.trunk)).xzy;
+}
+
 // The world-space offset of a tree vertex this frame; outPrevDelta = last frame's offset minus it (the motion vectors).
 // localPos = the mesh-local position, worldNormal = the vertex normal in world space (the leaf flutter).
 vec3 treeWindVertex(TreeWind tree, vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta)

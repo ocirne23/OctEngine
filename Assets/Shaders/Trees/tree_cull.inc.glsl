@@ -3,7 +3,8 @@
 // range's records from STATIC device-local data (TreeCullPiece, TreeCullType), deciding per tree from the camera distance
 // what draws: the meshes, the meshes on their crossfade materials, the voxels, or nothing (past the far-tree volume's
 // start). Nothing may read the range's stream entries: the TLAS writer (gi_tlas_instances.cs.glsl) builds ONE RT instance
-// per tree from this data too (treeCullRtPiece), with the material in its custom index (bit 23 set).
+// per tree from this data too (treeCullRtPiece), with the material in its custom index (bit 23 set) - and near the
+// scene focus a second one, its bark mesh for RTAO's rays (treeCullAoPiece).
 //
 // A tree has 3 FIXED record slots: 0 = bark, 1 = leaves, 2 = the far representation.
 // THE MAIN PASS: the meshes before the type's band, its VOXEL record after it, both inside it (the meshes on their
@@ -101,9 +102,24 @@ uint treeCullThreadInstance(uint gid, out bool isTree, out uint pieceIdx, out ui
 // The TLAS writer's SLOT layout (gi_tlas_instances.cs.glsl): only the list's RT SECTION - its first `rtPieces` entries
 // (the RT-capable trees in RT range) - takes tree slots; every other listed piece takes none. A tree slot's stream
 // instance is unused: its instance is built from the static data.
-uint treeCullTlasInstance(uint slot, uint rtPieces, out bool isTree, out uint pieceIdx, out uint passBits)
+// Then `aoPieces` MORE slots, for the section's first `aoPieces` entries again (the trees of the chunks in RTAO's range):
+// `bark` = this slot is the tree's BARK mesh for RTAO's rays (treeCullAoPiece), not its RT representation.
+uint treeCullTlasInstance(uint slot, uint rtPieces, uint aoPieces, out bool isTree, out uint pieceIdx, out uint passBits, out bool bark)
 {
-    return treeCullListedInstance(slot, rtPieces, isTree, pieceIdx, passBits);
+    const uint listIdx = slot - u_present_treeRangeBase; // unsigned: below base wraps
+    const uint listed = rtPieces + aoPieces;
+    isTree = listIdx < listed;
+    bark = isTree && listIdx >= rtPieces;
+    pieceIdx = 0u;
+    passBits = PASS_MAIN | PASS_SHADOW | PASS_GI;
+    if (isTree)
+    {
+        const uint entry = in_treeList[bark ? listIdx - rtPieces : listIdx];
+        pieceIdx = entry & 0x0FFFFFFFu;
+        passBits = entry >> 28;
+    }
+    return isTree ? u_present_treeRangeBase + listIdx * TREE_CULL_RECORDS
+                  : (slot < u_present_treeRangeBase ? slot : slot + (u_present_treeRangeLength - listed));
 }
 
 // A piece's decision: records [kBegin, kEnd) may draw (what slot k holds: the header; an ABSENT one is skipped).
@@ -238,6 +254,30 @@ bool treeCullRtPiece(uint pieceIdx, float rtRange, out TreeCullRecord rec, out v
         rec = in_treeTypes[typeIdx].leaves;
     if (rec.meshMaterial == TREE_CULL_ABSENT)
         rec = in_treeTypes[typeIdx].bark;
+    if (rec.meshMaterial == TREE_CULL_ABSENT)
+        return false;
+
+    posScale = in_treePieces[pieceIdx].posScale;
+    quat = in_treePieces[pieceIdx].quat;
+    return true;
+}
+
+// The TLAS writer's SECOND instance of a tree: its BARK mesh (the trunk and the branches), for RTAO's rays only - the
+// contact occlusion on the ground at the trunk, in the forks, on the bark. Only within `aoRange` (m) of the scene focus
+// (RTAO's max distance + its radius), and only where the bark is not the tree's RT representation already (a rock). A
+// bark mesh without a BLAS (a bush) comes out inactive in the writer.
+bool treeCullAoPiece(uint pieceIdx, float aoRange, out TreeCullRecord rec, out vec4 posScale, out vec4 quat)
+{
+    rec = treeCullNone();
+    posScale = vec4(0.0);
+    quat = vec4(0.0, 0.0, 0.0, 1.0);
+    if (distance(in_treePieces[pieceIdx].centre, u_sceneFocus.xyz) - in_treePieces[pieceIdx].radius > aoRange)
+        return false;
+
+    const uint typeIdx = in_treePieces[pieceIdx].type;
+    if (in_treeTypes[typeIdx].shadowBillboard.meshMaterial == TREE_CULL_ABSENT && in_treeTypes[typeIdx].leaves.meshMaterial == TREE_CULL_ABSENT)
+        return false;
+    rec = in_treeTypes[typeIdx].bark;
     if (rec.meshMaterial == TREE_CULL_ABSENT)
         return false;
 

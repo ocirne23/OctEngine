@@ -177,7 +177,7 @@ float volRayVisibility(vec3 origin, vec3 dir, float tMax)
     if (terrainRayMarch(origin, dir, 0.02, tMax) < tMax)
         return 0.0;
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.02, dir, tMax);
+    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, RT_CULL_SCENE, origin, 0.02, dir, tMax);
     while (rayQueryProceedEXT(rq)) {}
     return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? 0.0 : 1.0;
 }

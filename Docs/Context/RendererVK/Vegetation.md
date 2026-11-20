@@ -373,6 +373,30 @@ the clutter frame's header. Desktop only (as the grass).
   commands. `setClutterAssets` (GPU idle, re-record) / `setClutterFloorMap` (each slot takes it in present: the clutter
   frame's floor part is flushed only then) are Procedural ClutterSystem's.
 
+## The canopy map (`canopy_occlusion.inc.glsl`, "Trees/Canopy sky occlusion", `Renderer::setCanopyMap`)
+
+The AMBIENT's sky occlusion under the trees, for EVERY lit surface - the ground, the grass, the clutter, rocks, units,
+the trunks, the lower leaves, the voxel tier. A top-down texture of all the trees near the camera (Procedural
+ClutterSystem bakes it with the forest floor map: R = the blurred tree cover, G = the canopy's top over the ground /
+`CANOPY_MAP_MAX_HEIGHT`), a BINDLESS texture: `u_foliage_canopyTex` is its `u_textures` index, `u_foliage_canopyOrigin` /
+`u_foliage_canopyInvSize` its world square (live UBO values; inverse size 0 = no map) - no binding in any set.
+
+* **`computeLitColor` applies it**, on the indirect + flat ambient term only, beside the RTAO and the material's AO:
+  `1 - "Canopy sky occlusion" (u_foliage_canopyOcclusion, 0.8) x cover x the share of the canopy ABOVE the point`
+  (`canopyCover`, then `canopySkyVisibility` with the point's height above the ground: 1 - height / top). Formed and
+  used before the light loop. The sun is not touched: that is the cascades' work.
+* **The height** is the includer's `LIT_CANOPY_HEIGHT`: `0.0` for what lies on the ground (the terrain, the grass, the
+  clutter), the vertex's height above the tree's base for LitTree (`in_treeHeight`), the hit's
+  height up the box for the voxel tier. Without the define (generic meshes, the near bark on LitOpaque, rocks): the world height minus
+  the terrain height map's, fetched ONLY under a canopy (cover > 0).
+* **What it is for:** the GI probes carry the same occlusion at their spacing (2 m at the scene focus, x 2 per
+  cascade), which cannot tell one crown from the next tens of metres out. **Both act on the same light**: under a
+  closed canopy the probes are darker already, so the tweak is a share, not a physical value.
+* **What it cannot do:** it is top-down. A crown gets a vertical gradient (its lower leaves under the canopy above
+  them) and a short tree under tall ones goes dark, but two crowns of the same height side by side do not shade each
+  other, and a crown's top never changes.
+* The map's sampler repeats: nothing is read past the square, and the term fades out over its outer 5 %.
+
 ## The wind (`WindParams`, "Sky/Wind", `u_weather`)
 
 ONE wind for everything that moves with it: "Speed (m/s)" (default 2), "Direction (deg)" (the direction the wind blows
@@ -406,8 +430,8 @@ Procedural `TREE_VOXEL_BOX_WIND_CODE`), which means "tree" too; 1 = no wind). Th
 
 **Per species** (`.tree` `Wind Trunk / Branch`): `TreeCullType::wind` holds the two scales (4.12 fixed point each,
 `treeCullWind`); the main cull multiplies them into the tree's wind (below). The shadow cull packs the trunk
-scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree's SHADOW BILLBOARD, for "Trees/Billboard shadow
-shift (m)"; the cascade mask is the low 7 bits). Both culls grow the wind
+scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree's SHADOW BILLBOARD, for its
+mask's depth; the cascade mask is the low 7 bits). Both culls grow the wind
 reach by the larger scale above 1. The leaf flutter keeps the global settings.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
@@ -684,11 +708,9 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
   * **THE TRANSMISSION** ("Far transmission" 0.6, "Far transmission focus" 0.6): ADDED to that - the sun × a
-    forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
-    the crown at `Foliage transmission self shadow`'s share of the optical depth (exp(-depth x that) - the sun taps'
-    depth kept, not pow(sunT, ...): one exp, no log),
-    × the terrain / cloud shadow and the interior, in the near leaves' deepened colour (`leafTransmitColor`,
-    leaf_look.inc.glsl: "Foliage transmission saturation" / "warmth"); rocks take none. Only crowns between the camera
+    forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), with no
+    self-shadow of the crown,
+    × the terrain / cloud shadow and the interior, in the leaves' colour; rocks take none. Only crowns between the camera
     and the sun glow: "Far forward scatter" reshapes the WHOLE sun term, so it also changed the trees beside and behind.
   * "Far normal strength": the sun term toward `max(N·L, 0)` with N = −∇density by forward differences (3 more taps
     per lit step). A crown-scale gradient blended into it was tried and removed: not worth its 3 taps.

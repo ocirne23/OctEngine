@@ -124,14 +124,21 @@ namespace
 	uint8 toByte(float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
 
 	// Resolves the supersampled view into rows [offsetY, offsetY + its height) of the mask's level 0 (`outWidth` texels
-	// wide): per texel its COVER (the share of its subsamples a surface covers) and the LEAF share of the covered ones.
-	void resolveView(const FrameTarget& target, oc::vector<float>& outCover, oc::vector<float>& outLeaf, uint32 outWidth, uint32 offsetY)
+	// wide): per texel its COVER (the share of its subsamples a surface covers), the LEAF share of the covered ones and
+	// their mean DEPTH, 0..1 of `depthRange` metres: how far the tree's surface stands off the card's plane, toward the
+	// viewer. `back` (the same view from behind, or null): the depth is HALF THE THICKNESS between the two surfaces - a
+	// vertical card is lit from either side, and one value serves both. No `back` (the card seen from above only): the
+	// front surface's own height above the plane, never below it.
+	void resolveView(const FrameTarget& target, const FrameTarget* back, float depthRange, oc::vector<float>& outCover, oc::vector<float>& outLeaf,
+		oc::vector<float>& outDepth, uint32 outWidth, uint32 offsetY)
 	{
 		const uint32 w = target.width / SUPERSAMPLE, h = target.height / SUPERSAMPLE;
+		const float invRange = 1.0f / glm::max(depthRange, 1e-3f);
 		for (uint32 y = 0; y < h; ++y)
 			for (uint32 x = 0; x < w; ++x)
 			{
 				uint32 covered = 0, leaves = 0;
+				float depth = 0.0f;
 				for (uint32 sy = 0; sy < SUPERSAMPLE; ++sy)
 					for (uint32 sx = 0; sx < SUPERSAMPLE; ++sx)
 					{
@@ -140,11 +147,64 @@ namespace
 							continue;
 						++covered;
 						leaves += target.leaf[k];
+						if (!back)
+							depth += glm::max(target.depth[k], 0.0f);
+						else if (back->depth[k] > -FLT_MAX)
+							depth += glm::max(0.5f * (target.depth[k] + back->depth[k]), 0.0f);
 					}
 				const size_t out = ((size_t)offsetY + y) * outWidth + x;
 				outCover[out] = (float)covered / (float)(SUPERSAMPLE * SUPERSAMPLE);
 				outLeaf[out] = covered > 0 ? (float)leaves / (float)covered : 0.0f;
+				outDepth[out] = covered > 0 ? glm::min(depth / (float)covered * invRange, 1.0f) : 0.0f;
 			}
+	}
+
+	// Spreads a mask level's depth into its EMPTY texels (cover 0), a few texels out and never across a card's strip: a
+	// filtered tap at the crown's edge mixes in its empty neighbours, and a BC block's two ends should not be spent on them.
+	void dilateMaskDepth(oc::vector<float>& depth, const oc::vector<float>& cover, uint32 size, uint32 stripHeight)
+	{
+		constexpr int PASSES = 8;
+		oc::vector<uint8> known(depth.size());
+		for (size_t i = 0; i < depth.size(); ++i)
+			known[i] = cover[i] > 0.0f ? 1 : 0;
+		oc::vector<float> next;
+		oc::vector<uint8> nextKnown;
+		for (int pass = 0; pass < PASSES; ++pass)
+		{
+			next = depth;
+			nextKnown = known;
+			for (uint32 y = 0; y < size; ++y)
+			{
+				const uint32 strip = y / stripHeight;
+				for (uint32 x = 0; x < size; ++x)
+				{
+					const size_t idx = (size_t)y * size + x;
+					if (known[idx])
+						continue;
+					float sum = 0.0f;
+					uint32 count = 0;
+					for (int dy = -1; dy <= 1; ++dy)
+						for (int dx = -1; dx <= 1; ++dx)
+						{
+							const int nx = (int)x + dx, ny = (int)y + dy;
+							if (nx < 0 || ny < 0 || nx >= (int)size || ny >= (int)size || (uint32)ny / stripHeight != strip)
+								continue;
+							const size_t n = (size_t)ny * size + (size_t)nx;
+							if (!known[n])
+								continue;
+							sum += depth[n];
+							++count;
+						}
+					if (count > 0)
+					{
+						next[idx] = sum / (float)count;
+						nextKnown[idx] = 1;
+					}
+				}
+			}
+			depth.swap(next);
+			known.swap(nextKnown);
+		}
 	}
 
 	// The share of a mask level's texels that pass the alpha test (0.5) with their cover x `scale`.
@@ -156,19 +216,70 @@ namespace
 		return cover.empty() ? 0.0f : (float)solid / (float)cover.size();
 	}
 
-	// A mask level's bytes. THE VALUE IS THE (scaled) COVER up to `barkValue` - a texture filter blends it and the alpha test
-	// (0.5) then runs on a continuous cover. From `barkValue` up a texel is solid for certain, and the value says WHAT it is:
-	// `barkValue` = leaves .. 1 = bark. So leaves are the cover clamped (no step at all), and bark - opaque, its cover near
-	// 1 anyway - is about its cover too. A step AT the test (a texel of cover 0.51 stored as 1) made the filtered test
-	// solid over most of the way to a neighbour of cover 0.45: a speckled, too dense caster that flickered as it moved.
-	void encodeMaskLevel(const oc::vector<float>& cover, const oc::vector<float>& leaf, float scale, float barkValue, oc::vector<uint8>& out)
+	// A mask level's bytes, two per texel. THE FIRST IS THE (scaled) COVER up to `barkValue` - a texture filter blends it and
+	// the alpha test (0.5) then runs on a continuous cover. From `barkValue` up a texel is solid for certain, and the value
+	// says WHAT it is: `barkValue` = leaves .. 1 = bark. So leaves are the cover clamped (no step at all), and bark - opaque,
+	// its cover near 1 anyway - is about its cover too. A step AT the test (a texel of cover 0.51 stored as 1) made the
+	// filtered test solid over most of the way to a neighbour of cover 0.45: a speckled, too dense caster that flickered as
+	// it moved. THE SECOND IS THE DEPTH (resolveView), spread into the empty texels around the crown.
+	void encodeMaskLevel(const oc::vector<float>& cover, const oc::vector<float>& leaf, oc::vector<float> depth, float scale, float barkValue,
+		uint32 size, uint32 stripHeight, oc::vector<uint8>& out)
 	{
-		out.resize(cover.size());
+		dilateMaskDepth(depth, cover, size, stripHeight);
+		out.resize(cover.size() * 2);
 		for (size_t i = 0; i < cover.size(); ++i)
 		{
 			const float a = cover[i] * scale;
-			out[i] = toByte(a < barkValue ? a : glm::mix(1.0f, barkValue, leaf[i]));
+			out[i * 2] = toByte(a < barkValue ? a : glm::mix(1.0f, barkValue, leaf[i]));
+			out[i * 2 + 1] = toByte(depth[i]);
 		}
+	}
+
+	// THE INTERIOR of a res^3 grid of optical depths (`tau`: per crossing of `crossing` metres; x fastest, then y, then z):
+	// per voxel the smallest optical depth from it out of the box along the six axis directions (half its own), over the
+	// largest among the voxels a ray can see (an opacity above 2 %) - 0 on the crown's surface, 1 at its core.
+	void interiorField(const oc::vector<float>& tau, uint32 res, const glm::vec3& voxel, float crossing, oc::vector<float>& out)
+	{
+		const size_t count = (size_t)res * res * res;
+		const auto index = [res](uint32 x, uint32 y, uint32 z) { return (size_t)x + res * ((size_t)y + res * (size_t)z); };
+		oc::vector<float> best(count, FLT_MAX);
+		for (uint32 axis = 0; axis < 3; ++axis)
+		{
+			const float scale = voxel[(int)axis] / crossing; // tau per crossing -> per voxel length along this axis
+			for (uint32 b = 0; b < res; ++b)
+				for (uint32 a = 0; a < res; ++a)
+				{
+					const auto at = [&](uint32 s)
+					{
+						return axis == 0 ? index(s, a, b) : axis == 1 ? index(a, s, b) : index(a, b, s);
+					};
+					float sum = 0.0f;
+					for (uint32 s = 0; s < res; ++s) // from the low side
+					{
+						const size_t idx = at(s);
+						const float own = tau[idx] * scale;
+						best[idx] = glm::min(best[idx], sum + 0.5f * own);
+						sum += own;
+					}
+					sum = 0.0f;
+					for (uint32 s = res; s-- > 0; ) // from the high side
+					{
+						const size_t idx = at(s);
+						const float own = tau[idx] * scale;
+						best[idx] = glm::min(best[idx], sum + 0.5f * own);
+						sum += own;
+					}
+				}
+		}
+		constexpr float VISIBLE_TAU = 0.0202027f; // an opacity of 2 %: -ln(0.98)
+		float core = 0.0f;
+		for (size_t i = 0; i < count; ++i)
+			if (tau[i] > VISIBLE_TAU)
+				core = glm::max(core, best[i]);
+		const float invCore = core > 0.0f ? 1.0f / core : 0.0f;
+		out.resize(count);
+		for (size_t i = 0; i < count; ++i)
+			out[i] = glm::clamp(best[i] * invCore, 0.0f, 1.0f);
 	}
 }
 
@@ -439,46 +550,8 @@ namespace Procedural
 			if (!filled[i])
 				colour[i] = meanColour;
 
-		// THE INTERIOR: the smallest optical depth from the voxel out of the box along the six axis directions (half its
-		// own), normalized by the largest over the tree's visible voxels - 0 on the crown's surface, 1 at its core.
-		{
-			oc::vector<float> best(count, FLT_MAX);
-			for (uint32 axis = 0; axis < 3; ++axis)
-			{
-				const float scale = voxel[(int)axis] / crossing; // tau per crossing -> per voxel length along this axis
-				for (uint32 b = 0; b < res; ++b)
-					for (uint32 a = 0; a < res; ++a)
-					{
-						const auto at = [&](uint32 s)
-						{
-							return axis == 0 ? index(s, a, b) : axis == 1 ? index(a, s, b) : index(a, b, s);
-						};
-						float sum = 0.0f;
-						for (uint32 s = 0; s < res; ++s) // from the low side
-						{
-							const size_t idx = at(s);
-							const float own = tau[idx] * scale;
-							best[idx] = glm::min(best[idx], sum + 0.5f * own);
-							sum += own;
-						}
-						sum = 0.0f;
-						for (uint32 s = res; s-- > 0; ) // from the high side
-						{
-							const size_t idx = at(s);
-							const float own = tau[idx] * scale;
-							best[idx] = glm::min(best[idx], sum + 0.5f * own);
-							sum += own;
-						}
-					}
-			}
-			float core = 0.0f;
-			for (size_t i = 0; i < count; ++i)
-				if (opacity[i] > 0.02f)
-					core = glm::max(core, best[i]);
-			const float invCore = core > 0.0f ? 1.0f / core : 0.0f;
-			for (size_t i = 0; i < count; ++i)
-				interior[i] = glm::clamp(best[i] * invCore, 0.0f, 1.0f);
-		}
+		// THE INTERIOR (interiorField): 0 on the crown's surface, 1 at its core.
+		interiorField(tau, res, voxel, crossing, interior);
 
 		// ---- The levels, cut into BRICKS (TreeImpostor.ixx "The VOXEL tier") ----
 		constexpr uint32 B = TREE_VOXEL_BRICK, S = TREE_VOXEL_BRICK_TEXELS, C = TREE_VOXEL_SURFACE_TEXELS;
@@ -773,10 +846,20 @@ namespace Procedural
 			glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(maxZ, maxX) };
 	}
 
+	// A card's DEPTH RANGE (m): what the mask's depth channel at 1 stands for, off the card's plane (resolveView). A
+	// vertical card: the box's reach off the trunk axis along its normal (half a crown's thickness never passes it). The
+	// horizontal one: from the card up to the box's top.
+	static glm::vec3 billboardDepthRanges(const TreeBillboardBox& box, float topCardHeight)
+	{
+		return glm::max(glm::vec3(glm::max(-box.min.x, box.max.x), glm::max(-box.min.z, box.max.z),
+			(box.max.y - box.min.y) * (1.0f - topCardHeight)), glm::vec3(1e-3f));
+	}
+
 	void billboardMesh(const TreeBillboardBox& box, uint32 size, float topCardHeight, TreeMesh& out)
 	{
 		CardView views[3];
 		billboardCards(box, topCardHeight, views);
+		const glm::vec3 depthRanges = billboardDepthRanges(box, topCardHeight);
 		const float stripV = (float)billboardLayout(size).stripHeight / (float)size; // one strip in v
 		// THE CROWN SHAPE for a ray hit's normal (tree_card.inc.glsl): its radii = the cards' half extents, in every
 		// vertex's tangent (a card has no normal map). Its centre = the cards' bound centre, on the trunk axis.
@@ -790,13 +873,16 @@ namespace Procedural
 			// Image u along right; image v down from the card's top, into this card's strip of the texture.
 			const glm::vec2 uvs[4] = { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
 			// Both faces read the card's strip with the same u along `right`: the back face shows it through the card.
+			// THE NORMAL'S LENGTH = the card's depth range (shadow_depth.vs.glsl: how far the mask's depth lifts the shadow
+			// caster off the card); a ray hit takes the crown shape's normal, not this one.
+			const glm::vec3 normal = view.normal * depthRanges[(int)v];
 			for (int face = 0; face < 2; ++face)
 			{
 				const uint32 base = out.numVertices();
 				for (int k = 0; k < 4; ++k)
 				{
 					out.positions.push_back(corners[k]);
-					out.normals.push_back(face == 0 ? view.normal : -view.normal);
+					out.normals.push_back(face == 0 ? normal : -normal);
 					out.tangents.push_back(crownRadii);
 					out.bitangents.push_back(view.up);
 					out.texCoords.push_back(glm::vec3(uvs[k].x, (uvs[k].y + (float)v) * stripV, 0.0f)); // z 0: a plain mesh (no wind payload)
@@ -810,50 +896,66 @@ namespace Procedural
 		}
 	}
 
-	void bakeBillboardMask(const TreePiece& piece, const TreeBakeImage& leaves, uint32 size, float barkValue, oc::vector<oc::vector<uint8>>& outMips)
+	void bakeBillboardMask(const TreePiece& piece, const TreeBakeImage& leaves, uint32 size, float barkValue, float topCardHeight,
+		oc::vector<oc::vector<uint8>>& outMips)
 	{
 		const TreeBillboardLayout layout = billboardLayout(size);
-		// LEVEL 0: each card's view into its strip (the spare rows below the last strip stay empty). The horizontal card's
-		// view is the same at any card height (orthographic from above): billboardMesh places it with no re-bake.
-		oc::vector<float> cover((size_t)size * size, 0.0f), leaf((size_t)size * size, 0.0f);
+		// LEVEL 0: each card's view into its strip (the spare rows below the last strip stay empty). A vertical card is
+		// seen from behind too: its depth is half the thickness between the two views' surfaces.
+		oc::vector<float> cover((size_t)size * size, 0.0f), leaf((size_t)size * size, 0.0f), depth((size_t)size * size, 0.0f);
+		const TreeBillboardBox box = billboardBox(piece);
 		CardView views[3];
-		billboardCards(billboardBox(piece), 0.5f, views);
-		FrameTarget target;
+		billboardCards(box, topCardHeight, views);
+		const glm::vec3 depthRanges = billboardDepthRanges(box, topCardHeight);
+		FrameTarget target, back;
 		for (uint32 v = 0; v < 3; ++v)
 		{
 			const ViewBasis view{ views[v].centre, views[v].right, views[v].up, views[v].normal, views[v].halfExtent };
 			target.clear(size * SUPERSAMPLE, layout.stripHeight * SUPERSAMPLE);
 			rasterMesh(target, piece.bark[0], view, leaves, false);
 			rasterMesh(target, piece.leaves[0], view, leaves, true);
-			resolveView(target, cover, leaf, size, v * layout.stripHeight);
+			const bool vertical = v < 2;
+			if (vertical)
+			{
+				// The same image (right / up as they are), the other faces: z = the distance behind the plane.
+				const ViewBasis behind{ view.centre, view.right, view.up, -view.dir, view.halfExtent };
+				back.clear(size * SUPERSAMPLE, layout.stripHeight * SUPERSAMPLE);
+				rasterMesh(back, piece.bark[0], behind, leaves, false);
+				rasterMesh(back, piece.leaves[0], behind, leaves, true);
+			}
+			resolveView(target, vertical ? &back : nullptr, depthRanges[(int)v], cover, leaf, depth, size, v * layout.stripHeight);
 		}
 
-		// THE LEVELS: the cover averaged (unscaled: it feeds the next level), the leaf share by the cover. A level's test
-		// then runs on its cover x a scale that keeps level 0's solid share (binary search), as the leaf clusters' mips.
+		// THE LEVELS: the cover averaged (unscaled: it feeds the next level), the leaf share and the depth by the cover. A
+		// level's test then runs on its cover x a scale that keeps level 0's solid share (binary search), as the leaf
+		// clusters' mips.
 		outMips.clear();
 		outMips.resize(layout.numMips);
 		const float targetCoverage = maskCoverage(cover, 1.0f);
-		encodeMaskLevel(cover, leaf, 1.0f, barkValue, outMips[0]);
+		encodeMaskLevel(cover, leaf, depth, 1.0f, barkValue, size, layout.stripHeight, outMips[0]);
 		uint32 levelSize = size;
 		for (uint32 k = 1; k < layout.numMips; ++k)
 		{
 			const uint32 half = levelSize / 2;
-			oc::vector<float> coverNext((size_t)half * half), leafNext((size_t)half * half);
+			oc::vector<float> coverNext((size_t)half * half), leafNext((size_t)half * half), depthNext((size_t)half * half);
 			for (uint32 y = 0; y < half; ++y)
 				for (uint32 x = 0; x < half; ++x)
 				{
-					float c = 0.0f, l = 0.0f;
+					float c = 0.0f, l = 0.0f, d = 0.0f;
 					for (uint32 s = 0; s < 4; ++s)
 					{
 						const size_t src = (size_t)(y * 2 + (s >> 1)) * levelSize + (x * 2 + (s & 1));
 						c += cover[src];
 						l += cover[src] * leaf[src];
+						d += cover[src] * depth[src];
 					}
 					coverNext[(size_t)y * half + x] = c * 0.25f;
 					leafNext[(size_t)y * half + x] = c > 0.0f ? l / c : 0.0f;
+					depthNext[(size_t)y * half + x] = c > 0.0f ? d / c : 0.0f;
 				}
 			cover = oc::move(coverNext);
 			leaf = oc::move(leafNext);
+			depth = oc::move(depthNext);
 			levelSize = half;
 			float lo = 0.0f, hi = 8.0f;
 			for (int i = 0; i < 16; ++i)
@@ -861,7 +963,7 @@ namespace Procedural
 				const float mid = (lo + hi) * 0.5f;
 				(maskCoverage(cover, mid) < targetCoverage ? lo : hi) = mid;
 			}
-			encodeMaskLevel(cover, leaf, hi, barkValue, outMips[k]);
+			encodeMaskLevel(cover, leaf, depth, hi, barkValue, levelSize, layout.stripHeight >> k, outMips[k]);
 		}
 	}
 }

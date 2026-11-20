@@ -335,8 +335,8 @@ void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
     layout.descriptorSetLayoutBindings.push_back(storageBinding(9));  // the baked tree records' pieces
     layout.descriptorSetLayoutBindings.push_back(storageBinding(10)); // ... and their types
     layout.descriptorSetLayoutBindings.push_back(storageBinding(11)); // ... and this frame's visible-tree list
-    // The list's RT section length (recorded per frame - the GI prep secondary).
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(uint32) });
+    // The list's RT section length and its RTAO part's (recorded per frame - the GI prep secondary).
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 2 * sizeof(uint32) });
 }
 
 void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
@@ -587,7 +587,8 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_tlasUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    cmd.pushConstants(m_tlasInstancePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(uint32), &params.treeRtPieces);
+    const uint32 treeSections[2] = { params.treeRtPieces, params.treeAoPieces };
+    cmd.pushConstants(m_tlasInstancePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(treeSections), treeSections);
     cmd.dispatch((params.count + 63) / 64, 1, 1);
 }
 

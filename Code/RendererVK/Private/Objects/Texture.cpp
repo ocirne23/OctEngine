@@ -413,8 +413,13 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
         }
     };
     // A one-channel MASK: its channel reads as alpha too (and as G and B), so every alpha reader takes it as any texture's.
+    // A two-channel one keeps its own green (a second value beside the mask).
     if (redAsAlpha)
-        imageViewInfo.components = { vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR };
+    {
+        const bool twoChannel = format == vk::Format::eBc5UnormBlock || format == vk::Format::eR8G8Unorm;
+        imageViewInfo.components = { vk::ComponentSwizzle::eR, twoChannel ? vk::ComponentSwizzle::eG : vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eR,
+            vk::ComponentSwizzle::eR };
+    }
 
     auto createImageViewResult = vkDevice.createImageView(imageViewInfo);
     if (createImageViewResult.result != vk::Result::eSuccess)

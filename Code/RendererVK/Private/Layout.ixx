@@ -783,6 +783,13 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26;
     constexpr float TREE_CARD_BARK = 0.75f; // the mask's cover ends here; the bark share runs from here to 1
 
+    // ---- The TLAS instance masks (gi_tlas_instances.cs.glsl) and the rays' cull masks: a ray hits where they share a bit ----
+    constexpr uint32 RT_MASK_SCENE = 0xFB;     // every ray
+    constexpr uint32 RT_MASK_TREE_CARD = 0x02; // a tree's shadow billboard: every ray but RTAO's (its opaque rays would hit the whole card rectangles)
+    constexpr uint32 RT_MASK_TREE_BARK = 0x04; // a tree's bark mesh, beside its billboard: RTAO's rays only
+    constexpr uint32 RT_CULL_SCENE = 0xFB;     // every ray but RTAO's: the scene and the trees' cards
+    constexpr uint32 RT_CULL_AO = 0x05;        // RTAO's rays: the scene and the trees' bark
+
     struct alignas(16) MaterialInfo
     {
 		uint32 flags;
@@ -876,6 +883,10 @@ export namespace RendererVKLayout
     // proximity, rock proximity, occupied (inside a trunk or a rock: nothing grows) - over CLUTTER_FLOOR_DIM^2 texels
     // of CLUTTER_FLOOR_TEXEL metres around its centre.
     constexpr uint32 CLUTTER_FLOOR_DIM = 384;
+    // THE CANOPY MAP (Renderer::setCanopyMap; Procedural ClutterSystem bakes it with the floor map): CANOPY_MAP_DIM^2 texels
+    // over the floor map's square, the canopy's top over the ground stored / CANOPY_MAP_MAX_HEIGHT (m).
+    constexpr uint32 CANOPY_MAP_DIM = 192;
+    constexpr float CANOPY_MAP_MAX_HEIGHT = 64.0f;
     constexpr float CLUTTER_FLOOR_TEXEL = 1.0f;
     // Flower geometry (clutter_flower.vs.glsl): per LOD the stem's segments and the petal slots (a quad each).
     constexpr uint32 CLUTTER_FLOWER_STEM_SEGMENTS[CLUTTER_FLOWER_LODS] = { 4, 2, 1 };

@@ -56,7 +56,7 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 float rtShadowTlasVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
 {
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, origin, tMin, dir, tMax);
+	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, RT_CULL_SCENE, origin, tMin, dir, tMax);
 	while (rayQueryProceedEXT(rq))
 	{
 		if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))

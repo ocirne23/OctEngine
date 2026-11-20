@@ -15,9 +15,10 @@ export class RenderMaterial final : public RenderMaterialState
 public:
 
     // What the mip bytes ARE: RGBA8, or BC blocks the caller compressed (File TextureConvert::compressBlockRows). BC4 / R8: ONE channel, never sRGB
-    // (the trees' voxel opacity atlas, their shadow billboards' mask); as a material's albedo it reads in all four channels, so its `.a` is the mask.
+    // (the trees' voxel opacity atlas); as a material's albedo it reads in all four channels, so its `.a` is the mask. BC5 / Rg8 as a material's ALBEDO:
+    // a TWO-channel mask, never sRGB (the trees' shadow billboards: the cover, the depth) - its red reads as `.a` too, its green stays in `.g`.
     // Appended only: the .tex cache files store the value.
-    enum class ETextureEncoding : uint8 { Rgba8, BC1, BC3, BC5, BC4, R8 };
+    enum class ETextureEncoding : uint8 { Rgba8, BC1, BC3, BC5, BC4, R8, Rg8 };
 
     struct TextureDesc
     {
@@ -42,7 +43,10 @@ public:
     static RenderMaterial createForMesh(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
     static RenderMaterial createTextured(const TextureDesc& desc); // its own textures, from the caller's mip chains
     // A copy of material `source` (any index: a solid colour too) with `extraFlags` added, SHARING its textures: the handle owns the slot only.
-    static RenderMaterial derive(uint16 source, uint32 extraFlags);
+    // `linkedTexture`: a u_textures index the copy carries for its own shader, in its METAL-ROUGHNESS slot - only for a material that is drawn by a
+    // shader that samples no metal-roughness texture (a tree's leaves on LitTree: the variant's voxel opacity atlas, for the leaves' sun self-shadow).
+    // The copy does not own it: the caller keeps that texture alive longer than the copy.
+    static RenderMaterial derive(uint16 source, uint32 extraFlags, uint16 linkedTexture = UINT16_MAX);
     // The per-entity TINT (RenderNode::setMaterialOverride): a plain index, cached and shared, never freed. [Concurrency: LOCK-FREE on a hit]
     // `emissive` > 0 = an EMISSIVE colour: drawn by the UNLIT pipeline (a container with `PipelineIdx UnlitOpaque`) as
     // colour x emissive (up to 15.9, in steps of 1/16; above 1 the bloom takes it); the lit pipelines draw it as the
@@ -58,6 +62,7 @@ public:
 
     bool isValid() const { return m_index != UINT16_MAX; }
     uint16 index() const { return m_index; } // what Renderer::spawnMeshNode and RenderTreeSet::Rep take
+    uint16 albedoTexture() const;            // its albedo slot's u_textures index (what another material's `linkedTexture` takes)
     void destroy();
 
     // Its RendererVKLayout::MATERIAL_FLAG_* bits, rewritten in place (e.g. a distance-fade band). No re-record: a contents upload.

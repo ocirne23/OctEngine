@@ -109,8 +109,8 @@ calls `reloadShaders()`.
   registers / 32 B with one site, 64 / 48 with two.
 * **The lit core's includer defines** (instanced_indirect_lit.inc.glsl), each compiling a path OUT for a material that
   never takes it:
-  * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter and the tree voxels (their baked interior is their
-    AO; a runtime flag kept the whole upsample compiled).
+  * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter and the tree voxels (a runtime flag kept the whole
+    upsample compiled).
   * `LIT_NO_UNDERWATER` - no water-level fetch, no caustics: the tree leaves and voxels.
   * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
     the light loop, the diffuse takes no (1 - metalness). The two tree shaders.
@@ -174,7 +174,8 @@ calls `reloadShaders()`.
 * **The default static-mesh VS packs its interpolants into 4 locations**: `posU` (xyz + uv.x), `normalV` (xyz + uv.y),
   `tangent` (xyz + bitangent sign), flat `meshIdxMaterialIdx` at 3. The fragment shader rebuilds the bitangent. Every
   FS paired with that VS (lit, unlit, the gizmos, sky) uses this layout; the terrain, rock, ocean and river VS have
-  their own.
+  their own. Beside them: `prevWorldDelta` at 4 (the motion vectors) and `windSway` at 10 (the sun shadow's lookup
+  before the wind's sway, read by the lit FS and the LitTree FS only; Scene.md).
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):
   * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds (point/spot sphere,

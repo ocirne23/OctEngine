@@ -1,7 +1,8 @@
 // A tree's SHADOW BILLBOARD at a RAY HIT (MATERIAL_FLAG_BILLBOARD, Layout.ixx; Procedural TreeSystem). The card has no
-// albedo texture. Its albedo slot is a ONE-CHANNEL mask shown in all four channels, so `.a` reads it: the texel's COVER
-// up to TREE_CARD_BARK (the alpha test at 0.5 runs on a continuous cover), and from TREE_CARD_BARK to 1 the BARK SHARE
-// of a texel that is solid for certain. Its normal slot is a 2 x 1 texture of the species' two colours - the bark's
+// albedo texture. Its albedo slot is a TWO-CHANNEL mask whose red shows in `.r`, `.b` and `.a`, so `.a` reads it: the
+// texel's COVER up to TREE_CARD_BARK (the alpha test at 0.5 runs on a continuous cover), and from TREE_CARD_BARK to 1 the
+// BARK SHARE of a texel that is solid for certain. Its `.g` is the shadow pass's DEPTH (shadow_depth.vs.glsl), which a
+// ray hit does not read. Its normal slot is a 2 x 1 texture of the species' two colours - the bark's
 // mean, then the leaves' - as their square roots (8 bits hold a dark colour better). A hit's albedo = the two mixed by
 // the bark share; its normal = the crown shape's (treeCardNormal).
 // An EMPTY or thin texel takes the leaf colour: the rays that shade a hit run with the opaque flag (the whole card is

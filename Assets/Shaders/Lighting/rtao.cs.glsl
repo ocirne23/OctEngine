@@ -93,7 +93,7 @@ void main()
     const float depth = texelFetch(u_sceneDepth, depthPx, 0).r;
     if (depth <= 0.0) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0)); return; } // background (reversed-Z far = 0): no occlusion
 
-    // A NO-AO pixel (grass, clutter: not in the TLAS, no RTAO read): a HOLE (a < 0), no rays. The temporal pass keeps it,
+    // A NO-AO pixel (grass, clutter, tree leaves: not in the TLAS, no RTAO read): a HOLE (a < 0), no rays. The temporal pass keeps it,
     // the spatial pass fills it from the surfaces around - so the ground between the blades takes the ground's AO.
     if (motionNoAo(texelFetch(u_motion, depthPx, 0))) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, -1.0)); return; }
 
@@ -153,16 +153,16 @@ void main()
         // The TLAS, up to the terrain's hit.
         rayQueryEXT rq;
 #ifdef RTAO_ALPHA_TEST
-        // Masked geometry is non-opaque in the TLAS: the alpha test runs on its candidates. Cull mask 0x01: not the
-        // FOLIAGE cards (gi_tlas_instances.cs.glsl).
-        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, 0.01, dir, t);
+        // Masked geometry is non-opaque in the TLAS: the alpha test runs on its candidates. RT_CULL_AO: the scene and the
+        // trees' BARK meshes, not their shadow billboards (gi_tlas_instances.cs.glsl).
+        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, RT_CULL_AO, rayOrigin, 0.01, dir, t);
         while (rayQueryProceedEXT(rq))
         {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))
                 rayQueryConfirmIntersectionEXT(rq);
         }
 #else
-        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, 0.01, dir, t);
+        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, RT_CULL_AO, rayOrigin, 0.01, dir, t);
         while (rayQueryProceedEXT(rq)) {}
 #endif
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT)

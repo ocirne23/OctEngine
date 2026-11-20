@@ -31,6 +31,14 @@ clutter": a grid of patches, a ranked candidate list per patch and type, kept by
   their counts) or on a TreeWorld restart; one bake at a time, handed over by `Renderer::setClutterFloorMap`. Without
   "Trees/World/Enabled", or with clutter disabled, no map (the floor measures read 0). The GRASS reads it too:
   "Grass/Cover/Canopy thinning" (0.3).
+* **THE CANOPY MAP** - from the same bake (`FloorBake::canopy`), for the LIGHTING, not the placement: the canopy
+  channel at half the resolution (`CANOPY_MAP_DIM` 192, 2 m texels over the same square), BLURRED by a tent of 6 m (a
+  point on the ground sees the crowns around it), with the canopy's TOP over the ground (`TreeWorld::FloorType::height`:
+  the species' mean trunk height x its mean scale; the tallest crown per texel, then the cover-weighted mean of the
+  blur's reach) / `CANOPY_MAP_MAX_HEIGHT` (64 m). RGBA8: R cover, G top. `setCanopyMap` makes it a `RenderTexture` and
+  hands its index to `Renderer::setCanopyMap`; the texture it replaces lives until the next one (a frame in flight may
+  name it). It comes and goes with the floor map. RendererVK reads it as the ambient's sky occlusion
+  ([Vegetation.md](../RendererVK/Vegetation.md) "The canopy map").
 * Main thread, after `trees.update` and `rocks.update` and before `trees.kickWorldUpdate` (the clutter is the last
   reader of the tree records). Headless: never initialized.
 

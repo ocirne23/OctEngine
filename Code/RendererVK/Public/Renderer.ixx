@@ -219,6 +219,16 @@ public:
     void setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu> types, oc::span<const ClutterMesh> meshes);
     // THE FOREST FLOOR MAP: CLUTTER_FLOOR_DIM^2 rgba8 texels (canopy, trunk, rock, occupied) of CLUTTER_FLOOR_TEXEL m. MAIN THREAD;
     void setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels);
+    // THE CANOPY MAP: the caller's texture (a RenderTexture's index, kept alive by the caller while set) over the square of
+    // side `size` (m) around `centre` (xz): R = the tree cover above the ground (blurred), G = the canopy's top over the
+    // ground / CANOPY_MAP_MAX_HEIGHT. Every lit surface takes its sky occlusion from it ("Trees/Canopy sky occlusion";
+    // canopy_occlusion.inc.glsl). size 0 = none. MAIN THREAD.
+    void setCanopyMap(uint16 textureIdx, glm::vec2 centre, float size)
+    {
+        m_canopyTex = size > 0.0f ? textureIdx : (uint16)0;
+        m_canopyOrigin = centre - 0.5f * size;
+        m_canopyInvSize = size > 0.0f ? 1.0f / size : 0.0f;
+    }
 
     // ---- GPU particles and projected decals (the emitters: RenderParticleEmitter) ----
 

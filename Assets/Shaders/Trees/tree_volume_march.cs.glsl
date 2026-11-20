@@ -18,7 +18,6 @@
 #define TERRAIN_HEIGHT_BINDING 2
 #include "terrain_height.inc.glsl"
 #include "tree_volume.inc.glsl"
-#include "leaf_look.inc.glsl" // leafTransmitColor: the far transmission's colour, as the near leaves'
 #define CLOUD_SHADOW_BINDING 11
 #include "cloud_shadow.inc.glsl"
 #define FACTION_MAP_BINDING 20
@@ -552,11 +551,9 @@ void marchAt(ivec2 px)
 
                 const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
                 vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + u_ambientColor) * interior;
-                // + the TRANSMISSION: no N.L (it lights the far side), through the crown at "Foliage transmission self
-                // shadow"'s share of its optical depth, in the leaves' deepened colour; no rock.
+                // + the TRANSMISSION: no N.L (it lights the far side), in the leaves' colour; no rock.
                 if (transmitLobe > 0.0 && rock < 1.0)
-                    lit += leafTransmitColor(albedo) * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock)
-                        * exp(-sunDepth * u_foliage_transmissionSelfShadow) * terrainVis * cloudT * interior));
+                    lit += albedo * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock) * terrainVis * cloudT * interior));
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);

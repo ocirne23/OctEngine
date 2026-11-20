@@ -89,10 +89,15 @@ export namespace Procedural
 			RenderMaterial ownBarkMaterial; // the procedural bark texture material
 			RenderMaterial ownLeafMaterial; // a cluster texture material
 			RendererVKLayout::EPipelineIndex leafPipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
-			// The mesh -> voxels crossfade: bark / leaf materials derived with a distance fade-OUT (shared textures). Invalid
+			// The mesh -> voxels crossfade: the bark material derived with a distance fade-OUT (shared textures). Invalid
 			// without a far tier (`Billboard Distance` 0).
 			RenderMaterial barkFadeMaterial;
-			RenderMaterial leafFadeMaterial;
+			// THE LEAVES' MATERIALS PER VARIANT (parallel to variantMeshes; empty without a far tier): copies of the leaf
+			// material that link the variant's voxel grid, for the leaves' sun self-shadow (RenderMaterial::derive's
+			// linkedTexture) - the one a variant draws with (invalid: no grid, it draws with leafMaterial) and its
+			// crossfade fade-OUT copy.
+			oc::vector<RenderMaterial> variantLeafMaterials;
+			oc::vector<RenderMaterial> variantLeafFadeMaterials;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
@@ -108,7 +113,7 @@ export namespace Procedural
 		};
 		struct VariantBillboard // a baked variant's shadow billboard
 		{
-			CachedTexture mask; // one channel: `albedo` only (bakeBillboardMask)
+			CachedTexture mask; // two channels (the cover / bark share, the depth): `albedo` only (bakeBillboardMask)
 			TreeMesh cards;
 		};
 		struct SpeciesLoad

@@ -4,6 +4,7 @@
 #extension GL_EXT_shader_16bit_storage : enable
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_EXT_nonuniform_qualifier : enable // the LitTree variant's voxel grid lookups (tree_voxel.inc.glsl)
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -17,6 +18,20 @@
 #define TREE_WIND_NO_FLUTTER
 #endif
 #include "tree_wind.inc.glsl"
+#ifdef TREE_ORIGIN
+// LitTree: the leaf materials (binding 2) and the bindless textures (25), for the leaves' voxel grid link.
+struct MaterialInfo
+{
+    uint flags;
+    float opacity;
+    uint diffuseNormalTexIdx;
+    uint metalRoughnessTexIdxAlphaMode;
+};
+layout (binding = 2, std430) readonly buffer InMaterialInfos { MaterialInfo in_materialInfos[]; };
+layout (binding = 25) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+#include "tree_voxel.inc.glsl"
+#include "tree_leaf_sun.inc.glsl"
+#endif
 
 #ifdef STEREO
 // VR renders one eye per pass (no multiview here: the forward pass's DGC execution set forbids it), so the view index
@@ -58,9 +73,25 @@ layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
+#ifndef TREE_VOXEL
+// THE WIND'S SWAY of this point WITHOUT the trunk's bend (its branch + its leaf flutter; 0 with no wind payload). The sun
+// shadow is looked up at the position less this: the shadow casters bend by the trunk alone (shadow_depth.vs.glsl), so a
+// swaying branch would move through its own tree's shadow. The voxel box bends by the trunk only: it has none.
+layout (location = 10) out vec3 out_windSway;
+#endif
 #ifdef TREE_ORIGIN
 // LitTree: the camera's distance to the tree's origin - its distance fade (tree_fade.inc.glsl), one value a tree.
 layout (location = 5) out flat float out_treeDistance;
+// THE LEAVES' SUN SELF-SHADOW (tree_leaf_sun.inc.glsl treeLeafGridVertex): a leaf material links its variant's voxel grid
+// (its metal-roughness slot = the opacity atlas), and the grid holds its own box - read HERE, once per vertex.
+//   6: the vertex in the grid's space (0..1 per axis, unbent by the wind).
+//   7: per tree, xyz = the sun in grid units per metre, w = the cube root of the grid box's volume (m); w 0 = no grid.
+//   8: per tree, the grid's textures and its header (packed).
+//   9: the vertex's height above the tree's base (m): the canopy map's occlusion above it (canopy_occlusion.inc.glsl).
+layout (location = 6) out vec3 out_treeGrid;
+layout (location = 7) out flat vec4 out_treeSun;
+layout (location = 8) out flat uvec2 out_treeVoxel;
+layout (location = 9) out float out_treeHeight;
 #endif
 #ifdef TREE_VOXEL
 // The LitTreeVoxel variant (the trees' voxel tier, Procedural treeVoxelBoxMesh): the box vertex carries its GRID
@@ -104,6 +135,16 @@ void main()
 
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
+#ifdef TREE_ORIGIN
+    {
+        // Only a LEAF material links a grid (the bark's slot is "no texture").
+        const uint materialIdx = inst.meshIdxMaterialIdx >> 16;
+        const bool leafMaterial = (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_LEAF) != 0u;
+        treeLeafGridVertex(leafMaterial ? in_materialInfos[materialIdx].metalRoughnessTexIdxAlphaMode & 0xFFFFu : 0xFFFFu,
+            in_posU.xyz, inst_quat, inst_scale, out_treeGrid, out_treeSun, out_treeVoxel);
+        out_treeHeight = in_posU.y * inst_scale;
+    }
+#endif
 #ifndef TREE_VOXEL
     const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
 #else
@@ -123,6 +164,7 @@ void main()
     // it out here, per vertex.
     const bool treeRecord = treeWindIsRecord(inst.prevPosScale);
 #ifndef TREE_VOXEL
+    vec3 windSway = vec3(0.0);
     uint windPayload;
     if (treeWindPayload(in_tangent.w, windPayload))
 #else
@@ -136,6 +178,9 @@ void main()
         else
             tree = treeWindOfTree(inst_pos, inst_scale, vec2(1.0));
         windOffset = treeWindVertex(tree, in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windPrevDelta);
+#ifndef TREE_VOXEL
+        windSway = windOffset - treeWindTrunkPart(tree, in_posU.xyz, inst_scale);
+#endif
     }
 #ifdef TREE_VOXEL
     const vec3 pos = restPos + windOffset;
@@ -145,6 +190,7 @@ void main()
     out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
     out_posU   = vec4(pos, in_posU.w);
+    out_windSway = windSway;
 #endif
 #ifdef TREE_STATIC
     out_prevWorldDelta = windPrevDelta;

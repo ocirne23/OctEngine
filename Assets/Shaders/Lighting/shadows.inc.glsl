@@ -28,34 +28,6 @@ float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 bool g_shadowFoliage = false;
 #endif
 
-#ifdef SHADOW_LEAF_TRANSMIT
-// Tree MESH leaves (the LitTree FS sets it per leaf pixel): the fade length below, 0 = off. The normal bias stays.
-float g_shadowLeafLength = 0.0;
-#endif
-
-// FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers, 1 - exp(-gap /
-// length (m)). The tree's own caster then shades it from nothing at the caster and deepens into the crown; a blocker far
-// up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker. The length is
-// u_foliage_shadowLength on the voxel tier, g_shadowLeafLength on the tree mesh leaves (a leaf just under its own shadow
-// billboard's top card is barely shaded, one deep under it fully).
-float foliageTransmit(float visibility, float gap, int cascade)
-{
-	float shadowLength = 0.0;
-#ifdef SHADOW_FOLIAGE_BIAS
-	if (g_shadowFoliage)
-		shadowLength = u_foliage_shadowLength;
-#endif
-#ifdef SHADOW_LEAF_TRANSMIT
-	shadowLength = max(shadowLength, g_shadowLeafLength);
-#endif
-	if (shadowLength > 0.0)
-	{
-		const float metres = gap * cascadeDepthRange(cascade); // every blocker found is nearer than p.z: gap > 0
-		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / shadowLength));
-	}
-	return visibility;
-}
-
 mat4 cascadeMatrix(int c)
 {
 	mat4 m = u_cascadeViewProj[c];
@@ -148,11 +120,11 @@ float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 	// lies inside the search disk, with the complementary compare). The centre tap catches what the sparse search can
 	// miss: a small hole straight over the pixel (a gap in a grate or canopy with the caster close by).
 	if (blockers >= float(PCSS_BLOCKER_TEXELS) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
-		return foliageTransmit(0.0, p.z - avgBlocker, cascade);
+		return 0.0;
 
 	// The penumbra grows with the gap to the blocker: a caster touching the surface = ~MIN texels, far = up to MAX.
 	float penumbraTexels = clamp((p.z - avgBlocker) * pcssSunSizeTexels(cascade), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS);
-	return foliageTransmit(pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC), p.z - avgBlocker, cascade);
+	return pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC);
 }
 
 // Border PCSS: the fixed tap budget is split between the two cascades by t (a low-discrepancy key per tap), so a border
@@ -202,11 +174,8 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 		else      { sumA += vis; nA += 1.0; }
 	}
 
-	// FOLIAGE: each cascade's shadow fades in with its own blocker gap; no blocker found keeps the PCF result.
 	float visA = (nA > 0.0) ? sumA / nA : 1.0;
 	float visB = (nB > 0.0) ? sumB / nB : 1.0;
-	if (nDA > 0.0) visA = foliageTransmit(visA, pa.z - sumDA / nDA, ca);
-	if (nDB > 0.0) visB = foliageTransmit(visB, pb.z - sumDB / nDB, cb);
 
 	// If one cascade is invalid (or got no taps), use the other's visibility instead of injecting light.
 	if (!validA || nA == 0.0) return visB;

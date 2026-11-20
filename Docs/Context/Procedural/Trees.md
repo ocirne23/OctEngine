@@ -422,10 +422,20 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   shelter). Both faces of a card read the same strip: a silhouette is the same from both sides. Plain vertices: no
   wind payload, no codes (the shadow VS bends every tree caster by the trunk's sway alone). **Every vertex's tangent =
   the CROWN SHAPE's radii** (the cards' half extents): a ray that shades a hit takes its normal from an ellipsoid in
-  the cards' box, not from the flat card (RendererVK Scene.md, `MATERIAL_FLAG_BILLBOARD`).
-* **THE MASK** (`bakeBillboardMask`): ONE channel - no albedo, no normal. A small software rasterizer (2×2
+  the cards' box, not from the flat card (RendererVK Scene.md, `MATERIAL_FLAG_BILLBOARD`). **Every vertex's normal =
+  the card's, its LENGTH the card's DEPTH RANGE in metres** (`billboardDepthRanges`: what the mask's depth at 1 stands
+  for - a vertical card: the box's reach off the trunk axis along its normal; the horizontal card: from the card up to
+  the box's top). The shadow pass reads it; no ray does.
+* **THE MASK** (`bakeBillboardMask`): TWO channels - no albedo, no normal. A small software rasterizer (2×2
   supersampled, back faces culled, the leaf texture's alpha tested) draws each card's view into its strip of one
-  square texture. A texel's value (`encodeMaskLevel`): **its COVER up to `TREE_CARD_BARK`** (0.75, RendererVK
+  square texture. **The second channel is THE DEPTH**: how far the tree's surface stands off the card's plane, 0..1 of
+  the card's depth range, so the shadow pass casts from where the tree is and not from the flat card (RendererVK
+  Scene.md, "THE BILLBOARD'S DEPTH"). A vertical card is drawn from behind too (the same image, the other faces), and
+  its depth is HALF THE THICKNESS between the two surfaces: the sun lights either side, and one value serves both. The
+  horizontal card: the crown's top above the card (never below it), so its bake takes `TopCardHeight`. `dilateMaskDepth`
+  spreads the depth 8 texels into the empty texels of each level, never across a strip: a filtered tap at the crown's
+  edge mixes its neighbours in, and a BC block's two ends are not spent on empty texels.
+  The first channel's value (`encodeMaskLevel`): **its COVER up to `TREE_CARD_BARK`** (0.75, RendererVK
   Layout.ixx), and from there to 1 - solid for certain - WHAT it is: `TREE_CARD_BARK` = leaves only .. 1 = bark only,
   by the leaf share of its covered subsamples. So leaves are the cover, clamped, and bark (opaque: its cover is near 1)
   is about its cover too: **the value is continuous across the alpha test (0.5)**, which the shadow pass runs on a
@@ -438,18 +448,30 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   Mips stop at ~4 px per strip.
 * **The mips keep the cover**: a level's cover is the mean of the level below (unscaled), its test runs on that cover
   × a scale found by binary search so the SOLID share of the level equals level 0's (as the leaf clusters' mips) - a
-  crown casts as much shadow in a far cascade as in a near one. A level's leaf share is the cover-weighted mean.
+  crown casts as much shadow in a far cascade as in a near one. A level's leaf share and its depth are cover-weighted
+  means.
 * **The material** (`createBillboardMaterial`; `PieceMeshes::billboardMaterial`, `MATERIAL_FLAG_BILLBOARD`,
-  alpha-tested at 0.5): the mask in the albedo slot - BC4, or R8 without "Compress textures"; RendererVK shows a
-  one-channel albedo in all four channels, so every alpha reader (the shadow casters, the ray queries) takes it from
-  `.a` as any texture's. The normal slot holds a **2 x 1 texture of the species' two colours for the rays**: the bark
+  alpha-tested at 0.5): the mask in the albedo slot - BC5, or RG8 without "Compress textures"; RendererVK shows a
+  mask albedo's red in `.a` too, so every alpha reader (the shadow casters, the ray queries) takes it from `.a` as any
+  texture's, and the depth stays in `.g`. The normal slot holds a **2 x 1 texture of the species' two colours for the rays**: the bark
   texture's linear mean, then the leaves' (× `Billboard AlbedoScale`; a leafless species: its bark for both), stored
   as their square roots. A ray that shades a hit (GI, the water's and the film's reflections) mixes the two by the
   mask's bark share (`tree_card.inc.glsl`; an empty or thin texel takes the leaf colour: those rays treat the whole
   card as solid).
-* **RT (GI, RT shadows, RTAO, reflections) sees only the shadow billboards** of TREE species: every tree mesh is
-  created without a BLAS (`createMesh(..., raytraced = false)`), and BUSHES never get one (their billboard casts in
-  the cascades only).
+* **RT (GI, RT shadows, reflections) sees only the shadow billboards** of TREE species, and BUSHES have no BLAS at
+  all (their billboard casts in the cascades only). **RTAO sees a tree's BARK mesh instead**: a tree's bark is created
+  WITH a BLAS (`uploadSpecies`, `barkRaytraced`) and stands in the TLAS for RTAO's rays alone, near the scene focus
+  (RendererVK Scene.md, "RTAO AND THE TREES"). The leaf meshes have none.
+* **THE LEAVES' MATERIALS ARE PER VARIANT** (`Species::variantLeafMaterials` / `variantLeafFadeMaterials`, parallel to
+  `variantMeshes`; `uploadSpecies`): copies of the species' leaf material (`RenderMaterial::derive`, shared textures)
+  that LINK the variant's voxel grid - its opacity atlas, `voxelMaterial.albedoTexture()`, as the copy's
+  `linkedTexture` - for the mesh leaves' sun self-shadow (RendererVK Scene.md, "THE MESH LEAVES' SUN SELF-SHADOW").
+  One to draw with (only for a variant with a grid: the others draw with the species' material) and one for the
+  crossfade's fade-out (`applyFadeBands` sets its band). They are declared after their source in `Species`, and the
+  voxel materials they link live in `variantMeshes`, which is destroyed after them.
+* **THE GRID HOLDS ITS OWN BOX** (`createVoxelMaterial`): the box of the variant's box mesh goes into the index
+  texture's header row at upload (texels 1..3: min and size, 16 bits each over 128 m) - not baked, since the box comes
+  from the geometry on every load. A reader that has the grid but not the box mesh finds it there.
 
 #### The crossfade
 
@@ -496,7 +518,7 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   the mean colour and the MEAN normal (short where
   the leaves face every way), the bark weighted by what the voxel's own leaves leave of it, `exp(-leaf area /
   crossing^2)` - by area alone the branches inside the crown greyed it
-  (a bark-only voxel, the trunk under the crown, keeps the bark) - then x `Billboard AlbedoScale`; and the INTERIOR = the smallest optical depth to the box's side along the six axes, over the tree's largest.
+  (a bark-only voxel, the trunk under the crown, keeps the bark) - then x `Billboard AlbedoScale`; and the INTERIOR = the smallest optical depth to the box's side along the six axes, over the tree's largest (the voxel tier darkens its colour by it: "Trees/Voxel interior darkening").
   Colour and normal are dilated two rings into the empty voxels (the filter would pull a surface voxel toward black).
 * **The levels** halve down to 4 voxels: a coarse voxel's opacity is 1 - the MEAN TRANSMISSION through its children along
   the three axes (12 two-voxel columns), not the mean opacity, so a dense clump keeps its cover far away; the rest
@@ -530,18 +552,18 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   endpoints decodes exactly): the shadow casters get ONE texture index (the cull's alpha index), and both passes find
   the index through it (`voxelGrid`). It takes the band's fade-in in `applyFadeBands`; the box mesh
   (`treeVoxelBoxMesh`) has no BLAS.
-* Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel sharpness" (0..0.95,
-  default 0.95: the filter's REACH - the bake writes every surface point into its one voxel, but trilinear sampling spreads
-  each voxel's opacity a voxel into its neighbours, fuller clumps and silhouette; `voxelSharpen` steepens the fraction
-  between texel centres by 1 / (1 - this), toward each voxel covering its own cell - every opacity tap: the view, the
-  self-shadow and the shadow casters), "Voxel thinning" (0..0.95,
-  default 0: every march's sampled opacity with its extinction x (1 - this), `voxelThin` - the view, the sun self-shadow
+* Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel sharp cells" (on;
+  `u_foliage_voxelSharp`: each voxel covers its OWN cell - a sample reads the nearest voxel's texel, ONE fetch, no blend,
+  in every opacity tap: the view, the self-shadow, the mesh leaves' self-shadow and the shadow casters. Off = the
+  trilinear filter: the bake writes every surface point into its one voxel, and the filter spreads each voxel's opacity
+  a voxel into its neighbours - fuller clumps and silhouette, and a second slice fetch a sample. **The switch is a UBO
+  value: a constant while its tweak row is LOCKED, so only one path compiles**; unlocked it is a branch on a uniform),
+  "Voxel thinning" (0..0.95,
+  default 0.2: every march's sampled opacity with its extinction x (1 - this), `voxelThin` - the view, the sun self-shadow
   and the shadow casters alike; a crown fuller than its mesh thinned to match), "Voxel self shadow",
-  "Voxel normal hull", "Voxel saturation" (about the linear luminance: the bake's averages - the twigs drawn in the leaf
-  texture, a sparse voxel's branches - read greyer than the mesh leaves), "Voxel brightness" (x the linear colour, after
-  the saturation), "Voxel transmission" / "... glow" / "... focus" (x the "Foliage transmission" ones) and "Voxel
-  transmission self shadow" (the share of the voxel self-shadow the transmitted sun takes; in place of "Foliage
-  transmission self shadow"); the other "Foliage ..." leaf terms apply as on the mesh leaves.
+  "Voxel interior darkening" (the colour x 2 ^ (-2 x this x the baked interior)), and the leaf transmission through the "Foliage transmission" settings as
+  they are (strength, glow, focus; "Foliage transmission shadow" = the share of the cascades' shadow AND of the voxel
+  self-shadow the transmitted sun takes); the other "Foliage ..." leaf terms apply as on the mesh leaves.
 
 ### Texture files (`Assets/Local/Trees/Textures`)
 
@@ -567,11 +589,11 @@ masks and the voxel grids): the finished mip chains are BC-compressed when gener
 | bark albedo | BC1 sRGB (opaque) |
 | bark normal | BC5 (XY; MATERIAL_FLAG_BC5_NORMAL rebuilds Z) |
 | leaf cluster atlas | BC3 sRGB (alpha-tested) |
-| shadow billboard mask | BC4 (one channel: cover, then the bark share) |
+| shadow billboard mask | BC5 (two channels: the cover, then the bark share; the depth) |
 | voxel opacity atlas / surface atlas | BC4 / BC3 linear |
 
 4x less VRAM than RGBA8 (BC1 and BC4: 8x for their one or three channels). Off = the uncompressed chains (the A/B for
-compression artefacts).
+compression artefacts; the mask: RG8, the opacity atlas: R8).
 
 ### Bark texture
 

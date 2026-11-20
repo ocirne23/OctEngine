@@ -345,8 +345,9 @@ which is a baked define).
   one AO texel's world footprint), not a per-tap normal compare. **A ZERO bent normal in the AO image means "none"**
   (past the max distance, fully occluded, background): the lit shader then keeps its own shading normal, so the
   depth-derived facets never reach the GI lookup.
-* **GRASS AND CLUTTER ARE HOLES IN THE AO.** They are in the depth image but not in the TLAS, and they read no RTAO
-  (`LIT_NO_RTAO`). A trace from their depth is a near-random normal a few cm above the ground, its history fails under
+* **GRASS, CLUTTER AND TREE LEAVES ARE HOLES IN THE AO.** They are in the depth image but not in the TLAS, and they read no RTAO
+  (`LIT_NO_RTAO`; the tree FS, which also draws the bark, skips the read per fragment: `LIT_RTAO_SKIP` - [Scene.md](Scene.md)
+  "RTAO AND THE TREES"). A trace from their depth is a near-random normal a few cm above the ground, its history fails under
   the wind, and the ground between the blades upsamples it: grain at range, worse at a lower DLSS render resolution.
   So their fragments write the NO-AO flag into the motion target (`motionVectorNoAo`, see "Motion vectors"
   ([PostProcess.md](PostProcess.md))); the trace reads it (binding 1) and writes a HOLE (a = -1) without rays, the

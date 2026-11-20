@@ -115,6 +115,7 @@ namespace Procedural
 			if (m_floorSet)
 			{
 				renderer.setClutterFloorMap(glm::vec2(0.0f), {});
+				setCanopyMap(renderer, nullptr);
 				m_floorSet = false;
 				m_floorCentre = glm::vec2(FLT_MAX);
 			}
@@ -299,6 +300,26 @@ namespace Procedural
 		Log::info(oc::format("Clutter: {} types ({} flowers), {} placement rules, {} meshes", m_types.size(), flowers, types.size(), meshes.size()));
 	}
 
+	// THE CANOPY MAP of a finished bake as a texture, handed to the renderer (nullptr: none). The texture it replaces
+	// stays alive until the NEXT one arrives: a frame in flight may still name it.
+	void ClutterSystem::setCanopyMap(Renderer& renderer, FloorBake* bake)
+	{
+		constexpr uint32 M = RendererVKLayout::CANOPY_MAP_DIM;
+		m_canopyRetired = oc::move(m_canopyTexture);
+		if (!bake || bake->canopy.size() != (size_t)M * M * 4)
+		{
+			renderer.setCanopyMap(0, glm::vec2(0.0f), 0.0f);
+			return;
+		}
+		oc::vector<oc::span<uint8>> mips;
+		mips.push_back(oc::span<uint8>(bake->canopy.data(), bake->canopy.size()));
+		m_canopyTexture = RenderTexture::create(M, M, mips, "CanopyMap", RenderMaterial::ETextureEncoding::Rgba8, false);
+		if (m_canopyTexture.isValid())
+			renderer.setCanopyMap(m_canopyTexture.index(), bake->centre, 2.0f * FLOOR_HALF);
+		else
+			renderer.setCanopyMap(0, glm::vec2(0.0f), 0.0f);
+	}
+
 	// THE FOREST FLOOR MAP: kick a bake when the camera left the map's centre or the records under it changed; hand a
 	// finished bake to the renderer.
 	void ClutterSystem::updateFloorMap(Renderer& renderer, const Camera& camera)
@@ -307,6 +328,7 @@ namespace Procedural
 		{
 			Globals::jobSystem.wait(m_floorCounter);
 			renderer.setClutterFloorMap(m_floorBake->centre, m_floorBake->texels);
+			setCanopyMap(renderer, m_floorBake.get());
 			m_floorSet = true;
 			m_floorBake.reset();
 		}
@@ -319,6 +341,7 @@ namespace Procedural
 			if (m_floorSet)
 			{
 				renderer.setClutterFloorMap(glm::vec2(0.0f), {});
+				setCanopyMap(renderer, nullptr);
 				m_floorSet = false;
 				m_floorCentre = glm::vec2(FLT_MAX);
 			}
@@ -361,6 +384,7 @@ namespace Procedural
 			bake->kind.push_back(type.kind);
 			bake->crown.push_back(type.crown);
 			bake->trunk.push_back(type.trunk);
+			bake->height.push_back(type.height);
 			bake->rockScale.push_back(type.rockScale);
 			bake->footprint.push_back(glm::vec2(type.footprint.halfLength, type.footprint.radius));
 		}
@@ -399,6 +423,7 @@ namespace Procedural
 		oc::vector<uint8> channels[4];
 		for (oc::vector<uint8>& c : channels)
 			c.assign((size_t)N * N, 0);
+		oc::vector<uint8> canopyTop((size_t)N * N, 0); // the canopy map's: the crowns' top over the ground / CANOPY_MAP_MAX_HEIGHT
 		const glm::vec2 origin = bake.centre - FLOOR_HALF;
 		const float invTexel = 1.0f / CLUTTER_FLOOR_TEXEL;
 		// Within `reach` metres of the segment p -/+ half: value(distance) into the channel, max-blended.
@@ -438,6 +463,9 @@ namespace Procedural
 					const float crown = glm::max(bake.crown[type], 0.5f);
 					const float trunk = glm::max(bake.trunk[type], 0.05f);
 					splat(channels[0], p, glm::vec2(0.0f), 1.1f * crown, [&](float d) { return 1.0f - glm::smoothstep(0.75f * crown, 1.1f * crown, d); });
+					// The canopy map's top: the tallest crown over the texel.
+					const float top = bake.height[type] * (1.0f / RendererVKLayout::CANOPY_MAP_MAX_HEIGHT);
+					splat(canopyTop, p, glm::vec2(0.0f), 1.1f * crown, [&](float) { return top; });
 					const float trunkReach = glm::max(3.0f, 0.8f * crown);
 					splat(channels[1], p, glm::vec2(0.0f), trunkReach, [&](float d) { const float f = 1.0f - glm::max(d - trunk, 0.0f) / (trunkReach - trunk); return f * f; });
 					splat(channels[3], p, glm::vec2(0.0f), trunk + 0.15f, [](float) { return 1.0f; });
@@ -464,5 +492,59 @@ namespace Procedural
 		bake.texels.resize((size_t)N * N);
 		for (size_t i = 0; i < bake.texels.size(); ++i)
 			bake.texels[i] = (uint32)channels[0][i] | ((uint32)channels[1][i] << 8) | ((uint32)channels[2][i] << 16) | ((uint32)channels[3][i] << 24);
+
+		// THE CANOPY MAP (RendererVK canopy_occlusion.inc.glsl): the canopy channel at half the resolution, BLURRED over
+		// 6 m - a point on the ground sees the crowns AROUND it, not only the one above it - and the canopy's top as the
+		// cover-weighted mean of the crowns in that reach.
+		constexpr uint32 M = RendererVKLayout::CANOPY_MAP_DIM;
+		static_assert(M * 2 == CLUTTER_FLOOR_DIM, "the canopy map is the floor map at half the resolution");
+		oc::vector<float> cover((size_t)M * M), coverTop((size_t)M * M), scratch((size_t)M * M);
+		for (uint32 y = 0; y < M; ++y)
+			for (uint32 x = 0; x < M; ++x)
+			{
+				float c = 0.0f, ct = 0.0f;
+				for (uint32 s = 0; s < 4; ++s)
+				{
+					const size_t src = (size_t)(y * 2 + (s >> 1)) * N + (x * 2 + (s & 1));
+					const float texelCover = (float)channels[0][src] * (1.0f / 255.0f);
+					c += texelCover;
+					ct += texelCover * (float)canopyTop[src] * (1.0f / 255.0f);
+				}
+				cover[(size_t)y * M + x] = 0.25f * c;
+				coverTop[(size_t)y * M + x] = 0.25f * ct;
+			}
+		// A separable tent of radius 3 texels (2 m each), clamped at the map's edge.
+		const auto blur = [&](oc::vector<float>& image)
+		{
+			constexpr int R = 3;
+			constexpr float NORM = 1.0f / 16.0f; // 1 2 3 4 3 2 1
+			for (int pass = 0; pass < 2; ++pass)
+			{
+				for (int y = 0; y < (int)M; ++y)
+					for (int x = 0; x < (int)M; ++x)
+					{
+						float sum = 0.0f;
+						for (int k = -R; k <= R; ++k)
+						{
+							const int sx = glm::clamp(pass == 0 ? x + k : x, 0, (int)M - 1);
+							const int sy = glm::clamp(pass == 0 ? y : y + k, 0, (int)M - 1);
+							sum += image[(size_t)sy * M + (size_t)sx] * (float)(R + 1 - glm::abs(k));
+						}
+						scratch[(size_t)y * M + (size_t)x] = sum * NORM;
+					}
+				image.swap(scratch);
+			}
+		};
+		blur(cover);
+		blur(coverTop);
+		bake.canopy.resize((size_t)M * M * 4);
+		for (size_t i = 0; i < (size_t)M * M; ++i)
+		{
+			const float top = cover[i] > 1e-4f ? coverTop[i] / cover[i] : 0.0f;
+			bake.canopy[i * 4 + 0] = (uint8)(glm::clamp(cover[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+			bake.canopy[i * 4 + 1] = (uint8)(glm::clamp(top, 0.0f, 1.0f) * 255.0f + 0.5f);
+			bake.canopy[i * 4 + 2] = 0;
+			bake.canopy[i * 4 + 3] = 255;
+		}
 	}
 }

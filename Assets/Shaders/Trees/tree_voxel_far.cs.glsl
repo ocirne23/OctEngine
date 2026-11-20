@@ -175,14 +175,12 @@ void main()
         const vec3 centre = base + vec3(0.0, farType.centreY * scale, 0.0);
         const float radius = farType.radius * scale + windReach * max(farType.wind, 1.0);
 #ifdef FAR_SHADOW
-        // The billboard casts shifted toward the sun ("Billboard shadow shift"): its sphere grows by the shift.
-        const float casterRadius = radius + abs(u_foliage_billboardShadowShift);
         // ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF: the cascades lie all around the scene focus, so most of the far
         // ring's trees stand beside or behind the camera - and a far tree's shadow reaches its own length, no more. Kept:
         // inside the view frustum grown by that length (the box's height <= 2 x its radius, x the sun's cotangent).
-        if (!farInFrustum(centre, casterRadius + min(2.0 * radius * sunCot, FAR_SHADOW_MAX_LENGTH)))
+        if (!farInFrustum(centre, radius + min(2.0 * radius * sunCot, FAR_SHADOW_MAX_LENGTH)))
             continue;
-        const uint cascades = farCascadeMask(centre, casterRadius);
+        const uint cascades = farCascadeMask(centre, radius);
         if (cascades == 0u)
             continue;
         const uint data = farType.shadowTex | cascades << 16u;

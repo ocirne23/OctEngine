@@ -119,6 +119,7 @@ export namespace Procedural
 			uint8 kind = 0;           // 0 = nothing (not placed), 1 = a tree (or a bush placed on its own), 2 = a rock, 3 = dead wood (a rock type of `Surface Wood`)
 			float crown = 0.0f;       // tree: the crown's radius (m, at the species' mean scale)
 			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m, at the species' mean scale)
+			float height = 0.0f;      // tree: its height (m, at the species' mean scale: the trunk's mean height) - the canopy map's top
 			glm::vec2 treeScale{ 1.0f }; // tree: the species' Scale range (a record's scale: surveyHarvest, as the expansion)
 			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
 			RockFootprint footprint;  // rock / wood: its capsule x the record's scale (along the record's yaw, hash 104)

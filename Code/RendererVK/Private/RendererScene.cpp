@@ -361,7 +361,8 @@ namespace
         case ETextureEncoding::BC5: return vk::Format::eBc5UnormBlock;
         case ETextureEncoding::BC4: return vk::Format::eBc4UnormBlock;
         case ETextureEncoding::R8:  return vk::Format::eR8Unorm;
-        default:                    return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+        case ETextureEncoding::Rg8: return vk::Format::eR8G8Unorm;
+        default:                  return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
         }
     }
 }
@@ -373,7 +374,10 @@ uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc
     // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
     // A ONE-CHANNEL albedo (BC4 / R8) is a mask: its channel reads as alpha too, so the alpha readers (the shadow
     // casters, the ray queries) take it as any texture's. The voxel tier's opacity atlas reads its red as before.
-    const bool mask = desc.albedoEncoding == RenderMaterial::ETextureEncoding::BC4 || desc.albedoEncoding == RenderMaterial::ETextureEncoding::R8;
+    // A TWO-CHANNEL albedo (BC5 / Rg8) is a mask with a second value in its green (the shadow billboards' depth).
+    using ETextureEncoding = RenderMaterial::ETextureEncoding;
+    const bool mask = desc.albedoEncoding == ETextureEncoding::BC4 || desc.albedoEncoding == ETextureEncoding::R8
+        || desc.albedoEncoding == ETextureEncoding::BC5 || desc.albedoEncoding == ETextureEncoding::Rg8;
     const uint16 texIdx = Globals::textureManager.uploadMips(desc.width, desc.height, toFormat(desc.albedoEncoding, true), *desc.albedoMips,
         oc::format("{}/albedo", desc.debugName).c_str(), mask);
     RendererVKLayout::MaterialInfo material{};
@@ -424,11 +428,20 @@ void RendererState::destroyTextureMaterial(uint16 materialIdx)
     m_materials.release(materialIdx, 1);
 }
 
-uint16 RendererState::addDerivedMaterial(uint16 source, uint32 extraFlags)
+uint16 RendererState::addDerivedMaterial(uint16 source, uint32 extraFlags, uint16 linkedTexture)
 {
     RendererVKLayout::MaterialInfo material = m_materials.items()[source];
     material.flags |= extraFlags;
+    // The LINKED texture rides the metal-roughness slot: only for a material whose shader samples no metal-roughness
+    // (RenderMaterial::derive). A real texture index, so the streamer's notes on the slot stay valid; no destroy frees it.
+    if (linkedTexture != UINT16_MAX)
+        material.metalRoughnessTexIdx = linkedTexture;
     return (uint16)addMaterialInfos({ material });
+}
+
+uint16 RendererState::getMaterialAlbedoTexture(uint16 materialIdx)
+{
+    return m_materials.items()[materialIdx].diffuseTexIdx;
 }
 
 void RendererState::releaseMaterial(uint16 materialIdx)
@@ -618,12 +631,14 @@ RenderMaterial RenderMaterial::createTextured(const TextureDesc& desc)
     return material;
 }
 
-RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags)
+RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags, uint16 linkedTexture)
 {
     RenderMaterial material;
-    material.m_index = Globals::rendererVK.addDerivedMaterial(source, extraFlags);
+    material.m_index = Globals::rendererVK.addDerivedMaterial(source, extraFlags, linkedTexture);
     return material;
 }
+
+uint16 RenderMaterial::albedoTexture() const { return Globals::rendererVK.getMaterialAlbedoTexture(m_index); }
 
 uint16 RenderMaterial::getOrCreateSolidColor(const glm::vec3& color, float emissive) { return Globals::rendererVK.getOrCreateSolidColorMaterial(color, emissive); }
 

@@ -42,6 +42,7 @@ layout (location = 1) out vec4 out_motion;
 #define PL_LIGHT_TRACE_TWO_SITES // punctual_lights.inc.glsl: the tessellated ground keeps 64 registers with two trace sites (72 with one)
 #endif
 
+#define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
 #include "grass.inc.glsl" // the canopy shading of the ground under the grass (grassGroundCanopy)

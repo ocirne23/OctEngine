@@ -27,6 +27,7 @@ layout (location = 1) out vec4 out_motion;
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST
 #define LIT_NO_RTAO
+#define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: on the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassNearShadow
 #include "clutter.inc.glsl"

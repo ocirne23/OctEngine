@@ -95,12 +95,7 @@ void Settings::registerShadow(ShadowParams& s)
 void Settings::registerFoliage(FoliageParams& s)
 {
     // In the Procedural TreeSystem's "Trees" category: the trees are their only user.
-    Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.05f, 20.0f, 0.05f);
-    Tweak::floatVar("Trees", "Leaf shadow length (m)", &s.leafShadowLength, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Trees", "Foliage interior depth start", &s.interiorStart, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior depth end", &s.interiorEnd, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage transmission self shadow", &s.transmissionSelfShadow, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior shadow", &s.interiorShadow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Canopy sky occlusion", &s.canopyOcclusion, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission", &s.transmission, 0.01f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission focus", &s.transmissionFocus, 1.0f, 64.0f, 0.1f);
     Tweak::floatVar("Trees", "Foliage transmission glow", &s.transmissionGlow, 0.0f, 8.0f, 0.01f);
@@ -111,25 +106,15 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Leaf specular curve", &s.leafSpecCurve, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf specular", &s.leafSpecular, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Trees", "Leaf transmission centre", &s.leafTransmissionCentre, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage transmission saturation", &s.transmissionSaturation, 1.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage transmission warmth", &s.transmissionWarmth, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf patch variation", &s.leafPatchVariation, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf patch size (m)", &s.leafPatchSize, 0.1f, 50.0f, 0.1f);
     Tweak::floatVar("Trees", "Leaf sky wrap", &s.leafSkyWrap, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Billboard shadow shift (m)", &s.billboardShadowShift, -20.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Voxel LOD bias", &s.voxelLodBias, -2.0f, 4.0f, 0.05f);
-    Tweak::floatVar("Trees", "Voxel sharpness", &s.voxelSharpness, 0.0f, 0.95f, 0.01f);
+    Tweak::boolean("Trees", "Voxel sharp cells", &s.voxelSharp);
     Tweak::floatVar("Trees", "Voxel thinning", &s.voxelThinning, 0.0f, 0.95f, 0.01f);
     Tweak::floatVar("Trees", "Voxel self shadow", &s.voxelSelfShadow, 0.0f, 4.0f, 0.01f);
     Tweak::intVar("Trees", "Voxel self shadow coarser levels", &s.voxelSelfShadowLevels, 1, 3, 1.0f);
-    Tweak::floatVar("Trees", "Voxel normal hull", &s.voxelNormalHull, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel saturation", &s.voxelSaturation, 0.0f, 3.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel brightness", &s.voxelBrightness, 0.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel transmission", &s.voxelTransmission, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel transmission glow", &s.voxelTransmissionGlow, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel transmission focus", &s.voxelTransmissionFocus, 0.05f, 4.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel transmission self shadow", &s.voxelTransmissionSelfShadow, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Voxel transmission spread", &s.voxelTransmissionSpread, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Voxel interior darkening", &s.voxelInteriorDarkening, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Trees", "Voxel shadows", &s.voxelShadows);
     Tweak::floatVar("Trees", "Voxel shadow coverage", &s.voxelShadowCoverage, 0.05f, 0.99f, 0.01f);
     Tweak::floatVar("Trees", "Voxel shadow LOD bias", &s.voxelShadowLodBias, -2.0f, 4.0f, 0.05f);

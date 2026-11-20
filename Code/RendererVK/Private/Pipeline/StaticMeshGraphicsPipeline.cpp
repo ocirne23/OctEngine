@@ -457,6 +457,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eFragment
+            | vk::ShaderStageFlagBits::eVertex // the LitTree VS: a leaf material's linked voxel grid (tree_leaf_sun.inc.glsl)
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InRenderNodeTransforms
         .binding = 3,

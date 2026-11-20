@@ -39,13 +39,22 @@ layout (location = 6) in uvec4 inst_data; // the yaw (float bits), the alpha-mas
 layout (location = 0) out vec2 out_uv;
 layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragment skips the mask test)
 #ifdef TREE_VOXEL
-// The trees' VOXEL casters (ShadowMapGraphicsPipeline's voxel pipeline, "Trees/Voxel shadows"): the box mesh of the main
-// pass's voxel tier (its normal = the corner's grid coordinate, its tangent = the box size); the alpha index is the grid's
-// opacity atlas (its header names the brick index: tree_voxel.inc.glsl). The FS marches along the light from the face the sun sees.
-layout (location = 2) out vec3 out_voxelGrid;
+// THE CASTERS THAT WRITE THEIR DEPTH (ShadowMapGraphicsPipeline's voxel pipeline), two kinds:
+// The trees' VOXEL casters ("Trees/Voxel shadows"): the box mesh of the main pass's voxel tier (its normal = the corner's
+// grid coordinate, its tangent = the box size); the alpha index is the grid's opacity atlas (its header names the brick
+// index: tree_voxel.inc.glsl). The FS marches along the light from the face the sun sees.
+// The trees' SHADOW BILLBOARDS (bit 7): a flat card whose mask holds, in its green, how far the tree's surface stands off
+// the card (Procedural bakeBillboardMask: 0..1 of the card's depth range, the LENGTH of its vertex normal). The card is
+// drawn the full range toward the sun, and the FS pushes each fragment back by what its texel lacks - so the caster's
+// depth is the tree's sun side, and it is exact with the sun along the card's normal. The range is weighted by |N.L|: a
+// card the sun grazes covers little, and its depth along its own normal says nothing along the light (unweighted, the
+// grazed card's lift passed a round crown's surface by 40 % of its radius - and the nearest of the three cards wins).
+layout (location = 2) out vec3 out_voxelGrid;         // a billboard: per axis the way along the sun out of the tree's box (m)
 layout (location = 3) out flat vec3 out_voxelDirG;    // grid units per metre along the light's travel, no zero component
 layout (location = 4) out flat vec2 out_voxelStepLod; // x = the cube root of the box's volume (world metres), y = log2(the cascade's texel / x) + "Voxel shadow LOD bias"
+                                                      // x < 0: a BILLBOARD
 layout (location = 5) out flat vec2 out_voxelDepth;   // x = depth per metre along the light, y = the coverage that casts
+                                                      // a billboard: x = the depth of its whole range along the light, y = depth per metre
 #endif
 
 void main()
@@ -94,11 +103,17 @@ void main()
     {
         const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
         worldPos += treeWindTrunkOffset(localPos, inst.posScale.xyz, inst.posScale.w, windTrunk);
-        // A tree BILLBOARD (bit 7) shifted toward the sun by "Trees/Billboard shadow shift (m)" (< 0: away from it): its
-        // flat cards stand at the crown's middle, so its shadow starts there, not at the crown's sun side.
-        if ((inst.alphaTexIdxCascadeMask & 0x00000080u) != 0u)
-            worldPos += u_sunDirection.xyz * u_foliage_billboardShadowShift;
     }
+#ifdef TREE_VOXEL
+    // A billboard: out to its depth range (m along the light), where its mask's depth is 1.
+    const bool card = (inst.alphaTexIdxCascadeMask & 0x00008080u) == 0x00008080u;
+    float cardRange = 0.0;
+    if (card)
+    {
+        cardRange = abs(dot(quat_transform(in_vertices[vertexIdx].normalV.xyz, inst.quat), u_sunDirection.xyz)) * inst.posScale.w;
+        worldPos += u_sunDirection.xyz * cardRange;
+    }
+#endif
 
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).
     mat4 m = u_cascadeViewProj[gl_ViewIndex];
@@ -106,6 +121,27 @@ void main()
     gl_Position = m * vec4(worldPos, 1.0);
 
 #ifdef TREE_VOXEL
+    if (card)
+    {
+        // THE TREE'S BOX about its trunk axis, from the card itself (Procedural billboardMesh): its tangent = the half
+        // extents; its top = a vertical card's upper edge (u 1), and the horizontal card's height + its depth range.
+        const vec3 cardN = in_vertices[vertexIdx].normalV.xyz;
+        const vec3 radii = in_vertices[vertexIdx].tangent.xyz;
+        const float range = length(cardN);
+        const float boxTop = abs(cardN.y) > 0.5 * range ? localPos.y + range
+                                                         : localPos.y + (1.0 - in_vertices[vertexIdx].positionU.w) * 2.0 * radii.y;
+        const vec3 fromCentre = localPos - vec3(0.0, boxTop - radii.y, 0.0);
+        // Per axis the way along the sun to the box face it leaves through (m): linear over the card, so the FS takes
+        // their minimum - the lift never passes the box, where the tree's own leaves look the cascades up
+        // (instanced_indirect_tree.fs.glsl).
+        const vec3 sunO = quat_transform(u_sunDirection.xyz, vec4(-inst.quat.xyz, inst.quat.w));
+        out_voxelGrid = (radii - fromCentre * sign(sunO)) / max(abs(sunO), vec3(1e-6)) * inst.posScale.w;
+        out_voxelDirG = vec3(1.0);
+        out_voxelStepLod = vec2(-1.0, 0.0);
+        const float depthPerMetre = (m * vec4(-u_sunDirection.xyz, 0.0)).z;
+        out_voxelDepth = vec2(depthPerMetre * cardRange, depthPerMetre);
+    }
+    else
     {
         // The box's sides are > 0 (Procedural billboardBox), and so is a tree's scale: no clamp.
         const vec3 worldSize = in_vertices[vertexIdx].tangent.xyz * inst.posScale.w;

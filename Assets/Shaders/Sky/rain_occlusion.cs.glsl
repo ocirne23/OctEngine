@@ -43,7 +43,7 @@ void main()
     // The terrain first (not in the TLAS): the solid trace stops at it.
     const float tTerrain = terrainRayMarch(origin, dir, 0.0, range);
     rayQueryEXT solid;
-    rayQueryInitializeEXT(solid, u_tlas, gl_RayFlagsCullNoOpaqueEXT, 0xFFu, origin, 0.0, dir, tTerrain);
+    rayQueryInitializeEXT(solid, u_tlas, gl_RayFlagsCullNoOpaqueEXT, RT_CULL_SCENE, origin, 0.0, dir, tTerrain);
     while (rayQueryProceedEXT(solid)) {}
     const float tSolid = rayQueryGetIntersectionTypeEXT(solid, true) == gl_RayQueryCommittedIntersectionTriangleEXT
         ? rayQueryGetIntersectionTEXT(solid, true) : tTerrain;
@@ -51,7 +51,7 @@ void main()
     uint layers = 0u;
     float tTop = range;
     rayQueryEXT foliage;
-    rayQueryInitializeEXT(foliage, u_tlas, gl_RayFlagsCullOpaqueEXT, 0xFFu, origin, 0.0, dir, tSolid);
+    rayQueryInitializeEXT(foliage, u_tlas, gl_RayFlagsCullOpaqueEXT, RT_CULL_SCENE, origin, 0.0, dir, tSolid);
     while (rayQueryProceedEXT(foliage))
     {
         if (rayQueryGetIntersectionTypeEXT(foliage, false) == gl_RayQueryCandidateIntersectionTriangleEXT)

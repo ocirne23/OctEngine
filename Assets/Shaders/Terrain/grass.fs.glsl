@@ -30,6 +30,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 // depth a few centimetres over the ground (the blades are not in the TLAS): heavy noise, worst in shadow. The root
 // occlusion stands in.
 #define LIT_NO_RTAO
+#define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: on the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassCanopySun (in_terrainVertices: the lit core's binding 14)
 #define FACTION_MAP_BINDING 24

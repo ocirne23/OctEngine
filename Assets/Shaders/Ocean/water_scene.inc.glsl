@@ -165,7 +165,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
     // The terrain first (not in the TLAS): the trace stops at it.
     const float tTerrain = terrainRayMarch(origin, dir, 0.05, tMax);
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsNoneEXT, 0xFFu, origin, 0.05, dir, tTerrain);
+    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsNoneEXT, RT_CULL_SCENE, origin, 0.05, dir, tTerrain);
     while (rayQueryProceedEXT(rq))
     {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT

@@ -246,7 +246,11 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
     index, below 2^23). Every ray-query consumer reads only the material from `in_instances[custom]`, so each takes it
     from the custom index when bit 23 is set (`rt_shadow.inc`, `gi_probe_trace`, `rtao`, `ocean.fs`,
     `terrain_film.fs`) - no extra binding anywhere. The geometry comes from the sbt-offset RT mesh index as for any
-    instance; the billboards keep RTAO's mask 0x02. The three that SHADE a hit (`gi_probe_trace`, the water's
+    instance; the billboards keep their own mask (below). **THE BARK FOR RTAO**: the RT section's FIRST part is the chunks
+    that reach into RTAO's range ("RTAO/Max Distance" + "Radius" from the scene focus; `m_treeCullAoPieces`, a second
+    push constant), and each of their trees takes a SECOND slot after the section's: its BARK mesh (`treeCullAoPiece`,
+    which tests the tree itself; not for a type whose RT representation is the bark already - a rock), with the mask
+    `RT_MASK_TREE_BARK`. The three that SHADE a hit (`gi_probe_trace`, the water's
     `water_scene.inc`, `terrain_film.fs`) take a billboard's albedo from its two colours and its normal from the crown
     shape (`tree_card.inc.glsl`, `MATERIAL_FLAG_BILLBOARD` below): it has no albedo texture and no normals of use.
   * Destroying a set drains the GPU (rare: respawn / reload), so it must die before the meshes and materials its types
@@ -355,15 +359,18 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     execution set** (every pipeline of a set must match its first one in its use of FragDepth): the main cull routes
     `PIPELINE_IDX_LIT_TREE_VOXEL` into its own list (binding 23, count `[4]`), drawn with `drawIndexedIndirectCount` right
     after the opaque execute; the variant is out of the opaque set's mask.
-  * Shading: the voxel's mean leaf normal, toward the crown's outward direction where it is short ("Trees/Voxel normal
-    hull"); the INTERIOR (the surface atlas's colour A) as the ambient's AO through the "Foliage interior ..." remap; the sun's
+  * Shading: the voxel's mean leaf normal; **THE CROWN'S INSIDE DARKER**: the colour x 2 ^ (-2 x "Trees/Voxel interior darkening" (1,
+    `u_foliage_voxelInteriorDarkening`) x the hit's baked INTERIOR, the surface atlas's colour A: 0 on the crown's
+    surface .. 1 at its core) - on the COLOUR, so the sun, the ambient and the transmission all take it (on the ambient
+    alone it did not show in sunlight). **Never to black** (a quarter at the core at 1): the deepest voxels are the
+    SOLID bark bodies, opaque, and a linear x (1 - the interior) drew them as black voxels among the leaves; the sun's
     SELF-SHADOW marched through the tree's own voxels one level coarser ("Trees/Voxel self shadow"; the transmission
-    takes "Foliage transmission self shadow" of it; "Voxel self shadow coarser levels", 2, = how many levels coarser
+    takes "Foliage transmission shadow" of it; "Voxel self shadow coarser levels", 2, = how many levels coarser
     than the view march, 1..3: about half the march's steps per level. Against 1, 2 takes 0.3 ms off the opaque pass of
-    a forest view and 3 0.4 ms; the picture at 2 is that of 1, at 3 the crowns are a little brighter); the cascades' shadow looked up where that sun path LEAVES the box,
-    past "Billboard shadow shift" when the billboard casts - the tree's own caster lies in the box and would shadow it
+    a forest view and 3 0.4 ms; the picture at 2 is that of 1, at 3 the crowns are a little brighter); the cascades' shadow looked up where that sun path LEAVES the box
+    (+ 0.5 m) - the tree's own caster lies in the box and would shadow it
     twice. With "Voxel self shadow" 0 there is no march and the cascades are read at the hit itself: the tree takes its
-    own caster's shadow (its billboard, shifted, or its voxel caster). **That cascade lookup is
+    own caster's shadow (its billboard or its voxel caster). **That cascade lookup is
     ONE hardware-PCF tap** (`LIT_SUN_SHADOW_HARD`, `sampleSunShadowHard`: no blocker search, no penumbra, no foliage
     shadow length; the cascade cross-fade dithered) - a voxel pixel is noise that TAA / DLSS resolves anyway. With it the
     FS is 56 registers / 32 B (64 / 0 with the PCSS search). At NIGHT (`u_sunLit` 0, see [Shaders.md](Shaders.md)) neither the sun march nor
@@ -371,8 +378,8 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     term follows the voxel's leaves, not its normal alone: blended by the mean normal's length from the average of
     two-sided leaves facing every way, `0.25 x (1 - V.L)`, to `-N.L` (after the edge-on bend N faces the viewer: no
     flip to the seen side) - from the outward mean normal alone only the crown's underside glowed under a high sun. The length is trusted by the hit voxel's cover
-    (`smoothstep(0.05, 0.5, opacity)`: a thin tip's voxel holds a leaf or two, a long mean though the tip faces every way)
-    and x (1 - "Voxel transmission spread"). Then the leaf terms of the mesh leaves (N.V bend, transmission, sky wrap, the leaf patches) and no RTAO.
+    (`smoothstep(0.05, 0.5, opacity)`: a thin tip's voxel holds a leaf or two, a long mean though the tip faces every way).
+    Then the leaf terms of the mesh leaves (N.V bend, transmission, sky wrap, the leaf patches) and no RTAO.
     **The leaf-only terms go on by the voxel's LEAF SHARE** (the surface atlas's normal A; 0 = bark only): the leaf
     PATCHES ("Leaf patch variation"), the sun TRANSMISSION (back term + glow) and the SKY WRAP. The trunk and the bare
     branches keep their bark colour, let no sun through and take the ambient by their own normal. The transmission and
@@ -409,8 +416,7 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
       (not under RT sun shadow). The same three passes into their own buffers (`Lists m_shadow`, `MAX_SHADOW_INSTANCES`
       2^19), the CULL with `FAR_SHADOW`: per tree its type's billboard bucket (`FarTypeGpu::shadowBucket`, one per
       billboard mesh, `TreeInstanceSet::farShadowBuckets`) and alpha mask (`shadowTex`), the cascade mask of the shadow
-      cull's tree rule (`farCascadeMask`: each cascade's planes + its split + the margin, the sphere grown by the
-      billboard shift) instead of the view's distance test. **ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF**: the
+      cull's tree rule (`farCascadeMask`: each cascade's planes + its split + the margin) instead of the view's distance test. **ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF**: the
       cascades lie all around the scene focus, so most of the ring's trees stand beside or behind the camera. A caster is
       kept inside the VIEW FRUSTUM grown by its shadow's length (2 x its radius x the sun's cotangent, at most
       `FAR_SHADOW_MAX_LENGTH` 400 m) - the shadow draw 1.09 -> 0.72 ms and this cull 0.10 -> 0.06 ms in a forest view.
@@ -432,14 +438,38 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     finest level there and the shadow draw cost exploded; ONE fetch per step, the nearest slice -
     `voxelOpacityNearest`: the threshold is binary), to where the coverage
     reaches "Voxel shadow coverage" (0.5; a FIXED threshold: a shadow map gets no TAA), and writes that depth +
-    0.15 m (`layout (depth_greater)`; the rasterizer's bias does not reach a written depth). No billboard shift. The TLAS
+    0.15 m (`layout (depth_greater)`; the rasterizer's bias does not reach a written depth). The TLAS
     keeps the billboard.
+  * **THE BILLBOARD'S DEPTH**: a near-set SHADOW BILLBOARD casts from where the tree's surface is, not from its flat
+    card. Its mask's green holds how far the surface stands off the card's plane, 0..1 of the card's DEPTH RANGE (the
+    length of the card's vertex normal, in metres; Procedural Trees.md, "The shadow billboard"). The shadow cull routes
+    a billboard into the SECOND list too (`writesDepth` = a voxel caster or a billboard), so **every other caster keeps
+    the depth-only FS**. The voxel pipeline's VS (`card`: bits 15 + 7 of the packed word) draws the card its whole
+    range x the tree's scale x |N.L| toward the sun (after the trunk bend) and marks it with
+    `out_voxelStepLod.x` < 0; the FS takes ONE tap for the alpha test and the depth, and writes
+    `gl_FragCoord.z + (range - lift)` in depth units (`depth_greater` holds: lift ≤ range).
+    * **lift = min(depth x range, the way out of the tree's box) - `CARD_SHADOW_BIAS`** (0.2 m), at least 0.
+    * **Exact with the sun along the card's normal; the |N.L| weight makes it fall to the flat card as the sun grazes
+      the card.** A card's depth is measured along its own normal: along a grazing light it says nothing, the nearest
+      of the three cards wins in the map, and an unweighted lift would pass a round crown's surface.
+    * **The way out of the box**: the tree's own leaves look the cascades up where the sun path leaves their box, so
+      the lift must not pass it - on a flat-sided crown it would shade the sunlit side. The VS builds the box about the
+      trunk axis from the card (its tangent = the half extents; its top = a vertical card's upper edge or the horizontal
+      card's height + its range) and outputs, per axis, the way along the sun to the box face (linear over the card);
+      the FS takes the minimum.
+    * **The bias**: a trunk's own texels lift to about its sun side; 0.2 m short of it, the trunk and the outermost
+      leaves do not shade themselves.
+    * A receiver that looks the cascades up AT its own position - the bark, a leaf without the self-shadow - is shaded
+      by its tree's crown from the sun side now (the branches inside a crown), not by the card at the trunk axis.
+    * THE FAR SHADOW CASTERS keep the flat card (the main FS): a crown's depth is far below what a far cascade resolves.
 
 * **`MATERIAL_FLAG_BILLBOARD`** (bit 26): a tree's **SHADOW BILLBOARD** (Procedural TreeSystem; `RenderTreeSet::Type::
   shadowBillboard`) - three crossed cards that stand for the tree in the SHADOW passes, the rain shelter and the TLAS.
   **Never in the main pass: no lit variant draws it**, and it has no albedo and no normal map.
-  * **Its albedo slot is a ONE-CHANNEL MASK** (BC4 / R8). `addTextureMaterial` shows a one-channel albedo in all four
-    channels (the image view's component mapping, `Texture::initialize`'s `redAsAlpha`), so every alpha reader -
+  * **Its albedo slot is a TWO-CHANNEL MASK** (BC5 / RG8): the mask in red, the caster's depth in green ("THE
+    BILLBOARD'S DEPTH" above). `addTextureMaterial` shows a mask albedo's red in `.b` and `.a` too (the image view's
+    component mapping, `Texture::initialize`'s `redAsAlpha`; a ONE-channel albedo - BC4 / R8, the voxel opacity atlas -
+    shows it in all four), so every alpha reader -
     `shadow_depth.fs`, the far shadow casters, `rtsCandidateBlocks` - reads it through `.a` as any texture's. **The value is the
     COVER up to `TREE_CARD_BARK`** (0.75, Layout.ixx, a shader define), so the 0.5 test runs on a cover the texture
     filter blended, as on any alpha; from there to 1 - a texel that is solid for certain - it is the BARK SHARE
@@ -460,23 +490,23 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     center`, on the trunk axis), radii = the cards' half extents, which ride every card vertex's TANGENT (Procedural
     `billboardMesh`; a card has no normal map). The normal faces the ray, so **a card hit is never a backface** for the
     GI probes' embedded test.
-  * The shadow cull knows it by the flag (bit 7 of the packed word: the shift below); the TLAS writer gives it mask
-    0x02 (no RTAO, below). **No per-leaf pixel depth offset** in the caster (`gl_FragDepth` in `shadow_depth.fs`): it
-    cost ~15 % of the shadow draw. `OutShadowMeshInstance` keeps its 48-byte stride with pads.
-* **Shadow length**: a flat caster leaves a HARD edge in the crown it stands for (half the crown sits behind a card,
-  and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` / `pcssBorder`)
-  keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the PCSS average blocker
-  (`cascadeDepthRange`). **The voxel tier** (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage`: also the constant depth bias
-  only, no slope scaling and no normal offset - a voxel hit lies a small depth step from its own caster) takes
-  `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 3, min 0.05). **The tree MESH leaves**
-  (the LitTree FS, `SHADOW_LEAF_TRANSMIT` / `g_shadowLeafLength`, set per leaf pixel; the normal bias stays) take
-  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 3, 0 = off): their only caster is their own
-  shadow billboard, whose top card at `TopCardHeight` put every leaf under it in full shadow and every leaf above it
-  in none - now a leaf just under the card is barely shaded, one deep under it fully. Bark keeps the full shadow.
-* **Billboard shadow shift**: `Trees/Billboard shadow shift (m)` (`u_foliage_billboardShadowShift`, default 3; < 0 =
-  away from the sun) moves a tree BILLBOARD's shadow caster along the sun direction in `shadow_depth.vs` (the shadow
-  cull's bit 7: a swaying caster whose material has `MATERIAL_FLAG_BILLBOARD`; its cull radius grows by the shift).
-  The flat cards stand at the crown's middle, so the caster can be moved toward the crown's sun side.
+  * The shadow cull knows it by the flag (bit 7 of the packed word: the list of the casters that write their depth); the TLAS writer gives it the mask
+    `RT_MASK_TREE_CARD` (no RTAO ray hits it, below). **No per-leaf pixel depth offset** in the main caster FS (`gl_FragDepth` in `shadow_depth.fs`): it
+    cost ~15 % of the shadow draw - the billboards write theirs in the voxel pipeline's FS, on their own list.
+    `OutShadowMeshInstance` keeps its 48-byte stride with pads.
+* **The trees' cascade shadow is taken at full strength**, as any surface's. The tree's own flat caster does not shade
+  its crown: a leaf with the self-shadow looks the cascades up past its tree's box ("THE MESH LEAVES' SUN SELF-SHADOW"
+  below), as the voxel tier does. The voxel tier takes ONE hard shadow tap (`LIT_SUN_SHADOW_HARD`, no blocker search),
+  with the constant depth bias only (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage`: no slope scaling and no normal offset -
+  a voxel hit lies a small depth step from its own caster). (A fade of a leaf's shadow with the gap to its blocker,
+  "Leaf shadow length", was dropped: the self-shadow march does that work.)
+* **A swaying point takes its sun shadow at its position BEFORE THE SWAY.** The shadow casters bend by the trunk alone
+  (`treeWindTrunkOffset`), so a branch or a leaf that sways would move through its own tree's shadow. The lit VS
+  (`instanced_indirect.vs.glsl`, every variant but the voxel box) outputs `out_windSway` at location 10: the wind's offset
+  less the trunk's part (`treeWindTrunkPart`) - the branch sway + the leaf flutter, 0 for a vertex with no wind payload.
+  `sunShadowFirst` (the near bark on LitOpaque, LitMasked) and `sunShadowFirstTree` (LitTree) look the shadow up at
+  `pos - in_windSway`. **The trunk's bend stays in the lookup**: the casters have it too. Nothing else uses the rest
+  position (the shading, the fog, the GI stay on the swayed point).
 * **The leaf look** (`leaf_look.inc.glsl`, the LitTree leaves and the voxel tier): the LitTree leaves take `Trees/Leaf
   roughness` (0.35, a waxy sheen; the cluster normal map gives every leaf its own facing, its slope x `Trees/Leaf
   normal strength` (1; 0 = flat cards)) instead of 0.65; both
@@ -502,17 +532,16 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   is lit through from the sky behind it; at its own side only it read the dark ground: dark leaves all through the
   crowns. One lookup still.
 * **Leaf transmission** (`MATERIAL_FLAG_LEAF`, bit 30, **LitTree / LitTreeVoxel only**; LitMasked ignores the flag):
-  the FS adds the sun THROUGH the leaf, tinted by its colour DEEPENED (`leafTransmitColor`: the colour ^ `Foliage
-  transmission saturation` (1 = the leaf colour itself), x a yellow by `Foliage transmission warmth` (0 = none; at 1 red up to
-  x 1.8, blue down to x 0.45), back at its own luminance - light through a leaf passes its pigment about twice and its red edge lets more
-  red through: a yellow-green glow (the squared colour alone came out a deeper green); formed only where light comes
-  through - a sun-facing leaf seen with the sun behind skips its per-channel pow; on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
+  the FS adds the sun THROUGH the leaf, tinted by its colour (formed only where light comes
+  through); on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
   transmission centre` (0.4) at the midrib, 1 at the rim, from the leaf normal map's A (the RIM, Procedural
   TreeLeafTexture). Tried: the rim from the normal's tilt - each leaf's own random tilt cancels its cup on one half,
   which then read as all centre) — `saturate(-N·L)` (lit from behind) +
   `saturate(V·-L)^focus × glow` (the backlit rim looking toward the sun), × `Trees/Foliage transmission`. Its
   visibility = `mix(1, sun shadow, Foliage transmission shadow)`: a leaf seen from
-  the shaded side is in its own crown's shadow, which would leave no glow. `u_foliage_transmission` /
+  the shaded side is in its own crown's shadow, which would leave no glow. The tree's own self-shadow (the march
+  through its voxel grid) takes the same share. The voxel tier reads these four settings as they are: it has no
+  transmission settings of its own. `u_foliage_transmission` /
   `transmissionFocus` / `transmissionGlow` / `transmissionShadow`.
 * **Leaves seen edge-on:** their N is bent toward the viewer until N·V reaches `Trees/Foliage min N.V` (default 0.04,
   `u_foliage_minNoV`, 0 = off) - the leaf cards' bent normals (`Leaves NormalBend`) let N·V approach 0 with N·L > 0, and the sun's GGX at
@@ -527,10 +556,53 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   the shadow search twice. A LEAF pixel's shadow is looked up from its SUN side (the bias normal flipped toward the
   sun) - the facing reject gives every leaf facing away from the sun 0, exactly the ones the back term lights.
   LitMasked uses the plain `sunShadowFirst` (after its discard).
-* **No RTAO from the shadow billboards**: a `MATERIAL_FLAG_BILLBOARD` instance gets TLAS mask 0x02
-  (`gi_tlas_instances.cs`) and RTAO traces with cull mask 0x01, so its opaque rays do not hit whole card rectangles
-  (every other ray uses 0xFF and still hits them); and the voxel FS compiles without the AO read (`LIT_NO_RTAO`) —
-  traced from depth, it is the occlusion of a point inside a crown; the baked interior is its AO.
+* **RTAO AND THE TREES: rays for the bark, a bake for the leaves.**
+  * **The masks** (`RT_MASK_*` / `RT_CULL_*`, Layout.ixx, shader defines; a ray hits where its cull mask and the
+    instance's mask share a bit): the scene `0xFB`; a tree's SHADOW BILLBOARD `0x02` - every ray but RTAO's (opaque
+    rays would hit the whole card rectangles); a tree's BARK mesh `0x04` - RTAO's rays ONLY (its second TLAS slot,
+    above). RTAO traces with `RT_CULL_AO` (`0x05`), every other ray with `RT_CULL_SCENE` (`0xFB`). **A new ray query
+    takes one of the two, never a literal.**
+  * **The bark** (the trunk, the branches) is real geometry for RTAO within its range: the contact occlusion on the
+    ground at the trunk, in the forks, on the bark itself. The BLAS does not sway: a thin branch in strong wind gets
+    occlusion from where it stands at rest.
+  * **The leaves cast no rays and read no RTAO**: not in the TLAS, moving in the wind, a trace from their depth is noise
+    (as the grass's). A LitTree leaf fragment writes the NO-AO flag (`motionVectorNoAo`: the trace leaves a hole, no
+    ray) and skips the lit core's AO read (`LIT_RTAO_SKIP`, a bool of the includer: the bark beside it reads). The
+    leaves' own occlusion terms are the canopy map on the ambient ([Vegetation.md](Vegetation.md) "The canopy map";
+    the LitTree VS hands the vertex's height above the tree's base on for it, location 9) and the sun self-shadow
+    below. (A baked crown-interior occlusion on the AMBIENT - per vertex on the meshes, the surface atlas's A on the
+    voxels - was tried and removed: it showed too little. The voxel tier darkens its COLOUR by its interior instead;
+    the mesh leaves have no such value.)
+  * The voxel FS compiles without the AO read (`LIT_NO_RTAO`) — traced from depth, it is the occlusion of a point
+    inside a crown. It writes the NO-AO flag too: no ray for its pixels.
+* **THE MESH LEAVES' SUN SELF-SHADOW: the voxel tier's march, on the same grid** (`tree_leaf_sun.inc.glsl`,
+  `treeLeafSunTransmit`). The cascades hold a tree as three flat cards, so a mesh crown had no shading of its own depth:
+  a LitTree LEAF fragment marches the sun through its tree's voxel grid, from the leaf to the box's side, and the result
+  goes through the voxel tier's own tweak - `transmittance ^ "Voxel self shadow"` on the direct sun, at `"Foliage
+  transmission shadow"`'s share on the transmitted sun - so a tree shades itself alike on both sides of the mesh
+  <-> voxels crossfade.
+  * **How a leaf finds its grid: ITS MATERIAL LINKS IT, and the grid says where it stands.** Each variant draws its
+    leaves with its own copy of the species' leaf material (and one more for the crossfade's fade-out), made by
+    `RenderMaterial::derive(source, flags, linkedTexture)`: the copy carries the variant's voxel OPACITY ATLAS index in
+    its **metal-roughness slot** - free on a tree material (`LIT_DIELECTRIC`: no shader samples it), a real texture
+    index (the streamer's notes on the slot stay valid), owned by no material (`destroyTextureMaterial` frees the
+    albedo and the normal only). 0xFFFF = no grid. The grid's BOX in the tree's own space is in the grid itself: the
+    index texture's header row (`voxelGridBox`, tree_voxel.inc.glsl; Procedural writes it at upload).
+  * **THE VERTEX SHADER does the lookup, once per vertex** (`treeLeafGridVertex`; binding 2, the materials, is
+    visible to the vertex stage for it): the material's link, the atlas header (the index texture), the index header
+    (resolution, levels, columns) and the box. It hands on the vertex's GRID coordinate (location 6) and, flat, the
+    sun in grid units per metre + the cube root of the box's volume (7; w 0 = no grid) and the grid's textures and
+    header, packed (8). The fragment fetches nothing to find its grid.
+  * **The level** is the voxel tier's (the level whose voxel is about a pixel + "Voxel self shadow coarser levels"),
+    but never finer than `LEAF_SUN_MAX_VOXELS` (32 a side), at most `LEAF_SUN_MAX_STEPS` (24), starting ONE step out
+    (the leaf's own voxel holds the leaf). Empty bricks are jumped, two steps a wait, as the voxel tier.
+  * **The cascades are looked up where the sun path LEAVES the box** (+ 0.5 m), past the tree's own caster, as the
+    voxel tier does: the march darkens by the tree's own leaves already, and
+    its caster would shade it a second time. The exit needs no texture, so it is worked out BEFORE the shadow search;
+    the march runs after it, only for a pixel the cascades leave lit - its inputs are interpolants and flat values, so
+    nothing of it is held across the search. Its result is one scalar (the log of the transmittance x the strength).
+  * Off with "Voxel self shadow" 0, at night (`u_sunLit`), and for a tree without a grid: the leaf then takes the
+    cascades at its own point, its own billboard's shadow included.
 * **`MATERIAL_FLAG_DISTANCE_FADE`** (bit 25, LitTree / LitTreeVoxel only - `tree_fade.inc.glsl`; +
   `MATERIAL_FLAG_FADE_IN`, bit 24): a dithered fade over a camera-distance band packed into the LOW flag bits (start m
   in bits 0..11, width m in 12..21; `makeDistanceFadeFlags`). Fade-out keeps `dither < 1 − f`, fade-in `dither ≥ 1 − f`,

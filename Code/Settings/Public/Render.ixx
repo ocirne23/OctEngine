@@ -379,22 +379,16 @@ export struct ShadowParams
 // "Voxel ..." rows in the TweakPanel's "Trees" category - plus the tree wind. UBO-driven (u_foliage), so changes apply live.
 export struct FoliageParams
 {
-    float shadowLength = 3.0f;  // the voxel tier: the sun shadow fades in over this many metres between the receiver
-                                // and its blockers (>= 0.05): light reaches into a crown, so its own caster darkens it
-                                // gradually. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float leafShadowLength = 3.0f; // the same for the tree MESH leaves (0 = off: the caster's shadow at full
-                                   // strength) - a leaf just under its own shadow billboard's top card is barely
-                                   // shaded, one deep under it fully
-    float interiorShadow = 0.5f; // the voxel tier: darkening of the leaves deep INSIDE the crown, by the BAKED interior
-                                // (any crown shape), on the ambient (0 = off) - a fully lit crown otherwise looked flat.
-    float interiorStart = 0.5f; // the baked interior (0 = the crown's surface, 1 = about its core depth) where the
-    float interiorEnd = 1.0f;   // darkening starts / reaches full strength (smoothstep between)
-    float transmissionSelfShadow = 0.5f; // the far-tree volume: the share of its self-shadow the TRANSMITTED sun takes (it
-                                         // scatters forward through the leaves: at 1 a crown seen toward the sun hid it)
+    // THE CANOPY MAP as sky occlusion (canopy_occlusion.inc.glsl): every lit surface under the crowns of the trees around
+    // it loses this share of its ambient light where the cover is full - the forest floor, the trunks, the lower parts
+    // of a crown, a unit in the forest. Top-down: the cover above a point, from the map of all the near trees (the GI
+    // probes are too far apart to tell one crown from the next). 0 = off.
+    float canopyOcclusion = 0.8f;
     // TRANSMISSION (MATERIAL_FLAG_LEAF: the leaf clusters on LitTree, the voxel tier): the sun through the leaves - a
     // diffuse back term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
-    // shaded side sits in its own crown's shadow, which would leave it no glow.
+    // shaded side sits in its own crown's shadow, which would leave it no glow. The cascades' shadow and the tree's own
+    // self-shadow (the march through its voxel grid) both take that share. The voxel tier uses all four as they are.
     float transmission = 2.0f;
     float transmissionFocus = 40.0f;
     float transmissionGlow = 1.0f;
@@ -415,11 +409,6 @@ export struct FoliageParams
     // map's tilt (the cup is flat at the midrib): a leaf is thicker in its centre. 0 = even.
     float leafTransmissionCentre = 0.4f;
     float leafRoughness = 0.35f;        // the leaves' roughness (a waxy sheen in the sun)
-    // The transmitted sun's colour: the leaf colour ^ this, back at the leaf colour's luminance - light through a leaf
-    // passes its pigment about twice, so it comes out deeper and more yellow-green (1 = the leaf colour itself).
-    float transmissionSaturation = 1.0f;
-    // ... shifted toward yellow by this (0 = none, 1 = red x 1.8, blue x 0.45 before the luminance is restored).
-    float transmissionWarmth = 0.0f;
     // PATCHES of leaf colour over the crown (a world-space noise of this size, m): x 1 -+ variation in brightness, and
     // toward yellow / toward a deeper green with it. 0 = off.
     float leafPatchVariation = 1.0f;
@@ -427,9 +416,6 @@ export struct FoliageParams
     // A leaf facing DOWN takes its ambient (GI) from its normal mirrored this far toward the sky (0 = its own side
     // only, 1 = fully mirrored): a thin leaf is lit through from the sky behind it, not only by the dark ground.
     float leafSkyWrap = 0.5f;
-    // The trees' SHADOW BILLBOARDS shifted this far (m) toward the sun (< 0: away from it), in the shadow pass: the
-    // flat cards stand at the crown's middle, so their shadow started there, not at the sun side.
-    float billboardShadowShift = 3.0f;
     // A tree casts into sun cascade c only while its distance from the cascades' centre (the scene focus) minus its
     // radius stays within that cascade's split + this (m): far trees out of the near cascades. The margin keeps the
     // long shadows of trees up-sun, which fall into a nearer cascade's range (a 20 m tree at a 17 degree sun: ~65 m).
@@ -455,31 +441,19 @@ export struct FoliageParams
     float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (>= 100); a 100 m band fades it out
     // THE VOXEL TIER (instanced_indirect_tree_voxel.fs.glsl, "Trees/Voxel impostors"):
     float voxelLodBias = 0.0f;      // + the grid level the march picks (log2: +1 = voxels twice as large, half the steps)
-    float voxelSharpness = 0.95f;    // 0..0.95: the march's filter reach - 0 = trilinear (each voxel's opacity a voxel into its
-                                    // neighbours: fuller clumps), toward 1 = each voxel its own cell
-    float voxelThinning = 0.0f;     // 0..0.95: the leaves' density taken off in every voxel march (view, self-shadow,
+    bool voxelSharp = true;         // each voxel its own cell: a sample reads the nearest voxel, one fetch. Off = the trilinear
+                                    // filter (each voxel's opacity a voxel into its neighbours: fuller clumps, a second fetch)
+    float voxelThinning = 0.2f;    // 0..0.95: the leaves' density taken off in every voxel march (view, self-shadow,
                                     // shadow casters) - a crown fuller than its mesh thinned to match
     float voxelSelfShadow = 0.9f;   // the sun through the tree's own voxels toward the sun ^ this. 0 = no march: the tree
                                     // reads the cascades at its hit instead and takes its own caster's shadow from them
     int voxelSelfShadowLevels = 2;  // 1..3: the grid levels that sun march runs above the view march's (voxels twice as
                                     // large per level: about half its steps, a softer self-shadow). 2: the picture of 1
                                     // at 0.3 ms less in a forest view
-    // The voxel colour's saturation (linear, about its luminance): 1 = as baked, > 1 more vivid. The bake averages every
-    // surface in a voxel - the twigs drawn in the leaf texture, the branches of a sparse voxel - so it reads greyer than the
-    // mesh leaves, which keep each texel's own colour.
-    float voxelSaturation = 1.1f;
-    float voxelBrightness = 1.05f;   // x the voxel colour (linear), after the saturation
-    // The voxel tier's LEAF TRANSMISSION: x the "Foliage transmission" strength / glow / focus, and the share of the voxel
-    // self-shadow the transmitted sun takes.
-    float voxelTransmission = 0.9f;
-    float voxelTransmissionGlow = 1.0f;
-    float voxelTransmissionFocus = 1.0f;
-    float voxelTransmissionSelfShadow = 0.8f;
-    // The transmission's back term toward leaves facing EVERY way (0.25 x (1 - V.L)) and away from the voxel's mean normal
-    // (-N.L): 0 = by how much the voxel's leaves agree (x its cover), 1 = every voxel as leaves facing every way.
-    float voxelTransmissionSpread = 0.0f;
-    float voxelNormalHull = 0.02f;   // the shading normal toward the crown's outward direction where the leaves face every
-                                    // way (a short mean normal): x (1 - its length) x this (0 = the mean normal only)
+    // THE CROWN'S INSIDE, DARKER: the voxel colour x 2 ^ (-2 x this x the hit's baked INTERIOR, 0 = on the crown's surface ..
+    // 1 = at its core; never to black) - on the COLOUR, so the sun, the ambient and the transmitted light all take it: the
+    // leaves seen deep through the crown's gaps go dark, its outer shell keeps its colour. 0 = off.
+    float voxelInteriorDarkening = 1.0f;
     // The trees' SUN SHADOW CASTER in the cascades: their voxel grid (marched toward the sun, at every distance) instead of
     // their shadow billboard, for the types that have one. RT keeps the billboard.
     bool voxelShadows = false;

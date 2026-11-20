@@ -20,6 +20,12 @@ layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
 layout (location = 5) in flat float in_treeDistance; // the camera's distance to the tree's origin: the distance fade (the VS's TREE_ORIGIN)
+// The leaves' voxel grid, from the vertex shader (tree_leaf_sun.inc.glsl treeLeafGridVertex):
+layout (location = 6) in vec3 in_treeGrid;           // the point in its tree's voxel grid (0..1)
+layout (location = 7) in flat vec4 in_treeSun;       // xyz = the sun in grid units per metre; w = the cube root of the grid box's volume (m), 0 = no grid
+layout (location = 8) in flat uvec2 in_treeVoxel;    // the grid's textures and its header, packed
+layout (location = 9) in float in_treeHeight;        // the height above the tree's base (m)
+layout (location = 10) in vec3 in_windSway;          // the wind's sway of this point without the trunk's bend (its branch + its leaf flutter)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -32,7 +38,6 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
-#define SHADOW_LEAF_TRANSMIT // shadows.inc.glsl: the leaves' shadow fades in with the gap to the blocker
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
 #define LIT_EXTRA_LIGHT      // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
@@ -40,9 +45,18 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define LIT_DIELECTRIC       // instanced_indirect_lit.inc.glsl: a tree material is never metal (no metal-roughness texture)
 float16_t g_specularF0 = float16_t(0.04);
 #define LIT_SPECULAR_F0 g_specularF0 // instanced_indirect_lit.inc.glsl: the leaves' own F0 ("Trees/Leaf specular")
+// THE LEAVES READ NO RTAO (instanced_indirect_lit.inc.glsl LIT_RTAO_SKIP): they are not in the TLAS and they move in the
+// wind, so a trace from their depth is noise (as the grass's). Their fragments write the NO-AO flag, so the trace leaves a
+// hole and spends no ray on them. The BARK reads the RTAO: its mesh stands in the TLAS for those rays.
+bool g_leafNoRtao = false;
+#define LIT_RTAO_SKIP g_leafNoRtao
+#define LIT_CANOPY_HEIGHT in_treeHeight // instanced_indirect_lit.inc.glsl: the canopy map's occlusion above this height up the tree
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
+#define VOXEL_BRICK_ORIGIN // tree_voxel.inc.glsl: the march does not set this shader's register count
+#include "tree_voxel.inc.glsl"
+#include "tree_leaf_sun.inc.glsl" // the leaves' sun self-shadow through the tree's own voxel grid
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the tree takes the faction look of the land it stands on
 
@@ -51,12 +65,19 @@ float16_t g_specularF0 = float16_t(0.04);
 // gave it 0). The bias follows the geometric normal flipped toward the sun; doSunLight's facing test on the shading
 // normal still keeps the front light off a back-facing leaf. ONE call of sunShadowVisibility for both cases: each call
 // site inlines the whole shadow search (two cost ~20 KB of code).
-void sunShadowFirstTree(vec3 pos, bool leaf)
+// selfExit > 0 (a leaf with the SELF-SHADOW: tree_leaf_sun.inc.glsl): the cascades are looked up where the sun path
+// LEAVES the tree's box, past its own caster there (the shadow billboard, whose depth never passes the box; with
+// "Trees/Voxel shadows" the voxel grid itself) - the march darkens by the tree's own leaves already, and its caster
+// would shade it a second time. As the voxel tier's lookup.
+// EVERY LOOKUP IS AT THE POSITION BEFORE THE WIND'S SWAY (in_windSway): the casters bend by the trunk alone, so a swaying
+// branch or leaf would move through its own tree's shadow.
+void sunShadowFirstTree(vec3 pos, bool leaf, float selfExit)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
 	const bool facing = dot(geoN, u_sunDirection.xyz) > 0.0;
-	g_shadowLeafLength = leaf ? u_foliage_leafShadowLength : 0.0; // "Trees/Leaf shadow length (m)"
-	g_sunShadowFirst = (leaf || facing) && u_sunLit > 0.5 ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0; // no search at night
+	const vec3 restPos = pos - in_windSway;
+	const vec3 shadowPos = selfExit > 0.0 ? restPos + u_sunDirection.xyz * (selfExit + 0.5) : restPos;
+	g_sunShadowFirst = (leaf || facing) && u_sunLit > 0.5 ? sunShadowVisibility(shadowPos, facing ? geoN : -geoN) : 0.0; // no search at night
 }
 
 void main()
@@ -83,7 +104,16 @@ void main()
 
 	// After the discards: a cut-out pixel pays no shadow.
 	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
-	sunShadowFirstTree(pos, leaf);
+	// THE LEAVES' SUN SELF-SHADOW (tree_leaf_sun.inc.glsl): the sun through the tree's own voxel grid, as the voxel tier
+	// marches it. Its box's exit FIRST (no texture: the cascades are looked up there), the march after the search and only
+	// for a pixel the cascades leave lit. Its inputs are interpolants and flat values: nothing is held across the search.
+	// The result is ONE scalar, the log of the transmittance x "Voxel self shadow" (0 = none). A tree without a grid (the
+	// vertex shader's w 0) takes neither.
+	const bool selfShadow = leaf && u_foliage_voxelSelfShadow > 0.0 && u_sunLit > 0.5;
+	sunShadowFirstTree(pos, leaf, selfShadow ? treeLeafSunExit(in_treeGrid, in_treeSun) : 0.0);
+	float sunLog = 0.0;
+	if (selfShadow && g_sunShadowFirst > 0.0)
+		sunLog = log2(max(treeLeafSunTransmit(in_treeGrid, in_treeSun, in_treeVoxel, distance(u_viewPos, pos)), 1e-4)) * u_foliage_voxelSelfShadow;
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness and the normal-map
 	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES. A tree material has NO
@@ -142,7 +172,7 @@ void main()
 		}
 #endif
 
-		// TRANSMISSION: thin leaves let the sun through, tinted by their colour DEEPENED (leafTransmitColor) - a diffuse back term saturate(-N.L)
+		// TRANSMISSION: thin leaves let the sun through, tinted by their colour - a diffuse back term saturate(-N.L)
 		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on the
 		// sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's shadow,
 		// which would leave the backlit view no glow.
@@ -154,10 +184,13 @@ void main()
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		// x the leaf's THICKNESS: 1 - "Leaf transmission centre" at the midrib, 1 at the rim (leafRim).
-		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * mix(1.0 - u_foliage_leafTransmissionCentre, 1.0, leafRim);
-		const float through = (back + glow) * visibility; // 0 for a sun-facing leaf seen with the sun behind: no colour pow
+		// ... and the self-shadow at "Foliage transmission shadow"'s share too (the voxel tier's rule: light scattered forward
+		// through the leaves loses less).
+		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * mix(1.0 - u_foliage_leafTransmissionCentre, 1.0, leafRim)
+			* exp2(sunLog * u_foliage_transmissionShadow);
+		const float through = (back + glow) * visibility; // 0 for a sun-facing leaf seen with the sun behind
 		if (through > 0.0)
-			g_litExtraLight = f16vec3(min(leafTransmitColor(vec3(materialColor)) * (through * u_foliage_transmission * INV_PI)
+			g_litExtraLight = f16vec3(min(vec3(materialColor) * (through * u_foliage_transmission * INV_PI)
 				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
 
@@ -165,9 +198,11 @@ void main()
 	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
 #endif
 	g_specularF0 = float16_t(leaf ? u_foliage_leafSpecular : 0.04); // "Trees/Leaf specular": a waxy leaf's white highlight
+	g_leafNoRtao = leaf;
+	g_sunShadowFirst *= exp2(sunLog); // the direct sun takes the whole self-shadow (after the transmission took its share)
 	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, float16_t(0.0), float16_t(1.0));
 	// Alpha 1: the pipeline does not blend (alpha-tested, opaque), and the texture's alpha and the material's opacity were
 	// two values live across the whole lit core for it.
 	out_color = vec4(color, 1.0);
-	out_motion = motionVector(in_prevWorldDelta);
+	out_motion = leaf ? motionVectorNoAo(in_prevWorldDelta) : motionVector(in_prevWorldDelta);
 }

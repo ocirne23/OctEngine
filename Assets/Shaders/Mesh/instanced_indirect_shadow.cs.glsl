@@ -24,8 +24,9 @@ layout (binding = 9, std430) readonly buffer InMaterialInfos               { Mat
 #define TREE_CULL_TYPES_BINDING 14
 #define TREE_CULL_LIST_BINDING 15
 #include "tree_cull.inc.glsl"
-// The trees' VOXEL casters ("Trees/Voxel shadows"): their own list, drawn with plain indirect draws by the voxel shadow
-// pipeline (it writes FragDepth; ShadowMapGraphicsPipeline). The main cull's voxel list, borrowed (it runs later).
+// The trees' casters that WRITE THEIR DEPTH - the VOXEL casters ("Trees/Voxel shadows") and the shadow BILLBOARDS (their
+// mask's depth): their own list, drawn with plain indirect draws by the voxel shadow pipeline (ShadowMapGraphicsPipeline),
+// so every other caster keeps a depth-only fragment shader. The main cull's voxel list, borrowed (it runs later).
 layout (binding = 16, std430) buffer OutVoxelCommandBuffer { OutIndirectCommand out_voxelCommands[]; };
 
 // Bit c set if the sphere overlaps cascade c. The planes are normalized on the CPU (buildUboSunShadow).
@@ -50,7 +51,7 @@ uint cascadeOverlapMask(vec3 center, float radius)
     return mask;
 }
 
-// The caster's index in its bucket (list 0 the casters, 1 the voxel casters): ONE atomic per (list, mesh) and subgroup, as
+// The caster's index in its bucket (list 0 the casters, 1 the ones that write their depth): ONE atomic per (list, mesh) and subgroup, as
 // the main cull's bucketClaim (instanced_indirect.cs.glsl).
 uint casterClaim(uint list, uint meshIdx)
 {
@@ -119,7 +120,7 @@ void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool 
     const bool isRock         = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK; // tree-set rocks: LOD chain, no wind
     const bool sways          = isTree && !isRock;
     const float radius        = meshInfo.radius * instancePosScale.w
-                              + (sways ? u_foliage_windReach * max(windTrunk, 1.0) + abs(u_foliage_billboardShadowShift) : 0.0);
+                              + (sways ? u_foliage_windReach * max(windTrunk, 1.0) : 0.0);
     const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     if (!casterShadowInView(centerPos, radius, casterShadowReach(centerPos, radius, isTree)))
@@ -141,7 +142,7 @@ void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool 
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     // A voxel caster: its grid's albedo atlas (A = the opacity) in the same field.
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK || voxel) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
-    // Bits 0..6 the cascade mask (NUM_SHADOW_CASCADES = 4), 7 = a tree BILLBOARD (shifted toward the sun in the VS),
+    // Bits 0..6 the cascade mask (NUM_SHADOW_CASCADES = 4), 7 = a tree BILLBOARD (its mask's depth: shadow_depth.vs.glsl),
     // 8..14 the trunk-bend scale x 32 (0..~4), 15 = sways. Not swaying: bit 8 = a terrain node (TerrainVertex).
     const bool billboard = sways && (material.flags & MATERIAL_FLAG_BILLBOARD) != 0u;
     const uint windBits = sways ? uint(clamp(round(windTrunk * 32.0), 0.0, 127.0)) << 8
@@ -182,9 +183,11 @@ void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool 
     }
 
     const uint firstInstance = in_firstInstances[meshIdx];
-    // A voxel caster: its own bucket counter (no other list draws a voxel box mesh).
-    const uint idx = casterClaim(voxel ? 1u : 0u, meshIdx);
-    if (voxel)
+    // A voxel caster and a tree BILLBOARD (its mask's depth): the list of the casters that write their depth. Its own
+    // bucket counter (no other list draws a voxel box mesh or a card mesh).
+    const bool writesDepth = voxel || billboard;
+    const uint idx = casterClaim(writesDepth ? 1u : 0u, meshIdx);
+    if (writesDepth)
     {
         if (idx == 0)
         {

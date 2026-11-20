@@ -397,7 +397,8 @@ protected:
     friend class RenderTexture;
     uint16 addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
     uint16 addTextureMaterial(const RenderMaterial::TextureDesc& desc);
-    uint16 addDerivedMaterial(uint16 source, uint32 extraFlags);
+    uint16 addDerivedMaterial(uint16 source, uint32 extraFlags, uint16 linkedTexture);
+    uint16 getMaterialAlbedoTexture(uint16 materialIdx);
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color, float emissive = 0.0f);
     uint16 addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,
                       RenderMaterial::ETextureEncoding encoding, bool sRGB = true);
@@ -583,6 +584,7 @@ protected:
     uint32 m_treeCullCount = 0;
     uint32 m_treeCullPieces = 0;         // the trees in it (TREE_RECORDS_PER_PIECE records each)
     uint32 m_treeCullRtPieces = 0;       // the list's first ones: the RT-capable trees of the GI / shadow chunks in RT range (TLAS slots)
+    uint32 m_treeCullAoPieces = 0;       // ... and the first of those: the trees of the chunks in RTAO's range (a second TLAS slot each: the bark)
     uint32 m_giTlasDemand = 0;           // last present()'s TLAS slot count before the capacity clamp (the growth check)
     oc::atomic<bool> m_treeCullTaken{ false }; // renderTreeSet ran this frame (any thread; reset in beginFrame)
     float m_treeCullDistanceScale = 1.0f;
@@ -654,6 +656,10 @@ protected:
     oc::vector<uint32> m_clutterFloor;                 // the floor map's texels (setClutterFloorMap)
     glm::vec2 m_clutterFloorCentre{ 0.0f };
     oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_clutterFloorDirty{}; // the slot has not taken the map yet
+    // THE CANOPY MAP (setCanopyMap): the caller's bindless texture over a world square - the sky occlusion under the trees.
+    uint16 m_canopyTex = 0;
+    glm::vec2 m_canopyOrigin{ 0.0f };                  // the square's min corner (xz)
+    float m_canopyInvSize = 0.0f;                      // 1 / its side (m); 0 = no map
     // The inland water map (setRiverWaterMap): the CPU copy, and per frame slot its host-visible buffer (fog binding 14).
     oc::vector<float> m_riverWater;
     glm::vec2 m_riverWaterOrigin{ 0.0f };

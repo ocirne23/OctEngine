@@ -174,7 +174,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     // The terrain first (not in the TLAS): the trace stops at it.
     const float tTerrain = terrainRayMarch(origin, dir, 0.05, rayMax);
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.05, dir, tTerrain);
+    rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, RT_CULL_SCENE, origin, 0.05, dir, tTerrain);
     while (rayQueryProceedEXT(rq)) {}
 
     float t;

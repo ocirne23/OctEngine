@@ -29,6 +29,7 @@ layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
 
 #define SUN_SHADOW_FIRST
 #define LIT_NO_RTAO
+#define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: on the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_splat.inc.glsl"
 #include "grass.inc.glsl"   // grassNearShadow, grassValueNoise (in_terrainVertices: the lit core's binding 14)

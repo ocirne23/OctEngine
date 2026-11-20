@@ -345,6 +345,11 @@ static oc::string buildLayoutPreamble()
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");
     def("MATERIAL_FLAG_BILLBOARD", MATERIAL_FLAG_BILLBOARD, "u");
     def("TREE_CARD_BARK", TREE_CARD_BARK); // a shadow billboard's mask: where its bark share starts (tree_card.inc.glsl)
+    def("RT_MASK_SCENE", RT_MASK_SCENE, "u"); // the TLAS instance masks and the rays' cull masks
+    def("RT_MASK_TREE_CARD", RT_MASK_TREE_CARD, "u");
+    def("RT_MASK_TREE_BARK", RT_MASK_TREE_BARK, "u");
+    def("RT_CULL_SCENE", RT_CULL_SCENE, "u");
+    def("RT_CULL_AO", RT_CULL_AO, "u");
     def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
     def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
     def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");
@@ -391,6 +396,7 @@ static oc::string buildLayoutPreamble()
     def("CLUTTER_GRAIN_STALK_HALF_WIDTH", CLUTTER_GRAIN_STALK_HALF_WIDTH);
     def("CLUTTER_FLOWER_BUCKETS", CLUTTER_FLOWER_BUCKETS, "u");
     def("CLUTTER_FLOOR_DIM", CLUTTER_FLOOR_DIM, "u");
+    def("CANOPY_MAP_MAX_HEIGHT", CANOPY_MAP_MAX_HEIGHT);
     def("CLUTTER_FLOWER_STEM0", CLUTTER_FLOWER_STEM_SEGMENTS[0], "u");
     def("CLUTTER_FLOWER_STEM1", CLUTTER_FLOWER_STEM_SEGMENTS[1], "u");
     def("CLUTTER_FLOWER_STEM2", CLUTTER_FLOWER_STEM_SEGMENTS[2], "u");

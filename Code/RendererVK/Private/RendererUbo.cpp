@@ -2072,42 +2072,30 @@ void RendererState::registerUboValues(UboBlock& list)
                     + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f);
             }, UboLive);
         list.add("foliage_rtRange", f.rtRange);
-        list.add("foliage_shadowLength", [&] { return glm::max(f.shadowLength, 0.05f); }, f.shadowLength); // the tweak min
-        list.add("foliage_leafShadowLength", [&] { return glm::max(f.leafShadowLength, 0.0f); }, f.leafShadowLength);
-        list.add("foliage_interiorShadow", f.interiorShadow);
-        list.add("foliage_interiorStart", [&] { return glm::clamp(f.interiorStart, 0.0f, 1.0f); }, f.interiorStart);
-        list.add("foliage_interiorEnd", [&] { return glm::max(glm::clamp(f.interiorEnd, 0.0f, 1.0f), glm::clamp(f.interiorStart, 0.0f, 1.0f) + 1e-3f); },
-            f.interiorEnd, f.interiorStart);
+        // THE CANOPY MAP (setCanopyMap; canopy_occlusion.inc.glsl): its strength, its u_textures index, its square.
+        list.add("foliage_canopyOcclusion", [&] { return glm::clamp(f.canopyOcclusion, 0.0f, 1.0f); }, f.canopyOcclusion);
+        list.add("foliage_canopyTex", [this] { return (uint32)m_canopyTex; }, UboLive);
+        list.add("foliage_canopyOrigin", [this] { return m_canopyOrigin; }, UboLive);
+        list.add("foliage_canopyInvSize", [this] { return m_canopyInvSize; }, UboLive); // 0 = no map
         list.add("foliage_transmission", [&] { return glm::max(f.transmission, 0.01f); }, f.transmission); // the tweak min
         list.add("foliage_transmissionFocus", f.transmissionFocus);
         list.add("foliage_transmissionGlow", f.transmissionGlow);
         list.add("foliage_transmissionShadow", f.transmissionShadow);
-        list.add("foliage_transmissionSelfShadow", [&] { return glm::clamp(f.transmissionSelfShadow, 0.0f, 1.0f); }, f.transmissionSelfShadow);
         list.add("foliage_minNoV", [&] { return glm::clamp(f.minNoV, 0.0f, 0.9f); }, f.minNoV);
         list.add("foliage_leafNormalStrength", [&] { return glm::clamp(f.leafNormalStrength, 0.0f, 4.0f); }, f.leafNormalStrength);
         list.add("foliage_leafSpecCurve", [&] { return glm::clamp(f.leafSpecCurve, 0.0f, 8.0f); }, f.leafSpecCurve);
         list.add("foliage_leafSpecular", [&] { return glm::clamp(f.leafSpecular, 0.0f, 1.0f); }, f.leafSpecular);
         list.add("foliage_leafTransmissionCentre", [&] { return glm::clamp(f.leafTransmissionCentre, 0.0f, 1.0f); }, f.leafTransmissionCentre);
         list.add("foliage_leafRoughness", [&] { return glm::clamp(f.leafRoughness, 0.05f, 1.0f); }, f.leafRoughness);
-        list.add("foliage_transmissionWarmth", [&] { return glm::clamp(f.transmissionWarmth, 0.0f, 1.0f); }, f.transmissionWarmth);
-        list.add("foliage_transmissionSaturation", [&] { return glm::clamp(f.transmissionSaturation, 1.0f, 4.0f); }, f.transmissionSaturation);
         list.add("foliage_leafPatchVariation", [&] { return glm::clamp(f.leafPatchVariation, 0.0f, 1.0f); }, f.leafPatchVariation);
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
         list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
-        list.add("foliage_billboardShadowShift", f.billboardShadowShift);
         list.add("foliage_voxelLodBias", f.voxelLodBias);
-        list.add("foliage_voxelSharpen", [&] { return 1.0f / (1.0f - glm::clamp(f.voxelSharpness, 0.0f, 0.95f)); }, f.voxelSharpness);
+        list.add("foliage_voxelSharp", [&] { return f.voxelSharp ? 1.0f : 0.0f; }, f.voxelSharp);
         list.add("foliage_voxelDensity", [&] { return 1.0f - glm::clamp(f.voxelThinning, 0.0f, 0.95f); }, f.voxelThinning);
         list.add("foliage_voxelSelfShadow", [&] { return glm::max(f.voxelSelfShadow, 0.0f); }, f.voxelSelfShadow);
         list.add("foliage_voxelSelfShadowLevels", [&] { return (float)glm::clamp(f.voxelSelfShadowLevels, 1, 3); }, f.voxelSelfShadowLevels);
-        list.add("foliage_voxelNormalHull", [&] { return glm::clamp(f.voxelNormalHull, 0.0f, 1.0f); }, f.voxelNormalHull);
-        list.add("foliage_voxelSaturation", [&] { return glm::max(f.voxelSaturation, 0.0f); }, f.voxelSaturation);
-        list.add("foliage_voxelBrightness", [&] { return glm::max(f.voxelBrightness, 0.0f); }, f.voxelBrightness);
-        list.add("foliage_voxelTransmission", [&] { return glm::max(f.voxelTransmission, 0.0f); }, f.voxelTransmission);
-        list.add("foliage_voxelTransmissionGlow", [&] { return glm::max(f.voxelTransmissionGlow, 0.0f); }, f.voxelTransmissionGlow);
-        list.add("foliage_voxelTransmissionFocus", [&] { return glm::max(f.voxelTransmissionFocus, 0.05f); }, f.voxelTransmissionFocus);
-        list.add("foliage_voxelTransmissionSelfShadow", [&] { return glm::clamp(f.voxelTransmissionSelfShadow, 0.0f, 1.0f); }, f.voxelTransmissionSelfShadow);
-        list.add("foliage_voxelTransmissionSpread", [&] { return glm::clamp(f.voxelTransmissionSpread, 0.0f, 1.0f); }, f.voxelTransmissionSpread);
+        list.add("foliage_voxelInteriorDarkening", [&] { return glm::clamp(f.voxelInteriorDarkening, 0.0f, 1.0f); }, f.voxelInteriorDarkening);
         // The trees' shadow casters: the voxel grids (the shadow cull's routing, tree_cull.inc.glsl) - live, a cull branch.
         list.add("foliage_voxelShadows", [&] { return f.voxelShadows ? 1.0f : 0.0f; }, UboLive);
         list.add("foliage_voxelShadowCoverage", [&] { return glm::clamp(f.voxelShadowCoverage, 0.05f, 0.99f); }, f.voxelShadowCoverage);

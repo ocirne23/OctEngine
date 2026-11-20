@@ -672,6 +672,7 @@ void RendererState::beginFrame()
         m_treeCullCount = 0;
         m_treeCullPieces = 0;
         m_treeCullRtPieces = 0;
+        m_treeCullAoPieces = 0;
         m_treeCullTaken.store(false, oc::memory_order_relaxed);
         // Both read from any job during the entity pass (noteInstanceUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
@@ -994,8 +995,9 @@ void Renderer::present()
     // read 0 every frame - every TLAS slot inactive, an EMPTY TLAS, no ray hit anywhere.)
     // The TLAS slots (tree_cull.inc.glsl treeCullTlasInstance): the stream outside the tree range, and ONE per tree of
     // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
-    // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
-    m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
+    // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked. Plus ONE
+    // more per tree of the section's RTAO part: its bark.
+    m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces - m_treeCullAoPieces);
     m_ubo.evaluatePresent(); // + the tree range: RenderTreeSet::render claims it after beginFrame
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)

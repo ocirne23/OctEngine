@@ -122,6 +122,7 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 // variant's procedural colouring. Both bindings exist set-wide (StaticMeshGraphicsPipeline::buildPipelineLayout).
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
+#include "canopy_occlusion.inc.glsl" // the trees' canopy map: the ambient's sky occlusion (computeLitColor)
 #define UNDERWATER_OCEAN_BINDING 7
 #include "underwater_light.inc.glsl"
 
@@ -412,8 +413,13 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// Past the RTAO max distance the trace writes exactly (0, 1.0) (rtao.cs.glsl early-out), so skip the upsample and
 	// use those constants. The gate measures from the SCENE FOCUS, as that early-out does; the camera distance still
 	// drives the upsample's depth weights.
+	// LIT_RTAO_SKIP: the includer's bool - true = this fragment reads none (a shader with both kinds of surface: the
+	// trees' leaves beside their bark).
+#ifndef LIT_RTAO_SKIP
+#define LIT_RTAO_SKIP false
+#endif
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
-	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance)
+	if (!LIT_RTAO_SKIP && u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance)
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(worldPos, aoViewDist);
@@ -437,7 +443,24 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// Blends to the virtual sky probe over the probe field's outer band. Volume mode: ~8 filtered fetches, not ~100
 	// probe loads.
 	const f16vec3 indirect = giIndirectOverPiH(worldPos, bentN);
-	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (ao * texAO));
+	// THE CANOPY above the point (canopy_occlusion.inc.glsl): the ambient's share that the crowns around it hide - what the
+	// probes cannot resolve at their spacing. Formed and used HERE, before the light loop: nothing of it is live across it.
+	// LIT_CANOPY_HEIGHT: the includer's height of the fragment above the ground (m) - 0 for what lies on it (the terrain,
+	// the grass), the height up the crown for a tree. Without it: from the terrain height map, only under a canopy.
+	float16_t canopyVis = float16_t(1.0);
+	{
+		const vec2 canopy = canopyCover(worldPos.xz);
+		if (canopy.x > 0.0)
+		{
+#ifdef LIT_CANOPY_HEIGHT
+			const float canopyHeight = LIT_CANOPY_HEIGHT;
+#else
+			const float canopyHeight = terrainHeightMapPresent() ? max(worldPos.y - terrainHeightAt(worldPos.xz), 0.0) : 0.0;
+#endif
+			canopyVis = float16_t(canopySkyVisibility(canopy, canopyHeight));
+		}
+	}
+	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (ao * texAO * canopyVis));
 
 	const ivec3 gridPos = getGridPos(worldPos);
 	uint tableIdx = getTableIdx(gridPos);

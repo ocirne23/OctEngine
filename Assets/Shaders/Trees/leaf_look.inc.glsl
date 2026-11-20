@@ -4,22 +4,6 @@
 // THE LEAF LOOK, shared by the tree meshes' leaves (instanced_indirect_tree.fs.glsl) and the voxel tier
 // (instanced_indirect_tree_voxel.fs.glsl). Requires the UBO and hashU (shared.inc.glsl).
 
-// The TRANSMITTED sun's colour: the leaf colour ^ "Foliage transmission saturation", shifted WARM by "Foliage
-// transmission warmth" (x a yellow: red up, blue down), back at the leaf colour's own luminance - light through a leaf
-// passes its pigment about twice (deeper), and the chlorophyll's red edge lets more red through than its front shows:
-// a backlit leaf glows yellow-green (the squared colour alone came out a deeper GREEN).
-vec3 leafTransmitColor(vec3 albedo)
-{
-    // Saturation 1 and warmth 0 (constants while their rows are locked): the result IS the leaf colour - the three pows,
-    // the two dots and the divide fold away.
-    if (u_foliage_transmissionSaturation == 1.0 && u_foliage_transmissionWarmth == 0.0)
-        return albedo;
-    const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-    const vec3 deep = pow(max(albedo, vec3(1e-4)), vec3(u_foliage_transmissionSaturation))
-                    * mix(vec3(1.0), vec3(1.8, 1.0, 0.45), u_foliage_transmissionWarmth);
-    return deep * (dot(albedo, LUMA) / max(dot(deep, LUMA), 1e-6));
-}
-
 // A lattice corner's TWO values in [0, 65535]: the low and the high 16 bits of one hash of its key.
 vec2 leafNoiseCorner(uint key)
 {

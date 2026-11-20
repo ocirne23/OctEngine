@@ -67,11 +67,16 @@ export namespace Procedural
 			oc::vector<uint8> kind;        // per record type: 0 none, 1 tree, 2 rock, 3 dead wood (TreeWorld::FloorType)
 			oc::vector<float> crown;       // tree: crown radius (m)
 			oc::vector<float> trunk;       // tree: trunk radius (m)
+			oc::vector<float> height;      // tree: its height (m)
 			oc::vector<glm::vec2> rockScale;
 			oc::vector<glm::vec2> footprint; // rock / wood: its capsule's half length and radius x the record's scale
 			oc::vector<uint32> texels;     // the result
+			// THE CANOPY MAP (Renderer::setCanopyMap), from the same splat: CANOPY_MAP_DIM^2 rgba8 over the floor map's
+			// square - R the tree cover (blurred), G the canopy's top over the ground / CANOPY_MAP_MAX_HEIGHT.
+			oc::vector<uint8> canopy;
 		};
 		static void bakeFloor(FloorBake& bake);
+		void setCanopyMap(Renderer& renderer, FloorBake* bake);
 
 		ClutterSettings& m_settings = Globals::settings.clutter; // "Clutter" (the buttons are cleared here)
 		bool m_loaded = false;
@@ -92,6 +97,10 @@ export namespace Procedural
 		glm::vec2 m_floorCentre{ FLT_MAX };  // the centre the renderer's map was baked at
 		uint64 m_floorSignature = 0;         // the records it was baked from (chunks and their counts)
 		uint32 m_floorGeneration = UINT32_MAX; // TreeWorld's generation at that bake
+		// THE CANOPY MAP (Renderer::setCanopyMap): the texture the renderer reads, and the one it read before (kept one
+		// bake longer: a frame in flight may still name it).
+		RenderTexture m_canopyTexture;
+		RenderTexture m_canopyRetired;
 	};
 }
 

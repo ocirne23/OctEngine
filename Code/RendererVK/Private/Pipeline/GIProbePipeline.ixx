@@ -106,6 +106,7 @@ public:
         Buffer& treeList;        // this frame's visible trees (piece | pass bits << 28): one TLAS slot each
         uint32 count;            // this frame's live instance count (= u_present_giTlasNumInstances): the dispatch and the build cover it
         uint32 treeRtPieces;     // the tree list's RT section (push constant; tree_cull.inc.glsl treeCullTlasInstance)
+        uint32 treeAoPieces;     // ... and its first part: the trees that take a second slot, their bark for RTAO
     };
     // Per frame (the GI prep secondary): one thread per live instance; the range bound rides the UBO.
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);

@@ -260,6 +260,7 @@ namespace Procedural
 			floor.kind = 1;
 			floor.crown = desc.crownRadius * meanScale;
 			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
+			floor.height = 0.5f * (desc.trunkHeight.x + desc.trunkHeight.y) * meanScale;
 			floor.treeScale = desc.scale;
 			floor.harvest = desc.bush ? 0 : 1;
 			floor.wood = desc.wood;

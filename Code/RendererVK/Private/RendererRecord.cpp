@@ -1131,6 +1131,7 @@ void RendererState::recordGlobalIllumPrep(uint32 frameIdx)
             .treeList = treeCullList(frameIdx),
             .count = liveCount,
             .treeRtPieces = m_treeCullRtPieces,
+            .treeAoPieces = m_treeCullAoPieces,
         };
         m_giProbePipeline.recordTlasInstances(prepCommandBuffer, frameIdx, tlasParams);
 

@@ -195,7 +195,8 @@ far-tree volume in [RendererVK Vegetation](Context/RendererVK/Vegetation.md).
   unknown); pixel-skip copies arrive 1-3 frames late; under temporal "1 of 4" runs as "1 of 2".
 * The far records pass adds no bushes past the detail distance.
 * Inside the crossfade band the shadow pass is not dithered (both tiers cast).
-* RT sees a tree as its shadow billboard (opacity + the mean bark and leaf colours); bushes and tree meshes have no BLAS.
+* RT sees a tree as its shadow billboard (opacity + the mean bark and leaf colours), RTAO as its bark mesh; bushes and
+  leaf meshes have no BLAS. The bark BLAS does not sway (RTAO on thin branches in wind).
 * Fixed pools with no growth: 128 MB record pool, 600k-piece tree set. A ring-radius change
   restarts everything.
 * Per-tree VS warp for near uniqueness (G4b), device-local expansion records, scaling past ~100k

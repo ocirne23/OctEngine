@@ -655,6 +655,7 @@ void RendererState::destroyTreeSet(uint32 setId)
         m_treeCullSet = UINT32_MAX;
         m_treeCullPieces = 0;
         m_treeCullRtPieces = 0;
+        m_treeCullAoPieces = 0;
         setHaveToRecordCommandBuffers();
     }
     set.pieces.destroy();
@@ -708,9 +709,13 @@ void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> ch
     // for GI / shadows whose RT sphere reaches into "Trees/RT range" of the scene focus - the TLAS takes ONE slot per
     // entry of this section only (m_treeCullRtPieces; tree_cull.inc.glsl treeCullTlasInstance). Then every other
     // listed piece. The culls read the whole list, in any order.
+    // The RT section's own FIRST part: the chunks that reach into RTAO's range (its max distance + a ray's length) - each
+    // of their trees takes a SECOND TLAS slot, its bark mesh for RTAO's rays (m_treeCullAoPieces; treeCullAoPiece tests
+    // the tree itself).
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     oc::span<uint32> list = set.mappedLists[frameIdx];
     const float rtRange = m_foliageParams.rtRange;
+    const float aoRange = m_rtaoParams.enabled ? m_rtaoParams.maxDistance + m_rtaoParams.radius : -1.0f;
     const glm::vec3 focus = self().sceneFocusOrCamera();
     auto inRtSection = [&](const TreeChunkDraw& draw)
     {
@@ -718,18 +723,28 @@ void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> ch
         return rt.rtCount > 0 && (draw.passMask & (RendererVKLayout::PASS_GI | RendererVKLayout::PASS_SHADOW)) != 0
             && (rtRange <= 0.0f || glm::distance(rt.rtCentre, focus) - rt.rtRadius <= rtRange);
     };
-    uint32 numListed = 0;
-    for (const TreeChunkDraw& draw : chunks)
+    auto inAoPart = [&](const TreeChunkDraw& draw)
     {
-        if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0 || !inRtSection(draw))
-            continue;
-        const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
-        const uint32 rtCount = chunk.rtCount;
-        assert(numListed + rtCount <= list.size() && "RenderTreeSet::render: a chunk listed twice");
-        const uint32 bits = draw.passMask << 28;
-        for (uint32 i = 0; i < rtCount; ++i)
-            list[numListed + i] = (chunk.first + i) | bits;
-        numListed += rtCount;
+        const TreeInstanceSet::Chunk& rt = set.chunks[draw.chunk];
+        return aoRange >= 0.0f && glm::distance(rt.rtCentre, focus) - rt.rtRadius <= aoRange;
+    };
+    uint32 numListed = 0, numAo = 0;
+    for (int part = 0; part < 2; ++part) // the RTAO part, then the rest of the RT section
+    {
+        for (const TreeChunkDraw& draw : chunks)
+        {
+            if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0 || !inRtSection(draw) || inAoPart(draw) != (part == 0))
+                continue;
+            const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
+            const uint32 rtCount = chunk.rtCount;
+            assert(numListed + rtCount <= list.size() && "RenderTreeSet::render: a chunk listed twice");
+            const uint32 bits = draw.passMask << 28;
+            for (uint32 i = 0; i < rtCount; ++i)
+                list[numListed + i] = (chunk.first + i) | bits;
+            numListed += rtCount;
+        }
+        if (part == 0)
+            numAo = numListed;
     }
     const uint32 numRt = numListed;
     for (const TreeChunkDraw& draw : chunks)
@@ -763,6 +778,7 @@ void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> ch
     m_treeCullCount = count;
     m_treeCullPieces = numListed;
     m_treeCullRtPieces = numRt;
+    m_treeCullAoPieces = numAo;
     m_treeCullDistanceScale = distanceScale;
     m_treeCullForceFar = forceFar;
 }

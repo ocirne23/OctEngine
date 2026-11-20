@@ -407,7 +407,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Scene](../Docs/Context/RendererVK/Scene.md) | Per-frame instance flow, scene objects (single meshes, the sky draw, tree records, tint), texture + mesh streaming, mesh LODs, draw-list compaction |
 | ↳ [Lighting](../Docs/Context/RendererVK/Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, the sun cycle (time of day), beam lights, long-range sun shadows, the atmosphere (humidity haze, multiple scattering), aerial perspective |
 | ↳ [Clouds](../Docs/Context/RendererVK/Clouds.md) | Volumetric clouds |
-| ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
+| ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the canopy map (sky occlusion under the trees), the wind, tree wind, the far-tree volume |
 | ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
 | ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water, the rain occlusion map |
 | ↳ [Shaders](../Docs/Context/RendererVK/Shaders.md) | GLSL in `Assets/Shaders/`: folders, includes, compile, hoisted work, pipeline statistics (register counts), **half floats (fp16)** |

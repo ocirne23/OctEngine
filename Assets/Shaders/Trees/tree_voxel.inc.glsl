@@ -5,8 +5,10 @@
 //   never leaves it. Slot s sits at column s % cols, row s / cols, as its 8 z slices side by side (64 x 8 texels). A
 //   voxel's value = the OPACITY over one voxel crossing. Slot 0 is the HEADER: its first two 4 x 4 blocks hold the index
 //   texture's bindless id (low byte, high byte), so a pass that gets this atlas alone finds the rest.
-// - THE INDEX (RGBA8, exact): texel (0, 0) = R log2(res), G the levels, B log2(cols); below it level by level its D^3
-//   bricks - brick (x, y, z) at (x + z D, y) of the level's D rows: RGB = its slot, 0 = EMPTY (nothing stored: air).
+// - THE INDEX (RGBA8, exact): texel (0, 0) = R log2(res), G the levels, B log2(cols); texels (1..3, 0) = THE GRID'S BOX
+//   in the tree's own space (voxelGridBox: Procedural writes it at upload, so a grid says where it stands); below that
+//   row level by level its D^3 bricks - brick (x, y, z) at (x + z D, y) of the level's D rows: RGB = its slot, 0 = EMPTY
+//   (nothing stored: air).
 // - THE SURFACE ATLAS (half the opacity atlas each way): per stored brick 4^3 samples over the same span, as two tile
 //   sets side by side (2 x 16 x 4 texels): RGB the mean colour (sRGB-encoded) + A the interior, then RGB the mean normal
 //   + A the leaf share (0 = bark only).
@@ -86,6 +88,21 @@ VoxelGrid voxelGrid(uint opacityTex)
 	return grid;
 }
 
+// THE GRID'S BOX in the tree's own space (mesh-local): its min corner and its size, from the index's header row - six
+// 16-bit values, low byte first, two a texel: min x y z over [-VOXEL_BOX_RANGE / 2, VOXEL_BOX_RANGE / 2), size x y z over
+// [0, VOXEL_BOX_RANGE) (Procedural createVoxelMaterial; 2 mm steps). For a reader that has a grid but not its box mesh:
+// the mesh leaves' sun self-shadow (the box mesh carries the same box for the voxel tier's own draw).
+const float VOXEL_BOX_RANGE = 128.0;
+void voxelGridBox(VoxelGrid grid, out vec3 boxMin, out vec3 boxSize)
+{
+	const vec4 a = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(1, 0), 0) * 255.0 + 0.5);
+	const vec4 b = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(2, 0), 0) * 255.0 + 0.5);
+	const vec4 c = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(3, 0), 0) * 255.0 + 0.5);
+	const float unit = VOXEL_BOX_RANGE / 65536.0;
+	boxMin = vec3(a.r + a.g * 256.0, a.b + a.a * 256.0, b.r + b.g * 256.0) * unit - 0.5 * VOXEL_BOX_RANGE;
+	boxSize = vec3(b.b + b.a * 256.0, c.r + c.g * 256.0, c.b + c.a * 256.0) * unit;
+}
+
 float voxelLevelBricks(float n)
 {
 	return max(ceil((n - 1.0) / VOXEL_BRICK), 1.0);
@@ -154,14 +171,11 @@ float voxelBoxExit(VoxelLevel level, vec3 c, vec3 dirC)
 	return max(min(min(toFace.x, toFace.y), toFace.z), 0.0);
 }
 
-// SHARPNESS ("Trees/Voxel sharpness"): the filter's REACH. The bake writes every surface point into its one voxel; the
-// trilinear filter then spreads each voxel's opacity a whole voxel into its neighbours, which swells every clump and the
-// silhouette. The fraction between two voxel centres (f, 0..1) is steepened about 0.5 (x u_foliage_voxelSharpen = 1 /
-// (1 - sharpness)): 1 = trilinear, large = each voxel covers its own cell, a short blend at its faces.
-vec3 voxelSharpen(vec3 f)
-{
-	return clamp(f * u_foliage_voxelSharpen + (0.5 - 0.5 * u_foliage_voxelSharpen), vec3(0.0), vec3(1.0));
-}
+// SHARP CELLS ("Trees/Voxel sharp cells", u_foliage_voxelSharp): each voxel covers its OWN cell - a sample reads the
+// nearest voxel's texel, ONE fetch, no blend. Off = the trilinear filter: it spreads each voxel's opacity a whole voxel
+// into its neighbours (the bake writes every surface point into its one voxel), which swells every clump and the
+// silhouette, and it fetches a second slice. THE SWITCH IS A UBO VALUE: a constant while its tweak row is locked, so one
+// of the two paths compiles; unlocked, a branch on a uniform.
 
 // THE OPACITY, IN STEPS A MARCH PUTS TOGETHER ITSELF (the main pass's view and sun marches): a march's cost is its chain of
 // fetches, each one waited for before the next sample is known - so a march fetches TWO samples of a brick before it waits
@@ -182,25 +196,32 @@ bool voxelInBrick(vec3 u, VoxelBrick brick)
 	return all(equal(floor(u * (1.0 / VOXEL_BRICK)), brick.coord));
 }
 
-// A sample's place in its STORED brick: xy = its uv in the opacity atlas on its nearer z slice (bilinear inside the slice),
-// z = the blend to the next slice - exactly 0 on most samples once the filter is sharpened.
+// A sample's place in its STORED brick: xy = its uv in the opacity atlas, z = the blend to the next slice.
+// Sharp cells: the nearest voxel's texel centre (a brick stores both its ends, so that voxel is in it), z 0.
+// The filter: on its lower z slice (bilinear inside the slice).
 vec3 voxelSliceUv(VoxelGrid grid, VoxelBrick brick, vec3 u)
 {
 	// Inside the brick: 0 .. VOXEL_BRICK between its first and last stored voxel centres.
-	const vec3 voxel = floor(u);
-	const vec3 local = (voxel - brick.coord * VOXEL_BRICK) + voxelSharpen(u - voxel);
+	if (u_foliage_voxelSharp > 0.5)
+	{
+		const vec3 cell = floor(u + 0.5) - brick.coord * VOXEL_BRICK;
+		return vec3((voxelBrickOrigin(grid, brick) + vec2(cell.z * VOXEL_BRICK_TEXELS + cell.x, cell.y)) * grid.invSize, 0.0);
+	}
+	const vec3 local = u - brick.coord * VOXEL_BRICK;
 	const float s0 = min(floor(local.z), VOXEL_BRICK - 1.0);
 	return vec3((voxelBrickOrigin(grid, brick) + vec2(s0 * VOXEL_BRICK_TEXELS + local.x, local.y)) * grid.invSize, local.z - s0);
 }
 
-// The opacities at u0 and u1, both in the stored brick `brick`: linear between two slices, the second slice fetched only
-// where it weighs in. The two first taps go out TOGETHER - one wait for two steps of the march. A march with one sample
-// left in the brick passes it twice (the same texel: no second wait).
+// The opacities at u0 and u1, both in the stored brick `brick`. The two first taps go out TOGETHER - one wait for two
+// steps of the march. A march with one sample left in the brick passes it twice (the same texel: no second wait).
+// The filter only: linear between two slices, the second slice fetched where it weighs in.
 vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
 {
 	const vec3 s0 = voxelSliceUv(grid, brick, u0);
 	const vec3 s1 = voxelSliceUv(grid, brick, u1);
 	vec2 a = vec2(textureLod(u_textures[grid.opacityTex], s0.xy, 0.0).r, textureLod(u_textures[grid.opacityTex], s1.xy, 0.0).r);
+	if (u_foliage_voxelSharp > 0.5)
+		return a;
 	const vec2 nextSlice = vec2(VOXEL_BRICK_TEXELS * grid.invSize.x, 0.0);
 	if (s0.z > 0.0)
 		a.x = mix(a.x, textureLod(u_textures[grid.opacityTex], s0.xy + nextSlice, 0.0).r, s0.z);
@@ -208,8 +229,9 @@ vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
 		a.y = mix(a.y, textureLod(u_textures[grid.opacityTex], s1.xy + nextSlice, 0.0).r, s1.z);
 	return a;
 }
-// voxelOpacity with ONE fetch: the nearest slice, bilinear inside it (the shadow casters: a binary threshold, where the
-// blend between two slices changed little and cost a second fetch per step).
+// The opacity with ONE fetch at any setting: the nearest slice; inside it the nearest voxel (sharp cells) or bilinear
+// (the shadow casters: a binary threshold, where the blend between two slices changed little and cost a second fetch
+// per step).
 float voxelOpacityNearest(VoxelGrid grid, VoxelLevel level, vec3 c, vec3 dirC, float stepWorld, inout VoxelBrick last, out float skip)
 {
 	const vec3 u = voxelCentreCoord(level, c);
@@ -222,8 +244,7 @@ float voxelOpacityNearest(VoxelGrid grid, VoxelLevel level, vec3 c, vec3 dirC, f
 		return 0.0;
 	}
 	skip = 0.0;
-	const vec3 voxel = floor(u);
-	const vec2 local = ((voxel - brick * VOXEL_BRICK) + voxelSharpen(u - voxel)).xy;
+	const vec2 local = (u_foliage_voxelSharp > 0.5 ? floor(u.xy + 0.5) : u.xy) - brick.xy * VOXEL_BRICK;
 	const float slice = floor(u.z - brick.z * VOXEL_BRICK + 0.5);
 	return textureLod(u_textures[grid.opacityTex], (voxelBrickOrigin(grid, last) + vec2(slice * VOXEL_BRICK_TEXELS + local.x, local.y)) * grid.invSize, 0.0).r;
 }

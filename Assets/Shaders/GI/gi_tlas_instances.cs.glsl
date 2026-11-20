@@ -51,14 +51,16 @@ layout (binding = 7, std430) readonly buffer InRtMeshAliasBuffer          { uint
 // range, a tree per slot inside the section), its RT representation the billboard (treeCullRtPiece). Its custom index
 // carries the MATERIAL itself (RT_CUSTOM_TREE | materialIdx): a tree has no stream entry, and every ray-query consumer
 // reads only the material from in_instances[custom]. Consumers read the CUSTOM index, never the TLAS position, so the
-// layout is free.
+// layout is free. A tree near the scene focus takes a SECOND slot: its bark mesh, for RTAO's rays only (treeCullAoPiece).
 #define TREE_CULL_PIECES_BINDING 9
 #define TREE_CULL_TYPES_BINDING 10
 #define TREE_CULL_LIST_BINDING 11 // this frame's list of the trees
 #include "tree_cull.inc.glsl"
 const uint RT_CUSTOM_TREE = 0x800000u; // custom index bit 23: a tree, the low 16 bits its material
 
-layout (push_constant) uniform Push { uint treeRtPieces; } pc; // the tree list's RT section (Renderer m_treeCullRtPieces)
+// The tree list's RT section (Renderer m_treeCullRtPieces) and, its first part, the trees of the chunks in RTAO's range
+// (m_treeCullAoPieces: a bark slot each).
+layout (push_constant) uniform Push { uint treeRtPieces; uint treeAoPieces; } pc;
 
 layout(local_size_x = 64) in;
 
@@ -70,14 +72,24 @@ void main()
 
     // The slot's stream instance (`id`), or its tree. Past the live count, or a tree without an RT representation in
     // range: an inactive record (reference 0 - not built, not traversed).
-    bool isTree = false;
+    bool isTree = false, treeBark = false;
     uint pieceIdx = 0u, passBits = 0u;
-    const uint id = slot < u_present_giTlasNumInstances ? treeCullTlasInstance(slot, pc.treeRtPieces, isTree, pieceIdx, passBits) : slot;
+    const uint id = slot < u_present_giTlasNumInstances
+        ? treeCullTlasInstance(slot, pc.treeRtPieces, pc.treeAoPieces, isTree, pieceIdx, passBits, treeBark) : slot;
     TreeCullRecord treeRec;
     vec4 treePosScale, treeQuat;
+    bool treeTraced = false;
+    if (isTree && (passBits & (PASS_GI | PASS_SHADOW)) != 0u)
+    {
+        // Its bark for RTAO, within RTAO's reach of the scene focus (its trace's early-out + a ray's length); else its RT
+        // representation.
+        if (treeBark)
+            treeTraced = u_rt_aoEnabled > 0.5 && treeCullAoPiece(pieceIdx, u_rt_aoMaxDistance + u_rt_aoRadius, treeRec, treePosScale, treeQuat);
+        else
+            treeTraced = treeCullRtPiece(pieceIdx, u_foliage_rtRange, treeRec, treePosScale, treeQuat);
+    }
     // A tree whose terrain chunk is listed for the main view only: out of the RT set, as a stream instance would be.
-    if (slot >= u_present_giTlasNumInstances || (isTree && ((passBits & (PASS_GI | PASS_SHADOW)) == 0u
-        || !treeCullRtPiece(pieceIdx, u_foliage_rtRange, treeRec, treePosScale, treeQuat))))
+    if (slot >= u_present_giTlasNumInstances || (isTree && !treeTraced))
     {
         TlasInstance dead;
         dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
@@ -166,13 +178,13 @@ void main()
         o.blasHi = 0u;
     }
 
-    // Mask: FOLIAGE cards (tree billboards) only 0x02, so RTAO's rays (cull mask 0x01) skip them - its opaque rays
-    // would hit the whole card rectangles; every other ray (0xFF) still hits them.
+    // The MASK (Layout.ixx RT_MASK_* / RT_CULL_*): a tree's shadow billboard is hidden from RTAO's rays (opaque: they
+    // would hit the whole card rectangles) and seen by every other ray; its bark slot is the reverse - RTAO's rays only.
     const bool foliage = materialIdx < uint(in_materialInfos.length())
                       && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u;
     // Custom = the stream index (below RT_CUSTOM_TREE: the TLAS holds far fewer), or a tree's RT_CUSTOM_TREE | material.
     const uint custom = isTree ? RT_CUSTOM_TREE | materialIdx : id & (RT_CUSTOM_TREE - 1u);
-    o.instanceCustomIndexAndMask = custom | ((foliage ? 0x02u : 0xFFu) << 24);
+    o.instanceCustomIndexAndMask = custom | ((treeBark ? RT_MASK_TREE_BARK : foliage ? RT_MASK_TREE_CARD : RT_MASK_SCENE) << 24);
 
     out_instances[slot] = o;
 }
