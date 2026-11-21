@@ -7,7 +7,8 @@
 // others, so an out / in pair over the same band shares no pixel. Interleaved gradient noise, shifted per frame so TAA
 // blends it.
 // `treeDistance` = the camera's distance to the INSTANCE origin (the tree's base; every representation of one tree has
-// the same one), handed over flat by the vertex shader: the WHOLE tree fades by one distance and dissolves evenly. By
+// the same one) - measured by the LitTree and the near voxel tier's fragment from the tree's instance record, handed over
+// flat by the far voxel trees' vertex shader: the WHOLE tree fades by one distance and dissolves evenly. By
 // the pixel's own distance the band's sphere cut a tree in two - the mesh on its near half, the voxels on its far half -
 // and the cut showed the crown's dark inside.
 bool treeDistanceFaded(uint flags, float treeDistance)

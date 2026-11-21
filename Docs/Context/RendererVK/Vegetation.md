@@ -336,6 +336,11 @@ the clutter frame's header. Desktop only (as the grass).
   "The rock material" in [Terrain.md](Terrain.md)) on a ribbed body's crests (part 0: the uv's (cos, sin) around x the
   rib count in uv.w, along in uv.z) or over a pad (part 1: the uv's lattice). The vertex AO, and "Contact darkening"
   over "Contact height (m)" at the foot.
+* **THE RIGID INTERFACE shares its slots between the kinds** (`clutter.vs.glsl`; 20 components on triangles of a few
+  pixels): `fields.zw` = a pebble's temperature + humidity (only a pebble fetches the climate) or a mushroom's local
+  x, y (the cap's spots; its z in `uv.z`); `uv` = the other kinds' pattern coordinates; one flat word holds the kind,
+  the part and the object's height (a half). The world position AND the camera-relative one stay interpolated (the lit
+  core holds a rebuilt world position across its light loop; the bark bump's derivatives need the relative one).
 * **THE FLOWERS** (`clutter_flower.vs.glsl`): the STEM is a grass blade - the same Bezier, lean and wind
   (`grass_wind.inc.glsl`), so a flower sways exactly as the grass around it; motion vectors from last frame's time.
   The HEAD sits at the tip in a frame along the stem's upper chord: RADIAL (petals around a centre disc, tilted up by
@@ -386,7 +391,8 @@ ClutterSystem bakes it with the forest floor map: R = the blurred tree cover, G 
   (`canopyCover`, then `canopySkyVisibility` with the point's height above the ground: 1 - height / top). Formed and
   used before the light loop. The sun is not touched: that is the cascades' work.
 * **The height** is the includer's `LIT_CANOPY_HEIGHT`: `0.0` for what lies on the ground (the terrain, the grass, the
-  clutter), the vertex's height above the tree's base for LitTree (`in_treeHeight`), the hit's
+  clutter), the fragment's height over the tree's origin for LitTree (the origin read from the tree's instance record
+  there, not interpolated), the hit's
   height up the box for the voxel tier. Without the define (generic meshes, the near bark on LitOpaque, rocks): the world height minus
   the terrain height map's, fetched ONLY under a canopy (cover > 0).
 * **What it is for:** the GI probes carry the same occlusion at their spacing (2 m at the scene focus, x 2 per
@@ -459,12 +465,12 @@ trees work from the wind VECTOR (the direction x the speed is the vector: no nor
   branch + leaf) comes FIRST and the trunk's part last**, and the sway alone goes out as `outSway` (the sun shadow's
   lookup, Scene.md): nothing of the trunk is held across the sway (the register counts: "Statement order" in
   [Shaders.md](Shaders.md)).
-* **The voxel box takes the trunk's bend alone** (`treeWindTrunkVertex`, with the motion vector; `treeWindTrunkBend`
-  without): the near tier from its tree's record, with no record test and no per-vertex wind path (every instance of
-  LitTreeVoxel is a tree record); the far voxel trees from the trunk vector their cull works out once per tree
-  (`treeWindTrunkOfTree`, tree_voxel_far.cs.glsl), with no motion vector.
+* **The voxel tier takes the trunk's bend alone**, from its tree's record (every instance of LitTreeVoxel is a tree
+  record: no record test, no per-vertex wind path): the rectangle covers the box moved by its top's bend
+  (`treeWindTrunkBend`), the fragment shader shears its ray (`treeVoxelBoxShear`) and works out the motion at the hit
+  (`treeWindTrunkVertex`). **The far voxel trees have no wind**: they stand still.
 * A node with a wind payload that is no record calls `treeWindOfTree` per vertex; the shadow casters work the trunk
-  vector out per vertex (`treeWindTrunkOffset`).
+  vector out per vertex (`treeWindTrunkOfTree` + `treeWindTrunkBend`; the voxel caster: as one shear per tree).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond
 "Trunk fade end (m)" (3 km, a 100 m band) the trunk vector and the amplitude are zero. **The TLAS stays static**: RT
 shadows / GI / reflections see unswayed trees.

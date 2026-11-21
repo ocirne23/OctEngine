@@ -462,16 +462,17 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   all (their billboard casts in the cascades only). **RTAO sees a tree's BARK mesh instead**: a tree's bark is created
   WITH a BLAS (`uploadSpecies`, `barkRaytraced`) and stands in the TLAS for RTAO's rays alone, near the scene focus
   (RendererVK Scene.md, "RTAO AND THE TREES"). The leaf meshes have none.
-* **THE LEAVES' MATERIALS ARE PER VARIANT** (`Species::variantLeafMaterials` / `variantLeafFadeMaterials`, parallel to
-  `variantMeshes`; `uploadSpecies`): copies of the species' leaf material (`RenderMaterial::derive`, shared textures)
-  that LINK the variant's voxel grid - its opacity atlas, `voxelMaterial.albedoTexture()`, as the copy's
-  `linkedTexture` - for the mesh leaves' sun self-shadow (RendererVK Scene.md, "THE MESH LEAVES' SUN SELF-SHADOW").
-  One to draw with (only for a variant with a grid: the others draw with the species' material) and one for the
-  crossfade's fade-out (`applyFadeBands` sets its band). They are declared after their source in `Species`, and the
-  voxel materials they link live in `variantMeshes`, which is destroyed after them.
-* **THE GRID HOLDS ITS OWN BOX** (`createVoxelMaterial`): the box of the variant's box mesh goes into the index
-  texture's header row at upload (texels 1..3: min and size, 16 bits each over 128 m) - not baked, since the box comes
-  from the geometry on every load. A reader that has the grid but not the box mesh finds it there.
+* **A VARIANT'S VOXEL GRID IS IN ITS TYPE** (RendererVK Scene.md, "THE VOXEL TIER" and "THE MESH LEAVES' SUN
+  SELF-SHADOW": the voxel tier's fragment shader takes its box from the type, the mesh leaves march the grid for their
+  sun self-shadow). `uploadSpecies` keeps per variant (`PieceMeshes::voxelGrid*`) the
+  grid's box - from the box mesh on every load, not baked - and the index texture's header texel (log2 of the
+  resolution, the levels, log2 of the bricks per atlas row). `buildGpuTypes` hands them on with the two textures'
+  indices (`voxelMaterial.albedoTexture()`, `voxelIndex.index()`) as `RenderTreeSet::Type`'s `voxelGrid*`, for every
+  variant with a voxel material (a type with a voxel record MUST have them). No material links a grid: every variant
+  draws its leaves with the species' leaf material, and only a cluster-leaf species' material (`MATERIAL_FLAG_LEAF`)
+  takes the self-shadow.
+* **The crossfade's fade-out copies are per SPECIES** (`Species::barkFadeMaterial` / `leafFadeMaterial`:
+  `RenderMaterial::derive`, shared textures; `applyFadeBands` sets their band). They are declared after their sources.
 
 #### The crossfade
 
@@ -551,9 +552,13 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   bindless id** (its first two 4 x 4 blocks = the id's low and high byte, written at upload: a BC4 block of two equal
   endpoints decodes exactly): the shadow casters get ONE texture index (the cull's alpha index), and both passes find
   the index through it (`voxelGrid`). It takes the band's fade-in in `applyFadeBands`; the box mesh
-  (`treeVoxelBoxMesh`: `TREE_VOXEL_BOX_SLICES` + 1 = 5 rings of 4 corners up the box, so the wind's trunk bend follows its
-  curve as the mesh does) has no BLAS. A second box per variant with 8 corners (`voxelFarBox`, `Type::voxelFarMesh`) is
-  the far voxel trees': up to a million boxes, none beside a mesh.
+  (`treeVoxelBoxMesh`: the grid's box, 8 corners; its FIRST quad = the bottom face) has no BLAS. ONE box per variant
+  for three draws - the tier that crossfades with the meshes, the far voxel trees and the voxel shadow caster - and
+  each draws its first quad alone, as a rectangle around the box (RendererVK Scene.md, "THE VOXEL TIER": the fragment
+  shader finds the ray's entry itself). The other corners give the mesh its bounds (the culls) and the box (vertex 0).
+* Tried, dropped: the near box's rings FITTED to the tree's profile (9 rings, each as wide as the tree at its height;
+  it left 69 % (Aspen) to 92 % (Willow) of the box's side view). The pixels it saved cost less than the triangles it
+  added (the TRAM stall of the tier went 54 -> 75 %), and a round crown with a low base gained little.
 * Shading tweaks ("Trees"): "Voxel LOD bias" (+1 = voxels twice the pixel size, half the steps), "Voxel sharp cells" (on;
   `u_foliage_voxelSharp`: each voxel covers its OWN cell - a sample reads the nearest voxel's texel, ONE fetch, no blend,
   in every opacity tap: the view, the self-shadow, the mesh leaves' self-shadow and the shadow casters. Off = the

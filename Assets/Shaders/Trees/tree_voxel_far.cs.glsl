@@ -18,7 +18,6 @@
 #include "shared.inc.glsl"
 #define TREE_RECORD_GROUND
 #include "tree_record.inc.glsl"
-#include "tree_wind.inc.glsl" // the cull: a tree's trunk vector, once per tree (treeWindTrunkOfTree)
 
 layout (local_size_x = 64) in;
 
@@ -60,7 +59,8 @@ struct FarType
     float pad0;
 };
 struct FarBucket { uint indexCount; uint firstIndex; int vertexOffset; uint pad; };
-// bucketLocal = bucket << 26 | its index. wind = the tree's TRUNK VECTOR this frame, two halves (packHalf2x16).
+// bucketLocal = bucket << 26 | its index. wind = 0 for the main pass (its trees stand still).
+// materialMesh, as the cull writes it for the main pass: the set TYPE | materialIdx << 16.
 // FAR_SHADOW: materialMesh = the alpha-mask texture | the cascade mask << 16, wind = the trunk-bend scale (a float's bits).
 struct FarInstance { vec4 posScale; float yaw; uint materialMesh; uint wind; uint bucketLocal; };
 
@@ -136,8 +136,8 @@ void main()
 #endif
     const FarChunk chunk = pc.chunks.c[gl_WorkGroupID.x];
     const vec3 eye = u_views_viewPos[VIEW_CENTER].xyz;
-    const float windReach = u_foliage_windReach;
 #ifdef FAR_SHADOW
+    const float windReach = u_foliage_windReach; // the shadow billboards bend; the main pass's voxel trees stand still
     // A shadow's length per metre of caster height (the sun's cotangent over the horizon plane, y up).
     const float sunCot = sqrt(max(1.0 - u_sunDirection.y * u_sunDirection.y, 0.0)) / max(u_sunDirection.y, 1e-3);
 #endif
@@ -175,8 +175,8 @@ void main()
         const vec3 base = vec3(p.x, ground - 0.05, p.y);
 
         const vec3 centre = base + vec3(0.0, farType.centreY * scale, 0.0);
-        const float radius = farType.radius * scale + windReach * max(farType.wind, 1.0);
 #ifdef FAR_SHADOW
+        const float radius = farType.radius * scale + windReach * max(farType.wind, 1.0);
         // ONLY THE CASTERS THE VIEW CAN SEE THE SHADOW OF: the cascades lie all around the scene focus, so most of the far
         // ring's trees stand beside or behind the camera - and a far tree's shadow reaches its own length, no more. Kept:
         // inside the view frustum grown by that length (the box's height <= 2 x its radius, x the sun's cotangent).
@@ -187,9 +187,12 @@ void main()
             continue;
         const uint data = farType.shadowTex | cascades << 16u;
 #else
+        const float radius = farType.radius * scale;
         if (distance(centre, eye) > pc.endDistance || !farInFrustum(centre, radius))
             continue;
-        const uint data = farType.materialMesh;
+        // The set TYPE where the mesh index was (the draw's bucket names the mesh): the fragment shader takes the tree's box
+        // from the tree set's type table with it (instanced_indirect_tree_voxel.fs.glsl).
+        const uint data = (farType.materialMesh & 0xFFFF0000u) | setType;
 #endif
 
         const uint idx = atomicAdd(pc.state.v[0], 1u);
@@ -199,9 +202,7 @@ void main()
 #ifdef FAR_SHADOW
         const uint wind = floatBitsToUint(farType.wind); // the billboard's VS works the bend out itself (shadow_depth.vs.glsl)
 #else
-        // THE TREE'S WIND ONCE, HERE, for all the vertices of its box (the gusts, the trunk's sines, the hash, the fade:
-        // per vertex they were the larger part of tree_voxel_far.vs.glsl). Two halves: a millimetre at a metre of bend.
-        const uint wind = packHalf2x16(treeWindTrunkOfTree(base, farType.wind));
+        const uint wind = 0u; // a far voxel tree stands still (tree_voxel_far.vs.glsl)
 #endif
         pc.appended.i[idx] = FarInstance(vec4(base, scale), yaw, data, wind, bucket << 26u | local);
     }

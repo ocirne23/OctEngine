@@ -15,14 +15,13 @@
 
 #include "shared.inc.glsl"
 
+// The interface (clutter.vs.glsl): what only one kind reads shares its slots with the others'.
 layout (location = 0) in vec3 in_pos;
+layout (location = 5) in vec3 in_relPos;       // the position relative to the camera (the bump's derivatives, V)
 layout (location = 1) in vec3 in_normal;
-layout (location = 2) in vec3 in_local;
-layout (location = 3) in vec4 in_fields;      // x ao, y height above the base (m), z temperature C, w humidity
-layout (location = 4) flat in uvec4 in_look;   // x albedo0, y albedo1, z kind, w part
-layout (location = 5) in vec4 in_uv;           // the mesh's pattern coordinates (a branch's in metres)
-layout (location = 6) flat in float in_height; // the object's height (m)
-layout (location = 7) in vec3 in_relPos;       // the position relative to the camera (the bump's derivatives)
+layout (location = 2) in vec4 in_fields;       // x ao, y height above the base (m); zw: a pebble's temperature C + humidity, a mushroom's local x + y
+layout (location = 3) in vec4 in_uv;           // the mesh's pattern coordinates (a branch's in metres); a mushroom's z = its local z
+layout (location = 4) flat in uvec3 in_look;   // x albedo0, y albedo1, z = kind | part << 8 | the object's height (m, a half) << 16
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
@@ -101,8 +100,8 @@ void main()
     float roughness, spots;
     const vec3 albedo0 = clutterUnpackAlbedo(in_look.x, roughness);
     const vec3 albedo1 = clutterUnpackAlbedo(in_look.y, spots);
-    const uint kind = in_look.z;
-    const uint part = in_look.w;
+    const uint kind = in_look.z & 0xFFu;
+    const uint part = (in_look.z >> 8) & 0xFFu;
     vec3 albedo = albedo0;
     f16vec3 N = f16vec3(geoN);
     float ao = in_fields.x; // the generator writes AO in [0.4, 1]
@@ -172,7 +171,8 @@ void main()
         {
             const float around = atan(in_uv.y, in_uv.x);
             if (part == 1u)
-                albedo = mix(albedo0 * (0.94 + 0.06 * sin(around * 36.0)), vec3(0.92, 0.9, 0.85), clutterSpots(in_local, spots));
+                albedo = mix(albedo0 * (0.94 + 0.06 * sin(around * 36.0)), vec3(0.92, 0.9, 0.85),
+                    clutterSpots(vec3(in_fields.zw, in_uv.z), spots)); // the mesh-local position (the VS's mushroom slots)
             else
                 albedo = albedo1 * (0.62 + 0.25 * smoothstep(-0.3, 0.6, sin(around * 90.0)));
         }
@@ -180,7 +180,7 @@ void main()
 
     // THE FOOT: darker over the contact height, but at most a third of the object (else a stick a few cm high is all in
     // the band).
-    const float band = max(min(u_clutter_contactHeight, 0.35 * in_height), 1e-3);
+    const float band = max(min(u_clutter_contactHeight, 0.35 * unpackHalf2x16(in_look.z >> 16).x), 1e-3);
     ao *= 1.0 - u_clutter_contactDarkening * (1.0 - smoothstep(0.0, band, in_fields.y));
 
     const vec3 V = normalize(-in_relPos); // in_relPos = pos - camera, exact near the camera

@@ -192,7 +192,8 @@ void cullCaster(InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool 
         if (idx == 0)
         {
             out_voxelCommands[meshIdx].pipelineIndex = 0u;
-            out_voxelCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+            // A voxel caster: the box mesh's first quad (shadow_depth.vs.glsl places it on the rectangle around the box).
+            out_voxelCommands[meshIdx].indexCount    = voxel ? 6u : drawMeshInfo.indexCount;
             out_voxelCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
             out_voxelCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
             out_voxelCommands[meshIdx].firstInstance = firstInstance;

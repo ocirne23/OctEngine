@@ -31,10 +31,19 @@ public:
         // The MESHES (the main pass up to the voxel tier). barkFade / leavesFade: the same meshes on LitTree with fade-OUT materials (the crossfade band).
         Rep bark, barkFade, leaves, leavesFade;
         // The VOXEL tier (LitTreeVoxel; none = mesh nullptr: the meshes draw at every distance): past farDistance it takes the meshes' place in the MAIN
-        // pass, on a material with the band's fade-IN.
+        // pass, on a material with the band's fade-IN. Its mesh = the grid's BOX, 8 corners, its FIRST 6 INDICES the bottom face (Procedural
+        // treeVoxelBoxMesh): every draw of it - the main pass, the far voxel trees, the voxel shadow caster - takes those 6 indices, as a rectangle around the box.
         Rep voxel;
-        // The FAR VOXEL TREES' mesh for this type's voxel tier, on the voxel material (nullptr = voxel.mesh): the same box with fewer vertices.
-        const RenderMesh* voxelFarMesh = nullptr;
+        // THE TYPE'S VOXEL GRID, as the shaders read it from the type table (no fetch from the textures to find it, nothing flat per triangle): its
+        // MESH leaves' sun self-shadow (tree_leaf_sun.inc.glsl, LitTree) and the voxel tier's own fragment shader (the box). REQUIRED with `voxel`.
+        // voxelGridSize 0 = none. The box is in the tree's own space (mesh-local): the voxel box mesh's.
+        glm::vec3 voxelGridMin{ 0.0f };
+        glm::vec3 voxelGridSize{ 0.0f };
+        uint16 voxelGridOpacityTexture = 0; // the grid's opacity atlas and its brick index (u_textures indices)
+        uint16 voxelGridIndexTexture = 0;
+        uint8 voxelGridLog2Res = 0;         // the index texture's header: log2 of level 0's voxels per axis, the levels, log2 of the bricks per atlas row
+        uint8 voxelGridLevels = 0;
+        uint8 voxelGridLog2Cols = 0;
         float farDistance = 0.0f; // the mesh -> voxels switch distance (m); 0 = always the mesh
         float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
         // The SHADOW BILLBOARD (none = mesh nullptr: the meshes cast): crossed cards on a MATERIAL_FLAG_BILLBOARD material - the tree's sun-shadow caster

@@ -19,12 +19,8 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
-layout (location = 5) in flat float in_treeDistance; // the camera's distance to the tree's origin: the distance fade (the VS's TREE_ORIGIN)
-// The leaves' voxel grid, from the vertex shader (tree_leaf_sun.inc.glsl treeLeafGridVertex):
-layout (location = 6) in vec3 in_treeGrid;           // the point in its tree's voxel grid (0..1)
-layout (location = 7) in flat vec4 in_treeSun;       // xyz = the sun in grid units per metre; w = the cube root of the grid box's volume (m), 0 = no grid
-layout (location = 8) in flat uvec2 in_treeVoxel;    // the grid's textures and its header, packed
-layout (location = 9) in float in_treeHeight;        // the height above the tree's base (m)
+layout (location = 5) in flat uint in_treeInstance;  // the tree's draw slot (the VS's TREE_ORIGIN): its instance record, in_drawInstances
+layout (location = 6) in vec3 in_treeGrid;           // the point in its tree's voxel grid (0..1; tree_leaf_sun.inc.glsl)
 layout (location = 10) in vec3 in_windSway;          // the wind's sway of this point without the trunk's bend (its branch + its leaf flutter)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
@@ -32,6 +28,20 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target
+
+// THE TREE'S INSTANCE RECORD (the main cull's OutMeshInstance, 64 B, at the draw slot): what is the same for every pixel of
+// a tree is read HERE, where it is used, and not handed over as flat interpolants (7 plane equations a triangle, on the
+// smallest triangles of the scene) - the origin (the distance fade, the height up the tree), the rotation and the scale
+// (the sun in the tree's voxel grid). `wind` / `rest`: the tree's wind and its mesh | material (instanced_indirect.vs.glsl).
+// The tree's TYPE (the leaves' voxel grid, tree_type.inc.glsl) = the low 16 bits of in_meshIdxMaterialIdx.
+struct TreeDrawInstance
+{
+	vec4 posScale;
+	vec4 quat;
+	vec4 wind;
+	uvec4 rest;
+};
+layout (binding = 1, std430) readonly buffer InDrawInstances { TreeDrawInstance in_drawInstances[]; };
 
 // The lit core's AO read follows this point to where it was last frame (read where it is used, so the interpolant is
 // not live across the sun's shadow search).
@@ -50,12 +60,16 @@ float16_t g_specularF0 = float16_t(0.04);
 // hole and spends no ray on them. The BARK reads the RTAO: its mesh stands in the TLAS for those rays.
 bool g_leafNoRtao = false;
 #define LIT_RTAO_SKIP g_leafNoRtao
-#define LIT_CANOPY_HEIGHT in_treeHeight // instanced_indirect_lit.inc.glsl: the canopy map's occlusion above this height up the tree
+// instanced_indirect_lit.inc.glsl: the canopy map's occlusion above this height up the tree - the point's height over the
+// tree's origin (computeLitColor's worldPos), the origin read there.
+#define LIT_CANOPY_HEIGHT (worldPos.y - in_drawInstances[in_treeInstance].posScale.y)
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
 #define VOXEL_BRICK_ORIGIN // tree_voxel.inc.glsl: the march does not set this shader's register count
 #include "tree_voxel.inc.glsl"
+#define TREE_TYPES_BINDING 3
+#define TREE_LEAF_SUN_MARCH
 #include "tree_leaf_sun.inc.glsl" // the leaves' sun self-shadow through the tree's own voxel grid
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the tree takes the faction look of the land it stands on
@@ -99,21 +113,26 @@ void main()
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
-	if (treeDistanceFaded(material.flags, in_treeDistance)) // the crossfades, per tree (tree_fade.inc.glsl)
+	// The crossfades, per tree (tree_fade.inc.glsl): by the camera's distance to the tree's ORIGIN, read only on a material
+	// that fades.
+	if ((material.flags & MATERIAL_FLAG_DISTANCE_FADE) != 0u
+		&& treeDistanceFaded(material.flags, distance(u_viewPos, in_drawInstances[in_treeInstance].posScale.xyz)))
 		discard;
 
 	// After the discards: a cut-out pixel pays no shadow.
 	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
 	// THE LEAVES' SUN SELF-SHADOW (tree_leaf_sun.inc.glsl): the sun through the tree's own voxel grid, as the voxel tier
 	// marches it. Its box's exit FIRST (no texture: the cascades are looked up there), the march after the search and only
-	// for a pixel the cascades leave lit. Its inputs are interpolants and flat values: nothing is held across the search.
-	// The result is ONE scalar, the log of the transmittance x "Voxel self shadow" (0 = none). A tree without a grid (the
-	// vertex shader's w 0) takes neither.
+	// for a pixel the cascades leave lit. Its inputs are the grid interpolant and two loads (the tree's record, its type),
+	// taken again at the march: nothing is held across the search. The result is ONE scalar, the log of the transmittance
+	// x "Voxel self shadow" (0 = none). A type without a grid takes neither.
 	const bool selfShadow = leaf && u_foliage_voxelSelfShadow > 0.0 && u_sunLit > 0.5;
-	sunShadowFirstTree(pos, leaf, selfShadow ? treeLeafSunExit(in_treeGrid, in_treeSun) : 0.0);
+	const uint typeIdx = in_meshIdxMaterialIdx & 0xFFFFu;
+	sunShadowFirstTree(pos, leaf, selfShadow ? treeLeafSunExit(in_treeGrid, treeLeafSun(in_treeInstance, typeIdx)) : 0.0);
 	float sunLog = 0.0;
 	if (selfShadow && g_sunShadowFirst > 0.0)
-		sunLog = log2(max(treeLeafSunTransmit(in_treeGrid, in_treeSun, in_treeVoxel, distance(u_viewPos, pos)), 1e-4)) * u_foliage_voxelSelfShadow;
+		sunLog = log2(max(treeLeafSunTransmit(in_treeGrid, treeLeafSun(in_treeInstance, typeIdx), treeLeafGridVoxel(typeIdx),
+			distance(u_viewPos, pos)), 1e-4)) * u_foliage_voxelSelfShadow;
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness and the normal-map
 	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES. A tree material has NO

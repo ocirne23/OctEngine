@@ -3,46 +3,57 @@
 // tweaks ("Trees/Voxel self shadow", "... coarser levels"), so a tree shades itself alike on both sides of the mesh <->
 // voxels crossfade. The cascades cannot do it: the tree's caster there is three flat cards.
 //
-// WHERE THE GRID COMES FROM: a variant's LEAF MATERIAL carries its voxel opacity atlas's u_textures index in its
-// metal-roughness slot (RenderMaterial::derive's linkedTexture; a tree material samples no metal-roughness), and the grid
-// holds its own box (tree_voxel.inc.glsl voxelGridBox). THE VERTEX SHADER reads both, once per vertex
-// (treeLeafGridVertex), and hands on the leaf's grid coordinate and, flat, the tree's part: no fetch of it per pixel.
+// WHERE THE GRID COMES FROM: THE TREE SET'S TYPE TABLE (tree_type.inc.glsl: per type the grid's box in the tree's own
+// space, its textures and its header - written by the CPU, RenderTreeSet::Type's voxel grid). The main cull puts a tree's
+// TYPE into its record where a plain instance has its mesh index (instanced_indirect.cs.glsl), so a vertex and a fragment
+// find the grid with no texture fetch. What differs per TREE (the sun in its grid's space, its scale) the fragment works
+// out from the tree's instance record, at the draw slot the vertex shader hands on as ONE flat value. Only the leaf's grid
+// coordinate is interpolated.
 //
-// Requires tree_voxel.inc.glsl and the frame UBO.
+// The includer defines TREE_TYPES_BINDING (tree_type.inc.glsl: the table). The fragment side (TREE_LEAF_SUN_MARCH, the
+// includer's define) requires tree_voxel.inc.glsl, u_textures[], the frame UBO, mathutils.inc.glsl and the instance
+// records as in_drawInstances[] (posScale, quat).
 #ifndef TREE_LEAF_SUN_INC_GLSL
 #define TREE_LEAF_SUN_INC_GLSL
+
+#include "tree_type.inc.glsl"
+
+// THE VERTEX SIDE: the vertex `local` (the tree's own space) in its type's grid space, 0..1 per axis. A type without a
+// grid has the inverse size 0: its coordinate is 0.
+vec3 treeLeafGridCoord(uint typeIdx, vec3 local)
+{
+	return (local - in_treeTypes[typeIdx].gridMin) * in_treeTypes[typeIdx].gridInvSize;
+}
+
+#ifdef TREE_LEAF_SUN_MARCH
+// THE FRAGMENT SIDE.
 
 // The march's level has at most this many voxels a side: near the camera the voxel tier's own rule would take a level
 // of 64 or more, a long march for every leaf pixel of a close tree.
 const float LEAF_SUN_MAX_VOXELS = 32.0;
 const int LEAF_SUN_MAX_STEPS = 24;
 
-// THE VERTEX SIDE. linkedTexture = the material's metal-roughness slot (0xFFFF = no grid), local = the vertex in the
-// tree's own space, quat / scale = the tree's.
-//   grid  = the vertex in grid space (0..1 per axis; interpolated)
-//   sun   = xyz the sun in grid units per metre, no zero component; w = the cube root of the box's volume in world
-//           metres (x 1 / a level's voxels = that level's step), 0 = NO GRID
-//   voxel = x the opacity atlas | the index texture << 16 (u_textures), y log2(res) | levels << 8 | log2(cols) << 16
-void treeLeafGridVertex(uint linkedTexture, vec3 local, vec4 quat, float scale, out vec3 grid, out vec4 sun, out uvec2 voxel)
+// THE SUN IN THE GRID of the tree at draw slot `instance`: xyz = grid units per metre, no zero component; w = the cube
+// root of the box's volume in world metres (x 1 / a level's voxels = that level's step), 0 = NO GRID. Loaded and worked
+// out where it is used (the exit, then the march): a caller holds nothing of it across the shadow search between them.
+vec4 treeLeafSun(uint instance, uint typeIdx)
 {
-	grid = vec3(0.0);
-	sun = vec4(0.0);
-	voxel = uvec2(0u);
-	if (linkedTexture == 0xFFFFu)
-		return;
-	const VoxelGrid g = voxelGrid(linkedTexture);
-	vec3 boxMin, boxSize;
-	voxelGridBox(g, boxMin, boxSize);
-	if (boxSize.x <= 0.0 || boxSize.y <= 0.0 || boxSize.z <= 0.0)
-		return;
-	grid = (local - boxMin) / boxSize;
-	const vec3 size = boxSize * scale;
-	const vec3 sunRaw = quat_transform(u_sunDirection.xyz, vec4(-quat.xyz, quat.w)) / size;
-	sun = vec4(mix(vec3(1e-6), sunRaw, greaterThan(abs(sunRaw), vec3(1e-6))), pow(size.x * size.y * size.z, 1.0 / 3.0));
-	voxel = uvec2(g.opacityTex | (g.indexTex << 16), uint(log2(g.res) + 0.5) | (uint(g.levels) << 8) | (g.colsShift << 16));
+	const float cbrtVolume = in_treeTypes[typeIdx].gridCbrtVolume;
+	if (cbrtVolume <= 0.0)
+		return vec4(0.0);
+	const vec4 quat = in_drawInstances[instance].quat;
+	const float scale = in_drawInstances[instance].posScale.w;
+	const vec3 sunRaw = quat_transform(u_sunDirection.xyz, vec4(-quat.xyz, quat.w)) * (in_treeTypes[typeIdx].gridInvSize / scale);
+	return vec4(mix(vec3(1e-6), sunRaw, greaterThan(abs(sunRaw), vec3(1e-6))), cbrtVolume * scale);
 }
 
-// THE FRAGMENT SIDE.
+// The grid's textures and its header: x = the opacity atlas | the index texture << 16 (u_textures), y = log2(res) |
+// levels << 8 | log2(cols) << 16.
+uvec2 treeLeafGridVoxel(uint typeIdx)
+{
+	return uvec2(in_treeTypes[typeIdx].gridTextures, in_treeTypes[typeIdx].gridHeader);
+}
+
 // The sun path's length out of the tree's box from the leaf (m), 0 without a grid, else > 0: the cascades' lookup moves
 // there, so the tree's own caster does not shade it a second time (as the voxel tier's). No texture.
 float treeLeafSunExit(vec3 leafG, vec4 sun)
@@ -111,5 +122,6 @@ float treeLeafSunTransmit(vec3 leafG, vec4 sun, uvec2 voxel, float viewDist)
 	}
 	return transmit;
 }
+#endif
 
 #endif

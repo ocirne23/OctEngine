@@ -33,7 +33,9 @@ namespace
         uint32 pipelineAlpha = 0;
     };
 
-    // A piece TYPE (one baked variant of one species, or a rock variant): its representations and its crossfade band.
+    // A piece TYPE (one baked variant of one species, or a rock variant): its representations, its crossfade band and its
+    // voxel grid. Four 32-byte sectors (tree_type.inc.glsl): the culls read the first two, the LitTree and voxel-tier
+    // shaders the last two.
     struct TreeCullTypeGpu
     {
         TreeCullRecordGpu bark;
@@ -46,8 +48,18 @@ namespace
         float fadeWidth = 1.0f;   // crossfade band (m), centred on it
         float shadowDistance = 0.0f; // no sun shadow beyond this from the cascades' centre (m); 0 = no limit
         uint32 wind = 0;             // x the trunk bend | x the branch sway << 16, each 4.12 fixed point (tree_wind.inc.glsl)
+        // The type's voxel grid (RenderTreeSet::Type's voxelGrid*): its box in the tree's own space, its textures, its header.
+        glm::vec3 gridInvSize{ 0.0f };
+        float gridCbrtVolume = 0.0f;   // the cube root of the box's volume (m); 0 = NO GRID
+        uint32 gridTextures = 0;       // the opacity atlas | the index texture << 16
+        uint32 gridHeader = 0;         // log2(res) | levels << 8 | log2(cols) << 16
+        uint32 pad0 = 0, pad1 = 0;
+        glm::vec3 gridMin{ 0.0f };
+        float pad2 = 0.0f;
+        glm::vec3 gridSize{ 0.0f };
+        float pad3 = 0.0f;
     };
-    static_assert(sizeof(TreeCullTypeGpu) == 64);
+    static_assert(sizeof(TreeCullTypeGpu) == 128);
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -266,7 +278,23 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         gpu.shadowDistance = type.shadowDistance;
         auto fixed = [](float v) { return (uint32)std::round(glm::clamp(v, 0.0f, 15.99f) * 4096.0f); };
         gpu.wind = fixed(type.windTrunk) | (fixed(type.windBranch) << 16);
+        const bool hasGrid = type.voxelGridSize.x > 0.0f && type.voxelGridSize.y > 0.0f && type.voxelGridSize.z > 0.0f;
+        if (hasGrid)
+        {
+            gpu.gridMin = type.voxelGridMin;
+            gpu.gridSize = type.voxelGridSize;
+            gpu.gridInvSize = 1.0f / type.voxelGridSize;
+            gpu.gridCbrtVolume = std::cbrt(type.voxelGridSize.x * type.voxelGridSize.y * type.voxelGridSize.z);
+            gpu.gridTextures = (uint32)type.voxelGridOpacityTexture | ((uint32)type.voxelGridIndexTexture << 16);
+            gpu.gridHeader = (uint32)type.voxelGridLog2Res | ((uint32)type.voxelGridLevels << 8) | ((uint32)type.voxelGridLog2Cols << 16);
+        }
+        // The voxel tier's fragment shader takes its box from the type: no voxel record without it.
+        assert(hasGrid || gpu.voxel.meshMaterial == TREE_RECORD_ABSENT);
+        if (!hasGrid)
+            gpu.voxel = TreeCullRecordGpu{};
     }
+    // A tree's record carries its type in 16 bits (the main cull, instanced_indirect.cs.glsl).
+    assert(types.size() <= 0x10000);
 
     // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the shadow billboard, else the
     // leaves, else the bark - a rock) has a BLAS. The others (bushes: created without one) would only ever take inactive
@@ -308,7 +336,7 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         const TreeInstanceRep& voxel = types[t].voxel;
         if (!types[t].farRing || gpuTypes[t].voxel.meshMaterial == TREE_RECORD_ABSENT || !voxel.mesh)
             continue;
-        const RenderMesh* farMesh = types[t].voxelFarMesh && types[t].voxelFarMesh->isValid() ? types[t].voxelFarMesh : voxel.mesh;
+        const RenderMesh* farMesh = voxel.mesh;
         const uint16 meshIdx = farMesh->m_meshIdx;
         uint32 bucket = UINT32_MAX;
         for (uint32 b = 0; b < (uint32)set.farBuckets.size(); ++b)
@@ -320,7 +348,8 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
                 continue;
             const RendererVKLayout::MeshInfo& info = m_meshInfos.items()[meshIdx];
             bucket = (uint32)set.farBuckets.size();
-            set.farBuckets.push_back({ info.indexCount, info.firstIndex, info.vertexOffset, meshIdx }); // pad: the mesh (the dedupe)
+            // 6 indices: the box mesh's first quad, which the vertex shader places on the screen rectangle around the box.
+            set.farBuckets.push_back({ 6u, info.firstIndex, info.vertexOffset, meshIdx }); // pad: the mesh (the dedupe)
         }
         TreeVoxelFarPipeline::FarTypeGpu& far = set.farTypes[t];
         far.bucket = bucket;

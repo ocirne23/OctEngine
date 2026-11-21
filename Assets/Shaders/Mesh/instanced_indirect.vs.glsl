@@ -4,7 +4,6 @@
 #extension GL_EXT_shader_16bit_storage : enable
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
-#extension GL_EXT_nonuniform_qualifier : enable // the LitTree variant's voxel grid lookups (tree_voxel.inc.glsl)
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -18,18 +17,12 @@
 #define TREE_WIND_NO_FLUTTER
 #endif
 #include "tree_wind.inc.glsl"
+#ifdef TREE_VOXEL
+#include "tree_voxel_box.inc.glsl" // the screen rectangle around the tree's box
+#endif
 #ifdef TREE_ORIGIN
-// LitTree: the leaf materials (binding 2) and the bindless textures (25), for the leaves' voxel grid link.
-struct MaterialInfo
-{
-    uint flags;
-    float opacity;
-    uint diffuseNormalTexIdx;
-    uint metalRoughnessTexIdxAlphaMode;
-};
-layout (binding = 2, std430) readonly buffer InMaterialInfos { MaterialInfo in_materialInfos[]; };
-layout (binding = 25) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
-#include "tree_voxel.inc.glsl"
+// LitTree: the tree set's type table (binding 3), for the leaves' voxel grid (tree_leaf_sun.inc.glsl).
+#define TREE_TYPES_BINDING 3
 #include "tree_leaf_sun.inc.glsl"
 #endif
 
@@ -64,45 +57,41 @@ layout (location = 2) in vec4 in_tangent;
 // Packed into 4 locations (fewer ISBE / TRAM slots per vertex); the fragment shader rebuilds the bitangent from N, T
 // and the sign. The world position stays INTERPOLATED: an interpolant costs no register until it is read, while a
 // position rebuilt from gl_FragCoord + the depth stays live across the whole lit core (lit FS spill 16 -> 64 B, slower).
+// THE VOXEL TIER (TREE_VOXEL) has its own, smaller set (below): it draws a screen rectangle, not a surface.
+#ifndef TREE_VOXEL
 layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
-#ifndef TREE_VOXEL // the voxel box has no surface frame: its normal and tangent attributes carry the grid coordinate and the box size
 layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
 layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
-#endif
-layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#ifndef TREE_VOXEL
-// THE WIND'S SWAY of this point WITHOUT the trunk's bend (its branch + its leaf flutter; 0 with no wind payload). The sun
-// shadow is looked up at the position less this: the shadow casters bend by the trunk alone (shadow_depth.vs.glsl), so a
-// swaying branch would move through its own tree's shadow. The voxel box bends by the trunk only: it has none.
-layout (location = 10) out vec3 out_windSway;
 #endif
+layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 #ifdef TREE_ORIGIN
-// LitTree: the camera's distance to the tree's origin - its distance fade (tree_fade.inc.glsl), one value a tree.
-layout (location = 5) out flat float out_treeDistance;
-// THE LEAVES' SUN SELF-SHADOW (tree_leaf_sun.inc.glsl treeLeafGridVertex): a leaf material links its variant's voxel grid
-// (its metal-roughness slot = the opacity atlas), and the grid holds its own box - read HERE, once per vertex.
-//   6: the vertex in the grid's space (0..1 per axis, unbent by the wind).
-//   7: per tree, xyz = the sun in grid units per metre, w = the cube root of the grid box's volume (m); w 0 = no grid.
-//   8: per tree, the grid's textures and its header (packed).
-//   9: the vertex's height above the tree's base (m): the canopy map's occlusion above it (canopy_occlusion.inc.glsl).
+// LitTree: THE WIND'S SWAY of this point WITHOUT the trunk's bend (its branch + its leaf flutter). The sun shadow is looked
+// up at the position less this: the shadow casters bend by the trunk alone (shadow_depth.vs.glsl), so a swaying leaf would
+// move through its own tree's shadow. ONLY LitTree carries it: on the generic lit variant it was 3 interpolated components
+// of EVERY lit mesh for the trees' near bark (LitOpaque), whose sway is small - that bark takes its shadow where it is.
+layout (location = 10) out vec3 out_windSway;
+// LitTree: THE DRAW SLOT (gl_InstanceIndex), one flat value. Everything that is the same for a whole tree the fragment
+// reads from its instance record there (its origin: the distance fade and the height up the tree; its rotation and scale:
+// the sun in its voxel grid) and from its type (the low 16 bits of out_meshIdxMaterialIdx on a tree record) - a load per
+// pixel that every pixel of the tree shares, and no plane equation per triangle for it.
+layout (location = 5) out flat uint out_treeInstance;
+// THE LEAVES' SUN SELF-SHADOW (tree_leaf_sun.inc.glsl): the vertex in its type's voxel grid (0..1 per axis, unbent by the
+// wind; 0 for a type without a grid).
 layout (location = 6) out vec3 out_treeGrid;
-layout (location = 7) out flat vec4 out_treeSun;
-layout (location = 8) out flat uvec2 out_treeVoxel;
-layout (location = 9) out float out_treeHeight;
 #endif
 #ifdef TREE_VOXEL
-// The LitTreeVoxel variant (the trees' voxel tier, Procedural treeVoxelBoxMesh): the box vertex carries its GRID
-// coordinate (0 / 1 per axis) in its normal and the box size in its tangent. The FS marches in grid space [0, 1]^3.
-layout (location = 5) out vec3 out_voxelCam;            // the camera in grid space, sheared back by the trunk's bend at this vertex's height
-layout (location = 6) out vec3 out_voxelGrid;           // this point of the box in grid space
-layout (location = 7) out flat vec4 out_voxelQuat;      // the instance rotation (grid axes -> world)
-layout (location = 8) out flat vec4 out_voxelWorldSize; // xyz = the box in world metres, w = the cube root of its volume
-layout (location = 9) out flat float out_treeDistance;  // the camera's distance to the tree's origin: its distance fade (tree_fade.inc.glsl)
-layout (location = 10) out flat vec4 out_voxelSunLod;   // xyz = the sun in grid units per metre, w = the LOD scale
-#include "tree_voxel_box.inc.glsl"
+// The LitTreeVoxel variant (the trees' voxel tier): NO BOX IS DRAWN. The main cull hands this shader the box mesh's
+// first quad - its four bottom corners (Procedural treeVoxelBoxMesh: the normal = the corner's grid coordinate, the
+// tangent = the box size) - and it places them on the SCREEN RECTANGLE around the whole box, at the box's nearest depth: 2
+// triangles a tree. The fragment shader intersects each pixel's ray with the box itself and marches from there
+// (TREE_VOXEL_RECORD in instanced_indirect_tree_voxel.fs.glsl); what is one value per tree it reads from the tree's
+// record at the draw slot and from its type. A box of 5 rings was 18 front triangles x 27 components, and the TRAM
+// allocation was the tier's launch limit: this is 2 triangles x 5 components.
+layout (location = 0) out vec3 out_voxelRay;            // a world point on this pixel's view ray (linear over the rectangle)
+layout (location = 7) out flat uint out_treeInstance;   // the draw slot (gl_InstanceIndex)
 #endif
 
 #ifndef TREE_STATIC
@@ -136,24 +125,20 @@ void main()
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
 #ifdef TREE_ORIGIN
-    {
-        // Only a LEAF material links a grid (the bark's slot is "no texture").
-        const uint materialIdx = inst.meshIdxMaterialIdx >> 16;
-        const bool leafMaterial = (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_LEAF) != 0u;
-        treeLeafGridVertex(leafMaterial ? in_materialInfos[materialIdx].metalRoughnessTexIdxAlphaMode & 0xFFFFu : 0xFFFFu,
-            in_posU.xyz, inst_quat, inst_scale, out_treeGrid, out_treeSun, out_treeVoxel);
-        out_treeHeight = in_posU.y * inst_scale;
-    }
+    // Every LitTree instance is a tree record: the main cull wrote its TYPE where a plain instance has its mesh index.
+    out_treeInstance = uint(gl_InstanceIndex);
+    out_treeGrid = treeLeafGridCoord(inst.meshIdxMaterialIdx & 0xFFFFu, in_posU.xyz);
 #endif
 #ifdef TREE_VOXEL
-    // THE VOXEL BOX: the wind's TRUNK bend only (treeWindTrunkVertex: no branch, no leaf), straight from the tree's record.
-    // Every instance of this pipeline is one (the main cull packs the wind into each tree piece's record, tree_wind.inc.glsl
-    // treeWindPack), so there is no record test and no per-vertex wind path here. Only the trunk's two fields are read.
-    const TreeWind tree = treeWindUnpack(inst.prevPosScale, inst.prevQuat, inst.prevVertexDelta);
-    vec3 windPrevDelta;
-    const vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos
-                   + treeWindTrunkVertex(tree.trunk, tree.trunkDelta, in_posU.y, inst_scale, windPrevDelta);
-    out_posU   = vec4(pos, 0.0); // the box has no texture coordinate
+    // THE SCREEN RECTANGLE AROUND THE TREE'S BOX (tree_voxel_box.inc.glsl). The box bends in the wind by the trunk alone
+    // (every instance of this pipeline is a tree record: its trunk vector is in the record, tree_wind.inc.glsl
+    // treeWindPack): the box as it stands and the box moved by its top's bend, 16 corners. The corner's grid x / z = its
+    // corner of the rectangle.
+    const vec3 boxSize = in_tangent.xyz;
+    const vec3 boxMin = in_posU.xyz - in_normalV.xyz * boxSize;
+    const vec3 bendTop = treeWindTrunkBend(inst.prevPosScale.xy, boxMin.y + boxSize.y, inst_scale);
+    gl_Position = treeVoxelBoxRect(boxMin, boxSize, inst_pos, inst_scale, inst_quat, bendTop, 16u, in_normalV.xz, out_voxelRay);
+    out_treeInstance = uint(gl_InstanceIndex);
 #else
     const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
 
@@ -180,6 +165,7 @@ void main()
     out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
     out_posU   = vec4(pos, in_posU.w);
+#ifdef TREE_ORIGIN
     out_windSway = windSway;
 #endif
 #ifdef TREE_STATIC
@@ -187,23 +173,11 @@ void main()
 #else
     out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
 #endif
-#ifdef TREE_ORIGIN
-    out_treeDistance = distance(u_viewPos, inst_pos);
-#endif
-#ifdef TREE_VOXEL
-    out_voxelGrid = in_normalV.xyz;
-    out_voxelQuat = inst_quat;
-    // THE CAMERA, sheared back by the trunk's bend at this vertex's height (tree_voxel_box.inc.glsl treeVoxelBoxShear): this
-    // tier crossfades with the meshes, so what its march finds must stand where the mesh's vertex stands.
-    vec3 toCam = u_viewPos - inst_pos;
-    out_treeDistance = length(toCam);
-    toCam.xz -= tree.trunk * treeVoxelBoxShear(in_posU.y, inst_scale, toCam.y);
-    treeVoxelBoxInterface(in_posU.xyz, in_normalV.xyz, in_tangent.xyz, toCam, inst_scale, inst_quat, out_voxelCam, out_voxelWorldSize, out_voxelSunLod);
-#endif
 
     // Per-eye projection in VR / centre view on desktop, with the same TAA sub-pixel jitter for both eyes.
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+#endif
 #ifdef FORCE_NEAR_DEPTH
     // GizmoUI: stamp (nearly) the nearest depth - NDC z = 1 under REVERSED-Z, eGreater compare. Only z changes, so the
     // gizmo always wins depth; the residual 1% of the original z keeps its own parts depth-sorted against each other.

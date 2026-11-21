@@ -65,7 +65,9 @@ calls `reloadShaders()`.
   from it, see "The frame UBO and the tweak locks" ([FrameUbo.md](FrameUbo.md))). So must the main cull's
   `OutMeshInstance` (64 B): it is declared in the cull (`instanced_indirect.cs.glsl`) and in every scene vertex shader
   that reads it (lit, terrain, ocean, rock, river) - a shader that declares fewer fields reads with the wrong stride.
-  On a TREE record its three "last frame" fields carry the tree's wind ([Vegetation.md](Vegetation.md) "Tree wind").
+  On a TREE record its three "last frame" fields carry the tree's wind ([Vegetation.md](Vegetation.md) "Tree wind"),
+  and the mesh index's 16 bits its TYPE in the tree set ([Scene.md](Scene.md) "BAKED TREE RECORDS"). The LitTree
+  fragment shader reads the record too (its first two fields, at the draw slot its VS hands on).
   They index it by `gl_InstanceIndex` (the cull writes each instance at its draw slot; "Draw-list compaction" in
   [Scene.md](Scene.md)).
 * **`mathutils.inc.glsl`** (Common/, included by shared.inc.glsl; a shader without shared.inc.glsl includes it
@@ -141,26 +143,49 @@ calls `reloadShaders()`.
   a tree piece never moves and is never skinned, so no previous-transform work, the motion is the wind's alone;
   `TREE_WIND_NO_FLUTTER` (the voxel box: no leaf-card TIP vertex); the voxel box passes payload 0 as a
   constant (the trunk bend only) and writes no normal / tangent. A tree's whole wind comes per TREE, not per vertex
-  ([Vegetation.md](Vegetation.md) "Tree wind"). `TREE_ORIGIN` / `TREE_VOXEL` hand the fragment shader the camera's
-  DISTANCE to the tree's origin (one flat float: `treeDistanceFaded`), not the origin for every pixel to measure.
+  ([Vegetation.md](Vegetation.md) "Tree wind"). `TREE_ORIGIN` and `TREE_VOXEL` hand on the tree's DRAW SLOT
+  (one flat uint) and nothing else per tree: see the next rule. `TREE_VOXEL` draws no surface at all: a screen
+  rectangle around the tree's box ([Scene.md](Scene.md) "THE VOXEL TIER").
+* **What is the same for a whole TREE is a load in the fragment shader, not a flat interpolant** (each interpolated
+  component is a plane equation per triangle, and the TRAM allocation is the tree ranges' launch limit). The fragment
+  reads its tree's instance record at the draw slot (the origin, the rotation, the scale) and its type's entry of the
+  tree set's table (the voxel grid's box), each where it is used; every pixel of the tree shares those loads. The
+  vertex shader fetches nothing per tree. LitTree FS 34 -> 27 inputs at the same 64 / 16 B, its VS 44 -> 40 registers
+  and 11.3 -> 8.7 KB ([Scene.md](Scene.md) "THE MESH LEAVES' SUN SELF-SHADOW"); the voxel tier likewise ("THE VOXEL
+  TIER"). **A `flat` input costs the TRAM what an interpolated one does** (measured on that tier: 13 flat components
+  out, its TRAM launch stall 85 -> 53 %). The far voxel trees have no draw slot (an instance-rate record): two flat
+  values per tree (6 components) and the type's box, their FS 30 -> 14 inputs.
+* **The TRAM pays per TRIANGLE: a proxy that only carries a ray is a screen rectangle, not a box.** The near voxel
+  tier drew its grid's box (18 to 34 front triangles a tree) for the entry point alone; it draws 2 triangles and its
+  fragment shader intersects the pixel's ray with the box (FS 30 -> 9 inputs). More triangles to save pixels lost: a
+  box of 9 rings fitted to the tree raised that tier's TRAM stall from 54 to 75 %. The far voxel trees and the voxel
+  shadow caster draw the same 2 triangles (the caster's rectangle lies in its cascade's clip space).
+* **An affine proxy needs no loop over its corners.** The voxel shadow caster's rectangle (an orthographic cascade, a
+  box with a shear) comes from the box's corner and three edges in clip space; the inverse of those edges maps clip
+  space to the grid. With 8 projected corners and the cascade matrix's inverse its VS was 96 registers / 59 KB; it is
+  54 / 39 KB.
+* **A world position rebuilt in a lit-core fragment costs registers, whatever it is rebuilt from** (the clutter: from
+  its camera-relative interpolant, 64 / 16 B -> 72 / 32 B; the voxel tier's box version: from its grid coordinate and
+  the tree's record, 56 / 32 B -> 64 / 0). It stays an interpolant. A value read only AFTER the lit core (the voxel
+  tier's motion) is free to work out there.
 * **Statement order sets a vertex shader's registers.** In instanced_indirect.vs.glsl the wind is worked out BEFORE the
   vertex's own transform: the transformed position and normal held across the wind were 15 registers of the generic
   lit VS (63 -> 48; unlit 62 -> 48, tree 48 -> 40). Same rule in a helper: `treeWindOfTree` evaluates the gusts first
   and returns no early zero, so nothing of the tree is held across them (the main cull 53 -> 50). And inside
   `treeWindVertex`: the vertex's own sway (`treeWindSway`) first, the trunk's part last. The sway output for the shadow
-  lookup (`out_windSway`) as "offset minus the trunk's part" was 45 registers in the tree VS; in this order it is 44,
-  the unlit VS 46 and 30.
-* **The voxel box's two vertex shaders hold no wind path at all** (ALU, not registers: binary size is the measure). The
-  near tier reads the trunk's two fields from its tree's record (no record test, no per-vertex `treeWindOfTree`
-  fallback): 6.1 -> 3.6 KB, 40 registers with the sheared camera. The far voxel trees take the trunk vector their cull
-  works out once per tree: 7.9 -> 2.7 KB, 37 registers (the cull 6.1 -> 7.6 KB, once per tree and not per vertex).
-  `treeVoxelBoxInterface` takes ONE reciprocal of the box's world size for the camera and the sun. Still per vertex
-  there, and one value per tree: the cube root of the box's volume (a `pow`) and `exp2` of "Voxel LOD bias".
+  lookup (`out_windSway`) as "offset minus the trunk's part" cost the tree VS one register more than this order; the
+  unlit VS is 46 and 30.
+* **The voxel tier's two vertex shaders hold no wind path at all** (ALU, not registers: binary size is the measure). The
+  near tier reads the trunk's vector from its tree's record (no record test, no per-vertex `treeWindOfTree`
+  fallback) and projects the box's corners for its rectangle (16 projections for 4 vertices a tree: 94 registers,
+  12 KB - a vertex stage that is 0.2 % of the warps). The far voxel
+  trees have no wind at all (they stand still): 8 projections, 47 registers, 5.6 KB, and their cull works out no
+  trunk vector. Neither works out a value that is one per tree: the fragment shader builds those from the type's box.
 * **A march whose loop sets the shader's register count reads its ray from the interpolants at each step.** An
   interpolant costs no register between two reads; a start point and a direction worked out before the loop are held
   across it. The voxel shadow caster (`shadow_depth.fs.glsl`, 40 registers) scales `in_voxelGrid + in_voxelDirG * t` to
   voxel coordinates inside the loop and tests the box on the sample; held as start + direction + exit distance it took
-  48. Where another part sets the count (the main voxel FS: its light loop), hold them - fewer instructions a step.
+  48. Its slab test for the ray's entry sits BEFORE the loop and leaves one float (`t`) behind: still 40. Where another part sets the count (the main voxel FS: its light loop), hold them - fewer instructions a step.
 * **Do not factor shared terms out by hand.** The driver's compiler already shares a subexpression across inlined
   calls. Tried on the atmosphere (a march step's density and its two optical depths use the same two exponentials, the
   same radius and the same two square roots - one `AtmosPoint` struct for all three): the binaries shrank 2 %, the time
@@ -190,8 +215,15 @@ calls `reloadShaders()`.
 * **The default static-mesh VS packs its interpolants into 4 locations**: `posU` (xyz + uv.x), `normalV` (xyz + uv.y),
   `tangent` (xyz + bitangent sign), flat `meshIdxMaterialIdx` at 3. The fragment shader rebuilds the bitangent. Every
   FS paired with that VS (lit, unlit, the gizmos, sky) uses this layout; the terrain, rock, ocean and river VS have
-  their own. Beside them: `prevWorldDelta` at 4 (the motion vectors) and `windSway` at 10 (the sun shadow's lookup
-  before the wind's sway, read by the lit FS and the LitTree FS only; Scene.md).
+  their own. Beside them: `prevWorldDelta` at 4 (the motion vectors). LitTree adds three: its draw slot at 5
+  (flat), the vertex's voxel-grid coordinate at 6 and `windSway` at 10 (the sun shadow's lookup before the wind's
+  sway; Scene.md).
+* **An interface on small triangles counts its components** (each one is a plane equation per triangle; the launch
+  stall to read is the TRAM allocation). Two ways that cost no register: what only ONE kind of a shader's surfaces
+  reads shares its slots with the others' (the clutter: a pebble's climate, a mushroom's local position and the other
+  kinds' pattern coordinates in the same components - 28 -> 23 inputs), and flat values of a few bits pack into one
+  word. **Not the world position**: rebuilt from another interpolant (the clutter's camera-relative position + the
+  camera) the lit core held it across its light loop, 64 / 16 B -> 72 / 32 B.
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):
   * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds (point/spot sphere,
@@ -291,9 +323,9 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0, the unlit
 VS 30/0 and 46/0), tree FS 64/16
-(its VS 44/0), voxel tree FS 56/32 (its VS 40/0, the far voxel trees' VS 37/0; the voxel
-shadow caster FS 40/0), the shadow VS 31/0 (the tree variants 40/0), tree_volume_march 64/0 (handover 62/0),
-tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
+(its VS 40/0), voxel tree FS 64/16 (its VS 94/0; the far voxel trees' FS 64/0 and VS 47/0; the voxel
+shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the voxel pipeline 54/0), tree_volume_march 64/0 (handover 62/0),
+tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
 cull 46/0, the shadow cull 39/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
 river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 63, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,

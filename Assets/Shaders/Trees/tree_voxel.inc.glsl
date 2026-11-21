@@ -5,10 +5,10 @@
 //   never leaves it. Slot s sits at column s % cols, row s / cols, as its 8 z slices side by side (64 x 8 texels). A
 //   voxel's value = the OPACITY over one voxel crossing. Slot 0 is the HEADER: its first two 4 x 4 blocks hold the index
 //   texture's bindless id (low byte, high byte), so a pass that gets this atlas alone finds the rest.
-// - THE INDEX (RGBA8, exact): texel (0, 0) = R log2(res), G the levels, B log2(cols); texels (1..3, 0) = THE GRID'S BOX
-//   in the tree's own space (voxelGridBox: Procedural writes it at upload, so a grid says where it stands); below that
-//   row level by level its D^3 bricks - brick (x, y, z) at (x + z D, y) of the level's D rows: RGB = its slot, 0 = EMPTY
-//   (nothing stored: air).
+// - THE INDEX (RGBA8, exact): texel (0, 0) = R log2(res), G the levels, B log2(cols), the rest of that row unused; below
+//   it level by level its D^3 bricks - brick (x, y, z) at (x + z D, y) of the level's D rows: RGB = its slot, 0 = EMPTY
+//   (nothing stored: air). The grid's BOX is not in the textures: the box mesh carries it for the voxel tier's draw, the
+//   tree set's type table for the mesh leaves (tree_type.inc.glsl).
 // - THE SURFACE ATLAS (half the opacity atlas each way): per stored brick 4^3 samples over the same span, as two tile
 //   sets side by side (2 x 16 x 4 texels): RGB the mean colour (sRGB-encoded) + A the interior, then RGB the mean normal
 //   + A the leaf share (0 = bark only).
@@ -86,21 +86,6 @@ VoxelGrid voxelGrid(uint opacityTex)
 	grid.colsShift = uint(header.b);
 	grid.invSize = 1.0 / vec2(textureSize(u_textures[opacityTex], 0));
 	return grid;
-}
-
-// THE GRID'S BOX in the tree's own space (mesh-local): its min corner and its size, from the index's header row - six
-// 16-bit values, low byte first, two a texel: min x y z over [-VOXEL_BOX_RANGE / 2, VOXEL_BOX_RANGE / 2), size x y z over
-// [0, VOXEL_BOX_RANGE) (Procedural createVoxelMaterial; 2 mm steps). For a reader that has a grid but not its box mesh:
-// the mesh leaves' sun self-shadow (the box mesh carries the same box for the voxel tier's own draw).
-const float VOXEL_BOX_RANGE = 128.0;
-void voxelGridBox(VoxelGrid grid, out vec3 boxMin, out vec3 boxSize)
-{
-	const vec4 a = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(1, 0), 0) * 255.0 + 0.5);
-	const vec4 b = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(2, 0), 0) * 255.0 + 0.5);
-	const vec4 c = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(3, 0), 0) * 255.0 + 0.5);
-	const float unit = VOXEL_BOX_RANGE / 65536.0;
-	boxMin = vec3(a.r + a.g * 256.0, a.b + a.a * 256.0, b.r + b.g * 256.0) * unit - 0.5 * VOXEL_BOX_RANGE;
-	boxSize = vec3(b.b + b.a * 256.0, c.r + c.g * 256.0, c.b + c.a * 256.0) * unit;
 }
 
 float voxelLevelBricks(float n)

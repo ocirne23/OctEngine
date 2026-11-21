@@ -756,13 +756,11 @@ namespace Procedural
 		}
 	}
 
-	void treeVoxelBoxMesh(const TreeBillboardBox& box, uint32 slices, TreeMesh& out)
+	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out)
 	{
 		out = {};
-		// RINGS of four corners up the box, `slices` + 1 of them: the wind's trunk bend grows with the height SQUARED
-		// (tree_wind.inc.glsl), and a vertex shader bends the box only at its vertices. Two rings (1 slice) shear it straight -
-		// half the top's offset at mid height, where the mesh has a quarter; 4 slices are within 1/64 of the top's offset.
-		const uint32 SLICES = glm::max(slices, 1u);
+		// TWO RINGS of four corners: the box's 8.
+		constexpr uint32 SLICES = 1;
 		const glm::vec3 size = box.max - box.min;
 		for (uint32 r = 0; r <= SLICES; ++r)
 			for (uint32 c = 0; c < 4; ++c)
@@ -775,8 +773,13 @@ namespace Procedural
 				out.texCoords.push_back(glm::vec3(0.0f, 0.0f, TREE_VOXEL_BOX_WIND_CODE));
 				out.bones.push_back(0);
 			}
-		// Vertex = ring x 4 + (x | z << 1); vertex 0 is the box's minimum corner (createVoxelMaterial reads the box from it).
+		// Vertex = ring x 4 + (x | z << 1); vertex 0 is the box's minimum corner (TreeSystem::uploadSpecies reads the grid's box
+		// from it: position - grid coordinate x size).
 		// Counter-clockwise seen from outside (the engine's front faces).
+		// THE FIRST QUAD, the -Y face (6 indices, the box's four bottom corners), IS WHAT EVERY PASS DRAWS: those two triangles
+		// alone, as a rectangle its vertex shader builds from each corner's grid x / z (RendererVK instanced_indirect.vs.glsl
+		// TREE_VOXEL, tree_voxel_far.vs.glsl, shadow_depth.vs.glsl). Keep it first, and keep its winding: the shadow pipeline
+		// culls front faces (ShadowMapGraphicsPipeline::buildVoxelLayout).
 		const auto vertex = [](uint32 x, uint32 ring, uint32 z) { return ring * 4u + (x | (z << 1)); };
 		const auto quad = [&out](uint32 a, uint32 b, uint32 c, uint32 d) { out.indices.insert(out.indices.end(), { a, b, c, a, c, d }); };
 		quad(vertex(0, 0, 0), vertex(1, 0, 0), vertex(1, 0, 1), vertex(0, 0, 1));                               // -Y

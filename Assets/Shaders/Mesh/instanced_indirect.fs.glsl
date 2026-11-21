@@ -19,7 +19,6 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
-layout (location = 10) in vec3 in_windSway;      // the wind's sway of this point without the trunk's bend (the trees' near bark; else 0)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -41,12 +40,10 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 // THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live (lit FS 72/16 ->
 // 64/48 regs / spill B). The geometric normal also carries the shadow's normal offset (a normal map must not bend the
 // bias). A surface facing away from the sun gets none; doSunLight's facing test on the shading normal still applies.
-// Looked up at the position BEFORE THE WIND'S SWAY (in_windSway: a tree's bark on its branches): the casters bend by the
-// trunk alone, so the shadow stays on the branch as it sways.
 void sunShadowFirst(vec3 pos)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
-	g_sunShadowFirst = dot(geoN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(pos - in_windSway, geoN) : 0.0;
+	g_sunShadowFirst = dot(geoN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(pos, geoN) : 0.0;
 }
 
 void main()

@@ -182,7 +182,7 @@ GPU Frame
     → Terrain wetness                      (tick frames only)
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
-    → Far voxel trees                      (desktop: the far record chunks' trees as voxel boxes - cull, prefix, scatter; off: emptied; Scene.md)
+    → Far voxel trees                      (desktop: the far record chunks' trees as voxel trees - cull, prefix, scatter; off: emptied; Scene.md)
     → Grass near shadow                    (desktop, its own 2048 map; after the grass and clutter culls)
     → Cloud shadow                         (the cloud shadow map: one tile of each cascade's next snapshot; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
@@ -485,6 +485,13 @@ not only with validation — the validation messenger stays validation-only.
 * **Command labels = the `GpuProfiler` scopes.** `beginScope` / `endScope` also emit
   `vkCmdBegin/EndDebugUtilsLabelEXT` (`Device::beginDebugLabel`), BEFORE their early-outs, so the pair
   holds even when timestamps are off. A new profiled pass is therefore a Nsight marker range for free.
+* **The "Static meshes" stage's draw groups** take plain labels (no `GpuProfiler` scope: its timestamp queries are per
+  frame, and that secondary is cached) with **"Renderer/Label static mesh draws"** (off; a change re-records):
+  `StaticMeshGraphicsPipeline::record` opens "Opaque set" (ONE generated-commands execute: lit, masked, unlit, the
+  tree meshes, the rocks, the untessellated ground - they cannot be split), "Tree voxels", "Far voxel trees",
+  "Tessellated ground", "Grass", "Clutter", "Flowers", "Terrain film", "Sky" and "Transparent set" (the ocean, the
+  rivers: also inside "Static meshes"). Each group records a bind and a draw; one that draws nothing that frame is a
+  range with no workload.
 * **Never record an EMPTY scope** (a begin and an end with no command between them): Nsight's GPU Trace times a
   zero-length range at the NEXT workload, and when that is the first command inside a render pass begun with
   SECONDARY_COMMAND_BUFFERS contents (the force interval pass, a scene stage), its vkCmdWriteTimestamp is illegal -

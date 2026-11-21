@@ -299,10 +299,13 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.writeMotion = true,
 	});
 	// Variant 15 (EPipelineIndex::LitTreeVoxel): the procedural trees' VOXEL tier (Procedural TreeSystem). The VS
-	// (TREE_VOXEL) passes the box's grid coordinate, the camera in grid space and the instance frame; the FS marches the
-	// tree's voxel atlases from the box's front face and writes the hit's depth (conservatively farther: early depth
-	// still rejects a hidden box), then lights it with the foliage terms. Back faces culled: the camera never
-	// stands inside a tree at the tier's distances.
+	// (TREE_VOXEL) draws ONE SCREEN RECTANGLE around the tree's box (2 triangles: the main cull hands it the box mesh's
+	// first quad), at the box's nearest depth, and passes the pixel's view ray and the draw slot; the FS finds the ray's
+	// entry into the box itself, marches the tree's voxel atlases from there and writes the hit's depth (conservatively
+	// farther: early depth still rejects a box the scene hides), then lights it with the foliage terms. No culling: the
+	// rectangle faces the camera whatever the box's winding. TREE_VOXEL_RECORD: every instance is a tree record of the
+	// main cull, so the FS reads what is one value per tree from that record and its type (the far voxel trees'
+	// pipeline, the same FS without the define, draws the box and takes those values flat from its own VS).
 	const oc::string voxelVariantPath = "Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
@@ -313,8 +316,10 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.fragmentShader = ShaderSource{
 			.text = FileSystem::readFileStr(voxelVariantPath),
 			.debugFilePath = voxelVariantPath,
+			.defines = { { "TREE_VOXEL_RECORD", "1" } },
 		},
 		.writeMotion = true,
+		.cullMode = vk::CullModeFlagBits::eNone,
 	});
 	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitTreeVoxel);
 	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
@@ -451,19 +456,19 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eVertex
+            | vk::ShaderStageFlagBits::eFragment // the LitTree FS: what is the same for a whole tree, at its draw slot (instanced_indirect_tree.fs.glsl)
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InMaterialInfos
         .binding = 2,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eFragment
-            | vk::ShaderStageFlagBits::eVertex // the LitTree VS: a leaf material's linked voxel grid (tree_leaf_sun.inc.glsl)
     });
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InRenderNodeTransforms
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // TreeLeafTypes: the bound tree set's type table (LitTree: the leaves' voxel grid, tree_leaf_sun.inc.glsl)
         .binding = 3,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InLightInfos
         .binding = 4,
@@ -711,9 +716,10 @@ void StaticMeshGraphicsPipeline::buildTreeVoxelFarLayout(const GraphicsPipelineL
     far.descriptorBindingFlags = main.descriptorBindingFlags;
     far.pushConstantRanges = main.pushConstantRanges;
     far.indirectBindable = false;
-    far.motionTarget = true; // the opaque family; the wind moves the boxes
+    far.motionTarget = true; // the opaque family
     far.writeMotion = true;
     far.polygonMode = main.polygonMode;
+    far.cullMode = vk::CullModeFlagBits::eNone; // a screen rectangle, built from the box's bottom quad: no winding to rely on
 
     // Binding 0 = the mesh mega-buffer's MeshVertex (as the main layout), binding 1 = TreeVoxelFarPipeline::InstanceGpu.
     auto& bindings = far.vertexLayoutInfo.bindingDescriptions;
@@ -963,7 +969,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
 {
-    oc::array<DescriptorSetUpdateInfo, 19> graphicsDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 20> graphicsDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo{
             .binding = 0,
@@ -1101,21 +1107,26 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.grassNearShadowSampler, .imageView = params.grassNearShadowView,
                 .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } }
         },
-        DescriptorSetUpdateInfo{ // [16] the texture array
+        DescriptorSetUpdateInfo{ // [16] the bound tree set's type table (a change of the set re-records)
+            .binding = 3,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.treeTypesBuffer.getBuffer(), .range = params.treeTypesBuffer.getSize() } }
+        },
+        DescriptorSetUpdateInfo{ // [17] the texture array
             .binding = 25,
             .type = vk::DescriptorType::eCombinedImageSampler,
         },
-        DescriptorSetUpdateInfo{}, // [17] + [18] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{}, // [18] + [19] the GI volume cascades + sky: written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[17], graphicsDescriptorSetUpdateInfos[18]);
-    const size_t numUpdates = params.giVolume.empty() ? 17 : 19;
+        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[18], graphicsDescriptorSetUpdateInfos[19]);
+    const size_t numUpdates = params.giVolume.empty() ? 18 : 20;
 
     const size_t numTextures = Globals::textureManager.getNumTextures();
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
     {
-        graphicsDescriptorSetUpdateInfos[16].imageInfos.push_back(
+        graphicsDescriptorSetUpdateInfos[17].imageInfos.push_back(
             vk::DescriptorImageInfo{
                 .sampler = m_sampler.getSampler(),
                 .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
@@ -1140,7 +1151,30 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer() }, { 0 });
         vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
     };
+    // THE STAGE'S DRAW GROUPS AS NSIGHT SUB-RANGES ("Renderer/Label static mesh draws"; a change re-records): each group
+    // below opens its debug label, which closes the group before it. Labels only, no GpuProfiler scope: its timestamp
+    // queries are per frame, and this command buffer is cached. Every group records at least a bind and a draw, so no
+    // range is empty of commands; a group that draws nothing this frame (a count of 0) is a range with no workload.
+    const bool labelDraws = Globals::settings.renderer.labelStaticMeshDraws;
+    bool labelOpen = false;
+    const auto closeDrawGroup = [&]()
+    {
+        if (labelOpen)
+            Globals::device.endDebugLabel(vkCommandBuffer);
+        labelOpen = false;
+    };
+    const auto drawGroup = [&](const char* name)
+    {
+        if (!labelDraws)
+            return;
+        closeDrawGroup();
+        Globals::device.beginDebugLabel(vkCommandBuffer, name);
+        labelOpen = true;
+    };
+
     // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).
+    // The opaque set in ONE execute: lit, masked, unlit, the tree meshes (LitTree), the rocks and the untessellated ground.
+    drawGroup("Opaque set");
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_indirectExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
     recordExecuteGeneratedCommands(vkCommandBuffer, m_indirectExecutionSet, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
 
@@ -1158,12 +1192,14 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     };
     // The trees' VOXEL tier, right after the opaque meshes it hands over from: its FS writes FragDepth, so it cannot join
     // the execution set (every pipeline there must match the first one in that).
+    drawGroup("Tree voxels");
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::LitTreeVoxel), m_graphicsPipeline.getPipelineLayout(),
         params.treeVoxelCommandBuffer, 4);
     // The FAR voxel trees (TreeVoxelFarPipeline): one indexed indirect draw per voxel mesh over its sorted records (the
     // unused buckets draw 0 instances). The box meshes from the mega-buffers, the record instance-rate at binding 1.
     if (params.treeVoxelFar && m_treeVoxelFarBuilt)
     {
+        drawGroup("Far voxel trees");
         const TreeVoxelFarPipeline::Draw& far = *params.treeVoxelFar;
         vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipeline());
         vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
@@ -1174,12 +1210,16 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.drawIndexedIndirect(far.commands->getBuffer(), 0, TreeVoxelFarPipeline::MAX_BUCKETS, 5 * sizeof(uint32));
     }
     if (m_terrainTess && m_terrainTessBuilt)
+    {
+        drawGroup("Tessellated ground");
         drawSequences(m_terrainTessPipeline.getPipelineVariant(0), m_terrainTessPipeline.getPipelineLayout(), params.terrainTessCommandBuffer, 2);
+    }
     // The GRASS after the ground (its depth rejects the buried blade parts early), before the film (which then stays
     // under the blades): one indexed draw per visible patch, the patch record an instance-rate attribute, the blade
     // index buffer of vertex ids (grass.vs.glsl). No vertex buffer of geometry.
     if (params.grass && m_grassBuilt)
     {
+        drawGroup("Grass");
         const GrassPipeline::Draw& grass = *params.grass;
         vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipeline());
         vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
@@ -1199,6 +1239,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         const ClutterPipeline::Draw& clutter = *params.clutter;
         if (m_clutterBuilt && clutter.rigid)
         {
+            drawGroup("Clutter");
             vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_clutterPipeline.getPipeline());
             vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_clutterPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
             vkCommandBuffer.bindVertexBuffers(0, { clutter.vertices->getBuffer(), clutter.instances->getBuffer() }, { 0, 0 });
@@ -1214,23 +1255,29 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             vkCommandBuffer.bindIndexBuffer(clutter.flowerIndices->getBuffer(), 0, vk::IndexType::eUint32);
             vkCommandBuffer.drawIndexedIndirect(clutter.commands->getBuffer(), textured * halfBuckets * commandSize, halfBuckets, commandSize);
         };
+        if (m_flowerBuilt || m_texturedFlowerBuilt)
+            drawGroup("Flowers");
         if (m_flowerBuilt)
             drawFlowers(m_flowerPipeline, 0);
         if (m_texturedFlowerBuilt)
             drawFlowers(m_texturedFlowerPipeline, 1);
     }
+    drawGroup("Terrain film");
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);
     // The SKY after every depth writer of the scene: early depth rejects each pixel the scene covers.
     if (params.drawSky)
     {
+        drawGroup("Sky");
         bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
         vkCommandBuffer.draw(3, 1, 0, 0);
     }
     // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
     // its own (the transparent family's lowest variant).
+    drawGroup("Transparent set");
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
     recordExecuteGeneratedCommands(vkCommandBuffer, m_transparentExecutionSet, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
+    closeDrawGroup();
 }
 
 void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, const IndirectExecutionSet& executionSet, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx)

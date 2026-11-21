@@ -24,16 +24,23 @@ layout (location = 4) in uvec4 in_instLook;
 #ifndef CLUTTER_NEAR_SHADOW
 layout (location = 5) in vec4 in_uv;
 
+
+// THE INTERFACE: 20 components on triangles of a few pixels (each one is a plane equation per triangle), so what only ONE
+// kind reads shares its slots with the others'.
+// BOTH positions stay interpolated. The world position: the lit core holds a rebuilt one (relPos + the camera) across its
+// light loop - FS 64 / 16 B -> 72 / 32 B. The position relative to the camera (mesh offset + (instance - camera), exact
+// near the camera): the bump's screen derivatives read it (the world position's rounding, ~2 mm at 20 km, made them
+// sparkle) and the FS's V.
 layout (location = 0) out vec3 out_pos;
+layout (location = 5) out vec3 out_relPos;
 layout (location = 1) out vec3 out_normal;
-layout (location = 2) out vec3 out_local;        // the mesh-local position (scale 1): the procedural patterns
-layout (location = 3) out vec4 out_fields;       // x ao, y height above the object's base (m), z temperature C, w humidity
-layout (location = 4) flat out uvec4 out_look;   // x albedo0, y albedo1, z kind, w part
-layout (location = 5) out vec4 out_uv;           // the mesh's pattern coordinates (a branch's in metres)
-layout (location = 6) flat out float out_height; // the object's height (m): the contact band's scale
-// The position relative to the camera: mesh offset + (instance - camera), exact near the camera. The bump's screen
-// derivatives read it (the world position's rounding, ~2 mm at 20 km, made them sparkle) and the FS's V.
-layout (location = 7) out vec3 out_relPos;
+// x ao, y height above the object's base (m); zw BY KIND - a pebble: temperature C, humidity (the only kind that reads the
+// climate); a mushroom: its mesh-local position's x, y (scale 1: the cap's spots; z rides out_uv.z).
+layout (location = 2) out vec4 out_fields;
+// The mesh's pattern coordinates (a branch's in metres). A pebble has none; a mushroom reads xy alone (its z = local z).
+layout (location = 3) out vec4 out_uv;
+// x albedo0, y albedo1, z = kind | part << 8 | the object's height (m, a half: the contact band's scale) << 16.
+layout (location = 4) flat out uvec3 out_look;
 #endif
 
 void main()
@@ -50,20 +57,31 @@ void main()
     out_pos = pos;
     out_relPos = offset + (in_instPosScale.xyz - u_viewPos);
     out_normal = quat_transform(in_normalPart.xyz, q);
-    out_local = in_posAo.xyz;
 
-    float temperature = 12.5;
-    float humidity = 0.5;
-    if (terrainHeightMapPresent())
+    // What only ONE kind reads shares its slots with the others' (the interface above).
+    vec2 kindFields = vec2(0.0);
+    vec4 uv = in_uv;
+    if (kind == CLUTTER_KIND_PEBBLE)
     {
-        const vec4 climate = terrainClimateAt(pos.xz);
-        humidity = climate.w;
-        temperature = terrainTemperatureAt(climate, pos.y);
+        // The climate, for the bedrock: only a pebble fetches it.
+        kindFields = vec2(12.5, 0.5);
+        if (terrainHeightMapPresent())
+        {
+            const vec4 climate = terrainClimateAt(pos.xz);
+            kindFields = vec2(terrainTemperatureAt(climate, pos.y), climate.w);
+        }
     }
-    out_fields = vec4(in_posAo.w, in_posAo.y * scale, temperature, humidity);
-    out_look = uvec4(in_instLook.x, in_instLook.y, kind, uint(in_normalPart.w)); // fp32, written as exact 0 / 1 / 2
-    out_uv = kind == CLUTTER_KIND_BRANCH ? in_uv * scale : in_uv; // bark: metres
-    out_height = unpackHalf2x16(in_instLook.z).x;
+    else if (kind == CLUTTER_KIND_BRANCH)
+        uv = in_uv * scale; // bark: metres
+    else if (kind == CLUTTER_KIND_MUSHROOM)
+    {
+        kindFields = in_posAo.xy;
+        uv.z = in_posAo.z;
+    }
+    out_fields = vec4(in_posAo.w, in_posAo.y * scale, kindFields);
+    out_uv = uv;
+    // The part: fp32, written as exact 0 / 1 / 2. The height: the low half of the record's look.z, as it is.
+    out_look = uvec3(in_instLook.x, in_instLook.y, kind | (uint(in_normalPart.w) << 8) | ((in_instLook.z & 0xFFFFu) << 16));
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

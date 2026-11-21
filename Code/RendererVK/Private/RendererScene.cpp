@@ -428,14 +428,10 @@ void RendererState::destroyTextureMaterial(uint16 materialIdx)
     m_materials.release(materialIdx, 1);
 }
 
-uint16 RendererState::addDerivedMaterial(uint16 source, uint32 extraFlags, uint16 linkedTexture)
+uint16 RendererState::addDerivedMaterial(uint16 source, uint32 extraFlags)
 {
     RendererVKLayout::MaterialInfo material = m_materials.items()[source];
     material.flags |= extraFlags;
-    // The LINKED texture rides the metal-roughness slot: only for a material whose shader samples no metal-roughness
-    // (RenderMaterial::derive). A real texture index, so the streamer's notes on the slot stay valid; no destroy frees it.
-    if (linkedTexture != UINT16_MAX)
-        material.metalRoughnessTexIdx = linkedTexture;
     return (uint16)addMaterialInfos({ material });
 }
 
@@ -631,10 +627,10 @@ RenderMaterial RenderMaterial::createTextured(const TextureDesc& desc)
     return material;
 }
 
-RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags, uint16 linkedTexture)
+RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags)
 {
     RenderMaterial material;
-    material.m_index = Globals::rendererVK.addDerivedMaterial(source, extraFlags, linkedTexture);
+    material.m_index = Globals::rendererVK.addDerivedMaterial(source, extraFlags);
     return material;
 }
 

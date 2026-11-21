@@ -9,9 +9,10 @@
 
 // EPipelineIndex::LitTreeVoxel: THE VOXEL TIER of the procedural trees (Procedural TreeSystem, "Trees/Voxel impostors").
 // The main pass draws it past the tree's band, in its meshes' place (tree_cull.inc.glsl treeCullMainPiece); the shadows
-// and the rays take the tree's shadow billboard. The mesh is the variant's grid box (Procedural treeVoxelBoxMesh), front faces only; this
-// shader marches the tree's PREFILTERED voxel grid (sparse bricks: tree_voxel.inc.glsl, Procedural TreeImpostor.ixx "The VOXEL tier") from the
-// face along the view ray at the level whose voxel is about a pixel, stops where the ray's coverage passes this pixel's
+// and the rays take the tree's shadow billboard. What is drawn is ONE SCREEN RECTANGLE around the variant's grid box (both tiers);
+// this shader intersects the pixel's ray with the box (voxelTreeRay) and marches the tree's PREFILTERED voxel grid
+// (sparse bricks: tree_voxel.inc.glsl, Procedural TreeImpostor.ixx "The VOXEL tier") from the
+// entry along the view ray at the level whose voxel is about a pixel, stops where the ray's coverage passes this pixel's
 // threshold (stochastic coverage: TAA / DLSS resolve it), writes that point's depth and lights it with the foliage
 // terms - the leaf transmission, the N.V bend, the sky wrap - and a real self-shadow: the sun
 // marched through the tree's own voxels. The cascades' shadow is looked up where that sun path LEAVES the box, so the
@@ -20,27 +21,166 @@
 // DGC execution set does. The VS is instanced_indirect.vs.glsl with TREE_VOXEL.
 
 #include "shared.inc.glsl"
+#ifdef TREE_VOXEL_RECORD
+#include "tree_wind.inc.glsl"      // the near tier: the wind's motion at the hit
+#include "tree_voxel_box.inc.glsl" // the near tier: the trunk's bend as a shear of the ray
+#endif
 
-layout (location = 0) in vec4 in_posU;                 // xyz = the box face's world position (with the trunk bend)
-layout (location = 3) in flat uint in_meshIdxMaterialIdx;
-layout (location = 4) in vec3 in_prevWorldDelta;       // the wind's motion (instanced_indirect.vs.glsl)
-layout (location = 5) in vec3 in_voxelCam;             // the camera in grid space, sheared back by the trunk's bend (tree_voxel_box.inc.glsl)
-layout (location = 6) in vec3 in_voxelGrid;            // the face point in grid space
-layout (location = 7) in flat vec4 in_voxelQuat;       // grid (tree) axes -> world
-layout (location = 8) in flat vec4 in_voxelWorldSize;  // xyz = the box in world metres, w = the cube root of its volume
-layout (location = 9) in flat float in_treeDistance;   // the camera's distance to the tree's origin: the distance fade
-layout (location = 10) in flat vec4 in_voxelSunLod;    // xyz = the sun in grid units per metre (no zero component), w = the LOD scale (tree_voxel_box.inc.glsl)
+layout (location = 3) in flat uint in_meshIdxMaterialIdx; // the tree set TYPE | the material << 16 (both tiers' culls write the type)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
 
+// WHAT IS THE SAME FOR A WHOLE TREE IS NEVER A PLANE EQUATION PER TRIANGLE (flat, it was 13 of this shader's 27
+// interpolated components, with the TRAM allocation the tier's launch limit). The tree's BOX comes from the tree set's
+// type table (tree_type.inc.glsl), its rotation, scale and distance through the voxelTree* functions of the tier, and
+// the rest is built from those where it is used. Every pixel of a tree shares the loads.
+#define TREE_TYPES_BINDING 3
+#include "tree_type.inc.glsl"
+
+#ifdef TREE_VOXEL_RECORD
+// THE NEAR TIER (the pipeline's define; its VS is instanced_indirect.vs.glsl TREE_VOXEL): NO BOX IS DRAWN - a screen
+// rectangle around it, 2 triangles a tree, and this shader finds the ray's entry itself (voxelTreeRay). The tree's
+// instance record is read at the draw slot (the main cull's OutMeshInstance, 64 B; `wind` / `rest` = tree_wind.inc.glsl
+// treeWindPack). The wind's motion is not interpolated either: it follows from the hit's height.
+layout (location = 0) in vec3 in_posU;     // a world point on this pixel's view ray, about as far as the tree
+layout (location = 7) in flat uint in_treeInstance;
+struct TreeDrawInstance
+{
+	vec4 posScale;
+	vec4 quat;
+	vec4 wind;
+	uvec4 rest;
+};
+layout (binding = 1, std430) readonly buffer InDrawInstances { TreeDrawInstance in_drawInstances[]; };
+
+vec4 voxelTreeQuat() { return in_drawInstances[in_treeInstance].quat; } // grid (tree) axes -> world
+float voxelTreeScale() { return in_drawInstances[in_treeInstance].posScale.w; }
+float voxelTreeDistance() { return distance(u_viewPos, in_drawInstances[in_treeInstance].posScale.xyz); }
+vec3 voxelTreeViewDir() { return normalize(in_posU - u_viewPos); } // the camera -> this pixel, world, unit
+// THE PIXEL'S RAY THROUGH THE TREE'S GRID: camG = the camera in grid space, dirG = the ray's direction in grid units per
+// metre (no zero component: the empty bricks' jump divides by it), tNear / tFar = the distances from the camera (metres)
+// at which it enters and leaves the box (tNear 0: the camera stands inside). False = the ray misses the box: a pixel of
+// the rectangle beside it, gone before any fetch. THE MARCH RUNS FROM THE CAMERA along it (its t starts at tNear): no
+// entry point and no entry distance are held beside the ray.
+// THE TRUNK'S BEND is a shear of the ray about the height it enters at (tree_voxel_box.inc.glsl treeVoxelBoxShear), so
+// there are THREE slab tests: the ray as it is against the box widened by its top's bend (a first entry height; a ray
+// that misses that misses the bent tree), then twice the ray sheared about the last entry's height against the box.
+// Against the box's own bent faces (a numeric model, a top bend of some metres): the ray lies within 6 cm for 99 % of
+// the pixels. Its distances are the sheared ray's: the camera and the entry shear by different amounts, so the hit's
+// world position lies up to that difference along the view ray from the true one (centimetres; decimetres in a storm).
+bool voxelTreeRay(out vec3 camG, out vec3 dirG, out float tNear, out float tFar)
+{
+	const uint typeIdx = in_meshIdxMaterialIdx & 0xFFFFu;
+	const float scale = in_drawInstances[in_treeInstance].posScale.w;
+	// INTO THE TREE'S AXES ONCE (metres): the camera, the pixel's direction and the trunk vector. A tree turns about up
+	// only, so the shear (sideways by the height) is the same shear there - no rotation per test.
+	const vec4 quat = in_drawInstances[in_treeInstance].quat;
+	const vec4 toLocal = vec4(-quat.xyz, quat.w);
+	const vec3 camL = quat_transform(u_viewPos - in_drawInstances[in_treeInstance].posScale.xyz, toLocal);
+	const vec3 dirL = quat_transform(normalize(in_posU - u_viewPos), toLocal);
+	const vec2 trunkL = quat_transform(vec3(in_drawInstances[in_treeInstance].wind.x, 0.0, in_drawInstances[in_treeInstance].wind.y), toLocal).xz;
+	const vec3 perMetre = in_treeTypes[typeIdx].gridInvSize / scale;                                // grid units per metre
+	const vec3 originG = -in_treeTypes[typeIdx].gridMin * in_treeTypes[typeIdx].gridInvSize;       // the tree's origin in grid space
+	const float boxBase = in_treeTypes[typeIdx].gridMin.y;
+	const float boxHeight = in_treeTypes[typeIdx].gridSize.y;
+	// The top's bend in grid units, to either side (its x and z share the larger scale).
+	const float topHeight = max(boxBase + boxHeight, 0.0) * scale;
+	float widen = length(trunkL) * treeVoxelBoxShear(topHeight, topHeight).x * max(perMetre.x, perMetre.z);
+	vec2 shear = vec2(0.0);
+	camG = vec3(0.0);
+	dirG = vec3(1e-6);
+	tNear = 0.0;
+	tFar = 0.0;
+	for (int pass = 0; pass < 3; ++pass)
+	{
+		// The ray sheared about the last entry's height (the first test: as it is), then in grid units.
+		const vec3 raw = normalize(vec3(dirL.xz - trunkL * (shear.y * dirL.y), dirL.y).xzy) * perMetre;
+		camG = vec3(camL.xz - trunkL * shear.x, camL.y).xzy * perMetre + originG;
+		dirG = mix(vec3(1e-6), raw, greaterThan(abs(raw), vec3(1e-6)));
+		const vec3 t0 = (vec3(-widen, 0.0, -widen) - camG) / dirG;
+		const vec3 t1 = (vec3(1.0 + widen, 1.0, 1.0 + widen) - camG) / dirG;
+		const vec3 tLow = min(t0, t1);
+		const vec3 tHigh = max(t0, t1);
+		tNear = max(max(max(tLow.x, tLow.y), tLow.z), 0.0);
+		tFar = min(min(tHigh.x, tHigh.y), tHigh.z);
+		if (tNear >= tFar)
+			return false;
+		if (pass < 2)
+		{
+			shear = treeVoxelBoxShear(max(boxBase + (camG.y + dirG.y * tNear) * boxHeight, 0.0) * scale, camL.y);
+			widen = 0.0;
+		}
+	}
+	return true;
+}
+// THE WIND'S MOTION at the hit (the trunk's bend last frame minus now), from the HIT's height over the tree's origin: the
+// record is read here, at the shader's end, so nothing of it is held across the lit core.
+vec3 voxelTreePrevDelta(vec3 hitPos)
+{
+	vec3 prevDelta;
+	treeWindTrunkVertex(in_drawInstances[in_treeInstance].wind.xy, unpackHalf2x16(in_drawInstances[in_treeInstance].rest.y),
+		hitPos.y - in_drawInstances[in_treeInstance].posScale.y, 1.0, prevDelta);
+	return prevDelta;
+}
+#else
+// THE FAR VOXEL TREES (tree_voxel_far.vs.glsl: an instance-rate record, no draw slot): the same screen rectangle, with the
+// tree as TWO flat values. NO WIND: the box stands still (their sway is a few hundredths of a pixel a frame), so the ray
+// takes ONE slab test and there is no motion.
+layout (location = 0) in vec3 in_posU;           // a world point on this pixel's view ray, about as far as the tree
+layout (location = 5) in flat vec2 in_voxelYaw;  // sin, cos of half the yaw (the tree turns about up)
+layout (location = 7) in flat vec4 in_voxelTree; // xyz = the tree's origin (world), w = its scale
+vec4 voxelTreeQuat() { return vec4(0.0, in_voxelYaw.x, 0.0, in_voxelYaw.y); }
+float voxelTreeScale() { return in_voxelTree.w; }
+float voxelTreeDistance() { return distance(u_viewPos, in_voxelTree.xyz); }
+vec3 voxelTreeViewDir() { return normalize(in_posU - u_viewPos); }
+vec3 voxelTreePrevDelta(vec3 hitPos) { return vec3(0.0); }
+// The pixel's ray through the tree's grid (the near tier's voxelTreeRay, above, without the trunk's shear).
+bool voxelTreeRay(out vec3 camG, out vec3 dirG, out float tNear, out float tFar)
+{
+	const uint typeIdx = in_meshIdxMaterialIdx & 0xFFFFu;
+	const vec4 toLocal = vec4(0.0, -in_voxelYaw.x, 0.0, in_voxelYaw.y);
+	const vec3 perMetre = in_treeTypes[typeIdx].gridInvSize / in_voxelTree.w; // grid units per metre
+	camG = quat_transform(u_viewPos - in_voxelTree.xyz, toLocal) * perMetre - in_treeTypes[typeIdx].gridMin * in_treeTypes[typeIdx].gridInvSize;
+	const vec3 raw = quat_transform(normalize(in_posU - u_viewPos), toLocal) * perMetre;
+	dirG = mix(vec3(1e-6), raw, greaterThan(abs(raw), vec3(1e-6)));
+	const vec3 t0 = -camG / dirG;
+	const vec3 t1 = (1.0 - camG) / dirG;
+	const vec3 tLow = min(t0, t1);
+	const vec3 tHigh = max(t0, t1);
+	tNear = max(max(max(tLow.x, tLow.y), tLow.z), 0.0);
+	tFar = min(min(tHigh.x, tHigh.y), tHigh.z);
+	return tNear < tFar;
+}
+#endif
+
+// xyz = the box in world metres, w = the cube root of its volume (x 1 / a level's voxels = that level's step).
+vec4 voxelTreeWorldSize()
+{
+	const uint typeIdx = in_meshIdxMaterialIdx & 0xFFFFu;
+	return vec4(in_treeTypes[typeIdx].gridSize, in_treeTypes[typeIdx].gridCbrtVolume) * voxelTreeScale();
+}
+// The sun in grid units per metre, no zero component (the self-shadow march divides by it).
+vec3 voxelTreeSun()
+{
+	const vec4 quat = voxelTreeQuat();
+	const vec3 sun = quat_transform(u_sunDirection.xyz, vec4(-quat.xyz, quat.w))
+		* (in_treeTypes[in_meshIdxMaterialIdx & 0xFFFFu].gridInvSize / voxelTreeScale());
+	return mix(vec3(1e-6), sun, greaterThan(abs(sun), vec3(1e-6)));
+}
+// log2(this x the distance x level 0's voxels per axis) = the level whose voxel is about a pixel, + "Trees/Voxel LOD bias".
+// A pixel at 1 m spans 2 / u_mipPixelScale metres.
+float voxelTreeLodScale()
+{
+	return 2.0 * exp2(u_foliage_voxelLodBias) / (u_mipPixelScale * in_treeTypes[in_meshIdxMaterialIdx & 0xFFFFu].gridCbrtVolume * voxelTreeScale());
+}
+
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target
-// Reversed-Z: the hit lies at or behind the box face, so the written depth never exceeds the rasterized one - early depth
-// still rejects a box the scene hides.
+// Reversed-Z: the hit lies at or behind what is rasterized (the rectangle at the box's nearest depth), so the written
+// depth never exceeds the rasterized one - early depth still rejects a box the scene hides.
 layout (depth_less) out float gl_FragDepth;
 
-#define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST    // instanced_indirect_lit.inc.glsl: the sun's shadow before the material
 #define LIT_SUN_SHADOW_HARD // instanced_indirect_lit.inc.glsl: one shadow tap (a voxel pixel is noise that TAA / DLSS resolves)
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage's constant depth bias
@@ -87,10 +227,17 @@ void main()
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex);
 #endif
+	// THE RAY through the tree's grid; its parameter is the distance from the CAMERA (metres). First of all: a pixel of the
+	// rectangle that misses the box leaves here, before the material and every fetch.
+	vec3 camG, dirG;
+	float tNear, tFar;
+	if (!voxelTreeRay(camG, dirG, tNear, tFar))
+		discard;
+
 	const uint materialIdx = in_meshIdxMaterialIdx >> 16;
 	const MaterialInfo material = in_materialInfos[materialIdx];
-	// The crossfade with the meshes (the type's band), per tree: before the march.
-	if (treeDistanceFaded(material.flags, in_treeDistance))
+	// The crossfade with the meshes (the type's band), per tree: before the march. The distance only on a material that fades.
+	if ((material.flags & MATERIAL_FLAG_DISTANCE_FADE) != 0u && treeDistanceFaded(material.flags, voxelTreeDistance()))
 		discard;
 
 	// The material's albedo slot = the grid's opacity atlas (its header names the index), its normal slot = the surface atlas.
@@ -98,41 +245,32 @@ void main()
 	const uint surfaceTex = material.diffuseNormalTexIdx >> 16;
 	const float maxLod = grid.levels - 1.0;
 
-	// THE RAY, in grid space from the face; its parameter is the world distance from the face. The grid-space ray x the
-	// box's size is the camera -> face vector in metres: its length serves the direction and the level both.
-	const vec3 rayG = in_voxelGrid - in_voxelCam;
-	const vec3 rayW = rayG * in_voxelWorldSize.xyz;
-	const float invDist = inversesqrt(dot(rayW, rayW));
-	const vec3 dirRaw = rayG * invDist; // grid units per metre
-	// No zero component: the empty bricks' jump divides by it.
-	const vec3 dirG = mix(vec3(1e-6), dirRaw, greaterThan(abs(dirRaw), vec3(1e-6)));
-
-	// THE LEVEL: a voxel about a pixel ("Trees/Voxel LOD bias", inside the vertex shader's LOD scale), dithered between
-	// the two nearest per pixel.
-	const float lodF = log2(grid.res * in_voxelSunLod.w / invDist);
+	// THE LEVEL: a voxel about a pixel at the entry's distance ("Trees/Voxel LOD bias", inside the LOD scale), dithered
+	// between the two nearest per pixel.
+	const float lodF = log2(grid.res * voxelTreeLodScale() * max(tNear, 1e-3));
 	const float lod = clamp(floor(lodF + voxelNoise(vec2(29.0, 61.0))), 0.0, maxLod);
 	const VoxelLevel level = voxelLevel(grid, lod);
 	const float n = level.n;
-	const float stepWorld = in_voxelWorldSize.w / n; // one crossing: the stored opacity's length
+	const float stepWorld = voxelTreeWorldSize().w / n; // one crossing: the stored opacity's length
 
 	// THE MARCH, in the level's voxel coordinates (tree_voxel.inc.glsl): until the ray's coverage passes this pixel's
 	// threshold, or it leaves the box (then nothing). Not the distance fade's noise (tree_fade.inc.glsl, offset 0):
 	// inside its band only the high thresholds would be kept. An EMPTY brick (nothing stored: the index says so) is
 	// jumped to its far side.
 	const float threshold = max(voxelNoise(vec2(47.0, 113.0)), 0.004);
-	const vec3 faceC = in_voxelGrid * n;
 	const vec3 dirC = dirG * n;
-	const float exitT = voxelBoxExit(level, faceC, dirC); // the march ends where the ray leaves the box
+	const float exitT = tFar; // the march ends where the ray leaves the box
 	// TWO STEPS A WAIT: where the next step's sample lies in the same brick, both are fetched together (voxelOpacityPair) and
 	// taken in turn - the same samples as one a step. `t` stops at the hit: the hit's place is formed from it after the loop.
 	// The loop's math is the tier's other cost (a fifth less of it was a tenth less time): the ray is held as the voxel
-	// CENTRE coordinate (c - 0.5, once), and the end is one compare of the transmittance against 1 - the threshold.
-	float t = stepWorld * voxelNoise(vec2(83.0, 7.0));
+	// CENTRE coordinate of the CAMERA (c - 0.5, once) + the direction x t, t from the entry on, and the end is one compare
+	// of the transmittance against 1 - the threshold.
+	float t = tNear + stepWorld * voxelNoise(vec2(83.0, 7.0));
 	float transmit = 1.0;
 	bool hit = false;
 	float hitOpacity = 0.0;
 	const int maxSteps = int(n * 1.75) + 2;
-	const vec3 faceU = faceC - 0.5;
+	const vec3 faceU = camG * n - 0.5;
 	const float transmitEnd = 1.0 - threshold;
 	VoxelBrick marchBrick = voxelBrickNone();
 // One step's sample: its opacity onto the ray, and the march ends where the coverage passes the pixel's threshold.
@@ -168,11 +306,12 @@ void main()
 #undef VOXEL_VIEW_STEP
 	if (!hit)
 		discard;
-	const vec3 hitC = faceC + dirC * t;
+	const vec3 hitC = faceU + 0.5 + dirC * t;
 
-	// The hit lies on the pixel's own view ray: ONE view vector for the position and the lighting, formed after the march.
-	const vec3 V = normalize(u_viewPos - in_posU.xyz);
-	const vec3 pos = in_posU.xyz - V * t;
+	// The hit lies on the pixel's own view ray, t from the camera: ONE view vector for the position and the lighting,
+	// formed after the march. Anchored on the interpolated point of that ray (in_posU - V x a distance).
+	const vec3 V = -voxelTreeViewDir();
+	const vec3 pos = in_posU - V * (t - distance(in_posU, u_viewPos));
 
 	// THE SURFACE at the hit: its colour, mean normal and interior (the surface atlas: 4 samples per brick side).
 	vec3 albedo, normalTap;
@@ -188,12 +327,12 @@ void main()
 	const float leafAgree = meanLength * smoothstep(0.05, 0.5, hitOpacity);
 	// A zero vector (a voxel whose leaves cancel) stays zero: no NaN, no select.
 	const vec3 localN = meanN * inversesqrt(max(dot(meanN, meanN), 1e-8));
-	f16vec3 N = f16vec3(quat_transform(localN, in_voxelQuat));
+	f16vec3 N = f16vec3(quat_transform(localN, voxelTreeQuat()));
 
 	// THE SUN through the tree's own voxels (one level coarser), to where its path leaves the box. Its direction in grid
-	// space comes from the vertex shader (one per tree).
+	// space is one per tree (voxelTreeSun).
 	const vec3 L = u_sunDirection.xyz;
-	const vec3 sunG = in_voxelSunLod.xyz;
+	const vec3 sunG = voxelTreeSun();
 	const float exitDist = voxelBoxExit(level, hitC, sunG * n);
 	float sunTransmit = 1.0;
 	if (u_foliage_voxelSelfShadow > 0.0 && u_sunLit > 0.5) // at night the march's result scales a light of 0
@@ -204,7 +343,7 @@ void main()
 		for (float k = 0.0; k < u_foliage_voxelSelfShadowLevels && lod + k < maxLod; k += 1.0)
 			sunLevel = voxelLevelCoarser(sunLevel);
 		const float sunN = sunLevel.n;
-		const float sunStep = in_voxelWorldSize.w / sunN;
+		const float sunStep = voxelTreeWorldSize().w / sunN;
 		const vec3 sunU = hitG * sunN - 0.5; // the voxel centre coordinate, as the view march
 		const vec3 sunDirC = sunG * sunN;
 		// Empty bricks are jumped: the path out of the crown often crosses the box's empty corners.
@@ -240,7 +379,7 @@ void main()
 	// position, the colour, the normal and two scalars (the transmission's back + glow, the sun march's result).
 	// A voxel material is always a LEAF material (Procedural createVoxelMaterial): no leaf test.
 
-	g_canopyHeight = hitG.y * in_voxelWorldSize.y; // the box stands on the ground: the canopy map's occlusion above the hit
+	g_canopyHeight = hitG.y * voxelTreeWorldSize().y; // the box stands on the ground: the canopy map's occlusion above the hit
 
 	// THE CROWN'S INSIDE DARKER ("Trees/Voxel interior darkening"): the colour x 2 ^ (-2 x that x the hit's baked interior,
 	// 0 on the crown's surface .. 1 at its core). On the COLOUR, so every light takes it - the sun, the ambient, the
@@ -308,11 +447,11 @@ void main()
 	// THE DEPTH and the motion vector at the hit, formed AFTER the lighting from `pos` (which the light loop keeps live
 	// anyway): held from the march on, the depth and 1 / w were two more values across the lit core's register peak.
 	const vec4 clip = u_mvp * vec4(pos, 1.0);
-	const float depth = min(clip.z / clip.w, gl_FragCoord.z); // never nearer than the face (depth_less)
+	const float depth = min(clip.z / clip.w, gl_FragCoord.z); // never nearer than the rectangle (depth_less)
 	gl_FragDepth = depth;
 	// Flagged NO-AO (shared.inc.glsl motionNoAo, as motionVectorNoAo): this shader reads no RTAO, so the trace spends no
 	// ray on its pixels and leaves a hole.
-	vec4 motion = voxelMotionVector(in_prevWorldDelta, depth, 1.0 / clip.w);
+	vec4 motion = voxelMotionVector(voxelTreePrevDelta(pos), depth, 1.0 / clip.w);
 	motion.w = motion.w > 0.5 ? 2.0 : -1.0;
 	out_motion = motion;
 }

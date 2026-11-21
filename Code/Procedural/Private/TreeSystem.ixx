@@ -64,13 +64,20 @@ export namespace Procedural
 			// main pass.
 			RenderMesh billboard;
 			RenderMaterial billboardMaterial;
-			// THE VOXEL TIER ("Voxel impostors"): the box the march starts from, its material (the grid's opacity / surface
-			// brick atlases, owned; LitTreeVoxel) and the brick index texture the opacity atlas's header names. The main
-			// pass past the species' band.
+			// THE VOXEL TIER ("Voxel impostors"): the grid's box (8 corners: the main pass past the species' band, the far voxel
+			// trees and the voxel shadow caster each draw its first quad as a rectangle around it), its material (the
+			// grid's opacity / surface brick atlases, owned; LitTreeVoxel) and the brick index texture the opacity atlas's
+			// header names.
 			RenderMesh voxelBox;
-			RenderMesh voxelFarBox; // the same box with 8 corners: the far voxel trees' (treeVoxelBoxMesh)
 			RenderMaterial voxelMaterial;
 			RenderTexture voxelIndex;
+			// The grid as the MESH leaves find it (their sun self-shadow; RenderTreeSet::Type's leaf grid): its box in the
+			// tree's own space and the index texture's header.
+			glm::vec3 voxelGridMin{ 0.0f };
+			glm::vec3 voxelGridSize{ 0.0f };
+			uint8 voxelGridLog2Res = 0;
+			uint8 voxelGridLevels = 0;
+			uint8 voxelGridLog2Cols = 0;
 			glm::vec3 farCentre{ 0.0f }; // tree-local centre of the variant's box (the switch distance, the RT range)
 			float farRadius = 0.0f;      // tree-local radius around it (the crossfade band test)
 			// The far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
@@ -90,15 +97,10 @@ export namespace Procedural
 			RenderMaterial ownBarkMaterial; // the procedural bark texture material
 			RenderMaterial ownLeafMaterial; // a cluster texture material
 			RendererVKLayout::EPipelineIndex leafPipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
-			// The mesh -> voxels crossfade: the bark material derived with a distance fade-OUT (shared textures). Invalid
-			// without a far tier (`Billboard Distance` 0).
+			// The mesh -> voxels crossfade: the bark and the leaf material derived with a distance fade-OUT (shared
+			// textures). Invalid without a far tier (`Billboard Distance` 0).
 			RenderMaterial barkFadeMaterial;
-			// THE LEAVES' MATERIALS PER VARIANT (parallel to variantMeshes; empty without a far tier): copies of the leaf
-			// material that link the variant's voxel grid, for the leaves' sun self-shadow (RenderMaterial::derive's
-			// linkedTexture) - the one a variant draws with (invalid: no grid, it draws with leafMaterial) and its
-			// crossfade fade-OUT copy.
-			oc::vector<RenderMaterial> variantLeafMaterials;
-			oc::vector<RenderMaterial> variantLeafFadeMaterials;
+			RenderMaterial leafFadeMaterial;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
@@ -138,7 +140,6 @@ export namespace Procedural
 			oc::vector<CachedTexture> voxelTextures;       // per baked variant: the voxel tier's atlases (empty: none)
 			oc::vector<CachedTexture> voxelIndex;          // ... and its brick index
 			oc::vector<TreeMesh> voxelBoxes;               // ... and its box
-			oc::vector<TreeMesh> voxelFarBoxes;            // ... and the far voxel trees' box (8 corners)
 		};
 		struct LoadSlot
 		{

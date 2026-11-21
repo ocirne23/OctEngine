@@ -348,6 +348,7 @@ void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uin
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
         .materialInfoBuffer = m_materials.getBuffer(),
         .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .treeTypesBuffer = treeCullTypes(),
         .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
         .terrainTessCommandBuffer = m_indirectCullComputePipeline.getTerrainTessCommandBuffer(frameIdx),

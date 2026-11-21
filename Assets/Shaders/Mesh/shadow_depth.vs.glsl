@@ -9,6 +9,9 @@
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
 #include "tree_wind.inc.glsl"
+#ifdef TREE_VOXEL
+#include "tree_voxel_box.inc.glsl" // the trunk's bend as a shear
+#endif
 
 // Depth-only vertex shader for the sun shadow cascades, rendered in a single multiview pass: gl_ViewIndex selects the
 // cascade. The shadow cull packed the cascades each caster overlaps into a bitmask; for a cascade a caster does not
@@ -40,16 +43,18 @@ layout (location = 0) out vec2 out_uv;
 layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragment skips the mask test)
 #ifdef TREE_VOXEL
 // THE CASTERS THAT WRITE THEIR DEPTH (ShadowMapGraphicsPipeline's voxel pipeline), two kinds:
-// The trees' VOXEL casters ("Trees/Voxel shadows"): the box mesh of the main pass's voxel tier (its normal = the corner's
-// grid coordinate, its tangent = the box size); the alpha index is the grid's opacity atlas (its header names the brick
-// index: tree_voxel.inc.glsl). The FS marches along the light from the face the sun sees.
+// The trees' VOXEL casters ("Trees/Voxel shadows"): the first quad of the main pass's voxel box mesh (its normal = the
+// corner's grid coordinate, its tangent = the box size), placed on the rectangle around the box in the cascade (main);
+// the alpha index is the grid's opacity atlas (its header names the brick index: tree_voxel.inc.glsl). The FS intersects
+// the pixel's light ray with the box and marches along the light from there.
 // The trees' SHADOW BILLBOARDS (bit 7): a flat card whose mask holds, in its green, how far the tree's surface stands off
 // the card (Procedural bakeBillboardMask: 0..1 of the card's depth range, the LENGTH of its vertex normal). The card is
 // drawn the full range toward the sun, and the FS pushes each fragment back by what its texel lacks - so the caster's
 // depth is the tree's sun side, and it is exact with the sun along the card's normal. The range is weighted by |N.L|: a
 // card the sun grazes covers little, and its depth along its own normal says nothing along the light (unweighted, the
 // grazed card's lift passed a round crown's surface by 40 % of its radius - and the nearest of the three cards wins).
-layout (location = 2) out vec3 out_voxelGrid;         // a billboard: per axis the way along the sun out of the tree's box (m)
+layout (location = 2) out vec3 out_voxelGrid;         // the point of this pixel's light ray on the rectangle, in grid space
+                                                      // a billboard: per axis the way along the sun out of the tree's box (m)
 layout (location = 3) out flat vec3 out_voxelDirG;    // grid units per metre along the light's travel, no zero component
 layout (location = 4) out flat vec2 out_voxelStepLod; // x = the cube root of the box's volume (world metres), y = log2(the cascade's texel / x) + "Voxel shadow LOD bias"
                                                       // x < 0: a BILLBOARD
@@ -99,10 +104,12 @@ void main()
     vec3 worldPos = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
     // A tree (the shadow cull's bit 15): the wind's TRUNK bend only (its casters are mostly the billboards; no payload
     // attribute in this pass) - the same bend the main pass gives every representation.
+    vec2 trunk = vec2(0.0); // the tree's trunk vector (world XZ): once, for the bend here and the voxel caster's shear below
     if ((inst.alphaTexIdxCascadeMask & 0x00008000u) != 0u)
     {
         const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
-        worldPos += treeWindTrunkOffset(localPos, inst.posScale.xyz, inst.posScale.w, windTrunk);
+        trunk = treeWindTrunkOfTree(inst.posScale.xyz, windTrunk);
+        worldPos += treeWindTrunkBend(trunk, localPos.y, inst.posScale.w);
     }
 #ifdef TREE_VOXEL
     // A billboard: out to its depth range (m along the light), where its mask's depth is 1.
@@ -143,12 +150,47 @@ void main()
     }
     else
     {
+        // THE VOXEL CASTER: NO BOX IS DRAWN. The shadow cull hands this shader the box mesh's first quad (its four bottom
+        // corners), and it places them on the RECTANGLE around the whole box in the cascade's clip space, at the box's depth
+        // nearest to the light: 2 triangles a tree. A cascade is orthographic - every pixel's light ray has the tree's ONE
+        // direction, and the ray's point on the rectangle is linear over it - so the fragment shader gets that point in
+        // grid space and intersects the ray with the box itself.
+        // THE TRUNK'S BEND is ONE SHEAR PER TREE, about a fixed height (tree_voxel_box.inc.glsl treeVoxelBoxShear): a shear is
+        // affine, so the sheared box is drawn exactly and the ray is sheared back here, at no cost per pixel. Off the mesh's
+        // own bend by trunk x (the height from the pivot / ref)^2: a quarter of the top's bend at the base and at the top.
         // The box's sides are > 0 (Procedural billboardBox), and so is a tree's scale: no clamp.
-        const vec3 worldSize = in_vertices[vertexIdx].tangent.xyz * inst.posScale.w;
+        const vec3 grid = in_vertices[vertexIdx].normalV.xyz;
+        const vec3 boxSize = in_vertices[vertexIdx].tangent.xyz;
+        const vec3 boxMin = localPos - grid * boxSize;
+        const float scale = inst.posScale.w;
+        const vec3 worldSize = boxSize * scale;
+        const vec3 trunkWorld = vec3(trunk.x, 0.0, trunk.y);
+        // x = at the tree's base, y = per metre of height: a point at the height h stands trunk x (x + y h) to the side.
+        const vec2 shear = treeVoxelBoxShear(0.5 * max(boxMin.y + boxSize.y, 0.0) * scale, 0.0);
+        // THE SHEARED BOX IN THE CASCADE'S CLIP SPACE: its minimum corner and its three edges (all of it is affine: no loop
+        // over the corners, and the clip-space edges ARE the map from the grid to clip space).
+        vec3 base = quat_transform(boxMin * scale, inst.quat); // from the tree's origin (world)
+        base += trunkWorld * (shear.x + shear.y * base.y);
+        mat3 edges = mat3(quat_transform(vec3(worldSize.x, 0.0, 0.0), inst.quat), quat_transform(vec3(0.0, worldSize.y, 0.0), inst.quat),
+            quat_transform(vec3(0.0, 0.0, worldSize.z), inst.quat));
+        edges[0] += trunkWorld * (shear.y * edges[0].y);
+        edges[1] += trunkWorld * (shear.y * edges[1].y);
+        edges[2] += trunkWorld * (shear.y * edges[2].y);
+        const mat3 clipEdges = mat3(m) * edges;
+        const vec3 clipBase = (m * vec4(base + inst.posScale.xyz, 1.0)).xyz;
+        const vec3 clipMin = clipBase + min(clipEdges[0], vec3(0.0)) + min(clipEdges[1], vec3(0.0)) + min(clipEdges[2], vec3(0.0));
+        const vec2 clipMax = clipBase.xy + max(clipEdges[0].xy, vec2(0.0)) + max(clipEdges[1].xy, vec2(0.0)) + max(clipEdges[2].xy, vec2(0.0));
+        // The corner's grid x / z = its corner of the rectangle. Standard Z: the nearest depth is the smallest, and never in
+        // front of the cascade's near plane (the whole rectangle would be clipped; the ray then starts inside the box).
+        const vec3 clipRect = vec3(mix(clipMin.xy, clipMax, grid.xz), max(clipMin.z, 0.0));
+        gl_Position = vec4(clipRect, 1.0);
+        // THE RECTANGLE'S POINT IN THE GRID: its clip offset from the box's corner, in the clip-space edges. The light travels
+        // along clip z alone (an orthographic cascade): its direction in the grid is the z column, per metre.
+        const mat3 clipToGrid = inverse(clipEdges);
         const vec3 travel = -u_sunDirection.xyz; // from the sun into the scene
-        out_voxelGrid = in_vertices[vertexIdx].normalV.xyz;
-        const vec3 dirG = quat_transform(travel, vec4(-inst.quat.xyz, inst.quat.w)) / worldSize;
-        out_voxelDirG = mix(vec3(1e-6), dirG, greaterThan(abs(dirG), vec3(1e-6))); // the empty bricks' jump divides by it
+        out_voxelGrid = clipToGrid * (clipRect - clipBase);
+        const vec3 dirG = clipToGrid[2] * (m * vec4(travel, 0.0)).z;
+        out_voxelDirG = mix(vec3(1e-6), dirG, greaterThan(abs(dirG), vec3(1e-6))); // the slab test and the empty bricks' jump divide by it
         // The cascade's texel in metres: its ortho x row maps world to clip -1..1 over the map's resolution.
         const float texel = 2.0 * u_shadow_invResolution / length(vec3(m[0][0], m[1][0], m[2][0]));
         const float cubeRoot = pow(worldSize.x * worldSize.y * worldSize.z, 1.0 / 3.0);

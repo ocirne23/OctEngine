@@ -397,7 +397,7 @@ protected:
     friend class RenderTexture;
     uint16 addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
     uint16 addTextureMaterial(const RenderMaterial::TextureDesc& desc);
-    uint16 addDerivedMaterial(uint16 source, uint32 extraFlags, uint16 linkedTexture);
+    uint16 addDerivedMaterial(uint16 source, uint32 extraFlags);
     uint16 getMaterialAlbedoTexture(uint16 materialIdx);
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color, float emissive = 0.0f);
     uint16 addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName,

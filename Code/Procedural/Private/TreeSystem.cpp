@@ -303,27 +303,8 @@ namespace
 	// texture (`outIndex`, linear: exact bytes). The opacity atlas's HEADER - slot 0, no brick: its first two 4 x 4 blocks -
 	// takes the index texture's bindless id, low byte then high: the main pass and the shadow casters, which get the opacity
 	// atlas alone, both find the index through it (tree_voxel.inc.glsl voxelGrid).
-	// `box`: the grid's box mesh (treeVoxelBoxMesh) - its box goes into the index's header row (texels 1..3: min x y z, size
-	// x y z as 16-bit values over 128 m, low byte first; RendererVK tree_voxel.inc.glsl voxelGridBox), so a reader that has
-	// the grid but not the box mesh knows where it stands (the mesh leaves' sun self-shadow). Written here, not baked: the
-	// box comes from the geometry on every load.
-	RenderMaterial createVoxelMaterial(CachedTexture& atlases, CachedTexture& index, const TreeMesh& box, RenderTexture& outIndex, const char* debugName,
-		uint32 extraFlags)
+	RenderMaterial createVoxelMaterial(CachedTexture& atlases, CachedTexture& index, RenderTexture& outIndex, const char* debugName, uint32 extraFlags)
 	{
-		if (index.width >= 4 && !box.positions.empty() && index.albedo[0].size() >= 16)
-		{
-			constexpr float RANGE = 128.0f; // VOXEL_BOX_RANGE
-			const glm::vec3 size = box.tangents[0];
-			const glm::vec3 boxMin = box.positions[0] - box.normals[0] * size;
-			const float values[6] = { boxMin.x + 0.5f * RANGE, boxMin.y + 0.5f * RANGE, boxMin.z + 0.5f * RANGE, size.x, size.y, size.z };
-			uint8* header = index.albedo[0].data() + 4; // texel (1, 0)
-			for (uint32 k = 0; k < 6; ++k)
-			{
-				const uint32 fixed = (uint32)glm::clamp(values[k] * (65536.0f / RANGE) + 0.5f, 0.0f, 65535.0f);
-				header[k * 2] = (uint8)(fixed & 255u);
-				header[k * 2 + 1] = (uint8)(fixed >> 8);
-			}
-		}
 		oc::vector<oc::span<uint8>> indexMips, opacityMips, surfaceMips;
 		indexMips.push_back(oc::span<uint8>(index.albedo[0].data(), index.albedo[0].size()));
 		outIndex = RenderTexture::create(index.width, index.height, indexMips, oc::format("{}/index", debugName).c_str(),
@@ -432,8 +413,7 @@ namespace Procedural
 			const uint32 fadeOut = RendererVKLayout::makeDistanceFadeFlags(start, width, false);
 			const uint32 fadeIn = RendererVKLayout::makeDistanceFadeFlags(start, width, true);
 			setFade(species.barkFadeMaterial, fadeOut);
-			for (RenderMaterial& leafFade : species.variantLeafFadeMaterials)
-				setFade(leafFade, fadeOut);
+			setFade(species.leafFadeMaterial, fadeOut);
 			// Force far draws the voxels at every distance: no fade-in then, or they would vanish nearby.
 			const uint32 voxelFade = m_settings.forceFar ? 0u : fadeIn;
 			for (PieceMeshes& meshes : species.variantMeshes)
@@ -839,29 +819,26 @@ namespace Procedural
 				if (load.voxelTextures[v].albedo.empty() || v >= load.voxelBoxes.size() || v >= load.voxelIndex.size() || load.voxelIndex[v].albedo.empty())
 					continue;
 				PieceMeshes& meshes = species.variantMeshes[v];
-				meshes.voxelMaterial = createVoxelMaterial(load.voxelTextures[v], load.voxelIndex[v], load.voxelBoxes[v], meshes.voxelIndex,
+				meshes.voxelMaterial = createVoxelMaterial(load.voxelTextures[v], load.voxelIndex[v], meshes.voxelIndex,
 					oc::format("TreeVoxel/{}_{}", name, v).c_str(), RendererVKLayout::MATERIAL_FLAG_LEAF);
 				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
-				if (v < load.voxelFarBoxes.size())
-					meshes.voxelFarBox = uploadTreeMesh(renderer, load.voxelFarBoxes[v], false);
+				// THE GRID AS THE MESH LEAVES FIND IT (buildGpuTypes -> RenderTreeSet::Type's leaf grid): its box, from the box
+				// mesh (treeVoxelBoxMesh: a vertex's normal = its grid corner, its tangent = the box size), and the index
+				// texture's header texel (log2 of the resolution, the levels, log2 of the bricks per atlas row).
+				const TreeMesh& box = load.voxelBoxes[v];
+				const oc::vector<uint8>& header = load.voxelIndex[v].albedo[0];
+				if (!box.positions.empty() && header.size() >= 4)
+				{
+					meshes.voxelGridSize = box.tangents[0];
+					meshes.voxelGridMin = box.positions[0] - box.normals[0] * meshes.voxelGridSize;
+					meshes.voxelGridLog2Res = header[0];
+					meshes.voxelGridLevels = header[1];
+					meshes.voxelGridLog2Cols = header[2];
+				}
 			}
-			// The crossfade's fade-out copy of the bark material (bands set by applyFadeBands).
+			// The crossfade's fade-out copies of the bark and the leaf material (bands set by applyFadeBands).
 			species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
-			// THE LEAVES' MATERIALS, PER VARIANT: copies of the species' leaf material that LINK the variant's voxel grid (its
-			// opacity atlas, in the copy's metal-roughness slot: RenderMaterial::derive) - the mesh leaves march it toward
-			// the sun for their self-shadow (RendererVK tree_leaf_sun.inc.glsl). One to draw with, one for the crossfade's
-			// fade-out. A variant without a grid links none.
-			species.variantLeafMaterials.resize(species.variantMeshes.size());
-			species.variantLeafFadeMaterials.resize(species.variantMeshes.size());
-			for (size_t v = 0; v < species.variantMeshes.size(); ++v)
-			{
-				const RenderMaterial& voxelMaterial = species.variantMeshes[v].voxelMaterial;
-				const bool link = species.desc.leafType == ETreeLeafType::Cluster && voxelMaterial.isValid();
-				const uint16 linked = link ? voxelMaterial.albedoTexture() : (uint16)UINT16_MAX;
-				if (link)
-					species.variantLeafMaterials[v] = RenderMaterial::derive(species.leafMaterial, 0, linked);
-				species.variantLeafFadeMaterials[v] = RenderMaterial::derive(species.leafMaterial, 0, linked);
-			}
+			species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
 		}
 		Log::info(oc::format("Trees: '{}' - {} variants, triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
 			species.desc.name, load.variants.size(),
@@ -948,7 +925,6 @@ namespace Procedural
 			out.voxelTextures.resize(variants.size());
 			out.voxelIndex.resize(variants.size());
 			out.voxelBoxes.resize(variants.size());
-			out.voxelFarBoxes.resize(variants.size());
 			for (size_t v = 0; v < variants.size(); ++v)
 			{
 				const oc::string prefix = oc::format("{}_treevoxel{}r{}_", name, v, res);
@@ -979,8 +955,7 @@ namespace Procedural
 						(float)(texture.albedo[0].size() + texture.normal[0].size() + index.albedo[0].size()) / (1024.0f * 1024.0f)));
 				}
 				const TreeBillboardBox box = treeVoxelBox(variants[v], res);
-				treeVoxelBoxMesh(box, TREE_VOXEL_BOX_SLICES, out.voxelBoxes[v]);
-				treeVoxelBoxMesh(box, 1, out.voxelFarBoxes[v]);
+				treeVoxelBoxMesh(box, out.voxelBoxes[v]);
 			}
 		}
 	}
@@ -994,10 +969,20 @@ namespace Procedural
 				const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
 				const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
 				type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-				// The variant's own leaf material where it links a voxel grid (the leaves' sun self-shadow), else the species'.
-				const size_t variant = (size_t)(&meshes - species.variantMeshes.data());
-				const bool ownLeaves = variant < species.variantLeafMaterials.size() && species.variantLeafMaterials[variant].isValid();
-				type.leaves = { leaves, ownLeaves ? species.variantLeafMaterials[variant].index() : species.leafMaterial, species.leafPipeline };
+				type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
+				// THE VARIANT'S VOXEL GRID, in its type: the voxel tier's fragment shader takes the box from it, and the mesh
+				// leaves of a cluster-leaf species (MATERIAL_FLAG_LEAF) march it toward the sun for their self-shadow
+				// (RendererVK tree_leaf_sun.inc.glsl). A variant without a grid has none.
+				if (meshes.voxelMaterial.isValid() && meshes.voxelIndex.isValid())
+				{
+					type.voxelGridMin = meshes.voxelGridMin;
+					type.voxelGridSize = meshes.voxelGridSize;
+					type.voxelGridOpacityTexture = meshes.voxelMaterial.albedoTexture();
+					type.voxelGridIndexTexture = (uint16)meshes.voxelIndex.index();
+					type.voxelGridLog2Res = meshes.voxelGridLog2Res;
+					type.voxelGridLevels = meshes.voxelGridLevels;
+					type.voxelGridLog2Cols = meshes.voxelGridLog2Cols;
+				}
 				if (!meshes.density.empty())
 				{
 					type.density = meshes.density.data();
@@ -1010,13 +995,11 @@ namespace Procedural
 				if (meshes.billboard.isValid() && meshes.billboardMaterial.isValid())
 					type.shadowBillboard = { &meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitOpaque };
 				// The VOXEL tier past the species' band, the meshes fading out over it on their derived materials.
-				if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid() && species.barkFadeMaterial.isValid()
-					&& variant < species.variantLeafFadeMaterials.size() && species.variantLeafFadeMaterials[variant].isValid())
+				if (meshes.voxelBox.isValid() && meshes.voxelMaterial.isValid() && species.barkFadeMaterial.isValid() && species.leafFadeMaterial.isValid())
 				{
 					type.voxel = { &meshes.voxelBox, meshes.voxelMaterial.index(), RendererVKLayout::EPipelineIndex::LitTreeVoxel };
-					type.voxelFarMesh = meshes.voxelFarBox.isValid() ? &meshes.voxelFarBox : nullptr;
 					type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
-					type.leavesFade = { leaves, species.variantLeafFadeMaterials[variant].index(), RendererVKLayout::EPipelineIndex::LitTree };
+					type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 					type.farDistance = farDistance(species);
 					type.fadeWidth = fadeWidth(species);
 				}

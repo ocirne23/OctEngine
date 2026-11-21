@@ -118,12 +118,11 @@ export namespace Procedural
 	// counts in full. `albedoScale` x the linear colour (`Billboard AlbedoScale`).
 	void bakeTreeVoxels(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 res, float albedoScale,
 		TreeVoxelBake& out);
-	// The box the FS marches from (its front faces), in `slices` + 1 RINGS up its height: per vertex the position, normal =
-	// its GRID coordinate (0..1 per axis), tangent = the box size (the VS rebuilds the box from both), texCoords.z =
-	// TREE_VOXEL_BOX_WIND_CODE. THE SLICES are for the wind's trunk bend, a curve: the tier that crossfades with the meshes
-	// takes TREE_VOXEL_BOX_SLICES (the box then bends as the mesh does), the far voxel trees 1 (8 corners: up to a million
-	// boxes, none of them beside a mesh).
-	void treeVoxelBoxMesh(const TreeBillboardBox& box, uint32 slices, TreeMesh& out);
-	constexpr uint32 TREE_VOXEL_BOX_SLICES = 4;
+	// The grid's box, 8 corners: per vertex the position, normal = its GRID coordinate (0 / 1 per axis), tangent = the box
+	// size (a VS rebuilds the box from both), texCoords.z = TREE_VOXEL_BOX_WIND_CODE. ONE mesh per variant for three draws
+	// (the tier that crossfades with the meshes, the far voxel trees, the voxel shadow caster): each draws its FIRST QUAD
+	// alone (the bottom face's 6 indices) as a rectangle around the box - on the screen, or in the shadow cascade - and its
+	// FS finds the ray's entry itself: 2 triangles a tree. The other corners give the mesh its bounds.
+	void treeVoxelBoxMesh(const TreeBillboardBox& box, TreeMesh& out);
 	constexpr float TREE_VOXEL_BOX_WIND_CODE = 2.5f; // rides the tangent's w: >= 2 = the trunk bend only (tree_wind.inc.glsl treeWindPayload)
 }

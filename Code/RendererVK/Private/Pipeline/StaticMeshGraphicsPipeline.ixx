@@ -34,6 +34,7 @@ public:
         Buffer& indexBuffer;
         Buffer& materialInfoBuffer;
         Buffer& meshInstanceBuffer; // the cull's OutMeshInstance, at each draw slot (read by gl_InstanceIndex)
+        Buffer& treeTypesBuffer;    // the bound tree set's type table (LitTree: the leaves' voxel grid)
         Buffer& indirectCommandBuffer;            // opaque draw sequences
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)

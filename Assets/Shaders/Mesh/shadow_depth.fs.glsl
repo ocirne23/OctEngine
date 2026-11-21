@@ -8,7 +8,8 @@
 // materials. The cull resolved the mask: in_alphaTexIdx == 0xFFFF = opaque (no test). No gl_FragDepth write: a
 // per-leaf baked depth cost ~15 % of the shadow draw.
 // TREE_VOXEL (ShadowMapGraphicsPipeline's voxel pipeline): the casters that WRITE their depth. A tree's VOXEL caster
-// ("Trees/Voxel shadows") - the march along the light through its grid from the face the sun sees, to where the coverage
+// ("Trees/Voxel shadows") - a rectangle around its box in the cascade (shadow_depth.vs.glsl): the pixel's light ray against
+// the box, then the march along the light through its grid from the entry, to where the coverage
 // reaches "Voxel shadow coverage", and that depth written (or nothing). A FIXED threshold: a shadow map gets no TAA to
 // resolve noise. And a tree's SHADOW BILLBOARD (in_voxelStepLod.x < 0): its mask's alpha test, then the depth of the
 // tree's surface from the mask's green (shadow_depth.vs.glsl) - one tap for both.
@@ -20,13 +21,14 @@ layout (location = 0) in vec2 in_uv;
 layout (location = 1) in flat uint in_alphaTexIdx;
 
 #ifdef TREE_VOXEL
-layout (location = 2) in vec3 in_voxelGrid;         // a billboard: per axis the way along the sun out of the tree's box (m)
+layout (location = 2) in vec3 in_voxelGrid;         // the point of this pixel's light ray on the rectangle, in grid space
+                                                    // a billboard: per axis the way along the sun out of the tree's box (m)
 layout (location = 3) in flat vec3 in_voxelDirG;    // grid units per metre along the light's travel, no zero component
 layout (location = 4) in flat vec2 in_voxelStepLod; // x = the cube root of the box's volume (world metres), y = log2(texel / x) + the LOD bias; x < 0: a BILLBOARD
 layout (location = 5) in flat vec2 in_voxelDepth;   // x = depth per metre along the light, y = the coverage that casts
                                                     // a billboard: x = the depth of its whole range along the light, y = depth per metre
-// Standard Z (shadow maps): the hit lies at or behind the face, so the written depth is never smaller - early depth still
-// rejects a face behind another caster.
+// Standard Z (shadow maps): the hit lies at or behind the rectangle (the box's depth nearest to the light), so the written
+// depth is never smaller - early depth still rejects a tree behind another caster.
 layout (depth_greater) out float gl_FragDepth;
 #include "tree_voxel.inc.glsl"
 
@@ -59,18 +61,30 @@ void main()
 	const VoxelLevel level = voxelLevel(grid, lod);
 	const float n = level.n;
 	const float stepWorld = in_voxelStepLod.x / n;
+	// WHERE THE LIGHT RAY ENTERS THE BOX (m from the rectangle; 0: the rectangle lies inside it). A pixel of the rectangle
+	// beside the box leaves here, before any fetch of the march.
+	float t;
+	{
+		const vec3 t0 = -in_voxelGrid / in_voxelDirG;
+		const vec3 t1 = (1.0 - in_voxelGrid) / in_voxelDirG;
+		const vec3 tLow = min(t0, t1);
+		const vec3 tHigh = max(t0, t1);
+		t = max(max(max(tLow.x, tLow.y), tLow.z), 0.0);
+		if (t >= min(min(tHigh.x, tHigh.y), tHigh.z))
+			discard;
+	}
 	// The march in the level's voxel coordinates (tree_voxel.inc.glsl). An EMPTY brick is jumped to its far side.
-	// THIS MARCH SETS THE SHADER'S REGISTER COUNT (40), so its ray is NOT held in voxel coordinates: the face point and the
-	// direction are read from the interpolants at each step (no register between steps) and scaled there, and the box is
+	// THIS MARCH SETS THE SHADER'S REGISTER COUNT (40), so its ray is NOT held in voxel coordinates: the rectangle's point and
+	// the direction are read from the interpolants at each step (no register between steps) and scaled there, and the box is
 	// tested on the sample. Held as a start + a direction + an exit distance (the main pass's form) it took 48.
-	float t = 0.5 * stepWorld;
+	t += 0.5 * stepWorld;
 	float transmit = 1.0;
 	const int maxSteps = int(n * 1.75) + 2;
 	VoxelBrick marchBrick = voxelBrickNone();
 	for (int i = 0; i < maxSteps; ++i)
 	{
 		const vec3 c = (in_voxelGrid + in_voxelDirG * t) * n;
-		if (any(greaterThan(abs(c - 0.5 * n), vec3(0.501 * n)))) // the box, + the face's own rounding
+		if (any(greaterThan(abs(c - 0.5 * n), vec3(0.501 * n)))) // the box, + the entry's own rounding
 			break;
 		float skip;
 		const float a = voxelOpacityNearest(grid, level, c, in_voxelDirG * n, stepWorld, marchBrick, skip); // one fetch: the threshold is binary

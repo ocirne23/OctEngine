@@ -136,8 +136,9 @@ void RendererState::attachSettingsListeners()
     };
     Tweak::onChange(s.terrain.texParallaxEnabled, this, onTerrainRelief);
     Tweak::onChange(s.terrain.texTessEnabled, this, onTerrainRelief);
-    // The sky draw is in the cached static mesh secondary.
+    // The sky draw is in the cached static mesh secondary. So are its draw groups' debug labels.
     Tweak::onChange(s.sky.enabled, this, reRecord);
+    Tweak::onChange(s.renderer.labelStaticMeshDraws, this, reRecord);
     // The master + GI toggles are baked into the cached GI secondary; the master, "RT Sun" and "RT Lights"
     // also into the lit fragments (LIT_RT_*).
     m_staticMeshGraphicsPipeline.setRtShadows(s.rt.effectiveSunShadow(), s.rt.effectiveLightShadows());

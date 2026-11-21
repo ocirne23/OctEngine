@@ -141,8 +141,8 @@ bool frustumCheck(vec3 pos, float radius)
     return true;
 }
 
-// `treeWindScale`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1).
-void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWindScale)
+// `treeWindScale`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1). `treeType`: its type.
+void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWindScale, uint treeType)
 {
     uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo = in_meshInfos[meshIdx];
@@ -199,8 +199,10 @@ void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uin
         {
             if (idx == 0)
             {
+                // THE BOX MESH'S FIRST QUAD ALONE (its bottom face, 6 indices: Procedural treeVoxelBoxMesh): the tier's vertex
+                // shader makes a screen rectangle around the box of those four corners - 2 triangles a tree, not 12.
                 out_treeVoxelCommands[meshIdx].pipelineIndex = pipelineIdx;
-                out_treeVoxelCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_treeVoxelCommands[meshIdx].indexCount    = 6u;
                 out_treeVoxelCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_treeVoxelCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_treeVoxelCommands[meshIdx].firstInstance = firstInstance;
@@ -261,7 +263,9 @@ void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uin
         const uint slot = firstInstance + idx; // the draw slot: gl_InstanceIndex in the vertex shaders
         out_meshInstances[slot].posScale           = instancePosScale;
         out_meshInstances[slot].quat               = quat;
-        out_meshInstances[slot].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
+        // A TREE's record names its TYPE where a plain instance names its mesh (no scene shader reads a tree's mesh index):
+        // the LitTree shaders find the leaves' voxel grid in the type table with it (tree_leaf_sun.inc.glsl).
+        out_meshInstances[slot].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | (isTree && !isRock ? treeType : meshIdx);
         vec4 prevPosScale = vec4(0.0);
         uvec2 prevQuat = uvec2(0u);
         uint prevVertexDelta;
@@ -328,6 +332,6 @@ void main()
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        cullInstance(instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWindScale);
+        cullInstance(instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWindScale, isTree ? pick.typeIdx : 0u);
     }
 }

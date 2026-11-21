@@ -43,10 +43,7 @@ public:
     static RenderMaterial createForMesh(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
     static RenderMaterial createTextured(const TextureDesc& desc); // its own textures, from the caller's mip chains
     // A copy of material `source` (any index: a solid colour too) with `extraFlags` added, SHARING its textures: the handle owns the slot only.
-    // `linkedTexture`: a u_textures index the copy carries for its own shader, in its METAL-ROUGHNESS slot - only for a material that is drawn by a
-    // shader that samples no metal-roughness texture (a tree's leaves on LitTree: the variant's voxel opacity atlas, for the leaves' sun self-shadow).
-    // The copy does not own it: the caller keeps that texture alive longer than the copy.
-    static RenderMaterial derive(uint16 source, uint32 extraFlags, uint16 linkedTexture = UINT16_MAX);
+    static RenderMaterial derive(uint16 source, uint32 extraFlags);
     // The per-entity TINT (RenderNode::setMaterialOverride): a plain index, cached and shared, never freed. [Concurrency: LOCK-FREE on a hit]
     // `emissive` > 0 = an EMISSIVE colour: drawn by the UNLIT pipeline (a container with `PipelineIdx UnlitOpaque`) as
     // colour x emissive (up to 15.9, in steps of 1/16; above 1 the bloom takes it); the lit pipelines draw it as the
@@ -62,7 +59,7 @@ public:
 
     bool isValid() const { return m_index != UINT16_MAX; }
     uint16 index() const { return m_index; } // what Renderer::spawnMeshNode and RenderTreeSet::Rep take
-    uint16 albedoTexture() const;            // its albedo slot's u_textures index (what another material's `linkedTexture` takes)
+    uint16 albedoTexture() const;            // its albedo slot's u_textures index (a voxel material's opacity atlas: RenderTreeSet::Type's leaf grid)
     void destroy();
 
     // Its RendererVKLayout::MATERIAL_FLAG_* bits, rewritten in place (e.g. a distance-fade band). No re-record: a contents upload.

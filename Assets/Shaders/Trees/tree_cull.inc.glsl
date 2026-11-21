@@ -18,32 +18,15 @@
 // the main pass it hands over to the far-tree volume at its start, as a tree does; it keeps casting its sun shadow.
 //
 // The includer defines TREE_CULL_PIECES_BINDING / TREE_CULL_TYPES_BINDING / TREE_CULL_LIST_BINDING. Requires ubo.inc.glsl
-// and the PASS_* constants. The layouts mirror TreeCullPieceGpu / TreeCullTypeGpu - keep them in step.
+// and the PASS_* constants. The layouts mirror TreeCullPieceGpu / TreeCullTypeGpu (the type's: tree_type.inc.glsl) - keep
+// them in step.
 
 #ifndef TREE_CULL_INC_GLSL
 #define TREE_CULL_INC_GLSL
 
+#include "tree_type.inc.glsl" // TreeCullRecord, TreeCullType
+
 const uint TREE_CULL_RECORDS = 3u; // RendererTrees.cpp TREE_RECORDS_PER_PIECE
-
-struct TreeCullRecord
-{
-    uint meshMaterial;  // meshIdx | materialIdx << 16; TREE_CULL_ABSENT = none
-    uint pipelineAlpha; // pipelineIdx | alphaMode << 16
-};
-
-struct TreeCullType
-{
-    TreeCullRecord bark;
-    TreeCullRecord barkFade;
-    TreeCullRecord leaves;
-    TreeCullRecord leavesFade;
-    TreeCullRecord voxel;          // the VOXEL tier: the main pass past the band (absent = the meshes at every distance)
-    TreeCullRecord shadowBillboard; // the shadow passes and the TLAS only (absent = the meshes cast)
-    float farDistance;             // mesh -> voxels switch distance (m); x u_present_treeFarScale
-    float fadeWidth;               // crossfade band (m), centred on it
-    float shadowDistance;          // m from the cascades' centre beyond which it casts no sun shadow; 0 = no limit
-    uint wind;                     // x the trunk bend | x the branch sway << 16, 4.12 fixed point (treeCullWind)
-};
 
 struct TreeCullPiece
 {

@@ -1155,6 +1155,9 @@ export struct RendererSettings
 {
     bool vsync = true;               // "Time/VSync": FIFO present (Time's stable-dt snap relies on it); a change re-creates the swapchain
     bool logPipelineStats = false;   // "Renderer/Log pipeline stats": F5 re-creates the pipelines with it
+    // "Renderer/Label static mesh draws": a debug label around each draw group of the "Static meshes" stage (Nsight's
+    // sub-ranges: StaticMeshGraphicsPipeline::record). Off by default: the labels sit in a cached secondary. Re-records.
+    bool labelStaticMeshDraws = false;
     // "Renderer/Overlap compute": independent compute passes share their barriers so they run side by side (the primary
     // is re-recorded every frame: takes effect at once). Off: each pass on its own, with its own GPU timing scope.
     bool overlapCompute = true;

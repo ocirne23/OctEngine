@@ -52,10 +52,11 @@ void ShadowMapGraphicsPipeline::buildVoxelLayout(const GraphicsPipelineLayout& m
     voxel = main;
     voxel.vertexShader.defines.push_back({ "TREE_VOXEL", "1" });
     voxel.fragmentShader.defines.push_back({ "TREE_VOXEL", "1" });
-    // FRONT faces culled, as the main shadow pipeline: the march must start where the light ENTERS the box, and the cascade
-    // matrices (lookAtRH x orthoRH_ZO, no y flip) mirror the winding - a back-face cull kept only the faces where the light
-    // leaves, every march ended at once and nothing cast; no cull ran the fragment shader on both. Its FS writes the hit's
-    // depth, so the rasterizer's depth bias does not reach it (the FS adds its own).
+    // FRONT faces culled, as the main shadow pipeline: the shadow billboards are two-faced cards, and the cascade matrices
+    // (lookAtRH x orthoRH_ZO, no y flip) mirror the winding. A VOXEL caster is a rectangle its vertex shader builds in clip
+    // space (shadow_depth.vs.glsl): the box mesh's bottom quad with its grid x / z as clip x / y is clockwise in the
+    // framebuffer (no flipped viewport here) = a back face, so it stays. Its FS writes the hit's depth, so the rasterizer's
+    // depth bias does not reach it (the FS adds its own).
     voxel.cullMode = vk::CullModeFlagBits::eFront;
     voxel.indirectBindable = false; // plain indexed indirect draws, never DGC
 }
