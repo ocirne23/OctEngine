@@ -29,6 +29,14 @@ export constexpr vk::Format SCENE_DEPTH_FORMAT = vk::Format::eD32Sfloat;
 // It stays COLOR_ATTACHMENT_OPTIMAL across the opaque instances; the Renderer's end-of-opaque barrier moves
 // it to SHADER_READ_ONLY with the depth (recordSceneOpaqueToSampled).
 export constexpr vk::Format SCENE_MOTION_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+//
+// THE VOXEL HIT TARGET (SCENE_VOXEL_HIT_FORMAT) + THE VOXEL MARCH PASS: the trees' voxel tier marches in a pass of its
+// own, between two opaque stage instances - the scene depth (tested and written) + this target, into which the march
+// writes each pixel's nearest voxel hit: x = the hit word (the tree, the grid level, the hit voxel's cover; 0 = none,
+// Shaders/Trees/tree_voxel_box.inc.glsl), y = the hit's distance from the camera (a float's bits). The voxel lighting,
+// a full-screen draw of the next opaque instance, reads it. ONE layer: in VR the eyes use it in turn (march, light,
+// march, light). The pass clears it and leaves it SHADER_READ_ONLY; the depth stays DEPTH_STENCIL_ATTACHMENT.
+export constexpr vk::Format SCENE_VOXEL_HIT_FORMAT = vk::Format::eR32G32Uint;
 
 export class SceneColor final
 {
@@ -78,6 +86,10 @@ public:
     vk::Image       getDepthImage() const  { return m_depthImage; }
     vk::ImageView   getMotionView(uint32 eye) const { return m_motionLayerViews[eye]; }
     vk::Image       getMotionImage() const { return m_motionImage; }
+    // The voxel march pass (begun as it is: one variant) and its target; sampled with getDepthSampler (nearest).
+    vk::RenderPass  getVoxelMarchRenderPass() const { return m_voxelMarchRenderPass; }
+    vk::Framebuffer getVoxelMarchFramebuffer(uint32 eye) const { return m_voxelMarchFramebuffers[eye]; }
+    vk::ImageView   getVoxelHitView() const { return m_voxelHitView; }
     uint32          getViewCount() const   { return m_viewCount; }
     vk::Sampler     getSampler() const     { return m_sampler; } // linear, clamp
     vk::Sampler     getDepthSampler() const { return m_depthSampler; } // nearest, clamp (point sampling for reconstruction)
@@ -101,6 +113,12 @@ private:
     vk::Image m_motionImage;
     VmaAllocation m_motionMemory = nullptr;
     oc::array<vk::ImageView, 2> m_motionLayerViews{}; // per-eye 2D motion views (layer i)
+
+    vk::Image m_voxelHitImage;
+    VmaAllocation m_voxelHitMemory = nullptr;
+    vk::ImageView m_voxelHitView;
+    vk::RenderPass m_voxelMarchRenderPass;
+    oc::array<vk::Framebuffer, 2> m_voxelMarchFramebuffers{}; // the hit target + this eye's depth layer
 
     vk::RenderPass m_renderPass;
     vk::RenderPass m_opaqueRenderPass;

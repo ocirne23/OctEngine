@@ -262,9 +262,10 @@ which is a baked define).
   reflection's side of the sky; NOT centred on R: a grazing reflection's lobe would be half below the horizon, where the
   SH holds the dark ground); the zenith texel is only the GI-off fallback (`u_rt_giStrength` 0, stale SH). The terrain
   WET FILM does the same (`terrain_film.fs.glsl`). The forward set binds the map at **20** (binding **21** is the GI
-  irradiance volume, **22** the cloud shadow map, **23** the near grass cascade, **24** the faction map, and the texture
-  array is **25**: it must stay the set's highest binding, for the variable count - a new binding takes its number and
-  moves it up, in `buildPipelineLayout`, `updateTextureDescriptor`, `record()` and the six `u_textures` declarations). **Anything that would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map
+  irradiance volume, **22** the cloud shadow map, **23** the near grass cascade, **24** the faction map, **25** the voxel
+  hit target, **26** the far voxel trees' records, and the texture
+  array is **27**: it must stay the set's highest binding, for the variable count - a new binding takes its number and
+  moves it up: `StaticMeshGraphicsPipeline::TEXTURES_BINDING` and the seven `u_textures` declarations). **Anything that would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map
   instead.**
 * **THE GI IRRADIANCE VOLUME** ("GI/Irradiance volume", on by default; "GI/Volume voxels per probe" 1–2, default 2 —
   both in `Globals::settings.gi.grid`). Per frame, right after the trace (inside the GI toggle),

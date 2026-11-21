@@ -299,9 +299,9 @@ LitOpaque / LitMasked (instanced_indirect.fs.glsl, which has no tree code at all
 VOXELS - two variants: **`LitTree`** (variant 14,
 `instanced_indirect_tree.fs.glsl`, the lit VS with `ALPHA_MASK` + `TREE_ORIGIN`): the procedural tree MESHES
 (TreeSystem: the leaf clusters and every bark / leaf crossfade copy) - LitMasked's path + the distance fade + the leaf
-terms (below). **`LitTreeVoxel`** (variant 15, `instanced_indirect_tree_voxel.fs.glsl`, the lit VS with
-`TREE_VOXEL`): the VOXEL TIER (below). The distance fade is shared (`tree_fade.inc.glsl`); **keep the rest of the
-`main()`s in step.** All their values live in `Globals::settings.foliage` (`FoliageParams`, Settings.Render; registered
+terms (below). **`LitTreeVoxel`** (variant 15, `instanced_indirect_tree_voxel.fs.glsl` on the sky's full-screen
+VS): the LIGHTING of the VOXEL TIER (below), whose march draws in a pass of its own. The distance fade is shared
+(`tree_fade.inc.glsl`); **keep the leaf terms of the two `main()`s in step.** All their values live in `Globals::settings.foliage` (`FoliageParams`, Settings.Render; registered
 by `Settings::registerFoliage` as the "Foliage ...", "Leaf ..." and "Voxel ..." rows in the "Trees" tweak category) and
 ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the shadow passes only
 (`MATERIAL_FLAG_BILLBOARD` below).
@@ -310,61 +310,92 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   "The voxel tier"): a `RenderTreeSet::Type::voxel` record is the tree in the MAIN pass past its type's band
   (`treeCullMainPiece` in tree_cull.inc.glsl: slot 2; its material carries the band's fade-in);
   the shadows, the rain shelter, GI and RT take the shadow billboard.
+  * **THE MARCH AND THE LIGHTING ARE TWO PASSES** (both tiers: this one and the far voxel trees).
+    * **THE VOXEL MARCH PASS** (`SceneColor::getVoxelMarchRenderPass`: the scene depth, tested and written, + the VOXEL
+      HIT TARGET, `SCENE_VOXEL_HIT_FORMAT` RG32UI, cleared to 0; `RendererState::recordTreeVoxelMarchPass`, begun in the
+      primary between the "Static meshes" and "Static meshes late" stages, every frame). The trees' rectangles draw
+      there, AFTER every other opaque draw, with `Trees/tree_voxel_march.fs.glsl`: the ray against the box, the
+      distance fade, the march - and on a hit the hit's depth (`depth_less`) and the HIT WORD + the hit's distance from
+      the camera (a float's bits) into the target. The hit word (tree_voxel_box.inc.glsl): the tree's index (23 bits:
+      the near tier's draw slot, a far tree's record in its sorted list) | the far flag | the grid level (4 bits) |
+      the hit voxel's cover as the lighting needs it (3 bits) | valid. **40 registers** - no lit core. Its loop and its ray setup each
+      reach that count, so both hold little: no step counter (t ends the march), the transmittance held over its end
+      value, a sample's atlas place formed before the next sample is worked out (`voxelOpacityPairAt`), the pixel's
+      direction built again after the loop for the depth, one slab test.
+    * **THE LIGHTING** (`LitTreeVoxel` = variant 15, `instanced_indirect_tree_voxel.fs.glsl` on the sky's full-screen
+      triangle, no depth test, no depth write; the first draw of `StaticMeshGraphicsPipeline::record`'s Late phase,
+      before the film, the sky and the transparent set): per pixel one fetch of the hit target (0 = discard), then
+      the same ray again, the hit on it from the stored distance and level, the surface atlas, the sun's march
+      through the tree, the cascade shadow and the lit core; it writes the colour and the motion target.
+    * **Why:** the lit core's 64 registers were what limited the tier's warps (register stall 93 % once the TRAM was
+      out of the way); a ray that hit nothing held them through its whole march; and a tree behind another one was lit
+      and then covered (early depth only knows the rectangle's nearest depth). Now the lighting runs ONCE PER FINAL
+      PIXEL. **Each pixel is still ONE opaque hit or nothing** (stochastic coverage): nothing blends between voxel
+      layers, as before.
+    * **BOTH SHADERS BUILD THE RAY FROM THE SAME INPUTS WITH THE SAME CODE** (`Trees/tree_voxel_ray.inc.glsl`:
+      `voxelPixelDir` from `gl_FragCoord`, `voxelTreeRay`, `voxelRayCentre`), every value `precise`: the lighting
+      must find the hit in the brick the march stopped in. No interpolated value is involved - the tier's whole
+      vertex interface is ONE flat word (the tree). Where the hit's brick still reads EMPTY in the lighting (a last
+      bit at a brick's side), it takes a neutral leaf, never a fetch through the empty slot.
+    * The set's bindings for it: 25 = the hit target (the lighting), 26 = the far voxel trees' sorted records (both
+      fragment shaders; VR: a bound buffer nothing indexes). The texture array moved to 27.
   * **NO BOX IS DRAWN: ONE SCREEN RECTANGLE around the tree's box, 2 triangles a tree.** The mesh is the variant's GRID
     BOX, 8 corners (normal = the corner's grid coordinate, tangent = the box size, `|tangent w|` 2.5 = the trunk bend;
     Procedural `treeVoxelBoxMesh`), and **the main cull hands this tier its FIRST QUAD alone** (6 indices, the bottom
-    face: `out_treeVoxelCommands[].indexCount = 6`). The `TREE_VOXEL` VS projects the box's 8 corners twice - as it
-    stands and moved by its TOP's trunk bend (the bent tree lies between the two) - and places the quad's four vertices
-    (by their grid x / z) on the rectangle around them, at the box's NEAREST depth, w = 1; a corner behind the camera
-    ("Trees/Force far" next to a tree) = the whole screen. No culling on the variant. It hands on a world point on the
-    pixel's view ray (about as far as the tree) and the DRAW SLOT: 5 components.
+    face: `out_treeVoxelCommands[].indexCount = 6`). The `TREE_VOXEL` VS (the march pass's near pipeline) projects the
+    box's 8 corners twice - as it stands and moved by its TOP's trunk bend (the bent tree lies between the two) - and
+    places the quad's four vertices (by their grid x / z) on the rectangle around them (`treeVoxelBoxRect`), at the
+    box's NEAREST depth; a corner behind the camera ("Trees/Force far" next to a tree) = the whole screen. No culling.
+    It hands on the DRAW SLOT alone.
     **Why not the box:** each interpolated component is a plane equation per TRIANGLE, and the TRAM allocation was the
     tier's launch limit - 85 % with the box of 5 rings and 27 components, 53 % with 14 components, 75 % with a box of 9
-    rings fitted to the tree's profile (twice the triangles: the fit lost more than it saved; removed).
-  * **THE FRAGMENT SHADER FINDS THE RAY'S ENTRY ITSELF** (`voxelTreeRay`, `TREE_VOXEL_RECORD`: the near pipeline's FS
-    define): the camera and the pixel's direction go into the tree's axes once, then a slab test against the box
+    rings fitted to the tree's profile (twice the triangles: the fit lost more than it saved; removed), 3 % with the
+    rectangle.
+  * **THE FRAGMENT SHADERS FIND THE RAY'S ENTRY THEMSELVES** (`voxelTreeRay`, tree_voxel_ray.inc.glsl): the camera and
+    the pixel's direction go into the tree's axes once, then a slab test against the box
     gives where the ray enters and leaves (the camera's own place when it stands inside); a pixel of the rectangle
     beside the box discards there, before the material and every fetch. **The march runs from the CAMERA along the
     ray** (its t starts at the entry's distance). **THE TRUNK'S BEND MATCHES THE MESH'S** (the two tiers crossfade)
-    as a SHEAR OF THE RAY about the height it enters at (`treeVoxelBoxShear`, tree_voxel_box.inc.glsl: a point at the
+    as a SHEAR OF THE RAY about a pivot height h (`treeVoxelBoxShear`, tree_voxel_box.inc.glsl: a point at the
     height y goes to point - trunk x h (2 y - h) / ref², a direction d to d - trunk x (2 h / ref²) x d.y; a tree turns
     about up only, so the shear is the same in its own axes). The grid itself is not bent and the march is a straight
-    ray: with the plain ray one that looks down into the crown drew its hit at the ENTRY height's offset; the shear
-    about the entry height leaves trunk x (the height between entry and hit / ref)². The entry height needs the entry,
-    so there are THREE slab tests: the plain ray against the box widened by its top's bend, then twice the sheared
-    ray. Against a box with bent faces (a numeric model, a top bend of some metres) the ray lies within 6 cm for 99 %
-    of the pixels. The distances are the sheared ray's: the hit's world position lies centimetres along the view ray
-    from the true one (decimetres in a storm).
-  * **Everything that is ONE value per tree the fragment shader reads itself** (the `voxelTree*` functions): the
-    rotation, the scale, the origin and the trunk vector from the tree's instance record at the draw slot, the box
+    ray, so the bend is exact at h and off by trunk x (the height from h / ref)² along the ray. **THE PIVOT = the
+    height at which the ray passes the tree's AXIS** (nearest to it, ahead of the camera, inside the tree's height) -
+    where the crown it will hit stands - from the ray alone: two dot products and ONE slab test. A far voxel tree's
+    trunk vector is 0: the same code, no shear. The distances are the sheared ray's: the hit's world position lies
+    centimetres along the view ray from the true one (decimetres in a storm).
+    Tried, dropped: the pivot at the ray's ENTRY height (three slab tests: the entry needs a test first). Each test
+    after the first held the ray's inputs across the one before - the march shader took 48 registers, with one test 40.
+  * **Everything that is ONE value per tree the fragment shaders read themselves** (the `voxelTree*` functions, by the
+    tree's word): the rotation, the scale, the origin, the trunk vector and the type | material from the tree's record
+    (the near tier: the main cull's instance at the draw slot; a far tree: `TreeVoxelFarPipeline::InstanceGpu` in the
+    view's sorted list, binding 26), the box
     from its type (`gridMin`, `gridSize`, `gridInvSize`, `gridCbrtVolume`) - the box's world size + the cube root of
     its volume (a level's step = that / the level's voxels), the SUN's direction in grid units per metre (no zero
     component), the LOD scale (`log2(scale x distance x level 0's voxels)` = the level, "Voxel LOD bias" inside) and
     the camera's distance to the tree's origin (the distance fade, only on a material that fades). **A `flat` input
     takes a plane equation as an interpolated one does**: with the 13 flat components of the box gone the tier's TRAM
     stall went 85 -> 53 % and its time about a quarter down. **The wind's motion is not interpolated either**: the
-    fragment works it out at its end from the hit's height over the tree's origin and the record's trunk vector
-    (`voxelTreePrevDelta`). FS 30 -> 9 inputs; **64 registers / 16 B, where the box's version was 56 / 32** (not from
-    the three slab tests, their order with the material, the march's origin or the hit's anchor: each tried).
-  * **The far voxel trees draw the same rectangle** (`tree_voxel_far.vs.glsl`, `treeVoxelBoxRect` in
+    lighting works it out at its end from the hit's height over the tree's origin and the record's trunk vector
+    (`voxelTreePrevDelta`).
+  * **The far voxel trees draw the same rectangle in the same pass** (`tree_voxel_far.vs.glsl`, `treeVoxelBoxRect` in
     tree_voxel_box.inc.glsl - the function the near tier's VS calls too; their buckets hold 6 indices, the pipeline
-    culls no face). Their instance is an instance-rate record, with no draw slot to read: TWO flat values per tree
-    (the origin + the scale, sin and cos of half the yaw). Their cull writes the set TYPE where the mesh index was,
-    and the same fragment functions build the rest from the type's box. **NO WIND: a far voxel tree stands still**
+    culls no face). Their instance is an instance-rate record: the VS hands on its index in the sorted list
+    (`gl_InstanceIndex`) + the far flag, and the fragment shaders read the record there. Their cull writes the set TYPE
+    where the mesh index was. **NO WIND: a far voxel tree stands still**
     (none of them stands beside a mesh, and the sway out there is a few hundredths of a pixel a frame) - 8 corners
-    for the rectangle, ONE slab test for the ray, no motion. Their FS 30 -> 14 inputs (64 / 0), their VS 47
-    registers. The box's sides and a tree's scale are > 0 on the CPU (Procedural `billboardBox`): the shaders do not
-    clamp them.
-  * The FS marches from the ray's entry along the view ray at the level whose voxel is about a pixel
+    for the rectangle, ONE slab test for the ray, no motion. The box's sides and a tree's scale are > 0 on the CPU
+    (Procedural `billboardBox`): the shaders do not clamp them.
+  * The march runs from the ray's entry along the view ray at the level whose voxel is about a pixel
     (`u_mipPixelScale`; "Trees/Voxel LOD bias"; dithered between two levels per pixel), one crossing per step - the
     stored opacity's length, so a step multiplies the transmittance by `1 - opacity`. It stops where the coverage passes
     the pixel's noise threshold (STOCHASTIC coverage, resolved by TAA / DLSS) and discards when the ray leaves the box.
     **The marches run in the level's VOXEL coordinates** (the grid coordinate x the level's voxels: tree_voxel.inc.glsl
     takes `c`): a step is one multiply-add of a start and a direction scaled once, and it ends on ONE exit distance
     (`voxelBoxExit`), not a box test on every sample. A sample's brick and voxel are plain floors of `c - 0.5` held just
-    under the last voxel centre (`voxelCentreCoord`) - no clamp after them. `VOXEL_BRICK_ORIGIN` (this shader's define):
-    the march's brick holds its place in the atlas, worked out once per brick. The hit lies on the pixel's own view
-    ray, so ONE view vector serves the position and the lighting.
+    under the last voxel centre (`voxelCentreCoord`) - no clamp after them. `VOXEL_BRICK_ORIGIN` (the lighting shader's
+    define, for its sun march): a march's brick holds its place in the atlas, worked out once per brick. The hit lies
+    on the pixel's own view ray, so ONE view vector serves the position and the lighting.
     **TWO STEPS A WAIT** (the view march and the sun march): the tier's cost is its chain of fetches, each one waited for
     before the next sample is known. Where the next step's sample lies in the same stored brick (`voxelInBrick`), both
     first taps go out together (`voxelOpacityPair`) and are taken in turn - the same samples, the same result as one a
@@ -393,13 +424,12 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     index (one `texelFetch`) only when it enters ANOTHER brick (`VoxelBrick`: the march keeps its last one) and, in a
     stored brick, one filtered opacity tap - the second slice only where its blend weight is above 0 (with "Voxel
     sharpness" most samples lie on one slice); the colour, normal and interior are read once, at the hit, from the
-    march's own brick (`voxelSurface`). The whole surface is formed BEFORE the cascades' shadow search, and the depth
-    and the motion vector after the lighting, so few values cross the lit core.
-  * **It writes `gl_FragDepth`** (the hit; `layout (depth_less)`: never nearer than the face, so early depth still
-    rejects a hidden box) and its motion vector at that depth. **A pipeline that writes FragDepth cannot join the DGC
-    execution set** (every pipeline of a set must match its first one in its use of FragDepth): the main cull routes
-    `PIPELINE_IDX_LIT_TREE_VOXEL` into its own list (binding 23, count `[4]`), drawn with `drawIndexedIndirectCount` right
-    after the opaque execute; the variant is out of the opaque set's mask.
+    hit's brick, which the lighting looks up again (`voxelSurface`). The whole surface is formed BEFORE the cascades'
+    shadow search, and the motion vector after the lighting, so few values cross the lit core.
+  * **The march writes `gl_FragDepth`** (the hit; `layout (depth_less)`: never nearer than the rectangle, so early depth
+    still rejects a hidden tree); the lighting writes the motion vector at that depth. The main cull routes
+    `PIPELINE_IDX_LIT_TREE_VOXEL` into its own list (binding 23, count `[4]`), which the march pass draws with
+    `drawIndexedIndirectCount`; the variant is out of both execution sets' masks.
   * Shading: the voxel's mean leaf normal; **THE CROWN'S INSIDE DARKER**: the colour x 2 ^ (-2 x "Trees/Voxel interior darkening" (1,
     `u_foliage_voxelInteriorDarkening`) x the hit's baked INTERIOR, the surface atlas's colour A: 0 on the crown's
     surface .. 1 at its core) - on the COLOUR, so the sun, the ambient and the transmission all take it (on the ambient
@@ -451,11 +481,13 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
       records carry the trunk-bend scale.
     * PREFIX, one thread: each bucket's first instance and its `VkDrawIndexedIndirectCommand` (`MAX_BUCKETS` 64, the
       unused ones 0 instances). SCATTER: each record into its bucket's range.
-    * The draw: `StaticMeshGraphicsPipeline`'s far voxel pipeline (the main layout, the box's MeshVertex at binding 0, the
+    * The draw, in THE VOXEL MARCH PASS: `StaticMeshGraphicsPipeline`'s far march pipeline (the main layout's bindings, the box's MeshVertex at binding 0, the
       32 B record instance-rate at binding 1 - position + scale, the yaw, material, 0 (the shadow casters'
       list: the trunk-bend scale), bucket << 26 | index
-      - the voxel tier's FS), `drawIndexedIndirect` over the 64 buckets right after
-      the near voxel list. Every buffer reaches the passes as a device address; the UBO is the set's one binding.
+      - the march's FS), `drawIndexedIndirect` over the 64 buckets right after
+      the near voxel list. The same sorted records are the static mesh set's binding 26: the two voxel fragment shaders
+      read a far tree there. Every buffer reaches the three compute passes as a device address; the UBO is their set's
+      one binding.
     * **THE FAR SHADOW CASTERS**: the same chunks within the cascades' reach (horizontally from the scene focus: the
       shadow distance + "Foliage shadow cascade margin" + "Far height") cast as their SHADOW BILLBOARDS, with the sun cascades on
       (not under RT sun shadow). The same three passes into their own buffers (`Lists m_shadow`, `MAX_SHADOW_INSTANCES`

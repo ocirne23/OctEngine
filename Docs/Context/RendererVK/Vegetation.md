@@ -248,7 +248,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
   shadows around the camera, the canopy beyond.
   * Its OWN one-layer `ShadowMap` per frame slot (`grassNearShadowMap`, `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
-    through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 25, the set's highest). Drawn in the primary after
+    through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 27, the set's highest). Drawn in the primary after
     the cascades' pass ("Grass near shadow"). Tried: an extra layer of the sun array - it took the array's size, so
     the 4096 cascades made it 4096 too (4x the fill and clear for the blades).
   * Its matrix (`u_grass_shadowViewProj`, `buildUboGrass`): an ortho box of +-"Near shadow range (m)" (8 m: 0.8 cm
@@ -467,8 +467,8 @@ trees work from the wind VECTOR (the direction x the speed is the vector: no nor
   [Shaders.md](Shaders.md)).
 * **The voxel tier takes the trunk's bend alone**, from its tree's record (every instance of LitTreeVoxel is a tree
   record: no record test, no per-vertex wind path): the rectangle covers the box moved by its top's bend
-  (`treeWindTrunkBend`), the fragment shader shears its ray (`treeVoxelBoxShear`) and works out the motion at the hit
-  (`treeWindTrunkVertex`). **The far voxel trees have no wind**: they stand still.
+  (`treeWindTrunkBend`), the fragment shaders shear their ray (`treeVoxelBoxShear`) and the lighting works out the
+  motion at the hit (`treeWindTrunkVertex`). **The far voxel trees have no wind**: they stand still.
 * A node with a wind payload that is no record calls `treeWindOfTree` per vertex; the shadow casters work the trunk
   vector out per vertex (`treeWindTrunkOfTree` + `treeWindTrunkBend`; the voxel caster: as one shear per tree).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond

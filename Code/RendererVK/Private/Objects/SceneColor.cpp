@@ -53,6 +53,11 @@ void SceneColor::destroy()
     if (m_depthSampler) vkDevice.destroySampler(m_depthSampler);
     for (vk::Framebuffer& fb : m_framebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     for (vk::Framebuffer& fb : m_opaqueFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
+    for (vk::Framebuffer& fb : m_voxelMarchFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
+    if (m_voxelMarchRenderPass) vkDevice.destroyRenderPass(m_voxelMarchRenderPass);
+    if (m_voxelHitView) vkDevice.destroyImageView(m_voxelHitView);
+    Globals::gpuAllocator.destroyImage(m_voxelHitImage, m_voxelHitMemory);
+    m_voxelMarchRenderPass = nullptr; m_voxelHitView = nullptr; m_voxelHitImage = nullptr; m_voxelHitMemory = nullptr;
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
     if (m_opaqueRenderPass) vkDevice.destroyRenderPass(m_opaqueRenderPass);
     for (vk::RenderPass& rp : m_stagePasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
@@ -241,6 +246,87 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         Globals::device.setDebugName(m_opaqueFramebuffers[i], oc::format("SceneColor.opaque[{}]", i).c_str());
     }
 
+    // ---- THE VOXEL MARCH PASS (see SCENE_VOXEL_HIT_FORMAT): the hit target, cleared and left SHADER_READ_ONLY for the
+    // voxel lighting's fetch, + the depth, loaded and written, DEPTH_STENCIL_ATTACHMENT before and after (it runs between
+    // two opaque stage instances; the Renderer's inter-instance barrier covers the depth). ----
+    {
+        if (!createImage(vkDevice, width, height, SCENE_VOXEL_HIT_FORMAT, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+            1, m_voxelHitImage, m_voxelHitMemory, "SceneColor.voxelHit")) return false;
+        if (!createView(vkDevice, m_voxelHitImage, SCENE_VOXEL_HIT_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, 0, 1, m_voxelHitView,
+            "SceneColor.voxelHit")) return false;
+        const oc::array<vk::AttachmentDescription2, 2> marchAttachments{
+            vk::AttachmentDescription2{ // 0: the hit target
+                .format = SCENE_VOXEL_HIT_FORMAT,
+                .samples = vk::SampleCountFlagBits::e1,
+                .loadOp = vk::AttachmentLoadOp::eClear,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .initialLayout = vk::ImageLayout::eUndefined,
+                .finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            },
+            vk::AttachmentDescription2{ // 1: the scene depth
+                .format = SCENE_DEPTH_FORMAT,
+                .samples = vk::SampleCountFlagBits::e1,
+                .loadOp = vk::AttachmentLoadOp::eLoad,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+            },
+        };
+        const vk::SubpassDescription2 marchSubpass{
+            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorRef,
+            .pDepthStencilAttachment = &depthRef,
+        };
+        const oc::array<vk::SubpassDependency2, 3> marchDependencies{
+            dependencies[0],
+            vk::SubpassDependency2{ // the hit target's last reader: the previous use's voxel lighting
+                .srcSubpass = vk::SubpassExternal,
+                .dstSubpass = 0,
+                .srcStageMask = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                .srcAccessMask = vk::AccessFlagBits::eShaderRead,
+                .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            },
+            vk::SubpassDependency2{ // -> the voxel lighting's fetch
+                .srcSubpass = 0,
+                .dstSubpass = vk::SubpassExternal,
+                .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                .dstStageMask = vk::PipelineStageFlagBits::eFragmentShader,
+                .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+            },
+        };
+        const vk::RenderPassCreateInfo2 info{
+            .attachmentCount = (uint32)marchAttachments.size(),
+            .pAttachments = marchAttachments.data(),
+            .subpassCount = 1,
+            .pSubpasses = &marchSubpass,
+            .dependencyCount = (uint32)marchDependencies.size(),
+            .pDependencies = marchDependencies.data(),
+        };
+        auto result = vkDevice.createRenderPass2(info);
+        if (result.result != vk::Result::eSuccess) { assert(false && "scenecolor voxel march renderpass"); return false; }
+        m_voxelMarchRenderPass = result.value;
+        Globals::device.setDebugName(m_voxelMarchRenderPass, "SceneColor.voxelMarch");
+        for (uint32 i = 0; i < viewCount; ++i)
+        {
+            const oc::array<vk::ImageView, 2> views{ m_voxelHitView, m_depthLayerViews[i] };
+            const vk::FramebufferCreateInfo fbInfo{
+                .renderPass = m_voxelMarchRenderPass,
+                .attachmentCount = (uint32)views.size(),
+                .pAttachments = views.data(),
+                .width = width,
+                .height = height,
+                .layers = 1,
+            };
+            auto fbResult = vkDevice.createFramebuffer(fbInfo);
+            if (fbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor voxel march framebuffer"); return false; }
+            m_voxelMarchFramebuffers[i] = fbResult.value;
+            Globals::device.setDebugName(m_voxelMarchFramebuffers[i], oc::format("SceneColor.voxelMarch[{}]", i).c_str());
+        }
+    }
+
     // ---- STAGE variants (see getStageRenderPass): colour first/last x depth written/read-only.
     // Compatibility with the base pass (and the swapchain pass the pipelines are built against)
     // allows differences ONLY in load/store ops and layouts - the dependency array is carried
@@ -377,7 +463,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
             .subresourceRange = depthRange,
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToSampled });
-        vk::ImageMemoryBarrier2 bars[2]{
+        vk::ImageMemoryBarrier2 bars[3]{
             {
                 .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
                 .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
@@ -390,7 +476,10 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         };
         bars[1] = bars[0];
         bars[1].image = m_motionImage;
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 2, .pImageMemoryBarriers = bars });
+        bars[2] = bars[0];
+        bars[2].image = m_voxelHitImage; // one layer
+        bars[2].subresourceRange.layerCount = 1;
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 3, .pImageMemoryBarriers = bars });
         init.end();
         init.submitGraphics();
         (void)Globals::device.graphicsQueueWaitIdle();

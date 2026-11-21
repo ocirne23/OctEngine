@@ -21,14 +21,11 @@ struct TreeVolumeParams
     uint radialRes;     // texels from rMin to rMax
     uint slices;        // height slices
     float height;       // m above the floor the volume covers
-    float densityScale; // x the baked extinction
-    float pad0, pad1, pad2;
 };
 
 // The params in a pass's PUSH BLOCK (push.generated.glsl, TreeVolumePipeline's TvVolPush): flat pc_vol_* members, all but
 // the centre lockable. TV_PUSH_VOL packs them for the helpers below, so the baked members fold.
-#define TV_PUSH_VOL TreeVolumeParams(pc_vol_centre, pc_vol_rMin, pc_vol_rMax, pc_vol_angularRes, pc_vol_radialRes, pc_vol_slices, pc_vol_height, \
-    pc_vol_densityScale, 0.0, 0.0, 0.0)
+#define TV_PUSH_VOL TreeVolumeParams(pc_vol_centre, pc_vol_rMin, pc_vol_rMax, pc_vol_angularRes, pc_vol_radialRes, pc_vol_slices, pc_vol_height)
 
 const float TV_TWO_PI = 6.28318531;
 

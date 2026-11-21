@@ -2152,21 +2152,15 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_windLeafFadeEnd", [&] { return glm::max(f.windLeafFadeEnd, f.windLeafFadeStart + 0.01f); }, f.windLeafFadeEnd, f.windLeafFadeStart);
         list.add("foliage_windTrunkFadeEnd", [&] { return glm::max(f.windTrunkFadeEnd, 100.0f); }, f.windTrunkFadeEnd); // the tweak min: the 100 m fade band
         list.add("foliage_farStepScale", [&] { return glm::max(s.stepScale, 0.05f); }, s.stepScale);
-        list.add("foliage_farLayerSamples", [&] { return glm::clamp(s.layerSamples, 1.0f, 32.0f); }, s.layerSamples);
         list.add("foliage_farStepExponent", [&] { return glm::clamp(s.stepExponent, 0.0f, 2.0f); }, s.stepExponent);
         list.add("foliage_farMaxSteps", [&] { return (float)s.maxSteps; }, s.maxSteps);
         list.add("foliage_farOverlap", [&] { return glm::max(s.overlap, 1.0f); }, s.overlap);
         list.add("foliage_farShrink", [&] { return glm::max(s.blobShrink, 0.0f); }, s.blobShrink);
         list.add("foliage_farAmbient", s.ambient);
-        list.add("foliage_farSunScale", s.sunScale);
         list.add("foliage_farSelfShadow", s.selfShadow);
         list.add("foliage_farNormalStrength", [&] { return glm::clamp(s.normalStrength, 0.01f, 1.0f); }, s.normalStrength); // the tweak range
-        list.add("foliage_farGroundDark", s.groundDarkening);
         list.add("foliage_farForwardScatter", [&] { return glm::clamp(s.forwardScatter, -0.95f, 0.95f); }, s.forwardScatter);
-        list.add("foliage_farTransmission", [&] { return glm::max(s.transmission, 0.0f); }, s.transmission);        list.add("foliage_farTransmissionFocus", [&] { return glm::clamp(s.transmissionFocus, 0.0f, 0.95f); }, s.transmissionFocus);
-        list.add("foliage_farAlbedoScale", s.albedoScale);
-        list.add("foliage_farInteriorShadow", [&] { return glm::max(s.interiorShadow, 0.0f); }, s.interiorShadow);
-        list.add("foliage_farInteriorRadius", [&] { return glm::max(s.interiorRadius, 0.0f); }, s.interiorRadius); // 0: the taps sit on the sample
+        list.add("foliage_farTransmission", [&] { return glm::max(s.transmission, 0.0f); }, s.transmission);
         list.add("foliage_farSaturation", [&] { return glm::max(s.saturationScale, 0.0f); }, s.saturationScale);
     }
     {

@@ -73,19 +73,33 @@ public:
 		const ClutterPipeline::Draw* clutter = nullptr;
 		// The far voxel trees (TreeVoxelFarPipeline's sorted records + one draw per voxel mesh); null = none (VR).
 		const TreeVoxelFarPipeline::Draw* treeVoxelFar = nullptr;
+
+		// The voxel hit target (SceneColor; nearest): the voxel march pass writes it, the late phase's lighting reads it.
+		vk::ImageView voxelHitView;
+		vk::Sampler voxelHitSampler;
     };
 
-    void initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
-    void reloadShaders(vk::RenderPass renderPass, uint32 maxTextures);
+    // The three parts of a frame slot's static mesh draws, each in a render-pass instance of its own:
+    // Opaque     - an opaque scene stage: writes the set's descriptors, then the opaque set, the tessellated ground, the
+    //              grass, the clutter and the flowers.
+    // VoxelMarch - SceneColor's voxel march pass (the scene depth + the voxel hit target): the trees' voxel tier, both
+    //              tiers, after every other opaque draw.
+    // Late       - an opaque scene stage: the voxel lighting (one full-screen draw over the hit target), the terrain
+    //              film, the sky and the transparent set.
+    enum class RecordPhase { Opaque, VoxelMarch, Late };
+
+    // voxelMarchPass = SceneColor::getVoxelMarchRenderPass (the march pipelines are built against it).
+    void initialize(vk::RenderPass renderPass, vk::RenderPass voxelMarchPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
+    void reloadShaders(vk::RenderPass renderPass, vk::RenderPass voxelMarchPass, uint32 maxTextures);
     void resizeMeshCapacity(uint32 maxUniqueMeshes);
     // The opaque DGC scratch is SHARED with the shadow pass: its execute is done long before the scene's (a barrier
     // after the shadow draw, Renderer::recordPrimaryPreScene). Grows the scratch to hold `size` too. GPU idle.
     void reserveOpaquePreprocess(vk::DeviceSize size);
     Buffer& getOpaquePreprocessBuffer(uint32 frameIdx) { return m_preprocessBuffers[frameIdx]; }
-    void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors = true);
+    void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, RecordPhase phase);
     void updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler);
     void updateTlasDescriptor(vk::DescriptorSet descriptorSet, vk::AccelerationStructureKHR tlas);
-    // Rewrites one slot of the texture array (binding 24) with a streamed texture's current view.
+    // Rewrites one slot of the texture array (TEXTURES_BINDING) with a streamed texture's current view.
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the sky map binding (20) at GI's per-frame sky bake (GENERAL layout).
     void updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler);
@@ -130,6 +144,8 @@ private:
     // Every stage that reads the view index push constant (VR); the tess terrain's evaluation stage projects.
     static constexpr vk::ShaderStageFlags VIEW_PUSH_STAGES = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
         | vk::ShaderStageFlagBits::eTessellationControl | vk::ShaderStageFlagBits::eTessellationEvaluation;
+    // The texture array: the set's HIGHEST binding (variable descriptor count). `binding = 27` in the shaders.
+    static constexpr uint32 TEXTURES_BINDING = 27;
 
     void buildPipelineLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
     // The tessellated terrain from the main layout: its bindings (so the SAME descriptor set binds - the set
@@ -142,10 +158,12 @@ private:
     // The ground clutter the same way: the rigid meshes (their vertices + the record, instance rate) or the flowers
     // (the record only: built in the VS). Desktop only.
     void buildClutterLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& clutter, bool flowers);
-    // The far voxel trees the same way: the box mesh's vertices + the record (instance rate), tree_voxel_far.vs.glsl and
-    // the voxel tier's fragment shader. Desktop only.
-    void buildTreeVoxelFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far);
-    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers + far voxel trees
+    // THE VOXEL MARCH PASS's two pipelines (built against SceneColor's voxel march pass, not the opaque one), from the main
+    // layout's bindings: the near tier (the main vertex input, instanced_indirect.vs.glsl TREE_VOXEL) and the far voxel
+    // trees (+ the record, instance rate; tree_voxel_far.vs.glsl; desktop only), both with Trees/tree_voxel_march.fs.glsl.
+    void buildTreeVoxelMarchLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& march, bool far);
+    void buildTreeVoxelMarch(const GraphicsPipelineLayout& main, bool reload);
+    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers
 
     GraphicsPipeline m_graphicsPipeline;
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
@@ -161,8 +179,10 @@ private:
     bool m_clutterBuilt = false;
     bool m_flowerBuilt = false;
     bool m_texturedFlowerBuilt = false;
-    // The far voxel trees (TreeVoxelFarPipeline): one indexed indirect draw per voxel mesh, outside the execution set
-    // (it writes FragDepth).
+    // The voxel march pass's pipelines: the near tier (the main cull's voxel list) and the far voxel trees
+    // (TreeVoxelFarPipeline: one indexed indirect draw per voxel mesh). They write FragDepth and the hit target.
+    GraphicsPipeline m_treeVoxelMarchPipeline;
+    bool m_treeVoxelMarchBuilt = false;
     GraphicsPipeline m_treeVoxelFarPipeline;
     bool m_treeVoxelFarBuilt = false;
     // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
@@ -174,6 +194,7 @@ private:
     Sampler m_sampler;
     float m_mipLodBias = 0.0f;
     vk::RenderPass m_renderPass;
+    vk::RenderPass m_voxelMarchPass;
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant
     bool m_oceanRtReflections = true; // OCEAN_RT_REFLECTIONS define, matches OceanParams::rtReflections

@@ -298,26 +298,25 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.writeMotion = true,
 	});
-	// Variant 15 (EPipelineIndex::LitTreeVoxel): the procedural trees' VOXEL tier (Procedural TreeSystem). The VS
-	// (TREE_VOXEL) draws ONE SCREEN RECTANGLE around the tree's box (2 triangles: the main cull hands it the box mesh's
-	// first quad), at the box's nearest depth, and passes the pixel's view ray and the draw slot; the FS finds the ray's
-	// entry into the box itself, marches the tree's voxel atlases from there and writes the hit's depth (conservatively
-	// farther: early depth still rejects a box the scene hides), then lights it with the foliage terms. No culling: the
-	// rectangle faces the camera whatever the box's winding. TREE_VOXEL_RECORD: every instance is a tree record of the
-	// main cull, so the FS reads what is one value per tree from that record and its type (the far voxel trees'
-	// pipeline, the same FS without the define, draws the box and takes those values flat from its own VS).
+	// Variant 15 (EPipelineIndex::LitTreeVoxel): THE LIGHTING of the procedural trees' VOXEL tier (Procedural TreeSystem).
+	// The tier's instances carry this pipeline index, and the culls route them by it; what draws them is the VOXEL MARCH
+	// PASS (buildTreeVoxelMarchLayout: the scene depth + the voxel hit target, after every other opaque draw - the march
+	// alone, at its own register count). This variant is ONE FULL-SCREEN TRIANGLE (the sky's VS) over the hit target: per
+	// pixel that holds a hit it finds the hit again and lights it with the foliage terms - once per final pixel. No depth
+	// test and no depth write (the march wrote the hits' depth); it writes the motion target. Not in a DGC set: record()
+	// draws it directly, at the start of the late phase.
 	const oc::string voxelVariantPath = "Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
-			.text = graphicsPipelineLayout.vertexShader.text,
-			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
-			.defines = { { "TREE_VOXEL", "1" } },
+			.text = FileSystem::readFileStr(skyVertexPath),
+			.debugFilePath = skyVertexPath,
 		},
 		.fragmentShader = ShaderSource{
 			.text = FileSystem::readFileStr(voxelVariantPath),
 			.debugFilePath = voxelVariantPath,
-			.defines = { { "TREE_VOXEL_RECORD", "1" } },
 		},
+		.depthWrite = false,
+		.depthTest = false,
 		.writeMotion = true,
 		.cullMode = vk::CullModeFlagBits::eNone,
 	});
@@ -337,6 +336,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		{
 			const auto pipelineIdx = RendererVKLayout::EPipelineIndex(i + 1);
 			if (pipelineIdx == RendererVKLayout::EPipelineIndex::Sky
+				|| pipelineIdx == RendererVKLayout::EPipelineIndex::LitTreeVoxel // a full-screen triangle too
 				|| pipelineIdx == RendererVKLayout::EPipelineIndex::GizmoUI
 				|| pipelineIdx == RendererVKLayout::EPipelineIndex::GizmoWorld)
 				continue;
@@ -585,9 +585,22 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
 
-    // 25 = the set's highest binding number: required for eVariableDescriptorCount.
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_voxelHits (the voxel hit target: the voxel lighting, RG32UI, nearest)
         .binding = 25,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InVoxelFarTrees (the far voxel trees' sorted records: tree_voxel_ray.inc.glsl)
+        .binding = 26,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
+
+    // TEXTURES_BINDING = the set's highest binding number: required for eVariableDescriptorCount.
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+        .binding = TEXTURES_BINDING,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
@@ -598,7 +611,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // baked terrain height (19), sky map (20), cloud shadow map (22) and faction map (24) bindings are refreshed after
     // the (cached) draw CB is recorded -> UPDATE_AFTER_BIND; the GI volume (21) is written at record only for the
     // live cascades (partially bound; the images change only with the grid, which re-records); the texture
-    // array (25) is variable-count (allocated at the live texture capacity), only partially written, and
+    // array (TEXTURES_BINDING) is variable-count (allocated at the live texture capacity), only partially written, and
     // UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
@@ -609,7 +622,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
         else if (descriptorSetBindings[i].binding == 21)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-        else if (descriptorSetBindings[i].binding == 25)
+        else if (descriptorSetBindings[i].binding == TEXTURES_BINDING)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
 }
@@ -710,38 +723,65 @@ void StaticMeshGraphicsPipeline::buildClutterLayout(const GraphicsPipelineLayout
     clutter.fragmentShader = source(flowers ? "Shaders/Clutter/clutter_flower.fs.glsl" : "Shaders/Clutter/clutter.fs.glsl", main.fragmentShader.defines);
 }
 
-void StaticMeshGraphicsPipeline::buildTreeVoxelFarLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& far)
+void StaticMeshGraphicsPipeline::buildTreeVoxelMarchLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& march, bool far)
 {
-    far.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
-    far.descriptorBindingFlags = main.descriptorBindingFlags;
-    far.pushConstantRanges = main.pushConstantRanges;
-    far.indirectBindable = false;
-    far.motionTarget = true; // the opaque family
-    far.writeMotion = true;
-    far.polygonMode = main.polygonMode;
-    far.cullMode = vk::CullModeFlagBits::eNone; // a screen rectangle, built from the box's bottom quad: no winding to rely on
+    march.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    march.descriptorBindingFlags = main.descriptorBindingFlags;
+    march.pushConstantRanges = main.pushConstantRanges;
+    march.indirectBindable = false;
+    // Built against SceneColor's VOXEL MARCH pass: ONE colour attachment, the hit target (RG32UI: no blend), + the scene
+    // depth, tested and written (the layout's reversed-Z defaults). Always filled: a tree's voxels are a volume, not a mesh.
+    march.cullMode = vk::CullModeFlagBits::eNone; // a screen rectangle, built from the box's bottom quad: no winding to rely on
 
-    // Binding 0 = the mesh mega-buffer's MeshVertex (as the main layout), binding 1 = TreeVoxelFarPipeline::InstanceGpu.
-    auto& bindings = far.vertexLayoutInfo.bindingDescriptions;
-    auto& attributes = far.vertexLayoutInfo.attributeDescriptions;
+    // Binding 0 = the mesh mega-buffer's MeshVertex (as the main layout); the far trees: binding 1 =
+    // TreeVoxelFarPipeline::InstanceGpu (the near tier reads the main cull's instance at its draw slot).
+    auto& bindings = march.vertexLayoutInfo.bindingDescriptions;
+    auto& attributes = march.vertexLayoutInfo.attributeDescriptions;
     bindings.push_back(vk::VertexInputBindingDescription{ .binding = 0, .stride = sizeof(RendererVKLayout::MeshVertex), .inputRate = vk::VertexInputRate::eVertex });
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, positionU) });
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, normalV) });
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 2, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, tangent) });
-    using Instance = TreeVoxelFarPipeline::InstanceGpu;
-    bindings.push_back(vk::VertexInputBindingDescription{ .binding = 1, .stride = sizeof(Instance), .inputRate = vk::VertexInputRate::eInstance });
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 1, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(Instance, posScale) });
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 5, .binding = 1, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(Instance, yaw) });
+    if (far)
+    {
+        using Instance = TreeVoxelFarPipeline::InstanceGpu;
+        bindings.push_back(vk::VertexInputBindingDescription{ .binding = 1, .stride = sizeof(Instance), .inputRate = vk::VertexInputRate::eInstance });
+        attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 1, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(Instance, posScale) });
+        attributes.push_back(vk::VertexInputAttributeDescription{ .location = 5, .binding = 1, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(Instance, yaw) });
+    }
 
     const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
         return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
     };
-    oc::vector<ShaderDefine> vsDefines;
+    oc::vector<ShaderDefine> defines;
     if (m_stereo)
-        vsDefines.push_back({ "STEREO", "1" });
-    far.vertexShader = source("Shaders/Trees/tree_voxel_far.vs.glsl", vsDefines);
-    // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
-    far.fragmentShader = source("Shaders/Mesh/instanced_indirect_tree_voxel.fs.glsl", main.fragmentShader.defines);}
+        defines.push_back({ "STEREO", "1" });
+    march.fragmentShader = source("Shaders/Trees/tree_voxel_march.fs.glsl", defines);
+    if (far)
+        march.vertexShader = source("Shaders/Trees/tree_voxel_far.vs.glsl", defines);
+    else
+    {
+        defines.push_back({ "TREE_VOXEL", "1" });
+        march.vertexShader = source("Shaders/Mesh/instanced_indirect.vs.glsl", defines);
+    }
+}
+
+// The voxel march pass's pipelines: the near tier's always, the far voxel trees' on the desktop.
+void StaticMeshGraphicsPipeline::buildTreeVoxelMarch(const GraphicsPipelineLayout& main, bool reload)
+{
+    if (!m_voxelMarchPass)
+        return;
+    const auto build = [&](GraphicsPipeline& pipeline, bool& built, bool far, const char* name) {
+        GraphicsPipelineLayout layout;
+        buildTreeVoxelMarchLayout(main, layout, far);
+        if (!reload || !built)
+            built = pipeline.initialize(m_voxelMarchPass, layout);
+        else if (!pipeline.reloadShaders(m_voxelMarchPass, layout))
+            printf("StaticMeshGraphicsPipeline: %s shader reload failed, keeping previous pipeline\n", name);
+    };
+    build(m_treeVoxelMarchPipeline, m_treeVoxelMarchBuilt, false, "tree voxel march");
+    if (!m_stereo)
+        build(m_treeVoxelFarPipeline, m_treeVoxelFarBuilt, true, "far voxel trees");
+}
 
 // The desktop-only pipelines built from the main layout: the grass blades, the rigid clutter, the flowers.
 void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload)
@@ -762,16 +802,13 @@ void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout
     build(m_clutterPipeline, m_clutterBuilt, clutterLayout, "clutter");
     build(m_flowerPipeline, m_flowerBuilt, flowerLayout, "flower");
     build(m_texturedFlowerPipeline, m_texturedFlowerBuilt, texturedFlowerLayout, "textured flower");
-    GraphicsPipelineLayout treeVoxelFarLayout;
-    buildTreeVoxelFarLayout(main, treeVoxelFarLayout);
-    build(m_treeVoxelFarPipeline, m_treeVoxelFarBuilt, treeVoxelFarLayout, "far voxel trees");
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
     vk::DescriptorImageInfo imageInfo{ .sampler = m_sampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 25, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = TEXTURES_BINDING, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -847,9 +884,10 @@ void StaticMeshGraphicsPipeline::updateTlasDescriptor(vk::DescriptorSet descript
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
 
-void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo)
+void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, vk::RenderPass voxelMarchPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo)
 {
     m_renderPass = renderPass;
+    m_voxelMarchPass = voxelMarchPass;
     m_stereo = stereo;
     recreateSampler();
 
@@ -864,6 +902,7 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
     }
     if (!m_stereo)
         buildDesktopExtras(graphicsPipelineLayout, false);
+    buildTreeVoxelMarch(graphicsPipelineLayout, false);
 
     createExecutionSets();
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
@@ -935,11 +974,12 @@ void StaticMeshGraphicsPipeline::reserveOpaquePreprocess(vk::DeviceSize size)
     createPreprocessBuffers(m_maxUniqueMeshes);
 }
 
-void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32 maxTextures)
+void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, vk::RenderPass voxelMarchPass, uint32 maxTextures)
 {
-    // sceneColor's render pass is recreated on window resize, so refresh the cached handle rather than
-    // reloading against the (possibly dangling) one captured at initialize().
+    // sceneColor's render passes are recreated on window resize, so refresh the cached handles rather than
+    // reloading against the (possibly dangling) ones captured at initialize().
     m_renderPass = renderPass;
+    m_voxelMarchPass = voxelMarchPass;
     if (!m_renderPass)
         return;
 
@@ -962,14 +1002,16 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
     }
     if (!m_stereo)
         buildDesktopExtras(graphicsPipelineLayout, true);
+    buildTreeVoxelMarch(graphicsPipelineLayout, true);
 
     createExecutionSets();
     createPreprocessBuffers(m_maxUniqueMeshes); // the new sets' pipelines can need more scratch
 }
 
-void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
+void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, RecordPhase phase)
 {
-    oc::array<DescriptorSetUpdateInfo, 20> graphicsDescriptorSetUpdateInfos
+    // The set's contents: written by the OPAQUE phase (the first of a frame slot's three), bound by all of them.
+    oc::array<DescriptorSetUpdateInfo, 22> graphicsDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo{
             .binding = 0,
@@ -1113,15 +1155,27 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.treeTypesBuffer.getBuffer(), .range = params.treeTypesBuffer.getSize() } }
         },
         DescriptorSetUpdateInfo{ // [17] the texture array
-            .binding = 25,
+            .binding = TEXTURES_BINDING,
             .type = vk::DescriptorType::eCombinedImageSampler,
         },
-        DescriptorSetUpdateInfo{}, // [18] + [19] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{ // [18] the voxel hit target (the voxel lighting's fetch)
+            .binding = 25,
+            .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.voxelHitSampler, .imageView = params.voxelHitView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } }
+        },
+        DescriptorSetUpdateInfo{ // [19] the far voxel trees' sorted records (VR: none - a bound buffer nothing indexes)
+            .binding = 26,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = (params.treeVoxelFar ? *params.treeVoxelFar->instances : params.treeTypesBuffer).getBuffer(),
+                .range = vk::WholeSize } }
+        },
+        DescriptorSetUpdateInfo{}, // [20] + [21] the GI volume cascades + sky: written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[18], graphicsDescriptorSetUpdateInfos[19]);
-    const size_t numUpdates = params.giVolume.empty() ? 18 : 20;
+        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[20], graphicsDescriptorSetUpdateInfos[21]);
+    const size_t numUpdates = params.giVolume.empty() ? 20 : 22;
 
     const size_t numTextures = Globals::textureManager.getNumTextures();
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
@@ -1137,7 +1191,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     vk::DescriptorSet descriptorSet = params.descriptorSet.getDescriptorSet();
-    if (updateDescriptors)
+    if (phase == RecordPhase::Opaque)
         commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet,
             oc::span<DescriptorSetUpdateInfo>(graphicsDescriptorSetUpdateInfos.data(), numUpdates));
     // Pipeline, set, view index and vertex/index buffers: bound again after every generated-commands execute,
@@ -1172,17 +1226,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         labelOpen = true;
     };
 
-    // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).
-    // The opaque set in ONE execute: lit, masked, unlit, the tree meshes (LitTree), the rocks and the untessellated ground.
-    drawGroup("Opaque set");
-    bindForDraws(m_graphicsPipeline.getPipelineVariant(m_indirectExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
-    recordExecuteGeneratedCommands(vkCommandBuffer, m_indirectExecutionSet, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
-
-    // The TESSELLATED terrain ground, then the terrain FILM over all of the ground, both before the transparent
-    // execute: the ocean then always blends over the film (in the transparent sequence their order was
-    // undefined - a seam where the film drew after the ocean). Plain indexed indirect draws over the cull's
-    // compacted sequences (offset 4 skips the pipelineIndex word); with tessellation off the cull routes no
-    // ground there, so that count is 0. The film variant is indirect-bindable, and binds normally too.
+    // Plain indexed indirect draws over one of the cull's compacted sequence lists (offset 4 skips the pipelineIndex word).
     constexpr vk::DeviceSize sequenceStride = sizeof(RendererVKLayout::IndirectDrawSequence);
     const auto drawSequences = [&](vk::Pipeline pipeline, vk::PipelineLayout layout, Buffer& sequences, uint32 countIdx)
     {
@@ -1190,25 +1234,72 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
             params.drawCountBuffer.getBuffer(), countIdx * sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
     };
-    // The trees' VOXEL tier, right after the opaque meshes it hands over from: its FS writes FragDepth, so it cannot join
-    // the execution set (every pipeline there must match the first one in that).
-    drawGroup("Tree voxels");
-    drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::LitTreeVoxel), m_graphicsPipeline.getPipelineLayout(),
-        params.treeVoxelCommandBuffer, 4);
-    // The FAR voxel trees (TreeVoxelFarPipeline): one indexed indirect draw per voxel mesh over its sorted records (the
-    // unused buckets draw 0 instances). The box meshes from the mega-buffers, the record instance-rate at binding 1.
-    if (params.treeVoxelFar && m_treeVoxelFarBuilt)
+
+    // ---- THE VOXEL MARCH PASS (SceneColor's: the scene depth + the voxel hit target) ----
+    // The trees' VOXEL tier, after every other opaque draw of the scene: a tree the scene hides is rejected by early depth
+    // before it marches. The near tier (the main cull's voxel list), then the FAR voxel trees (TreeVoxelFarPipeline: one
+    // indexed indirect draw per voxel mesh over its sorted records, the record instance-rate at binding 1; the unused
+    // buckets draw 0 instances). Both draw the box mesh's first quad, as a screen rectangle.
+    if (phase == RecordPhase::VoxelMarch)
     {
-        drawGroup("Far voxel trees");
-        const TreeVoxelFarPipeline::Draw& far = *params.treeVoxelFar;
-        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipeline());
-        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-        if (m_stereo)
-            vkCommandBuffer.pushConstants(m_treeVoxelFarPipeline.getPipelineLayout(), VIEW_PUSH_STAGES, 0, sizeof(uint32), &params.viewIndex);
-        vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer(), far.instances->getBuffer() }, { 0, 0 });
-        vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
-        vkCommandBuffer.drawIndexedIndirect(far.commands->getBuffer(), 0, TreeVoxelFarPipeline::MAX_BUCKETS, 5 * sizeof(uint32));
+        if (m_treeVoxelMarchBuilt)
+        {
+            drawGroup("Tree voxels");
+            drawSequences(m_treeVoxelMarchPipeline.getPipeline(), m_treeVoxelMarchPipeline.getPipelineLayout(), params.treeVoxelCommandBuffer, 4);
+        }
+        if (params.treeVoxelFar && m_treeVoxelFarBuilt)
+        {
+            drawGroup("Far voxel trees");
+            const TreeVoxelFarPipeline::Draw& far = *params.treeVoxelFar;
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_treeVoxelFarPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+            if (m_stereo)
+                vkCommandBuffer.pushConstants(m_treeVoxelFarPipeline.getPipelineLayout(), VIEW_PUSH_STAGES, 0, sizeof(uint32), &params.viewIndex);
+            vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer(), far.instances->getBuffer() }, { 0, 0 });
+            vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+            vkCommandBuffer.drawIndexedIndirect(far.commands->getBuffer(), 0, TreeVoxelFarPipeline::MAX_BUCKETS, 5 * sizeof(uint32));
+        }
+        closeDrawGroup();
+        return;
     }
+
+    // ---- THE LATE PHASE (an opaque stage instance of its own, after the voxel march pass) ----
+    if (phase == RecordPhase::Late)
+    {
+        // THE VOXEL TREES' LIGHTING: one full-screen triangle over the hit target the march pass filled (always: the pass
+        // runs every frame, and clears the target), before everything that blends over the scene.
+        drawGroup("Tree voxel lighting");
+        bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::LitTreeVoxel), m_graphicsPipeline.getPipelineLayout());
+        vkCommandBuffer.draw(3, 1, 0, 0);
+        // The terrain FILM over all of the ground, before the transparent execute: the ocean then always blends over the
+        // film (in the transparent sequence their order was undefined - a seam where the film drew after the ocean). The
+        // film variant is indirect-bindable, and binds normally too. After the voxel march: the trees' depth hides it.
+        drawGroup("Terrain film");
+        drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
+            params.terrainFilmCommandBuffer, 3);
+        // The SKY after every depth writer of the scene: early depth rejects each pixel the scene covers.
+        if (params.drawSky)
+        {
+            drawGroup("Sky");
+            bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
+            vkCommandBuffer.draw(3, 1, 0, 0);
+        }
+        // The transparent set's initial pipeline is its own (the transparent family's lowest variant).
+        drawGroup("Transparent set");
+        bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
+        recordExecuteGeneratedCommands(vkCommandBuffer, m_transparentExecutionSet, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
+        closeDrawGroup();
+        return;
+    }
+
+    // ---- THE OPAQUE PHASE ----
+    // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).
+    // The opaque set in ONE execute: lit, masked, unlit, the tree meshes (LitTree), the rocks and the untessellated ground.
+    drawGroup("Opaque set");
+    bindForDraws(m_graphicsPipeline.getPipelineVariant(m_indirectExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
+    recordExecuteGeneratedCommands(vkCommandBuffer, m_indirectExecutionSet, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
+
+    // The TESSELLATED terrain ground: with tessellation off the cull routes no ground there, so that count is 0.
     if (m_terrainTess && m_terrainTessBuilt)
     {
         drawGroup("Tessellated ground");
@@ -1262,21 +1353,6 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         if (m_texturedFlowerBuilt)
             drawFlowers(m_texturedFlowerPipeline, 1);
     }
-    drawGroup("Terrain film");
-    drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
-        params.terrainFilmCommandBuffer, 3);
-    // The SKY after every depth writer of the scene: early depth rejects each pixel the scene covers.
-    if (params.drawSky)
-    {
-        drawGroup("Sky");
-        bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
-        vkCommandBuffer.draw(3, 1, 0, 0);
-    }
-    // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
-    // its own (the transparent family's lowest variant).
-    drawGroup("Transparent set");
-    bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
-    recordExecuteGeneratedCommands(vkCommandBuffer, m_transparentExecutionSet, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
     closeDrawGroup();
 }
 

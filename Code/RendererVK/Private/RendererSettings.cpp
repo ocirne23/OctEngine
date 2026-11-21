@@ -90,7 +90,8 @@ void RendererState::attachSettingsListeners()
     const auto reloadLitShaders = [this]() {
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_perFrameData[0].sceneColor.getVoxelMarchRenderPass(),
+            m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     };
 
@@ -129,7 +130,8 @@ void RendererState::attachSettingsListeners()
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setTerrainRelief(t.texParallaxEnabled, t.texTessEnabled);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_perFrameData[0].sceneColor.getVoxelMarchRenderPass(),
+            m_textures.getLayoutCap());
         m_indirectCullComputePipeline.setTerrainTess(t.texTessEnabled);
         m_indirectCullComputePipeline.reloadShaders();
         setHaveToRecordCommandBuffers();

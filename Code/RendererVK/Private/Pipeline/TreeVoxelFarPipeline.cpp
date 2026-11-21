@@ -175,7 +175,9 @@ void TreeVoxelFarPipeline::runPasses(vk::CommandBuffer cmd, uint32 frameIdx, con
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | drawStages,
-        .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eVertexAttributeRead,
+        // A list that a fragment shader reads too (the view's sorted records): as a storage buffer.
+        .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eVertexAttributeRead
+            | ((drawStages & vk::PipelineStageFlagBits2::eFragmentShader) ? vk::AccessFlagBits2::eShaderStorageRead : vk::AccessFlags2()),
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toDraws });
 }
@@ -194,7 +196,10 @@ void TreeVoxelFarPipeline::clearList(vk::CommandBuffer cmd, Lists& lists, uint32
 
 void TreeVoxelFarPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
 {
-    runPasses(cmd, frameIdx, params, m_cull, m_view, MAX_INSTANCES, vk::PipelineStageFlagBits2::eVertexAttributeInput);
+    // The view's records: the march pass's vertex input, and both voxel fragment shaders read them (the march and the
+    // lighting: tree_voxel_ray.inc.glsl).
+    runPasses(cmd, frameIdx, params, m_cull, m_view, MAX_INSTANCES,
+        vk::PipelineStageFlagBits2::eVertexAttributeInput | vk::PipelineStageFlagBits2::eFragmentShader);
 }
 
 void TreeVoxelFarPipeline::recordClear(vk::CommandBuffer cmd, uint32 frameIdx)

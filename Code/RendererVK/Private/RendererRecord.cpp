@@ -331,7 +331,37 @@ void RendererState::recordStaticMesh(uint32 frameIdx)
     cb.end();
 }
 
+void RendererState::recordStaticMeshLate(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].staticMeshLateCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb, true);
+    recordStaticMeshLateInto(cb, frameIdx, 0);
+    cb.end();
+}
+
+// The voxel march pass's draws as a cached secondary (desktop): it inherits SceneColor's voxel march pass.
+void RendererState::recordTreeVoxelMarch(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].treeVoxelMarchCommandBuffer;
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_perFrameData[frameIdx].sceneColor.getVoxelMarchRenderPass() };
+    cb.begin(false, &inheritance);
+    recordStaticMeshPhase(cb, frameIdx, 0, (int)StaticMeshGraphicsPipeline::RecordPhase::VoxelMarch);
+    cb.end();
+}
+
 void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+{
+    recordStaticMeshPhase(cb, frameIdx, eyeIndex, (int)StaticMeshGraphicsPipeline::RecordPhase::Opaque);
+}
+
+void RendererState::recordStaticMeshLateInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+{
+    recordStaticMeshPhase(cb, frameIdx, eyeIndex, (int)StaticMeshGraphicsPipeline::RecordPhase::Late);
+}
+
+// One phase of the static meshes' draws (StaticMeshGraphicsPipeline::RecordPhase) into a command buffer that is inside
+// that phase's render pass. The Opaque phase writes the eye's descriptor set: it records first.
+void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex, int phase)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -376,9 +406,41 @@ void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uin
         .grass = m_sceneViewCount == 1 ? &grassDraw : nullptr, // desktop only (the count is 0 while grass is off)
         .clutter = m_sceneViewCount == 1 ? &clutterDraw : nullptr, // the same (its draws are empty while it is off)
         .treeVoxelFar = m_sceneViewCount == 1 ? &treeVoxelFarDraw : nullptr, // the same
+        .voxelHitView = frameData.sceneColor.getVoxelHitView(),
+        .voxelHitSampler = frameData.sceneColor.getDepthSampler(), // nearest: an integer target
     };
     // Each eye has its own descriptor set (per-eye AO + last frame's depth), so both eyes write their own.
-    m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, true);
+    m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, (StaticMeshGraphicsPipeline::RecordPhase)phase);
+}
+
+// THE VOXEL MARCH PASS in the primary: begun and ended here (a secondary cannot begin one), between two opaque scene
+// stage instances. inlineCb (VR: the primary's wrapper): the draws are recorded into it here; null (desktop): the cached
+// secondary executes.
+void RendererState::recordTreeVoxelMarchPass(vk::CommandBuffer vkPrimary, uint32 frameIdx, uint32 eyeIndex, CommandBuffer* inlineCb)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    const SceneColor& sceneColor = frameData.sceneColor;
+    // [0] the hit target: 0 = no voxel tree. [1] the depth: loaded.
+    const oc::array<vk::ClearValue, 2> clears{ vk::ClearColorValue{ std::array<uint32, 4>{ 0u, 0u, 0u, 0u } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+    const vk::RenderPassBeginInfo begin{
+        .renderPass = sceneColor.getVoxelMarchRenderPass(),
+        .framebuffer = sceneColor.getVoxelMarchFramebuffer(eyeIndex),
+        .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ m_renderRect.min.x, m_renderRect.min.y },
+            .extent = vk::Extent2D{ sceneColor.getWidth() - m_renderRect.min.x, sceneColor.getHeight() - m_renderRect.min.y } },
+        .clearValueCount = (uint32)clears.size(),
+        .pClearValues = clears.data(),
+    };
+    m_gpuProfiler.beginScope(vkPrimary, "Tree voxel march");
+    vkPrimary.beginRenderPass(begin, inlineCb ? vk::SubpassContents::eInline : vk::SubpassContents::eSecondaryCommandBuffers);
+    if (inlineCb)
+        recordStaticMeshPhase(*inlineCb, frameIdx, eyeIndex, (int)StaticMeshGraphicsPipeline::RecordPhase::VoxelMarch);
+    else
+    {
+        const vk::CommandBuffer marchCb = frameData.treeVoxelMarchCommandBuffer.getCommandBuffer();
+        vkPrimary.executeCommands(1, &marchCb);
+    }
+    vkPrimary.endRenderPass();
+    m_gpuProfiler.endScope(vkPrimary);
 }
 
 // AO trace+denoise for one eye (compute, no render pass); reads that eye's scene depth - so it runs
@@ -1404,6 +1466,9 @@ oc::array<RendererState::SceneStage, RendererState::NUM_SCENE_STAGES> RendererSt
     const bool force = m_force.isEnabled();
     return {
         SceneStage{ "Static meshes",     true,  true,                             false, &f.staticMeshCommandBuffer,   &RendererState::recordStaticMesh,   &RendererState::recordStaticMeshInto },
+        // [1], right after the voxel march pass (recordTreeVoxelMarchPass, which both primaries run after stage [0]): the
+        // voxel lighting, the terrain film, the sky and the transparent set.
+        SceneStage{ "Static meshes late", true, true,                             false, &f.staticMeshLateCommandBuffer, &RendererState::recordStaticMeshLate, &RendererState::recordStaticMeshLateInto },
         SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &RendererState::recordGiProbeDebug, nullptr },
         SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &RendererState::recordDecals,       &RendererState::recordDecalsInto },
         SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &RendererState::recordDebugLines,   nullptr },
@@ -1472,6 +1537,7 @@ void RendererState::recordSceneSecondaries(uint32 frameIdx)
         for (const SceneStage& stage : buildSceneStages(frameIdx))
             if (!stage.gateRecording || stage.enabled)
                 (this->*stage.recordCached)(frameIdx);
+        recordTreeVoxelMarch(frameIdx); // after "Static meshes": that stage's record writes the set this one binds
         recordForceMarch(frameIdx);
         recordAO(frameIdx);
         recordClouds(frameIdx);
@@ -1657,17 +1723,26 @@ void RendererState::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffe
     {
         m_gpuProfiler.beginScope(vkCommandBuffer, eye == 0 ? "Eye L" : "Eye R");
         // This eye's forward set (last frame's AO view + TLAS) is written at scene-record time (recordSceneSecondaries).
+        // The opaque stages write this eye's depth, in TWO instances around the voxel march pass (as the desktop path):
+        // "Static meshes" (stage [0]), the march, then the other opaque stages ("Static meshes late" first).
         vk::RenderPassBeginInfo eyeRpBegin{
-            .renderPass = sceneColor.getStageRenderPass(true, !layered, false),
+            .renderPass = sceneColor.getStageRenderPass(true, false, false),
             .framebuffer = sceneColor.getOpaqueFramebuffer(eye),
             .renderArea = sceneArea,
             .clearValueCount = (uint32)s_sceneClears.size(),
             .pClearValues = s_sceneClears.data(),
         };
-        vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline); // opaque: writes this eye's depth
-        for (const SceneStage& stage : stages)
-            if (stage.opaque && stage.enabled && stage.recordInline)
-                (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
+        vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
+        (this->*stages[0].recordInline)(commandBuffer, frameIdx, eye);
+        vkCommandBuffer.endRenderPass();
+        sceneInstanceBarrier(vkCommandBuffer);
+        recordTreeVoxelMarchPass(vkCommandBuffer, frameIdx, eye, &commandBuffer);
+        sceneInstanceBarrier(vkCommandBuffer);
+        eyeRpBegin.renderPass = sceneColor.getStageRenderPass(false, !layered, false);
+        vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
+        for (uint32 s = 1; s < NUM_SCENE_STAGES; ++s)
+            if (stages[s].opaque && stages[s].enabled && stages[s].recordInline)
+                (this->*stages[s].recordInline)(commandBuffer, frameIdx, eye);
         vkCommandBuffer.endRenderPass();
         recordSceneOpaqueToSampled(vkCommandBuffer, sceneColor, eye);
 
@@ -1806,7 +1881,16 @@ void RendererState::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCo
     m_gpuProfiler.beginScope(vkCommandBuffer, "Scene opaque");
     for (const SceneStage& stage : stages)
         if (stage.opaque)
+        {
             runStage(stage);
+            // THE VOXEL MARCH PASS after "Static meshes" (every other opaque draw is in the depth), before "Static meshes
+            // late" (whose first draw lights the march's hits). Its own pass: the scene depth + the voxel hit target.
+            if (&stage == &stages[0])
+            {
+                sceneInstanceBarrier(vkCommandBuffer);
+                recordTreeVoxelMarchPass(vkCommandBuffer, frameIdx, 0, nullptr);
+            }
+        }
     recordSceneOpaqueToSampled(vkCommandBuffer, sceneColor, 0);
     m_gpuProfiler.endScope(vkCommandBuffer); // Scene opaque
 

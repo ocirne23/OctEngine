@@ -227,7 +227,7 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
 
     if (floorWeight > 1e-6)
         smoothFloor = floorSum / floorWeight;
-    return max(sum - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
+    return max(sum - u_foliage_farShrink, 0.0);
 }
 
 // The LIGHTING TAPS (sun, normal, interior - up to 12 per lit step) lie within ~10 m of their sample, which lies
@@ -247,7 +247,7 @@ float densityAbove(vec2 uv, float h)
     if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc_vol_height)
         return 0.0;
     // u (the angle) repeats. "Far blob shrink" cuts the filtered fall-off at a blob's edge first.
-    return max(densityTexel(vec3(uv, h * (1.0 / pc_vol_height))) - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
+    return max(densityTexel(vec3(uv, h * (1.0 / pc_vol_height))) - u_foliage_farShrink, 0.0);
 }
 
 float densityTap(vec2 uv, mat2 J, float h, vec3 d)
@@ -369,19 +369,14 @@ void marchAt(ivec2 px)
 
     const vec3 L = u_sunDirection.xyz;
     const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_sunVisible; // u_sunVisible: the eclipse
-    // PER RAY: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic - 1 at g = 0 - x "Far sun
-    // scale"; a rock takes no phase) and the SKY LIGHT: pi x the cosine-weighted mean radiance of GI's sky map over the
+    // PER RAY: the sun term's direction-only factor (Henyey-Greenstein relative to isotropic - 1 at g = 0; a rock takes
+    // no phase) and the SKY LIGHT: pi x the cosine-weighted mean radiance of GI's sky map over the
     // upper hemisphere (5 taps, baked once per frame: gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL) x "Far ambient".
     const float g = u_foliage_farForwardScatter;
     const float hgBase = 1.0 + g * g - 2.0 * g * dot(dir, L); // |g| <= 0.95 on the CPU: >= 0.0025
-    const float phase = (1.0 - g * g) / (hgBase * sqrt(hgBase)); // ^1.5
-    const float sunLeaf = u_foliage_farSunScale * phase;
-    // The TRANSMISSION lobe ("Far transmission" x a forward-only HG of "Far transmission focus"): light THROUGH the
-    // leaves, ADDED to the sun term only when the view looks toward the sun - "Far forward scatter" reshapes the whole
-    // sun term, so it lit or dimmed the trees beside and behind the camera too.
-    const float gT = u_foliage_farTransmissionFocus;
-    const float hgT = 1.0 + gT * gT - 2.0 * gT * dot(dir, L);
-    const float transmitLobe = u_foliage_farTransmission * (1.0 - gT * gT) / (hgT * sqrt(hgT));
+    const float sunLeaf = (1.0 - g * g) / (hgBase * sqrt(hgBase)); // ^1.5
+    // The TRANSMISSION ("Far transmission"): light THROUGH the leaves, ADDED to the sun term the same from every side.
+    const float transmitLobe = u_foliage_farTransmission;
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     // + the SKY RADIANCE delta light from straight up ("Sky/Sky Radiance": moonlight / space light): the sky map holds
     // only its atmosphere-scattered part; the lit surfaces take the direct part through the GI probes (gi_probe_trace's
@@ -411,8 +406,8 @@ void marchAt(ivec2 px)
     // the FIRST step's length, not a skipped stretch: the first sample stays exactly at the start and covers only that
     // partial step. Skipping it moved the volume's FRONT EDGE by up to a step per pixel per frame - crowns across "Far
     // start" cut at a random depth: noise there, worse with the pixel skip's mixed frames, smaller with a smaller step.
-    // The longest step along this ray that still keeps "Far layer samples" samples through the layer's height.
-    const float layerStepT = max(pc_vol_height / max(u_foliage_farLayerSamples, 1.0) / max(abs(dir.y), 1e-4), 0.25);
+    // The longest step along this ray that still keeps one sample through the layer's height.
+    const float layerStepT = max(pc_vol_height / max(abs(dir.y), 1e-4), 0.25);
     const float rStart = length(u_viewPos.xz + dir.xz * t - bakeCentre());
     const float firstDt = max(jitter * max(rStart * cellPerR * farStepScaleAt(tvRadialUv(rStart, TV_PUSH_VOL)), 0.25), 0.01);
 
@@ -514,9 +509,8 @@ void marchAt(ivec2 px)
                 // The faction look, at the step's own place (the colour map is baked: the layer changes between bakes), the
                 // weaker share on a rock column.
                 const vec3 albedo = terrainFactionTint(
-                    max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale,
+                    max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0),
                     p.xz, mix(1.0, u_terrain_factionSolidScale, rock));
-                const float hNorm = h * (1.0 / pc_vol_height);
 
                 // The volume's NORMAL = -grad(density), by forward differences over half a cell (horizontal) / one slice
                 // (up), from the taps' floor, x "Far normal strength"; a rock takes the full N.L.
@@ -532,28 +526,11 @@ void marchAt(ivec2 px)
                         sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), mix(u_foliage_farNormalStrength, 1.0, rock));
                 }
 
-                // The sky light, darker toward the ground ("Far ground darkening").
-                const vec3 sky = skyBase * mix(1.0 - u_foliage_farGroundDark, 1.0, hNorm);
-
-                // INTERIOR: the mean extinction of 6 taps around the sample (+-x / +-z / +-y at "Far interior radius" cells)
-                // as an AO term on the sun and the sky alike. Radius 0 puts the taps on the sample: skipped.
-                float interior = 1.0;
-                if (u_foliage_farInteriorShadow > 0.0 && u_foliage_farInteriorRadius > 0.0)
-                {
-                    const float rr = u_foliage_farInteriorRadius * cell;
-                    const float ry = min(rr, 0.5 * pc_vol_height);
-                    const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
-                        + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
-                        + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) * (1.0 / 6.0);
-                    // A rock's core is solid, with no lit interior to darken: a quarter of the term.
-                    interior = exp(-u_foliage_farInteriorShadow * m * rr * (1.0 - 0.75 * rock));
-                }
-
-                const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
-                vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + u_ambientColor) * interior;
+                const vec3 sunPart = sunRadiance * mix(sunLeaf, 1.0, rock);
+                vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + skyBase) + u_ambientColor);
                 // + the TRANSMISSION: no N.L (it lights the far side), in the leaves' colour; no rock.
                 if (transmitLobe > 0.0 && rock < 1.0)
-                    lit += albedo * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock) * terrainVis * cloudT * interior));
+                    lit += albedo * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock) * terrainVis * cloudT));
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);

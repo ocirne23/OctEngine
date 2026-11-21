@@ -175,7 +175,8 @@ void RendererState::initPipelines()
     // The depth-writing stages' pipelines: the opaque family, with the motion target (SceneColor).
     const vk::RenderPass opaqueRenderPass = m_perFrameData[0].sceneColor.getOpaqueRenderPass();
 
-    m_staticMeshGraphicsPipeline.initialize(opaqueRenderPass,m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
+    m_staticMeshGraphicsPipeline.initialize(opaqueRenderPass, m_perFrameData[0].sceneColor.getVoxelMarchRenderPass(), m_meshInfos.capacity(),
+        m_textures.getLayoutCap(), m_sceneViewCount > 1);
     m_rtaoPipeline.initialize(&m_rtaoParams, renderExt.width, renderExt.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
 
@@ -252,6 +253,8 @@ void RendererState::initPerFrameResources()
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.primary");
         perFrame.presentCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.present");
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMesh");
+        perFrame.treeVoxelMarchCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.treeVoxelMarch");
+        perFrame.staticMeshLateCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMeshLate");
         perFrame.aoCommandBuffers[0].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTrace");
         perFrame.aoCommandBuffers[1].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTemporal");
         perFrame.aoCommandBuffers[2].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoBlur");
@@ -430,7 +433,8 @@ void Renderer::reloadShaders()
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
 
-    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_perFrameData[0].sceneColor.getVoxelMarchRenderPass(),
+        m_textures.getLayoutCap());
     m_rtaoPipeline.reloadShaders();
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
@@ -480,7 +484,8 @@ void Renderer::setOceanParams(const OceanParams& ocean)
         m_staticMeshGraphicsPipeline.setOceanHitLights(ocean.hitLighting);
         m_staticMeshGraphicsPipeline.setOceanRtReflections(ocean.rtReflections);
         m_staticMeshGraphicsPipeline.setOceanDebugMode(ocean.debugMode);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_perFrameData[0].sceneColor.getVoxelMarchRenderPass(),
+            m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     }
 }

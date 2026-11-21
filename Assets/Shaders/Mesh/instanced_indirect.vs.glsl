@@ -65,8 +65,8 @@ layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
 // unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#endif
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
+#endif
 #ifdef TREE_ORIGIN
 // LitTree: THE WIND'S SWAY of this point WITHOUT the trunk's bend (its branch + its leaf flutter). The sun shadow is looked
 // up at the position less this: the shadow casters bend by the trunk alone (shadow_depth.vs.glsl), so a swaying leaf would
@@ -83,15 +83,14 @@ layout (location = 5) out flat uint out_treeInstance;
 layout (location = 6) out vec3 out_treeGrid;
 #endif
 #ifdef TREE_VOXEL
-// The LitTreeVoxel variant (the trees' voxel tier): NO BOX IS DRAWN. The main cull hands this shader the box mesh's
-// first quad - its four bottom corners (Procedural treeVoxelBoxMesh: the normal = the corner's grid coordinate, the
-// tangent = the box size) - and it places them on the SCREEN RECTANGLE around the whole box, at the box's nearest depth: 2
-// triangles a tree. The fragment shader intersects each pixel's ray with the box itself and marches from there
-// (TREE_VOXEL_RECORD in instanced_indirect_tree_voxel.fs.glsl); what is one value per tree it reads from the tree's
-// record at the draw slot and from its type. A box of 5 rings was 18 front triangles x 27 components, and the TRAM
-// allocation was the tier's launch limit: this is 2 triangles x 5 components.
-layout (location = 0) out vec3 out_voxelRay;            // a world point on this pixel's view ray (linear over the rectangle)
-layout (location = 7) out flat uint out_treeInstance;   // the draw slot (gl_InstanceIndex)
+// The trees' voxel tier in THE VOXEL MARCH PASS (StaticMeshGraphicsPipeline's near march pipeline): NO BOX IS DRAWN.
+// The main cull hands this shader the box mesh's first quad - its four bottom corners (Procedural treeVoxelBoxMesh: the
+// normal = the corner's grid coordinate, the tangent = the box size) - and it places them on the SCREEN RECTANGLE around
+// the whole box, at the box's nearest depth: 2 triangles a tree. The fragment shader (Trees/tree_voxel_march.fs.glsl)
+// builds each pixel's ray from the pixel, intersects it with the box and marches from there; what is one value per tree
+// it reads from the tree's record at the draw slot and from its type. A box of 5 rings was 18 front triangles x 27
+// components, and the TRAM allocation was the tier's launch limit: this is 2 triangles x 1 component.
+layout (location = 0) out flat uint out_voxelTree; // the tree: the draw slot (gl_InstanceIndex; tree_voxel_box.inc.glsl VOXEL_HIT_INDEX_MASK)
 #endif
 
 #ifndef TREE_STATIC
@@ -122,7 +121,9 @@ void main()
     float inst_scale = inst.posScale.w;
     vec4  inst_quat  = inst.quat;
 
+#ifndef TREE_VOXEL
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
+#endif
 
 #ifdef TREE_ORIGIN
     // Every LitTree instance is a tree record: the main cull wrote its TYPE where a plain instance has its mesh index.
@@ -137,8 +138,8 @@ void main()
     const vec3 boxSize = in_tangent.xyz;
     const vec3 boxMin = in_posU.xyz - in_normalV.xyz * boxSize;
     const vec3 bendTop = treeWindTrunkBend(inst.prevPosScale.xy, boxMin.y + boxSize.y, inst_scale);
-    gl_Position = treeVoxelBoxRect(boxMin, boxSize, inst_pos, inst_scale, inst_quat, bendTop, 16u, in_normalV.xz, out_voxelRay);
-    out_treeInstance = uint(gl_InstanceIndex);
+    gl_Position = treeVoxelBoxRect(boxMin, boxSize, inst_pos, inst_scale, inst_quat, bendTop, 16u, in_normalV.xz);
+    out_voxelTree = uint(gl_InstanceIndex);
 #else
     const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
 

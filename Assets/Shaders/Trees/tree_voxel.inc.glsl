@@ -200,10 +200,10 @@ vec3 voxelSliceUv(VoxelGrid grid, VoxelBrick brick, vec3 u)
 // The opacities at u0 and u1, both in the stored brick `brick`. The two first taps go out TOGETHER - one wait for two
 // steps of the march. A march with one sample left in the brick passes it twice (the same texel: no second wait).
 // The filter only: linear between two slices, the second slice fetched where it weighs in.
-vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
+// voxelOpacityPairAt: the same from the two samples' places (voxelSliceUv) - for a march that forms the first place
+// before it works out the second sample (the voxel march pass: fewer values live at once).
+vec2 voxelOpacityPairAt(VoxelGrid grid, vec3 s0, vec3 s1)
 {
-	const vec3 s0 = voxelSliceUv(grid, brick, u0);
-	const vec3 s1 = voxelSliceUv(grid, brick, u1);
 	vec2 a = vec2(textureLod(u_textures[grid.opacityTex], s0.xy, 0.0).r, textureLod(u_textures[grid.opacityTex], s1.xy, 0.0).r);
 	if (u_foliage_voxelSharp > 0.5)
 		return a;
@@ -213,6 +213,10 @@ vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
 	if (s1.z > 0.0)
 		a.y = mix(a.y, textureLod(u_textures[grid.opacityTex], s1.xy + nextSlice, 0.0).r, s1.z);
 	return a;
+}
+vec2 voxelOpacityPair(VoxelGrid grid, VoxelBrick brick, vec3 u0, vec3 u1)
+{
+	return voxelOpacityPairAt(grid, voxelSliceUv(grid, brick, u0), voxelSliceUv(grid, brick, u1));
 }
 // The opacity with ONE fetch at any setting: the nearest slice; inside it the nearest voxel (sharp cells) or bilinear
 // (the shadow casters: a binary threshold, where the blend between two slices changed little and cost a second fetch

@@ -1,19 +1,23 @@
-// THE VOXEL TIER'S RAY SETUP, shared by its shaders. Requires the UBO and mathutils.inc.glsl (shared.inc.glsl).
+// THE VOXEL TIER'S RECTANGLE AND ITS HIT WORD, shared by its shaders. Requires the UBO and mathutils.inc.glsl (shared.inc.glsl).
 // NO BOX IS DRAWN, in either tier: the vertex shader draws ONE SCREEN RECTANGLE around the tree's box (treeVoxelBoxRect:
-// instanced_indirect.vs.glsl TREE_VOXEL, tree_voxel_far.vs.glsl), and the fragment shader intersects the pixel's ray with
-// the box itself (instanced_indirect_tree_voxel.fs.glsl voxelTreeRay) - 2 triangles a tree and no interpolated entry point.
-// NOTHING that is one value per tree is worked out per vertex: the fragment shader takes the box from the tree set's type
-// table and the tree's origin, rotation and scale from its record (the near tier) or from two flat values (the far trees).
+// instanced_indirect.vs.glsl TREE_VOXEL, tree_voxel_far.vs.glsl) and hands on ONE flat word, the tree; the fragment shaders
+// build the pixel's ray themselves and intersect it with the box (tree_voxel_ray.inc.glsl) - 2 triangles a tree and no
+// interpolated value at all.
 #ifndef TREE_VOXEL_BOX_INC_GLSL
 #define TREE_VOXEL_BOX_INC_GLSL
 
-// THE SCREEN RECTANGLE AROUND A TREE'S BOX: the clip position of the rectangle's corner `corner` (0 / 1 per axis), and
-// rayPoint = a world point on that corner's view ray, about as far as the tree (linear over the rectangle: the fragment
-// shader takes the pixel's direction from the camera to it, and anchors the hit on it).
+// THE HIT WORD (the voxel hit target's first channel, RendererVK SceneColor; its second = the hit's distance from the
+// camera, a float's bits). 0 = no voxel tree at this pixel. The vertex shaders hand on the low 24 bits (the tree).
+const uint VOXEL_HIT_INDEX_MASK = 0x007FFFFFu; // the near tier: the draw slot (the main cull's instance); the far trees: the record in their sorted list
+const uint VOXEL_HIT_FAR        = 0x00800000u; // a far voxel tree (tree_voxel_far.vs.glsl)
+const uint VOXEL_HIT_LOD_SHIFT  = 24u;         // 4 bits: the grid level the view march ran at
+const uint VOXEL_HIT_AGREE_SHIFT = 28u;        // 3 bits: how far the hit voxel's cover lets its mean normal be trusted (0..7)
+const uint VOXEL_HIT_VALID      = 0x80000000u;
+
+// THE SCREEN RECTANGLE AROUND A TREE'S BOX: the clip position of the rectangle's corner `corner` (0 / 1 per axis).
 // boxMin / boxSize = the box (mesh-local). corners = 8: the box as it stands; 16: also the box moved by bendTop, its TOP's
 // trunk bend (world) - the bend grows with the height, so everything of the bent tree lies between the two.
-vec4 treeVoxelBoxRect(vec3 boxMin, vec3 boxSize, vec3 instPos, float instScale, vec4 instQuat, vec3 bendTop, uint corners, vec2 corner,
-    out vec3 rayPoint)
+vec4 treeVoxelBoxRect(vec3 boxMin, vec3 boxSize, vec3 instPos, float instScale, vec4 instQuat, vec3 bendTop, uint corners, vec2 corner)
 {
     vec2 ndcMin = vec2(1e30);
     vec2 ndcMax = vec2(-1e30);
@@ -39,17 +43,13 @@ vec4 treeVoxelBoxRect(vec3 boxMin, vec3 boxSize, vec3 instPos, float instScale, 
         ndcMax = vec2(1.0);
     }
     const vec2 ndc = mix(ndcMin, ndcMax, corner);
-    // The ray is camera-relative and linear in the NDC position (shared.inc.glsl viewRelFromDepth's numerator: the eye
-    // cancels, so it keeps its precision far from the world origin).
-    const mat4 invM = u_invMvp;
-    const vec3 ray = invM[0].xyz * ndc.x + invM[1].xyz * ndc.y + (invM[3].xyz - u_viewPos * invM[3].w);
-    rayPoint = u_viewPos + ray * distance(u_viewPos, instPos);
     // At the box's NEAREST depth: the hit the fragment shader writes is never nearer (its depth_less), and early depth
-    // rejects a tree the scene hides. w = 1: the ray interpolates linearly over the screen. The TAA jitter as every pass.
+    // rejects a tree the scene hides. The TAA jitter as every pass.
     return vec4(ndc + u_taaJitter.xy, min(nearest, 1.0), 1.0);
 }
 
-// THE TRUNK'S BEND AS A SHEAR OF THE RAY (the near tier only: a far voxel tree stands still). The tree bends, the grid does not: what stands at the height h
+// THE TRUNK'S BEND AS A SHEAR OF THE RAY (the near tier, and the voxel shadow caster's one shear per tree; a far voxel
+// tree stands still). The tree bends, the grid does not: what stands at the height h
 // in the grid is drawn trunk x (h / ref)^2 to the side, as a mesh vertex is. The march is a STRAIGHT ray through the grid,
 // so the bend is taken as a SHEAR about the height the ray enters at (h): its slope there, exact at h and off by
 // trunk x (dh / ref)^2 a height dh away. A shear keeps a ray straight; sheared back, a point at the height y over the

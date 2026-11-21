@@ -104,8 +104,8 @@ namespace
             && a.recordDetail == b.recordDetail && a.rockExtinction == b.rockExtinction;
     }
 
-    // A block's volume params LOCKABLE (all but the centre), from the settings `settingsOf` returns; the density scale is
-    // always the live one. The sources are the live rows (`s`) either way: a snapshot holds what they were.
+    // A block's volume params LOCKABLE (all but the centre), from the settings `settingsOf` returns. The sources are the
+    // live rows (`s`) either way: a snapshot holds what they were.
     template<typename F>
     void addVolLockables(PushBlock& block, const TvVolPush& vol, const FarTreeParams& s, F settingsOf)
     {
@@ -115,7 +115,6 @@ namespace
         block.lockable(vol.radialRes, [settingsOf] { return volumeParams(settingsOf()).radialRes; }, s.radialRes);
         block.lockable(vol.slices, [settingsOf] { return volumeParams(settingsOf()).slices; }, s.slices);
         block.lockable(vol.height, [settingsOf] { return volumeParams(settingsOf()).height; }, s.height);
-        block.lockable(vol.densityScale, s.densityScale);
     }
 
     void createImage(vk::ImageType type, vk::Format format, vk::Extent3D extent, vk::ImageUsageFlags usage,
@@ -566,7 +565,6 @@ void TreeVolumePipeline::createTemporalImages(uint32 scale)
     }
     initGeneral(oc::span<const vk::Image>(images.data(), images.size()), vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } });
     m_hasTemporalImages = true;
-    m_lastMarchFrame = UINT32_MAX; // the slots' history distances are new: no history this frame
 }
 
 void TreeVolumePipeline::destroyTemporalImages()
@@ -1502,7 +1500,7 @@ uint32 TreeVolumePipeline::marchPrepare(vk::CommandBuffer cmd, const RecordParam
     const FarTreeParams& s = params.settings;
     if (!ready(s))
         return 0;
-    // TEMPORAL OFF (no blend, no half res) is the plain march: its own variant, one phase, no other image touched. On:
+    // TEMPORAL OFF (no half res) is the plain march: its own variant, one phase, no other image touched. On:
     // the march at the temporal images' scale, the temporal pass, and at half res the upsample (2 or 3 phases).
     // The scale and the pixel skip are BAKED into the variants: dispatch by what they were compiled with (prepare()
     // rebuilds them when the settings change), never by the live settings.
@@ -1537,7 +1535,6 @@ uint32 TreeVolumePipeline::marchPrepare(vk::CommandBuffer cmd, const RecordParam
         cmd.clearColorImage(m_latest.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { range });
         cmd.clearColorImage(m_latestDepth.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
     }
-    // The history counts when last frame ran the temporal pass too (the previous slot holds its result + distances).
     MarchFrame& mf = m_marchFrame;
     mf.temporal = temporal;
     mf.scale = scale;
@@ -1545,9 +1542,6 @@ uint32 TreeVolumePipeline::marchPrepare(vk::CommandBuffer cmd, const RecordParam
     mf.marchHeight = marchHeight;
     mf.checker = checker;
     mf.quad = quad;
-    mf.historyWeight = temporal && m_lastMarchFrame != UINT32_MAX && params.frameNumber == m_lastMarchFrame + 1
-        ? glm::clamp(s.temporalBlend, 0.0f, 0.98f) : 0.0f;
-    m_lastMarchFrame = temporal ? params.frameNumber : UINT32_MAX;
     // THE HAND-OVER variant reads both bakes - from the frame after it began (this frame's UBO must carry its fraction).
     mf.handover = handingOver() && m_job.crossFade && m_job.handoverStart < params.frameNumber;
     return !temporal ? 1u : scale > 1 ? 3u : 2u;
@@ -1589,7 +1583,6 @@ void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx
         tpc.set(m_temporalPush.viewIndex, RendererVKLayout::VIEW_CENTER);
         tpc.set(m_temporalPush.width, marchWidth);
         tpc.set(m_temporalPush.height, marchHeight);
-        tpc.set(m_temporalPush.historyWeight, mf.historyWeight);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipelineLayout(), 0, 1, &tset, 0, nullptr);
         cmd.pushConstants(m_temporalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, tpc.size(), tpc.data());

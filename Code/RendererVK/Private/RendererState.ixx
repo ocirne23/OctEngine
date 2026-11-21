@@ -147,6 +147,16 @@ protected:
     void recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx); // after the GI step, both primaries
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
+    void recordStaticMeshLate(uint32 frameIdx);
+    void recordStaticMeshLateInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
+    // THE VOXEL MARCH PASS (SceneColor's: the scene depth + the voxel hit target), between the "Static meshes" and the
+    // "Static meshes late" stages: the trees' voxel tier marches there, and the late stage's first draw lights its hits.
+    // recordTreeVoxelMarch fills the cached secondary (desktop); recordTreeVoxelMarchPass begins and ends the pass in the
+    // primary around it (desktop) or around the inline draws (VR, per eye). ALWAYS RUN, like the late stage's lighting
+    // draw (a cached secondary): with no voxel tree in view the pass clears the hit target and the lighting discards.
+    void recordTreeVoxelMarch(uint32 frameIdx);
+    void recordTreeVoxelMarchPass(vk::CommandBuffer primary, uint32 frameIdx, uint32 eyeIndex, CommandBuffer* inlineCb);
+    void recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex, int phase);
     void recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex);
     void recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
@@ -363,7 +373,7 @@ protected:
         void (RendererState::*recordCached)(uint32);                         // fills cb
         void (RendererState::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
     };
-    static constexpr uint32 NUM_SCENE_STAGES = 11;
+    static constexpr uint32 NUM_SCENE_STAGES = 12;
     oc::array<SceneStage, NUM_SCENE_STAGES> buildSceneStages(uint32 frameIdx);
 
     void recreateVrEyeTargets();
@@ -858,7 +868,11 @@ protected:
 
         CommandBuffer primaryCommandBuffer; // the frame's work: its own batch, submitted before the acquire
         CommandBuffer presentCommandBuffer; // the swapchain pass alone: the batch that waits for the acquired image
+        // The static meshes' three phases (StaticMeshGraphicsPipeline::RecordPhase): the opaque draws, the voxel march
+        // pass's, and the late draws (the voxel lighting, the film, the sky, the transparent set).
         CommandBuffer staticMeshCommandBuffer;
+        CommandBuffer treeVoxelMarchCommandBuffer;
+        CommandBuffer staticMeshLateCommandBuffer;
         // One cached secondary per PHASE (desktop): the post-scene compute group interleaves them with the other passes'
         // (recordPostSceneCompute). RTAO: the trace, the temporal pass, the blur; the clouds: the march, the temporal pass.
         oc::array<CommandBuffer, 3> aoCommandBuffers;

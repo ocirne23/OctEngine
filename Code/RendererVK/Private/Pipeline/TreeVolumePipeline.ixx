@@ -64,7 +64,6 @@ struct TvVolPush
     PushValue<uint32> radialRes = g("radialRes");       // texels from rMin to rMax
     PushValue<uint32> slices = g("slices");             // height slices
     PushValue<float> height = g("height");              // m above the terrain the volume covers
-    PushValue<float> densityScale = g("densityScale");  // x the baked extinction
 };
 // tree_volume_splat.cs.glsl: the detail chunks' records.
 struct SplatPush
@@ -150,7 +149,6 @@ struct TemporalPush
     PushValue<uint32> viewIndex = g("viewIndex");
     PushValue<uint32> width = g("width");
     PushValue<uint32> height = g("height");
-    PushValue<float> historyWeight = g("historyWeight");
     PushValue<float> maxDist = g("vol_rMax");              // lockable: the march's max distance (the far volume's end)
 };
 // tree_volume_upsample.cs.glsl.
@@ -436,13 +434,11 @@ private:
         uint32 scale = 1;
         uint32 marchWidth = 0;
         uint32 marchHeight = 0;
-        float historyWeight = 0.0f;
     };
     MarchFrame m_marchFrame;
     vk::Sampler m_linearSampler; // u repeats (the volume's angle)
     vk::Sampler m_mipSampler;    // every mip (the rock textures' smallest: their mean colour)
     vk::Sampler m_screenSampler; // clamp: the temporal pass's screen images
-    uint32 m_lastMarchFrame = UINT32_MAX; // frameNumber of the last march (the history's validity)
     uint32 m_lastPlainMarchFrame = UINT32_MAX; // ... of the last plain PIXEL-SKIP march (else UINT32_MAX)
     int m_lastSkipMode = 0;                    // its mode (a change restarts the latest images)
     // The plain pixel skip's latest march per pixel (render size; only while the plain path skips pixels): colour

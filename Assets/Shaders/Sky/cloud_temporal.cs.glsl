@@ -51,7 +51,7 @@ const float LIMIT_MATCH = 0.15;
 #define u_viewIndex pc_viewIndex
 #define u_width pc_width
 #define u_height pc_height
-#define u_historyWeight pc_historyWeight
+#define u_historyWeight 0.0 // the far trees keep no history: this pass only reconstructs (half res, the pixel skip)
 #else
 layout (push_constant) uniform CloudPC
 {

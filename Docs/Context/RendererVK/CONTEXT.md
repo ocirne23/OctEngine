@@ -190,7 +190,7 @@ GPU Frame
     → Rain occlusion                       (ray query on that TLAS; only while a weather volume requested the map; see Particle)
     → Particle sim                         (after the TLAS: it reads this frame's rain map)
     → Volumetric fog
-    → Scene opaque                         (WRITES the scene depth, then parks it read-only)
+    → Scene opaque                         (WRITES the scene depth, then parks it read-only; the voxel march pass is inside it)
     → Far tree bake                        (only while a bake runs; see "Far-tree volume")
     → Post-scene compute                   (RTAO + cloud march + far-tree march, phase by phase; reads this frame's depth; see below)
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
@@ -243,9 +243,17 @@ The scene renders as **one render-pass INSTANCE per enabled stage** (separate se
 attachment barriers between instances — `sceneInstanceBarrier`, RendererRecord.cpp), in two groups:
 
 ```
-Scene opaque   (depth WRITTEN):            Static meshes → GI probe debug
+Scene opaque   (depth WRITTEN):            Static meshes → [Tree voxel march] → Static meshes late → GI probe debug
 Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Particles → Far trees apply → Cloud apply → Fog apply → Beam cards → Force shells → Force union blend
 ```
+
+**"Tree voxel march" is NOT a scene stage**: a pass of its own (`SceneColor::getVoxelMarchRenderPass`: the scene depth
++ the voxel hit target, no colour, no motion), begun in the primary right after the "Static meshes" stage
+(`recordTreeVoxelMarchPass`; desktop: around a cached secondary, VR: inline per eye), every frame. The static meshes'
+draws are three PHASES (`StaticMeshGraphicsPipeline::RecordPhase`): Opaque = "Static meshes" (the opaque set, the
+tessellated ground, the grass, the clutter, the flowers), VoxelMarch = that pass (the trees' voxel tier: the march
+alone), Late = "Static meshes late" (the voxel lighting over the hit target, the terrain film, the sky, the
+transparent set). See "THE VOXEL TIER" in [Scene.md](Scene.md).
 
 (With the fog on, the fog apply composites the clouds and far trees itself; with the fog off and clouds on, the cloud
 apply composites the far trees.) `SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance
@@ -485,13 +493,13 @@ not only with validation — the validation messenger stays validation-only.
 * **Command labels = the `GpuProfiler` scopes.** `beginScope` / `endScope` also emit
   `vkCmdBegin/EndDebugUtilsLabelEXT` (`Device::beginDebugLabel`), BEFORE their early-outs, so the pair
   holds even when timestamps are off. A new profiled pass is therefore a Nsight marker range for free.
-* **The "Static meshes" stage's draw groups** take plain labels (no `GpuProfiler` scope: its timestamp queries are per
-  frame, and that secondary is cached) with **"Renderer/Label static mesh draws"** (off; a change re-records):
-  `StaticMeshGraphicsPipeline::record` opens "Opaque set" (ONE generated-commands execute: lit, masked, unlit, the
-  tree meshes, the rocks, the untessellated ground - they cannot be split), "Tree voxels", "Far voxel trees",
-  "Tessellated ground", "Grass", "Clutter", "Flowers", "Terrain film", "Sky" and "Transparent set" (the ocean, the
-  rivers: also inside "Static meshes"). Each group records a bind and a draw; one that draws nothing that frame is a
-  range with no workload.
+* **The static meshes' draw groups** take plain labels (no `GpuProfiler` scope: its timestamp queries are per
+  frame, and those secondaries are cached) with **"Renderer/Label static mesh draws"** (off; a change re-records).
+  `StaticMeshGraphicsPipeline::record` opens, per phase: in "Static meshes" - "Opaque set" (ONE generated-commands
+  execute: lit, masked, unlit, the tree meshes, the rocks, the untessellated ground - they cannot be split),
+  "Tessellated ground", "Grass", "Clutter", "Flowers"; in "Tree voxel march" - "Tree voxels", "Far voxel trees"; in
+  "Static meshes late" - "Tree voxel lighting", "Terrain film", "Sky" and "Transparent set" (the ocean, the rivers).
+  Each group records a bind and a draw; one that draws nothing that frame is a range with no workload.
 * **Never record an EMPTY scope** (a begin and an end with no command between them): Nsight's GPU Trace times a
   zero-length range at the NEXT workload, and when that is the first command inside a render pass begun with
   SECONDARY_COMMAND_BUFFERS contents (the force interval pass, a scene stage), its vkCmdWriteTimestamp is illegal -

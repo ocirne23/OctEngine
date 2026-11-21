@@ -635,28 +635,16 @@ export struct FarTreeParams
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 8;             // height slices
     float height = 30.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 1.5f;    // x the baked extinction
-    float blobShrink = 0.5f;     // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float blobShrink = 0.75f;    // 1/m off the baked extinction: blobs shrink toward their cores
     float stepScale = 0.8f;       // march step, x the cell size, at startDistance
-    float layerSamples = 1.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
     float stepExponent = 0.4f;  // ... x (r / startDistance) ^ this beyond: > 0 = finer near the start, coarser far out
     uint32 maxSteps = 600;
-    float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
-    float sunScale = 1.5f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
-    float normalStrength = 0.5f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
-    float groundDarkening = 0.0f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 0.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
-                                  // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
-    float interiorRadius = 0.075f; // the taps' distance, x the cell size
+    float ambient = 0.7f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
+    float selfShadow = 0.5f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float normalStrength = 0.7f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float forwardScatter = 0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
-    // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
-    // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 0.25f;
-    float transmissionFocus = 0.0f;
-    float albedoScale = 1.0f;    // x the leaf colour
-    float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
-    float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
+    float transmission = 0.35f;   // light THROUGH the leaves, ADDED to the sun term, the same from every side. 0 = off.
+    float saturationScale = 0.8f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
     // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per
     // frame only 1 of 2 pixels (the checkerboard) or 1 of 4 (one per 2x2 block) is marched, the rest copied from a
@@ -664,7 +652,7 @@ export struct FarTreeParams
     // reconstructs instead, and 1 of 4 runs as 1 of 2 (its checkerboard).
     bool halfRes = false;
     int pixelSkip = 1;        // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
-    bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
+    bool temporalPath() const { return halfRes; }
     float rebakeDistance = 256.0f; // the camera moves this far from the bake centre -> re-bake
     // BAKE AHEAD: the bake centres on where the camera will be at the swap (its smoothed velocity x the last bake's real
     // duration), and the re-bake test uses that point too - the lag cancels at a steady speed, at any frame rate.
