@@ -29,10 +29,10 @@ import Settings.fwd;
 //           around the bake centre, the records change, or a volume setting changes. A tree set's own pieces are never
 //           splatted: the records expand to the same trees.
 //   march : tree_volume_march.cs, full res, the view ray from the start distance to the scene surface.
-//   temporal: cloud_temporal.cs's TREE_TEMPORAL instance ("Far temporal blend" > 0): last frame's result reprojected
-//           at the trees' mean distance, rejected / neighbourhood-clamped as for the clouds, blended in. OFF COSTS
-//           NOTHING: the plain march variant writes the result directly, the barriers are the march's own, and the
-//           temporal images do not exist (created at the first frame with it on).
+//   temporal: cloud_temporal.cs's TREE_TEMPORAL instance ("Far half res" only): it reconstructs the pixels the march
+//           skipped; no history is blended in. OFF COSTS NOTHING: the plain march variant writes the result directly,
+//           the barriers are the march's own, and the temporal images do not exist (created at the first frame with it
+//           on).
 //   apply : a scene-forward stage (before the cloud / fog apply): colour + scene x transmittance.
 // Desktop only (one view). Every image stays in GENERAL for life.
 //

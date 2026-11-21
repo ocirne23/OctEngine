@@ -589,7 +589,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
 * **ROCKS** (Procedural's world rocks): rock records are record types like trees' and go through the same passes. A
   rock type is a **SOLID** (`RenderTreeSet::Type::solid` -> the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w`
   = 0): its grid is OCCUPANCY (0..1), and its extinction is **"Far rock extinction (1/m)"** (a rebake setting - before
-  "Far density" and the blob shrink) at ANY size - a crown's extinction thins with its scale (`/ scale`: its leaves
+  the blob shrink) at ANY size - a crown's extinction thins with its scale (`/ scale`: its leaves
   spread over a larger volume), a rock's does not. So the far mass of a rock record is its occupied volume x scale^3 x
   that (a tree's: x scale^2).
   * **DEAD WOOD** (`solidOwnColour` -> `albedo.w` = 0.5, the record type's too): a solid's extinction and mass, but a
@@ -605,7 +605,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     the lapse at the column's floor), over EVERY rock entry. **The colour map's ALPHA is 1 - the rock fraction** (the
     clear and every tree write keep 1).
   * **The march**: by that fraction the sun term loses its phase ("Far forward scatter": a surface does not glow
-    backlit), takes the full N.L ("Far normal strength" toward 1), and the interior darkening drops to a quarter.
+    backlit) and takes the full N.L ("Far normal strength" toward 1).
   * A rock mesh leaves the main pass at the same distance as a tree (see "Hand-over" below).
 * **THE BAKE IS SPREAD OVER FRAMES** ("Far bake frames"; in one frame the world records cost several ms of GPU per
   bake): `startBake` SNAPSHOTS what it reads that can change before it ends - the record table
@@ -695,44 +695,40 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   scene distance from `viewRelFromDepth` at the jittered uv.
 * **The canopy's colour and sky light:** the leaf colour (linear, as `meanLeafAlbedo` decoded it, or the species'
   `Color Far`, then x its `Billboard FarAlbedoScale` - Procedural Trees.md; LINEAR in an RGBA8
-  UNORM image) is mixed toward its Rec. 709 luminance by "Far saturation scale" (0 grey .. 1 as baked .. 2; a
-  push-constant word), then x "Far albedo scale". The SKY term is the real sky: pi x the cosine-weighted mean radiance
+  UNORM image) is mixed toward its Rec. 709 luminance by "Far saturation scale" (0.8; 0 grey .. 1 as baked .. 2). The SKY term is the real sky: pi x the cosine-weighted mean radiance
   of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45° down 4 x 0.15:
   one cloud overhead does not set it alone), baked once per frame by the sky-map bake into `SKY_MAP_TREE_SKY_TEXEL`
   (one `texelFetch` per ray), + the SKY RADIANCE delta light from straight up (`u_sky_radiance`, "Sky/Sky Radiance":
   the sky map holds only its atmosphere-scattered part, the lit surfaces take the direct part through the GI probes'
-  projection - on an upward surface its irradiance is `u_sky_radiance` itself), x "Far ambient" (1 = physical). The sky
+  projection - on an upward surface its irradiance is `u_sky_radiance` itself), x "Far ambient" (0.7; 1 = physical). The sky
   map is baked in the GI stage, before "Far trees".
 * **March** (`tree_volume_march.cs`, full res, every pixel): from "Far start" (camera distance; at least the ring's
   entry, exact circle roots; a vertical ray never enters) to the scene surface or "Far end", at most "Far max steps".
-  * "Far blob shrink" (1/m) comes off the baked extinction first (before "Far density"), so a blob shrinks toward its
+  * "Far blob shrink" (0.75, 1/m) comes off the baked extinction, so a blob shrinks toward its
     dense core. Steps of one cell × "Far step scale" (so they grow like the cells) × (r / "Far start") ^ "Far step
     distance exponent" (`farStepScaleAt`; 0.8 / 0.4 - 0 = off: > 0 makes them finer near the start and coarser far
-    out; from the step's radial uv, which already holds log(r): one exp2 per step, none at exponent 0), each capped so its VERTICAL travel stays <= "Far height" / "Far layer samples" (8: `layerStepT` - a steep ray
-    from high up crossed the 30 m layer in ~1 cell of its length, 0-2 samples hit or missed: bands; a shallow ray never
+    out; from the step's radial uv, which already holds log(r): one exp2 per step, none at exponent 0), each capped so its VERTICAL travel stays <= "Far height" (`layerStepT`: one sample at least through the layer - a steep ray
+    from high up crossed the 30 m layer in ~1 cell of its length; a shallow ray never
     reaches the cap; the max-floor skip and the jump above the layer are not capped, so the empty air stays fast), the WHOLE ray shifted by a
     per-pixel, per-frame fraction of its first step (TAA averages it — jittering only the first sample left the rest
     on a grid sliding with the camera, and the blobs shimmered) - as the FIRST STEP'S LENGTH: the first sample stays
     exactly at "Far start" and covers that partial step (skipping it moved the volume's front edge by up to a step per
     pixel per frame: crowns across the start cut at a random depth - noise, worse with the pixel skip), the height gap
     above the volume's top.
-  * Per lit sample: `albedo / π ×` (the sun × "Far sun scale" × the Henyey-Greenstein phase ("Far forward scatter"; a
-    rock takes none) × its transmittance through the crown (3 taps out to 14 m, × "Far self shadow") × the terrain's
+  * Per lit sample: `albedo / π ×` (the sun × the Henyey-Greenstein phase ("Far forward scatter" 0.35; a
+    rock takes none) × its transmittance through the crown (3 taps out to 14 m, × "Far self shadow" 0.5) × the terrain's
     sun visibility (`terrainSunVisibility`, once per ray at the first hit, from the hit's height above its tree floor
     put on the height MAP's ground there - from the hit itself a crown in a valley started under the map's coarse,
     concave-overshooting surface and lost all sun: black patches along valleys, changing with "Data map range") × the cloud shadow
-    (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
-    "Far ground darkening") + `u_ambientColor`, × the interior darkening.
-  * **THE TRANSMISSION** ("Far transmission" 0.6, "Far transmission focus" 0.6): ADDED to that - the sun × a
-    forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), with no
-    self-shadow of the crown,
-    × the terrain / cloud shadow and the interior, in the leaves' colour; rocks take none. Only crowns between the camera
-    and the sun glow: "Far forward scatter" reshapes the WHOLE sun term, so it also changed the trees beside and behind.
-  * "Far normal strength": the sun term toward `max(N·L, 0)` with N = −∇density by forward differences (3 more taps
+    (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above) + `u_ambientColor`.
+  * **THE TRANSMISSION** ("Far transmission" 0.35): ADDED to that - the sun × the strength, the same from every side,
+    no N·L (it lights the far side), with no self-shadow of the crown,
+    × the terrain / cloud shadow, in the leaves' colour; rocks take none.
+  * "Far normal strength" (0.7): the sun term toward `max(N·L, 0)` with N = −∇density by forward differences (3 more taps
     per lit step). A crown-scale gradient blended into it was tried and removed: not worth its 3 taps.
-  * "Far interior shadow" / "Far interior radius": `exp(−strength × the mean extinction of 6 taps at radius × the
-    cell size around the sample × that distance)` on the sun and the sky — a blob's core is dense on every side; the
-    6 taps per lit step run only when both are > 0.
+  * Tried, each dropped (its tweak stood at the value that turns it off): a scale on the baked extinction, on the sun
+    term and on the leaf colour; more than one sample through the layer for a steep ray; a sky term darker toward the
+    ground; a forward-only phase lobe on the transmission; an interior darkening from 6 density taps around the sample.
   * **The volume FADES IN over "Far overlap" ON THE RESULT - of the BAND only:** the ray accumulates two segments
     split at the fade end ("Far start" + "Far overlap"), the band fades as a whole by its own weighted mean distance,
     and the segment behind it composites under it unfaded (an opaque band skips to the fade end unless it is already
@@ -754,8 +750,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     would read 0 (exact - **keep the ring if the floor pass changes**). It sits in the step formula and the sample's
     `hasFloor ?` - as a branch of its own it cost the march 8 registers.
   * A segment's distance weights are not summed - `sum(T x alpha)` telescopes to `1 - T`, so the weighted mean is
-    `distSum / (1 - T)` (an opaque segment normalises its sum before its T is zeroed). The interior taps skip at "Far
-    interior radius" 0.
+    `distSum / (1 - T)` (an opaque segment normalises its sum before its T is zeroed).
   * ONE `marchAt` call site (two inlined copies raise every warp's register count).
 * **THE MAX-FLOOR SKIP** (`tree_volume_floor_max.cs`, the bake's last step - after the far columns, the last floor
   writes): the BACK floor -> the highest floor per block of `TV_FLOOR_MAX_BLOCK`² (16²) columns (R32F `m_floorBlock`),
@@ -774,15 +769,14 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     from the centre, so the test needs `d < r x sin(4 blocks)`.
 * The march runs in the post-scene compute group (`marchPrepare` + `recordMarchPhase`; see "Barriers and overlap"
   ([CONTEXT.md](CONTEXT.md))) - its own scope "Far trees" only with "Renderer/Overlap compute" off.
-* **Temporal** ("Far temporal blend", the history's weight; **default 0 — and 0 costs NOTHING**: the plain march
+* **The temporal pass runs only with "Far half res"** (off by default — **and off costs NOTHING**: the plain march
   variant writes the slot's result (R16F linear distance) directly with the original barriers, the temporal images are
-  freed and the temporal pipelines are compiled only at their first use; the full-res march is stable without it). On:
+  freed and the temporal pipelines are compiled only at their first use). On:
   the `TREE_TEMPORAL_OUT` march variant writes a raw pair (log2 distances), then `cloud_temporal.cs.glsl`'s
-  **`TREE_TEMPORAL` instance** (history distances per slot; it also writes the R16F distance the fog apply reads) — the
-  CLOUDS' pass, shared rather than copied: full res, no checkerboard, no wind, the weight from the push constant. It
-  reprojects the previous slot's result at the mean distance, rejects it when that distance leaves the
-  neighbourhood's range or the march limit changed (a silhouette), clamps it to the neighbourhood and blends. The
-  history counts only when the previous frame marched (`frameNumber`).
+  **`TREE_TEMPORAL` instance** (it also writes the R16F distance the fog apply reads) — the
+  CLOUDS' pass, shared rather than copied: no wind, and **NO HISTORY BLEND** (its weight is the constant 0 in that
+  instance: the pass only RECONSTRUCTS the pixels the march skipped). A history blend was tried and dropped: the
+  full-res march is stable without it.
 * **"Far pixel skip"** (Off / **1 of 2 (checkerboard), the default** / 1 of 4) **needs no pass on its own**: one
   thread per BLOCK - a horizontal pair, the marched pixel alternating per frame and row, or a 2x2 block, the marched
   pixel cycling through it over 4 frames - marches ONE pixel: the first of its schedule whose surface lies FARTHER than

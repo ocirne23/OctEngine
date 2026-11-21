@@ -461,7 +461,7 @@ void marchAt(ivec2 px)
         float dt = i == 0u ? firstDt : max(cell * (hasFloor ? stepScale : max(stepScale, 1.0)), 0.25);
         // A STEEP ray (from high up) crosses the thin layer in a few metres of its length, against steps of a cell (tens of
         // metres far out): 0-2 samples in it, hit or missed by the step pattern - bands. Its VERTICAL travel per step is
-        // capped at "Far height" / "Far layer samples" (a shallow ray's never reaches it: no cost at ground level). The
+        // capped at "Far height" (a shallow ray's never reaches it: no cost at ground level). The
         // jump above the layer below still skips the empty air.
         dt = min(dt, layerStepT);
         if (!hasFloor)

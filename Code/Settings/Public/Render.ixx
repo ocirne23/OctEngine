@@ -646,7 +646,7 @@ export struct FarTreeParams
     float transmission = 0.35f;   // light THROUGH the leaves, ADDED to the sun term, the same from every side. 0 = off.
     float saturationScale = 0.8f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
-    // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per
+    // temporal pass - half res runs the temporal pass, which only reconstructs) and / or PIXEL SKIPPING: per
     // frame only 1 of 2 pixels (the checkerboard) or 1 of 4 (one per 2x2 block) is marched, the rest copied from a
     // persistent image of each pixel's latest march (tree_volume_march.cs.glsl). Under the temporal pass the pass
     // reconstructs instead, and 1 of 4 runs as 1 of 2 (its checkerboard).
@@ -668,8 +668,8 @@ export struct FarTreeParams
     // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
     // (0 = at once; the swap then still takes the copy's frames).
     float swapTime = 0.2f;
-    // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
-    // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
+    // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before
+    // the blob shrink) is this at any size, over its occupancy. A rebake setting.
     float rockExtinction = 4.0f;
 };
 
