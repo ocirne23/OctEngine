@@ -139,6 +139,14 @@ vec2 atmosLightOpticalDepth(vec3 pos, vec3 lightDir)
 	return vec2(odR, mix(odM, odR, u_sky_hazeBackground));
 }
 
+// The same straight UP from height h (m): the column above it, scale height x density (the Chapman function is 1 at the
+// zenith). No Chapman evaluation, and its exponentials are atmosDensity's own.
+vec2 atmosZenithOpticalDepth(float h)
+{
+	const vec2 od = exp(-h / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * vec2(ATMOS_H_RAY, ATMOS_H_MIE);
+	return vec2(od.x, mix(od.y, od.x, u_sky_hazeBackground));
+}
+
 // Transmittance from a point at `height` above the surface toward a light: white at midday, warm at the horizon, ~0
 // below it.
 vec3 atmosTransmittanceToLight(float height, vec3 lightDir, vec3 up)

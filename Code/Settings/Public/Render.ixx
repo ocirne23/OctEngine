@@ -87,11 +87,11 @@ export struct SkyParams
 
     // Atmosphere scattering: multipliers on the Earth sea-level Rayleigh/Mie coefficients. These drive
     // both the visible sky and (through skyRadiance) the majority of the indirect sky lighting.
-    float rayleighScatter = 1.0f;
-    float mieScatter = 1.0f;
+    float rayleighScatter = 1.2f;
+    float mieScatter = 1.5f;
     // HUMIDITY: the haze particles take up water and grow - "Haze scattering" x 1 / (1 - humidity)^2 (0.5 = x 4, 0.7 = x 11,
     // 0.8 = x 25, 0.9 = x 100: a white murk). The water only scatters: the haze's absorption stays the dry particles'.
-    float humidity = 0.7f;
+    float humidity = 0.65f;
     float humidityHazeScale() const
     {
         const float dry = 1.0f - glm::clamp(humidity, 0.0f, 0.9f);
@@ -100,9 +100,9 @@ export struct SkyParams
     // MULTIPLE SCATTERING: x the light the air and the haze get from the rest of the sky and from the lit ground (not from
     // the sun itself). It is what makes a thick haze a bright, white band at the horizon: with the sun's own light alone
     // (0) more haze is a DARKER horizon away from the sun. 1 = physical.
-    float multiScatter = 1.0f;
+    float multiScatter = 1.5f;
     float scatterBoost = 1.0f;         // x ALL the light the atmosphere scatters (non-physical above 1: more indirect light)
-    float saturation = 2.0f;           // the sun-lit sky's colour saturation (1 = as scattered); x (2 - sun visible) in an eclipse
+    float saturation = 1.5f;          // the sun-lit sky's colour saturation (1 = as scattered); x (2 - sun visible) in an eclipse
     // THE HAZE SCATTERS IN TWO LOBES (two particle sizes): a WIDE one (the fine particles: the dull glow over a large part
     // of the sky) and a SHARP one (the coarse particles: a bright glow a few degrees round the sun). The sharp lobe is in
     // the sky, the mirror sky, the aerial perspective and the air in front of the clouds; the low-res GI sky takes the
@@ -116,7 +116,7 @@ export struct SkyParams
     // AIR ("Air height"). Haze above the low layer: a whiter sky from altitude, a redder low sun. 0 = the low layer alone.
     float hazeBackground = 0.05f;
     float mieExtinction = 1.11f;        // Mie extinction/scattering ratio (> 1 = absorbing haze)
-    float ozone = 2.3f;                 // ozone absorption strength (1 = Earth-like): a LAYER 15 - 35 km up, so it colours
+    float ozone = 2.45f;                // ozone absorption strength (1 = Earth-like): a LAYER 15 - 35 km up, so it colours
                                         // the light of a low sun and the twilight sky, not the air near the ground
 
     // Stars
@@ -702,6 +702,7 @@ export struct FogParams
     // sky has it); >= 0.05.
     float aerialStrength = 1.0f;
     float aerialMaxDistanceKm = 40.0f; // the LUT's depth: past it the scene takes the value at this distance
+    bool aerialTerrainShadow = true;   // the terrain shadows the air's SUN part (no sun glow in front of a mountain that hides the sun)
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
     float range = 1024.0f;         // froxel grid far distance (m). With the far field on, this is a
                                    // near-field quality knob rather than a view distance: shortening it

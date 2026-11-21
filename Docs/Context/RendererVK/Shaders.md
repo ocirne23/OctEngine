@@ -220,6 +220,14 @@ calls `reloadShaders()`.
     out first and held across the rest of the step the sky FS was 64; in this order it is 56. The ozone's view part
     takes the ray's origin from `tLow` (`atmosOzoneSegment`), which the march holds already: the whole ray's ozone as a
     value of its own across the loop was gi_sky_map 56 -> 64.
+  * **A light at the zenith needs no Chapman evaluation** (`atmosZenithOpticalDepth`: scale height x density, the
+    exponentials are `atmosDensity`'s own). The aerial LUT's sky-radiance light: 63 -> 52 registers, and a third of the
+    step's evaluations gone. Within 40 km of the camera the light's `up` is under 0.4 degrees from the sample's own
+    zenith: under 0.2 % in the optical depth.
+  * **A value from before the loop goes into one the loop holds already.** The aerial LUT's terrain shadow is marched
+    FIRST (before the ray's atmosphere constants exist) and multiplied into the sun's two phases: 65 -> 63. In that
+    shader the step's order is measured too, and the plain one is the lowest (52): the sun's optical depth first 54, the
+    cloud shadow first 53, the optical depths added per species before `atmosTau` 53 - 55, the cloud shadow removed 61.
   * **Where the colour goes is not predictable: measure both.** `atmosMarch` colours its light IN the step (one sum:
     56; a sum per species, coloured after: 72). `cloudAerialScatter` is the opposite (sums per light and species,
     coloured after: 64; the colours in the step: 72 - the compiler held every colour x phase product across it).
@@ -343,7 +351,7 @@ shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the voxel pipe
 tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
 cull 46/0, the shadow cull 39/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
-river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 63, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its

@@ -69,6 +69,10 @@ void VolumetricFogPipeline::buildAerialLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
+    // 3 = the terrain-data cascades (the sun part's terrain shadow): the ping-pong pair, like the scatter set's copy.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
 void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
@@ -406,10 +410,12 @@ void VolumetricFogPipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageVi
     // Points the terrain height binding (10, UPDATE_AFTER_BIND) at the active ping-pong image; refreshed
     // every frame so a CPU re-bake swaps images without re-recording the cached fog CB.
     vk::DescriptorImageInfo imageInfo{ .sampler = terrainSampler, .imageView = terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    // Scatter set (binding 10), then every eye's apply set (binding 3).
-    oc::array<vk::WriteDescriptorSet, 1 + MAX_VIEWS> writes{};
+    // Scatter set (binding 10), the aerial set (binding 3), then every eye's apply set (binding 3).
+    oc::array<vk::WriteDescriptorSet, 2 + MAX_VIEWS> writes{};
     uint32 numWrites = 0;
     writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_scatterSets[frameIdx].getDescriptorSet(), .dstBinding = 10, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_aerialSets[frameIdx].getDescriptorSet(), .dstBinding = 3, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     for (uint32 eye = 0; eye < m_applyViewCount; ++eye)
         writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_applySets[applySlot(frameIdx, eye)].getDescriptorSet(), .dstBinding = 3, .descriptorCount = 1,

@@ -1528,6 +1528,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("fog_hazeInvHeight", [&] { return 1.0f / glm::max(f.shaftHazeHeight, 1.0f); }, f.shaftHazeHeight);
         list.add("fog_aerialStrength", [&] { return glm::max(f.aerialStrength, 0.05f); }, f.aerialStrength); // the tweak min
         list.add("fog_aerialMaxDistance", [&] { return glm::max(f.aerialMaxDistanceKm, 1.0f) * 1000.0f; }, f.aerialMaxDistanceKm);
+        list.add("fog_aerialTerrainShadow", f.aerialTerrainShadow);
     }
     {
         // ---- Ocean (o = the "Ocean" settings in MODEL units; oceanWorldScaled is THE world-scale conversion, shared

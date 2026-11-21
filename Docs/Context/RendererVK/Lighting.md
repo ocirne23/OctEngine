@@ -577,6 +577,13 @@ on the ground, so tinting it turns the near valley mist blue and still never mat
   it too), the multiple-scattering light past that curve (see "The atmosphere" above). A level ray far out goes to the horizon sky's own colour. Each step's sun is
   cloud-shadowed (`cloudSunTransmittanceBilinear`; past the far cascade, the layer's mean). No jitter: no temporal
   pass averages the LUT, and a texel covers many pixels.
+* **The sun part is TERRAIN-SHADOWED** ("Terrain shadow", `u_fog_aerialTerrainShadow`; binding 3 = the terrain-data
+  cascades, written by `updateTerrainDescriptor`): ONE `terrainSunVisibility` cone march per slice, from its middle (50 m
+  start, 10 steps: a 25.6 km reach). Without it the air in front of a mountain that hides the sun takes the haze's whole
+  sun glow. A sun under the horizon marches LEVEL (`max(L.y, 0.002)`): the planet's own shadow is the atmosphere's. The
+  sky-radiance light and the multiple-scattering light take no shadow (the sky-radiance light's optical depth is the
+  column straight above the sample, `atmosZenithOpticalDepth`: no Chapman evaluation). **Not in the sky** (`sky.fs.glsl` has no terrain
+  shadow: the glow above a ridge that hides the sun stays) and not in the air in front of the clouds.
 * **Apply** (`vol_apply.fs.glsl` `aerialTo` / `withAerial`, binding 11): the air goes BEHIND the fog (`fog + fog.a x
   air`), on the scene and the far-tree layer. **Not on the sky** (it holds the whole ray) **and not on the clouds**
   (their march has its own `cloudAerialScatter`, with the same sun + sky-light terms; with `sameFog` the cloud folds the scene's fog BEFORE the air is

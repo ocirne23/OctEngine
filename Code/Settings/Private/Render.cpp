@@ -278,6 +278,7 @@ void Settings::registerFog(FogParams& s)
     Tweak::floatVar("Fog/Shaft haze", "Height (m)", &s.shaftHazeHeight, 10.0f, 10000.0f, 10.0f);
     Tweak::floatVar("Fog/Aerial perspective", "Strength", &s.aerialStrength, 0.05f, 20.0f, 0.05f);
     Tweak::floatVar("Fog/Aerial perspective", "Max distance (km)", &s.aerialMaxDistanceKm, 1.0f, 400.0f, 1.0f);
+    Tweak::boolean("Fog/Aerial perspective", "Terrain shadow", &s.aerialTerrainShadow);
     Tweak::floatVar("Fog", "Anisotropy", &s.anisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Fog", "Range", &s.range, 32.0f, 4096.0f, 32.0f);
     Tweak::boolean("Fog/Far Field", "Enabled", &s.farField);
