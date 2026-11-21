@@ -277,7 +277,7 @@ protected:
     glm::vec3 m_skyMsSun[2]{};                // per unit light: the sun at m_skyMsSunCos ...
     glm::vec3 m_skyMsUp[2]{};                 // ... and the light from straight up (the Sky Radiance)
     float m_skyMsSunCos = 2.0f;               // the sun's height the sun part holds (2 = none yet)
-    oc::array<float, 10> m_skyMsAtmosphere{}; // the atmosphere both parts hold (SkyAtmosphere::key)
+    oc::array<float, 11> m_skyMsAtmosphere{}; // the atmosphere both parts hold (SkyAtmosphere::key)
     struct GrassNearCascade
     {
         glm::mat4 viewProj{ 1.0f };

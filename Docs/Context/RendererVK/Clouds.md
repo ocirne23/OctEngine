@@ -297,7 +297,9 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     scales the ADDED air light only; the dimming has its own tweak below). Three lights, as the
     terrain's aerial LUT: the sun, the SKY LIGHT ("Sky Radiance" from the local up, not cloud-shadowed - most of
     the blue; without it the air in the clouds' shadow added nothing), and the MULTIPLE-SCATTERING light
-    (`atmosMultiScatter`: the haze's white - see "The atmosphere" in [Lighting.md](Lighting.md)). **That one has no sum
+    (`atmosMultiScatter`: the haze's white - see "The atmosphere" in [Lighting.md](Lighting.md)). The sun's haze part
+    has both lobes (the glow round the sun in front of a cloud), and the ozone is on the two lights' way in only, one
+    length per ray after the loop. **That one has no sum
     and no step work:** it is the sky light's two sums (the scattering along the ray, behind the view transmittance x
     the transmittance toward the zenith) x `atmosMultiScatter` / the upward transmittance, both at the segment's
     middle. **This loop sets cloud_sky's register count (64):** the sums are per light and per species and coloured

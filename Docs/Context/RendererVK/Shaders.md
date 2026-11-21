@@ -175,6 +175,11 @@ calls `reloadShaders()`.
   * **A term that needs a SECOND vector across the widest point of a step costs a register step.** The
     multiple-scattering light in the saturated sun march (the saturation needs the once-scattered light apart): sky
     FS 64. On the unsaturated sky-light march it adds into the same vector: 56.
+  * **The light's transmittance comes FIRST in a step** (`atmosMarch`: its Chapman evaluation, then the ozone
+    lengths, then the `exp`), before the sample's density and 1 / extinction. With the ozone length as one float worked
+    out first and held across the rest of the step the sky FS was 64; in this order it is 56. The ozone's view part
+    takes the ray's origin from `tLow` (`atmosOzoneSegment`), which the march holds already: the whole ray's ozone as a
+    value of its own across the loop was gi_sky_map 56 -> 64.
   * **Where the colour goes is not predictable: measure both.** `atmosMarch` colours its light IN the step (one sum:
     56; a sum per species, coloured after: 72). `cloudAerialScatter` is the opposite (sums per light and species,
     coloured after: 64; the colours in the step: 72 - the compiler held every colour x phase product across it).
@@ -291,7 +296,7 @@ shadow caster FS 40/0), the shadow VS 31/0 (the tree variants 40/0), tree_volume
 tree_volume_splat 37..56/0, tree_voxel_far 33/0, the main
 cull 46/0, the shadow cull 39/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
-river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 62, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 63, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its

@@ -40,6 +40,7 @@ namespace
     // ("Haze extinction": the dry particles' absorption) goes toward 1 as the haze grows.
     float skyBetaMie(const SkyParams& sky) { return 3.996e-6f * sky.mieScatter * sky.humidityHazeScale(); }
     float skyMieExtinction(const SkyParams& sky) { return 1.0f + (glm::max(sky.mieExtinction, 1.0f) - 1.0f) / sky.humidityHazeScale(); }
+    float skyHazeBackground(const SkyParams& sky) { return glm::clamp(sky.hazeBackground, 0.0f, 0.5f); }
     glm::vec3 skyMoonDirection(const SkyParams& sky) { return glm::normalize(sky.moonDirection); }
     float skyMoonCos(const SkyParams& sky) { return cosf(glm::radians(sky.moonSizeDeg)); }
     // The sun direction and the up axis as the shaders get them: unit vectors (the shaders never normalize them).
@@ -122,29 +123,34 @@ namespace
 
     // THE ATMOSPHERE ON THE CPU: the mirror of atmosphere.inc.glsl (the Chapman optical depths, atmosTau, the ray's optical
     // depth), for the per-frame values no shader should evaluate per pixel: the sun's transmittance at the ground and the
-    // multiple-scattering light. KEEP IN SYNC with the GLSL (ATMOS_R_PLANET, ATMOS_R_ATMOS, ATMOS_BETA_OZONE,
-    // atmosChapman, atmosRayOD, ATMOS_MS_LOW / ATMOS_MS_HIGH).
+    // multiple-scattering light. KEEP IN SYNC with the GLSL (ATMOS_R_PLANET, ATMOS_R_ATMOS, ATMOS_BETA_OZONE and the
+    // ozone layer's radii, atmosOzonePath, atmosDensity, atmosChapman, atmosRayOD, ATMOS_MS_LOW / ATMOS_MS_HIGH).
     struct SkyAtmosphere
     {
         static constexpr float c_planetRadius = 6371e3f;
         static constexpr float c_atmosRadius = 6451e3f;
+        static constexpr double c_ozoneBottom = 6371e3 + 15e3; // the ozone layer's radii
+        static constexpr double c_ozoneTop = 6371e3 + 35e3;
         glm::vec3 betaRayleigh;
-        glm::vec3 betaOzone; // x "Ozone"
+        glm::vec3 betaOzone; // inside the layer, x "Ozone"
         float betaMie;
         float mieExtinction;
         float rayleighHeight;
         float mieHeight;
+        float hazeBackground; // the share of the ground's haze density that thins with the air
 
         explicit SkyAtmosphere(const SkyParams& sky)
-            : betaRayleigh(skyBetaRayleigh(sky)), betaOzone(glm::vec3(0.650e-6f, 1.881e-6f, 0.085e-6f) * sky.ozone)
+            : betaRayleigh(skyBetaRayleigh(sky)), betaOzone(glm::vec3(0.650e-6f, 1.881e-6f, 0.085e-6f) * (0.75f * sky.ozone))
             , betaMie(skyBetaMie(sky)), mieExtinction(skyMieExtinction(sky)), rayleighHeight(sky.rayleighHeight), mieHeight(sky.mieHeight)
+            , hazeBackground(skyHazeBackground(sky))
         {
         }
 
         // Every value above: two atmospheres with the same key scatter the same.
-        oc::array<float, 10> key() const
+        oc::array<float, 11> key() const
         {
-            return { betaRayleigh.x, betaRayleigh.y, betaRayleigh.z, betaOzone.x, betaOzone.y, betaOzone.z, betaMie, mieExtinction, rayleighHeight, mieHeight };
+            return { betaRayleigh.x, betaRayleigh.y, betaRayleigh.z, betaOzone.x, betaOzone.y, betaOzone.z, betaMie, mieExtinction, rayleighHeight, mieHeight,
+                     hazeBackground };
         }
 
         static float chapman(float X, float cosChi) // Schüler's grazing-incidence closed form; X = (planet radius + height) / scale height
@@ -157,22 +163,43 @@ namespace
             return 2.0f * std::sqrt(1.5707963f * X0) * std::exp(glm::min(X - X0, 60.0f)) - c / ((c - 1.0f) * (-cosChi) + 1.0f);
         }
 
-        // The (Rayleigh, Mie) densities at a height, 1 at the ground.
-        glm::vec2 density(float height) const { return glm::vec2(std::exp(-height / rayleighHeight), std::exp(-height / mieHeight)); }
+        // The (Rayleigh, Mie) densities at a height, 1 at the ground: the haze is its low layer + the background share
+        // that thins with the air (atmosDensity).
+        glm::vec2 density(float height) const
+        {
+            const float air = std::exp(-height / rayleighHeight);
+            return glm::vec2(air, glm::mix(std::exp(-height / mieHeight), air, hazeBackground));
+        }
 
         // (Rayleigh, Mie) optical depth from pos (planet-centred) to space along dir.
         glm::vec2 lightOpticalDepth(const glm::vec3& pos, const glm::vec3& dir) const
         {
             const float r = glm::length(pos);
             const float cosChi = glm::dot(pos, dir) / r;
-            return density(glm::max(r - c_planetRadius, 0.0f))
-                * glm::vec2(rayleighHeight * chapman(r / rayleighHeight, cosChi), mieHeight * chapman(r / mieHeight, cosChi));
+            const float height = glm::max(r - c_planetRadius, 0.0f);
+            const float air = std::exp(-height / rayleighHeight) * rayleighHeight * chapman(r / rayleighHeight, cosChi);
+            const float haze = std::exp(-height / mieHeight) * mieHeight * chapman(r / mieHeight, cosChi);
+            return glm::vec2(air, glm::mix(haze, air, hazeBackground));
         }
 
-        // The optical thickness per colour of (Rayleigh, Mie) optical depths; of the two densities at a point, its extinction (1/m).
-        glm::vec3 tau(const glm::vec2& od) const { return betaRayleigh * od.x + glm::vec3(betaMie * mieExtinction * od.y) + betaOzone * od.x; }
+        // The optical thickness per colour of (Rayleigh, Mie) optical depths; of the two densities at a point, its
+        // extinction (1/m). The ozone is apart (ozoneTau): it is a layer, not a share of the air.
+        glm::vec3 tau(const glm::vec2& od) const { return betaRayleigh * od.x + glm::vec3(betaMie * mieExtinction * od.y); }
         // The scattering (1/m) at a point of those densities.
         glm::vec3 scattering(const glm::vec2& dens) const { return betaRayleigh * dens.x + glm::vec3(betaMie * dens.y); }
+
+        // The length (m) inside the ozone layer of the ray from pos (planet-centred) to space along dir (atmosOzonePath).
+        // s runs along the ray, 0 at its closest point to the planet's centre: the layer is where |s| is between the two
+        // half chords.
+        static float ozonePath(const glm::vec3& pos, const glm::vec3& dir)
+        {
+            const double s = glm::dot(glm::dvec3(pos), glm::dvec3(dir));
+            const double closestSq = glm::dot(glm::dvec3(pos), glm::dvec3(pos)) - s * s;
+            const double inner = std::sqrt(glm::max(c_ozoneBottom * c_ozoneBottom - closestSq, 0.0));
+            const double outer = std::sqrt(glm::max(c_ozoneTop * c_ozoneTop - closestSq, 0.0));
+            return (float)(glm::max(outer - glm::max(s, inner), 0.0) + glm::max(glm::min(-s, outer) - inner, 0.0));
+        }
+        glm::vec3 ozoneTau(float path) const { return betaOzone * path; }
     };
 
     // The (Rayleigh, Mie) optical depth along a ray from its origin: atmosphere.inc.glsl's AtmosRay / atmosRayOD (a descending
@@ -251,7 +278,13 @@ namespace
                     tFar = glm::min(tFar, tGround.x);
 
                 const SkyRay ray(atm, ro, dir);
-                glm::vec3 through(1.0f); // the transmittance to the step's start
+                const float ozoneRo = SkyAtmosphere::ozonePath(ro, dir);
+                // The ozone on the light's way to p and on the view's way from p back to the origin.
+                auto ozone = [&](const glm::vec3& p)
+                {
+                    return atm.ozoneTau(SkyAtmosphere::ozonePath(p, light) + glm::max(ozoneRo - SkyAtmosphere::ozonePath(p, dir), 0.0f));
+                };
+                glm::vec3 through(1.0f); // the transmittance to the step's start (the air and the haze)
                 for (int i = 0; i < c_steps; ++i)
                 {
                     const float sEnd = (float)(i + 1) / (float)c_steps;
@@ -261,14 +294,14 @@ namespace
                     const glm::vec3 next = glm::exp(-atm.tau(ray.opticalDepth(tFar * sEnd * sEnd)));
                     const glm::vec3 scattered = (through - next) * atm.scattering(dens) / glm::max(atm.tau(dens), glm::vec3(1e-30f));
                     again += scattered;
-                    once += scattered * glm::exp(-atm.tau(atm.lightOpticalDepth(p, light)));
+                    once += scattered * glm::exp(-(atm.tau(atm.lightOpticalDepth(p, light)) + ozone(p)));
                     through = next;
                 }
                 if (hitsGround) // a diffuse ground: albedo / pi x its irradiance, x 4 pi as the rest
                 {
                     const glm::vec3 ground = ro + dir * tFar;
                     const float cosLight = glm::max(glm::dot(ground, light) / glm::length(ground), 0.0f);
-                    once += through * glm::exp(-atm.tau(atm.lightOpticalDepth(ground, light))) * (4.0f * c_groundAlbedo * cosLight);
+                    once += through * glm::exp(-(atm.tau(atm.lightOpticalDepth(ground, light)) + ozone(ground))) * (4.0f * c_groundAlbedo * cosLight);
                 }
             }
         }
@@ -284,9 +317,11 @@ namespace
     glm::vec3 sunTransmittance(const SkyParams& sky)
     {
         const SkyAtmosphere atm(sky);
-        const float cosChi = glm::dot(skyUpAxis(sky), skySunDirection(sky)); // pos = up * R, so cos(chi) = up . L
-        const glm::vec3 tau = atm.tau(glm::vec2(atm.rayleighHeight * SkyAtmosphere::chapman(SkyAtmosphere::c_planetRadius / atm.rayleighHeight, cosChi),
-                                                atm.mieHeight * SkyAtmosphere::chapman(SkyAtmosphere::c_planetRadius / atm.mieHeight, cosChi)));
+        const float cosChi = glm::clamp(glm::dot(skyUpAxis(sky), skySunDirection(sky)), -1.0f, 1.0f);
+        // In the atmosphere's own frame: up = +Y, the sun in the XY plane.
+        const glm::vec3 ground(0.0f, SkyAtmosphere::c_planetRadius, 0.0f);
+        const glm::vec3 toSun(std::sqrt(1.0f - cosChi * cosChi), cosChi, 0.0f);
+        const glm::vec3 tau = atm.tau(atm.lightOpticalDepth(ground, toSun)) + atm.ozoneTau(SkyAtmosphere::ozonePath(ground, toSun));
         // THE HORIZON: the planet hides the sun once its disc has set - the visible share of the disc, a smooth step over
         // +- its angular radius about the horizon. The Chapman form gives a large but FINITE depth below it: a dim red sun
         // kept lighting the world after sunset (a glint on the ocean where the sun would be).
@@ -396,7 +431,7 @@ void RendererState::buildUboSky()
 {
     const SkyParams& s = m_skyParams;
     const SkyAtmosphere atm(s);
-    const oc::array<float, 10> key = atm.key();
+    const oc::array<float, 11> key = atm.key();
     const bool newAtmosphere = key != m_skyMsAtmosphere;
     const float sunCos = glm::dot(skyUpAxis(s), skySunDirection(s));
     if (newAtmosphere)
@@ -1087,6 +1122,10 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("sky_scatterBoost", s.scatterBoost);
         list.add("sky_saturation", s.saturation);
         list.add("sky_mieG", s.mieG);
+        // The haze's sharp lobe (atmosHazePhase) and its background share (atmosDensity).
+        list.add("sky_hazeSharpG", [&] { return glm::clamp(s.hazeSharpG, 0.0f, 0.99f); }, s.hazeSharpG);
+        list.add("sky_hazeSharpShare", [&] { return glm::clamp(s.hazeSharpShare, 0.0f, 1.0f); }, s.hazeSharpShare);
+        list.add("sky_hazeBackground", [&] { return skyHazeBackground(s); }, s.hazeBackground);
         list.add("sky_moonBrightness", [&] { return glm::max(s.moonBrightness, 0.01f); }, s.moonBrightness);
         list.add("sky_starDensity", [&] { return glm::max(s.starDensity, 0.01f); }, s.starDensity);
         list.add("sky_starSize", s.starSize);

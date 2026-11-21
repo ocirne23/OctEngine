@@ -46,11 +46,11 @@ void main()
 
     const float muSun = dot(dir, L);
     const float pRSun = phaseRayleigh(muSun);
-    const float pMSun = phaseHG(muSun, u_sky_mieG);
+    const float pMSun = atmosHazePhase(muSun, ATMOS_HAZE_SUN); // both lobes: terrain toward the sun takes the haze's glow
     const bool skyLight = dot(u_sky_radiance, u_sky_radiance) > 0.0;
     const float muSky = dot(dir, up);
     const float pRSky = phaseRayleigh(muSky);
-    const float pMSky = phaseHG(muSky, 0.0); // a diffuse glow, no forward lobe (atmosphere.inc.glsl atmosMarch)
+    const float pMSky = atmosHazePhase(muSky, ATMOS_HAZE_DIFFUSE);
 
     const float eclipse = u_sunVisible;
     const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
@@ -69,21 +69,25 @@ void main()
         const float t = tPrev + (float(j) + 0.5) * dt;
         const vec3 p = ro + dir * t;
         const float h = max(length(p) - ATMOS_R_PLANET, 0.0);
-        const vec2 dens = exp(-h / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * (dt * strength);
+        const vec2 dens = atmosDensity(h) * (dt * strength);
         const vec3 viewTau = atmosTau(atmosRayOD(ray, t)) * strength;
         sun += exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, L)))) * cloudSunTransmittanceBilinear(u_viewPos + dir * t)
              * (u_sky_betaRayleigh * (dens.x * pRSun) + vec3(u_sky_betaMie * dens.y * pMSun));
         rest += exp(-viewTau) * atmosScattering(dens) * atmosMultiScatter(h);
+        // THE OZONE (a layer far above this LUT's range): on the lights' way in only. The sky-radiance light comes
+        // straight down through the whole layer; the sun's part is after the scan.
         if (skyLight)
             rest += exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, up))))
-                  * (u_sky_betaRayleigh * (dens.x * pRSky) + vec3(u_sky_betaMie * dens.y * pMSky)) * (u_sky_scatterBoost * u_sky_radiance);
+                  * (u_sky_betaRayleigh * (dens.x * pRSky) + vec3(u_sky_betaMie * dens.y * pMSky)) * (u_sky_scatterBoost * u_sky_radiance * atmosOzoneZenith());
     }
 
     // The slices in front, added: the scattered light from the camera to this slice's far edge.
     sun = subgroupInclusiveAdd(sun);
     rest = subgroupInclusiveAdd(rest);
 
-    vec3 color = sun * (u_sky_scatterBoost * u_sunColor.rgb);
+    // The sun's ozone, ONE length for the whole column (the camera's): over the LUT's range the sun ray's way through a
+    // layer 15 km up or more changes by under a percent.
+    vec3 color = sun * (u_sky_scatterBoost * u_sunColor.rgb) * exp(-atmosOzoneTau(atmosOzonePath(ro, L)));
     color = max(mix(vec3(dot(color, luminosity)), color, u_sky_saturation * (2.0 - eclipse)), vec3(0.0)) * eclipse; // sky.fs.glsl's curve
     color += rest; // past the saturation, as the sky
     const vec3 T = exp(-atmosTau(atmosRayOD(ray, tNext)) * strength);

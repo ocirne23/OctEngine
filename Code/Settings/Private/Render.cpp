@@ -47,9 +47,13 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky/Atmosphere", "Haze scattering", &s.mieScatter, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Sky/Atmosphere", "Humidity", &s.humidity, 0.0f, 0.9f, 0.005f); // x the haze: 1 / (1 - humidity)^2
     Tweak::floatVar("Sky/Atmosphere", "Multiple scattering", &s.multiScatter, 0.0f, 4.0f, 0.01f);
+    // The haze's two lobes: the wide one, and a sharp one round the sun (its share of the haze's scattering).
     Tweak::floatVar("Sky/Atmosphere", "Haze forward scatter", &s.mieG, 0.0f, 0.99f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze sun glow sharpness", &s.hazeSharpG, 0.8f, 0.99f, 0.001f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze sun glow share", &s.hazeSharpShare, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Sky/Atmosphere", "Air height", &s.rayleighHeight, 1000.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Sky/Atmosphere", "Haze height", &s.mieHeight, 200.0f, 5000.0f, 5.0f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze background share", &s.hazeBackground, 0.0f, 0.5f, 0.005f); // thins with "Air height"
     Tweak::floatVar("Sky/Atmosphere", "Haze extinction", &s.mieExtinction, 1.0f, 2.0f, 0.005f);
     Tweak::floatVar("Sky/Atmosphere", "Ozone", &s.ozone, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Sky/Stars", "Density", &s.starDensity, 0.01f, 1.0f);

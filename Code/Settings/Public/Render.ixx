@@ -103,12 +103,21 @@ export struct SkyParams
     float multiScatter = 1.0f;
     float scatterBoost = 1.0f;         // x ALL the light the atmosphere scatters (non-physical above 1: more indirect light)
     float saturation = 2.0f;           // the sun-lit sky's colour saturation (1 = as scattered); x (2 - sun visible) in an eclipse
-    float mieG = 0.76f;                 // Mie anisotropy (forward-scatter lobe)
+    // THE HAZE SCATTERS IN TWO LOBES (two particle sizes): a WIDE one (the fine particles: the dull glow over a large part
+    // of the sky) and a SHARP one (the coarse particles: a bright glow a few degrees round the sun). The sharp lobe is in
+    // the sky, the mirror sky, the aerial perspective and the air in front of the clouds; the low-res GI sky takes the
+    // wide lobe for all of the haze.
+    float mieG = 0.76f;                 // the wide lobe's anisotropy
+    float hazeSharpG = 0.95f;           // the sharp lobe's anisotropy (0.95 = half its peak at ~2 degrees from the sun)
+    float hazeSharpShare = 0.15f;       // the share of the haze's scattering in the sharp lobe (0 = the wide lobe alone)
     float rayleighHeight = 8500.0f;     // Rayleigh scale height (m): how fast air density falls off
     float mieHeight = 1200.0f;          // Mie scale height (m): how high the haze layer reaches
+    // The BACKGROUND haze: this share of the ground's haze density does not stay in the low layer, it thins with the
+    // AIR ("Air height"). Haze above the low layer: a whiter sky from altitude, a redder low sun. 0 = the low layer alone.
+    float hazeBackground = 0.05f;
     float mieExtinction = 1.11f;        // Mie extinction/scattering ratio (> 1 = absorbing haze)
-    float ozone = 4.0f;                 // ozone absorption strength (1 = Earth-like); absorbs green/yellow,
-                                        // suppresses the green horizon band single scattering produces
+    float ozone = 2.3f;                 // ozone absorption strength (1 = Earth-like): a LAYER 15 - 35 km up, so it colours
+                                        // the light of a low sun and the twilight sky, not the air near the ground
 
     // Stars
     float starDensity = 0.63f;

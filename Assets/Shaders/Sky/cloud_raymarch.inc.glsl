@@ -147,7 +147,8 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
     {
         const vec3 p = ro + dir * t;
         const float h = length(p) - ATMOS_R_PLANET;
-        const vec2 dens = exp2(max(h, 0.0) * densExp2) * dt;
+        vec2 dens = exp2(max(h, 0.0) * densExp2) * dt;
+        dens.y = mix(dens.y, dens.x, u_sky_hazeBackground); // the haze's background share (atmosDensity)
         const vec2 viewOD = atmosRayOD(ray, t);
         const vec3 atten = exp(-atmosTau(viewOD + atmosLightOpticalDepth(p, lightDir)))
                          * cloudAirSunVis(origin + dir * t, camAlt, lightDir);
@@ -165,9 +166,13 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
     const vec3 mid = ro + dir * (0.5 * tEnd);
     const float midR = length(mid);
     const vec3 multi = (skyR + skyM) * atmosMultiScatter(max(midR - ATMOS_R_PLANET, 0.0)) / exp(-atmosTau(atmosLightOpticalDepth(mid, mid / midR)));
-    // The sky light's haze part has no forward lobe: a diffuse glow (atmosphere.inc.glsl atmosMarch).
-    return (sumR * u_sky_betaRayleigh * phaseRayleigh(mu) + sumM * vec3(u_sky_betaMie) * phaseHG(mu, u_sky_mieG)) * (u_sky_scatterBoost * u_sunVisible) * u_sunColor
-         + (skyR * phaseRayleigh(dir.y) + skyM * phaseHG(dir.y, 0.0)) * u_sky_scatterBoost * u_sky_radiance
+    // THE OZONE (a layer far above the clouds): on the lights' way in only, ONE length per ray, at the segment's middle -
+    // nothing in the step. The sun's haze part has both lobes (the glow round the sun in front of a cloud); the sky
+    // light's has none: a diffuse glow (atmosHazePhase).
+    const vec3 sunOzone = exp(-atmosOzoneTau(atmosOzonePath(mid, lightDir)));
+    return (sumR * u_sky_betaRayleigh * phaseRayleigh(mu) + sumM * vec3(u_sky_betaMie) * atmosHazePhase(mu, ATMOS_HAZE_SUN))
+           * (u_sky_scatterBoost * u_sunVisible) * u_sunColor * sunOzone
+         + (skyR * phaseRayleigh(dir.y) + skyM * atmosHazePhase(dir.y, ATMOS_HAZE_DIFFUSE)) * u_sky_scatterBoost * u_sky_radiance * atmosOzoneZenith()
          + multi;
 }
 

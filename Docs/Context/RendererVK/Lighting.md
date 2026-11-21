@@ -460,10 +460,42 @@ raster-bound: with every terrain triangle made degenerate it still cost ~70% of 
 ## The atmosphere (`atmosphere.inc.glsl`, "Sky/Atmosphere" tweaks)
 
 ONE model for the visible sky (`sky.fs.glsl`), the sky map (GI, reflections, the clouds' ambient), the aerial
-perspective LUT and the air in front of the clouds: AIR (Rayleigh, + ozone absorption) and HAZE (Mie: a layer of
-"Haze height" scale height), both exponential in height, so every optical depth is closed form (Chapman:
-`atmosLightOpticalDepth`, `atmosRayOD`). Three lights reach a point of it: the sun, the sky-radiance light (from
-straight up) and the multiple-scattering light.
+perspective LUT and the air in front of the clouds: AIR (Rayleigh) and HAZE (Mie: a layer of "Haze height" scale
+height + a background share), both exponential in height, so every optical depth is closed form (Chapman:
+`atmosLightOpticalDepth`, `atmosRayOD`), plus an OZONE layer high up. Three lights reach a point of it: the sun, the
+sky-radiance light (from straight up) and the multiple-scattering light.
+
+* **THE HAZE SCATTERS IN TWO LOBES** (`atmosHazePhase`, a constant mode per march): haze is particles of two sizes,
+  and one Henyey-Greenstein lobe cannot hold both. The WIDE lobe ("Haze forward scatter", `u_sky_mieG`: the fine
+  particles) is the dull glow over a large part of the sky; the SHARP lobe ("Haze sun glow sharpness",
+  `u_sky_hazeSharpG`, default 0.95: half its peak ~2 degrees from the sun) holds "Haze sun glow share"
+  (`u_sky_hazeSharpShare`, 0.15) of the haze's scattering: a bright glow a few degrees round the sun, as bright as the
+  haze is thick (x 4.7 at the sun, x 1.4 at 5 degrees at the defaults). Past ~20 degrees the two-lobe phase is the
+  wide lobe x (1 - share).
+  * `ATMOS_HAZE_SUN` (both lobes): the sky, the mirror layer, the aerial LUT (terrain toward the sun), the air in front
+    of the clouds. The phase is per RAY, so it costs a march nothing per step.
+  * `ATMOS_HAZE_SUN_WIDE` (all of the haze in the wide lobe, the same energy): `skyRadiance` - the low-res GI sky and
+    every ambient. The sharp lobe is narrower than a GI texel (5.6 degrees): a sun that moves over the texel centres
+    would make the sky light pulse.
+  * `ATMOS_HAZE_DIFFUSE` (no lobe): the sky-radiance light (below).
+  * **The sky's "Sun Glow" halo is another thing** (`sky.fs.glsl`): a glare under a degree wide at a fixed strength,
+    in the visible sky only.
+* **THE HAZE'S BACKGROUND** ("Haze background share", `u_sky_hazeBackground`, 0 .. 0.5): this share of the ground's
+  haze density does not stay in the low layer; it thins with the AIR ("Air height"). Haze above the low layer: a whiter
+  sky from altitude, a redder low sun (at 0.05 the haze straight up is x 1.3). **It has the air's scale height on
+  purpose**: its density and its optical depth are a `mix` with the air's own (`atmosDensity`,
+  `atmosLightOpticalDepth`), with no exponential and no Chapman evaluation of its own. A real haze top (an inversion)
+  is still not covered.
+* **THE OZONE IS A LAYER, not a share of the air** (`atmosOzonePath`, "Ozone": 1 = Earth-like): uniform, 15 - 35 km
+  up, absorption only. Near the ground there is none, so a level ray gets it only on the LIGHT's way in; the layer's
+  airmass toward a sun at the horizon is ~11.6 (the air's is ~38), and the light that reaches the high air after
+  sunset goes through it twice. A layer has no Chapman form: its optical depth is a LENGTH through it, closed form for
+  any point and direction (the ray's coordinate along itself against the two half chords).
+  * **It is NOT in `atmosTau`.** A march adds it to the exponent of each sample's light (the light's way in + the
+    view's way back to the origin) and to the transmittance it returns; the view transmittance its steps take from
+    holds the air and the haze only, so (source / extinction) stays right.
+  * The aerial LUT and `cloudAerialScatter` lie far under the layer: the lights' way in only, ONE length per column /
+    per ray, outside the step (`atmosOzoneZenith` for the sky-radiance light). Their view transmittance has no ozone.
 
 * **THE MARCH to the atmosphere's edge** (`atmosMarch`, for ONE light: it returns a radiance; `atmosphereScatter` =
   from the camera altitude, with the ground; `atmosphereScatterCheap` = from the ground observer, any direction - the
@@ -511,15 +543,16 @@ straight up) and the multiple-scattering light.
     lies under them. The high one does not.
   * **It does not take "Saturation"** (only the sun's once-scattered light does, in the sky, the mirror layer and the
     LUT): it is the haze's white.
-* **The sky-radiance light has NO forward lobe in the haze** (`mieG` 0 for it in every march): it stands for a diffuse
-  glow, and with the sun's lobe a thick haze drew a bright spot round the zenith at night.
+* **The sky-radiance light has NO forward lobe in the haze** (`ATMOS_HAZE_DIFFUSE` in every march): it stands for a
+  diffuse glow, and with the sun's lobe a thick haze drew a bright spot round the zenith at night.
 * **"Scatter Boost"** x all the scattered light (the multiple-scattering light too), not the transmittance; 1 =
   physical.
-* **The CPU mirror** (`SkyAtmosphere`, `SkyRay` in RendererUbo.cpp: the same Chapman form, `atmosTau`, the ray's
-  cases) serves `u_sunTransmittance` and the multiple-scattering light. **A change of the GLSL model goes there
-  too.**
+* **The CPU mirror** (`SkyAtmosphere`, `SkyRay` in RendererUbo.cpp: the same Chapman form, `atmosTau`, the haze's
+  background mix, the ozone layer's path, the ray's cases) serves `u_sunTransmittance` and the multiple-scattering
+  light. **A change of the GLSL model goes there too.**
 * Not covered: the humidity of the place (the terrain's climate does not drive it), a haze top that is not
-  exponential (an inversion), the fog-off path's air. **The clouds' air march is 8 EQUAL steps** (the midpoint rule):
+  exponential (an inversion), a haze that scatters by colour (the fine particles scatter blue: `u_sky_betaMie` is one
+  number), the fog-off path's air. **The clouds' air march is 8 EQUAL steps** (the midpoint rule):
   in a very thick haze ("Humidity" above ~0.85) the air in front of far clouds is under-sampled - up to ~45 % too
   dark at 0.9, and noisy with the jitter. The "Aerial fade" hides most of it (those clouds fade into the sky).
 
