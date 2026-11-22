@@ -1,6 +1,11 @@
 // THE GRASS BLADE MODEL, in three steps; grass.vs.glsl runs all three for every vertex.
-// grassTuft: the tuft's root (the R2 point), its type, size, ground (height + facet normal), distance, dry patch,
-//   relief sink and the wind field at its root - everything its blades share.
+// THE BLADES BELONG TO THE BASE CELLS of a world grid (u_grass_patchSize): a base cell's blades are ranked, their places
+// and looks hashed from the cell's coordinates. They are DRAWN in ring cells (grass_cull.cs.glsl) of 2^level base cells
+// a side: grassBaseCell splits a blade's index in the ring cell into its base cell and its rank there. So a blade is
+// the same in every ring, and a ring's step over the ground shows nothing.
+// grassTuft: the tuft's root (the R2 point), its type, size, ground (height + facet normal), distance and relief sink -
+//   what its blades share. (Its wind field and dry patch too, but grassBuildBlade samples those, at the tuft's root: see
+//   the order there.)
 // grassBuildBlade: one blade of a tuft into g_blade - its place in the tuft's spiral, its density test (false: not
 //   drawn), its curve this frame and last (the wind's push with its own sway phase), its width, its normals' ends, its
 //   look. Its ground is the tuft's, followed along the facet's slope (a member stands a few centimetres off the root).
@@ -11,14 +16,18 @@
 #ifndef GRASS_BLADE_INC_GLSL
 #define GRASS_BLADE_INC_GLSL
 
-// One visible patch (the cull's record, RendererVKLayout::GrassPatchGpu), decoded.
+// One ring cell (the cull's record, RendererVKLayout::GrassPatchGpu), decoded, and the blade's base cell in it.
 struct GrassPatchIn
 {
-    vec2 origin;          // the patch's min corner (world XZ)
+    vec2 origin;          // the BASE cell's min corner (world XZ): grassBaseCell sets it per blade
+    vec2 cellOrigin;      // the ring cell's min corner, and 1 / its size: the corner densities span it
+    float invCellSize;
     GrassGround ground;   // its terrain chunk
     vec4 corners;         // the corner densities
-    float temperature;    // C: the patch's mean (the cold darkening)
-    uint lod;
+    float temperature;    // C: the cell's mean (the cold darkening)
+    uint lod;             // the ring's
+    uint level;           // the ring cell is 2^level base cells a side
+    bool morph;           // the next ring is one LOD coarser: the blades geomorph to it toward the ring's outer border
 };
 
 GrassPatchIn grassPatchIn(vec4 origins, uvec4 data)
@@ -26,34 +35,54 @@ GrassPatchIn grassPatchIn(vec4 origins, uvec4 data)
     const vec2 cellTemperature = unpackHalf2x16(data.w);
     GrassPatchIn p;
     p.origin = origins.xy;
+    p.cellOrigin = origins.xy;
+    p.level = (data.y >> 18) & 7u;
+    p.invCellSize = 1.0 / (u_grass_patchSize * float(1u << p.level));
     p.ground = GrassGround(origins.zw, data.x, data.y & 0xFFFFu, cellTemperature.x);
     p.corners = unpackUnorm4x8(data.z);
     p.temperature = cellTemperature.y;
     p.lod = (data.y >> 16) & 3u;
+    p.morph = ((data.y >> 21) & 1u) != 0u;
 #ifdef GRASS_NEAR_SHADOW
-    p.lod = grassCasterLod(p.lod);
+    p.lod = grassCasterLod(p.lod); // (the next ring's casters are a LOD coarser too: the morph flag holds)
 #endif
     return p;
 }
 
-// THE GRASS TYPE of a tuft rooted at xz: each type's weight in the types' patch pattern there (grass.inc.glsl
-// grassTypeCorners), with "Type mixing" of a random score per tuft (`random`: four bytes) mixed in, x its share. The
-// highest score wins (no type with a share: type 0).
+// Blade `blade` of ring cell p: its base cell (p.origin; row-major in the ring cell) and - returned - its RANK there.
+// The index interleaves the base cells (rank x the cell's base cells + the base cell), so the first K blades of a ring
+// cell are the lowest ranks of all its base cells: evenly spread, as a base cell's own prefix is.
+uint grassBaseCell(inout GrassPatchIn p, uint blade)
+{
+    const uint base = blade & ((1u << (2u * p.level)) - 1u);
+    p.origin = p.cellOrigin + vec2(float(base & ((1u << p.level) - 1u)), float(base >> p.level)) * u_grass_patchSize;
+    return blade >> (2u * p.level);
+}
+
+// THE GRASS TYPE of a tuft rooted at xz: each type's score in the types' patch pattern there (grass.inc.glsl
+// grassTypeScores: its weight x its share). The highest score wins (no type with a share: type 0) - or, with "TYPE
+// BLENDING", the tuft DRAWS its type (`random`: its own hash) by the scores' shares (grass.inc.glsl
+// grassTypeScores: the scores to the power u_grass_typeBlendPower): between two types their tufts stand mixed, each the more often the
+// nearer its own patch.
 uint grassType(vec2 xz, uint random)
 {
-    const vec4 score = mix(grassTypeCorners(xz), unpackUnorm4x8(random), u_grass_typeMixing) * grassTypeShares();
+    const vec4 score = grassTypeScores(xz);
     uint best = 0u;
     for (uint i = 1u; i < GRASS_TYPES; ++i)
         if (score[i] > score[best])
             best = i;
-    return best;
+    if (u_grass_typeBlendPower <= 0.0 || score[best] <= 0.0)
+        return best;
+    const vec4 share = pow(score * (1.0 / score[best]), vec4(u_grass_typeBlendPower)); // the best = 1: no underflow
+    const float draw = grassUnit(grassHash(random ^ 0x68E31DA4u)) * (share.x + share.y + share.z + share.w);
+    return draw < share.x ? 0u : draw < share.x + share.y ? 1u : draw < share.x + share.y + share.z ? 2u : 3u;
 }
 
 // What a tuft's blades share.
 struct GrassTuft
 {
     vec2 xz;          // the root
-    uint hash;        // + 1: the spiral's turn, the size; + 2: the type's random scores
+    uint hash;        // + 1: the spiral's turn, the size; + 2: the type's draw
     float turn;       // rad: the spiral's start
     float size;       // x the blades' height: 1 - "Tuft size variation" x a random
     uint type;
@@ -61,23 +90,17 @@ struct GrassTuft
     vec3 groundN;
     float dist;       // m: from the camera (the thinning, the LODs, the wind fade, the pixel floor)
     float sink;      // m: the roots under the mesh ("Root sink" + half the relief)
-    vec4 wind;        // grassWindField at the root, this frame
-#ifndef GRASS_NEAR_SHADOW
-    vec4 windPrev;    // ... and last frame (the motion vectors)
-    float dryness;    // the dry patches at the root
-#endif
 };
 
 GrassTuft grassTuft(GrassPatchIn p, uint tuft)
 {
     const float P = u_grass_patchSize;
-    const uint T = uint(u_grass_tufts);
     const uint patchHash = grassHash2(ivec2(floor(p.origin / P + 0.5)));
     GrassTuft t;
     t.hash = grassHash(patchHash ^ (tuft * 0x9E3779B9u));
     // The root: the tuft's point of the patch's R2 sequence (offset per patch), with a small jitter.
     vec2 uv = fract(grassUnit2(patchHash) + float(tuft) * vec2(0.7548776662, 0.5698402910));
-    uv = fract(uv + (grassUnit2(t.hash) - 0.5) * (0.5 / sqrt(float(T))));
+    uv = fract(uv + (grassUnit2(t.hash) - 0.5) * u_grass_tuftJitter);
     t.xz = p.origin + uv * P;
     const vec2 turnSize = grassUnit2(grassHash(t.hash + 1u));
     t.turn = turnSize.x * GRASS_TWO_PI;
@@ -93,11 +116,6 @@ GrassTuft grassTuft(GrassPatchIn p, uint tuft)
         const float f = clamp((t.dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
         t.sink += 0.5 * u_terrainTess_depthGround * (1.0 - pow(f, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, t.groundN.y);
     }
-    t.wind = grassWindField(t.xz, u_timeSeconds);
-#ifndef GRASS_NEAR_SHADOW
-    t.windPrev = grassWindField(t.xz, u_grass_prevTime);
-    t.dryness = grassDryness(t.xz);
-#endif
     return t;
 }
 
@@ -119,13 +137,10 @@ struct GrassBlade
     float turn;          // dot(tip.xz, n0.xz): the lean + wind across the blade's face
     vec2 tipN;           // the linear normal's tip end (its root end: n0 = (1, 0))
     bool stalk;
-    float dist;          // the tuft's (the geomorph)
+    float morph;         // the geomorph to the next ring's LOD (0 .. 1; grassBuildBlade)
     float groundY;       // the ground under the root (the canopy depth)
 #ifndef GRASS_NEAR_SHADOW
     vec3 tipPrevDelta;   // last frame's tip offset - this frame's
-    vec3 groundN;        // the facet normal (flat)
-    vec4 look;           // flat: x the albedo factor, y dryness, z the ground normal blend, w the canopy extinction
-    uint lookBits;       // flat: the type | seed stalk << 2 | the seed stalks' cover of this blade (unorm8) << 8
     float canopyHeight;
 #endif
 };
@@ -162,7 +177,11 @@ vec2 grassBladeCurveNormal(float t)
 }
 
 // One BLADE of tuft `t`: rank `blade` (its place in the patch's ranked list) = member `member` of the tuft. False = not
-// drawn (thinned out, or - the near casters - out of the cascade's reach). Fills g_blade.
+// drawn (thinned out, or - the near casters - out of the cascade's reach). Fills g_blade, and WRITES THE FLAT OUTPUT
+// (the includer's `flat out uvec4 out_flat`, declared before this file; grass.fs.glsl unpacks it): x = half2(the albedo
+// factor, dryness), y = half2(the ground normal blend, the canopy extinction), z = the facet normal's x / z (snorm16;
+// its y > 0 rebuilt: grassUnpackGroundNormal), w = the look bits (the type | seed stalk << 2 | the seed stalks' cover of
+// this blade (unorm8) << 8) | the width axis << 16.
 // The random values: two per hash (16-bit halves) - bladeHash: its place in the spiral; +1: height, facing; +2: lean
 // angle, lean amount; +3: wind phase, colour variation; +4: seed stalk.
 bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
@@ -184,7 +203,7 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
 
     // Density (the COVER: the corners, bilinear at the blade - climate, slope, water, snow) x
     // thinning, against the blade's rank. Where the cover fades the blades get fewer AND smaller ("Size by cover").
-    const vec2 uv = clamp((xz - p.origin) / u_grass_patchSize, vec2(0.0), vec2(1.0)); // the member may stand just outside
+    const vec2 uv = clamp((xz - p.cellOrigin) * p.invCellSize, vec2(0.0), vec2(1.0)); // the member may stand just outside
     const float cover = mix(mix(p.corners.x, p.corners.y, uv.x), mix(p.corners.z, p.corners.w, uv.x), uv.y);
     const float coverSize = grassCoverSize(cover);
     const float thinning = grassKeep(t.dist);
@@ -193,23 +212,72 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     const float grow = clamp((keep - rank) / (u_grass_growBand * keep), 0.0, 1.0); // keep = 0: -inf -> 0
     if (grow <= 0.0)
         return false;
+    const float widthSize = grassWidthSize(coverSize);
+
+    // THE ORDER BELOW KEEPS THE REGISTERS DOWN (this function is the vertex shader's peak; a blade that is not drawn,
+    // above, pays for none of it):
+    // - each part of the flat output is WRITTEN when it is known (an output costs no register, a value held to the end
+    //   does);
+    // - everything that needs no wind comes first, and THE WIND LAST: each frame's wind is sampled there, when little
+    //   but the finished blade is held. With both wind fields sampled per tuft and held to the tip, the shader took 8
+    //   registers more.
+    const vec2 phaseVariation = grassUnit2(grassHash(bladeHash + 3u));
+#ifndef GRASS_NEAR_SHADOW
+    // The albedo factor: the per-blade variation x the COLD darkening (full at "Cold temperature", none from "Warm
+    // temperature"; the cell's mean temperature - climate is km-scale, so no cell steps show); the dry patches (the
+    // tuft's).
+    const float variation = 1.0 + u_grass_colorVariation * (phaseVariation.y * 2.0 - 1.0);
+    const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, p.temperature);
+    out_flat.x = packHalf2x16(vec2(variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), grassDryness(t.xz)));
+    // The ground normal blend, the canopy extinction; the facet normal.
+    out_flat.y = packHalf2x16(vec2(clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend, grassCanopyExtinction(cover, widthSize, t.dist)));
+    out_flat.z = packSnorm2x16(t.groundN.xz);
+    // The canopy at this blade: its mean height (the ground under it takes the same).
+    g_blade.canopyHeight = grassCanopyHeight(coverSize);
+#endif
 
     // The ground under it: the tuft's, along the facet's slope.
     const vec3 n = t.groundN;
     g_blade.groundY = t.groundY - (n.x * offset.x + n.z * offset.y) / n.y;
-    g_blade.dist = t.dist;
+    // THE GEOMORPH to the next ring's LOD (p.morph: it is one LOD coarser): the LOD is the RING's, and a ring ends at
+    // its level's block - a square around the camera that moves in steps. The block's edge is never nearer than
+    // (GRASS_RING_HALF - 1) of its cells (a Chebyshev distance), so the morph is complete there, over the last "LOD morph
+    // band" of that distance: a blade that changes ring has the coarser shape already.
+    g_blade.morph = 0.0;
+    if (p.morph)
+    {
+        const vec2 fromCamera = abs(t.xz - u_viewPos.xz);
+        const float border = float(GRASS_RING_HALF - 1) / p.invCellSize;
+        g_blade.morph = smoothstep(border * (1.0 - u_grass_lodMorphBand), border, max(fromCamera.x, fromCamera.y));
+    }
 
     const vec2 heightFacing = grassUnit2(grassHash(bladeHash + 1u));
-    const vec2 leanRandom = grassUnit2(grassHash(bladeHash + 2u));
-    const vec2 phaseVariation = grassUnit2(grassHash(bladeHash + 3u));
-    const float stalkRandom = grassUnit2(grassHash(bladeHash + 4u)).x;
 
-    // THE TUFT's type and size; a seed stalk is taller and thin.
-    const vec4 typeShape = u_grass_typeShape[t.type]; // x height, y width, z curvature (factors), w share
-    g_blade.stalk = stalkRandom < u_grass_typeTint[t.type].w;
-    const float typeHeight = typeShape.x * t.size * (g_blade.stalk ? u_grass_seedHeight : 1.0);
+    // THE TUFT's type and size (u_grass_typeShape: x height, y width, z curvature - factors -, w share; read where each is
+    // used); a seed stalk is taller and thin.
+    g_blade.stalk = grassUnit2(grassHash(bladeHash + 4u)).x < u_grass_typeTint[t.type].w;
+    const float typeHeight = u_grass_typeShape[t.type].x * t.size * (g_blade.stalk ? u_grass_seedHeight : 1.0);
     const float height = (u_grass_bladeHeight * typeHeight * mix(1.0 - u_grass_heightVariation, 1.0, heightFacing.x) * coverSize + t.sink) * grow;
     g_blade.root = vec3(xz.x, g_blade.groundY - t.sink, xz.y);
+    // The normal: NEAR the curve's own (the bent top catches the light), easing into one LINEAR in t from "LOD 2
+    // distance" to "LOD 3 distance" - a LOD 3 blade is ONE triangle, and the curve's tip normal spread over it flipped
+    // it bright or dark at the switch.
+    g_blade.linearBlend = smoothstep(u_grass_lod2Distance, u_grass_lod3Distance, t.dist);
+#ifndef GRASS_NEAR_SHADOW
+    // THE SEED STALKS' COLOUR ON THE BLADES, from LOD 2 to LOD 3 (the normal's blend: 0 at "LOD 2 distance", 1 at "LOD 3
+    // distance"): a LOD 3 stalk is one triangle a pixel or two wide, tapering to nothing where its seed head is - it
+    // does not show. So every blade of the type takes the stalks' colour (grass.fs.glsl) by the share of the view the
+    // stalks would cover (grass.inc.glsl grassStalkCover, as the far tier has it), their depth x "Seed stalks/Far blade
+    // colour". With the type and the seed stalk: the look bits (the FS's colours).
+    float seedCover = 0.0;
+    if (g_blade.linearBlend > 0.0 && !g_blade.stalk)
+    {
+        const vec3 toEye = u_viewPos - g_blade.root;
+        seedCover = g_blade.linearBlend * grassStalkCover(u_grass_typeSeedFar[t.type] * u_grass_seedFarBlade,
+            clamp(dot(t.groundN, toEye) / length(toEye), 0.0, 1.0));
+    }
+    const uint lookBits = t.type | (g_blade.stalk ? 4u : 0u) | (uint(seedCover * 255.0 + 0.5) << 8);
+#endif
 
     // FAN OUT: an outer member faces across its way out from the root and leans out along it ("Fan out", by how far out
     // it stands); the inner ones keep a random facing and lean.
@@ -227,76 +295,50 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     const vec2 sideXZ = acrossXZ * (a < 0.0 ? -turned : turned)
         + viewXZ * ((dot(facingXZ, viewXZ) < 0.0 ? -1.0 : 1.0) * sqrt(max(1.0 - turned * turned, 0.0)));
     g_blade.side = sideXZ;
+#ifndef GRASS_NEAR_SHADOW
+    // The look bits | THE WIDTH AXIS << 16 - the normal's frame (grassVertex): its x (15 bits, -1 .. 1) and its z's sign
+    // (the top bit). The axis is unit, so the FS rebuilds |z| with one square root: no angle, no trigonometry.
+    out_flat.w = lookBits | ((uint(clamp(sideXZ.x * 0.5 + 0.5, 0.0, 1.0) * 32767.0 + 0.5) | (sideXZ.y < 0.0 ? 0x8000u : 0u)) << 16);
+#endif
 
-    // The lean (a seed stalk stands stiffer: a third of it) and the wind - the tuft's field, the blade's own sway phase.
-    // The wind eases out with the distance ("Wind/Fade start / end"): far blades are a pixel wide, and their motion only
-    // reads as grain. Both frames take the same factor, so the motion vectors stay exact.
+    // The lean (a seed stalk stands stiffer: a third of it).
+    const vec2 leanRandom = grassUnit2(grassHash(bladeHash + 2u));
     const float leanAngle = leanRandom.x * GRASS_TWO_PI;
     const vec2 lean = (vec2(cos(leanAngle), sin(leanAngle)) * (1.0 - fan) + outward * (fan * 1.4))
-        * (u_grass_curvature * typeShape.z * (g_blade.stalk ? 0.35 : 1.0) * height * leanRandom.y);
-    const float phase = phaseVariation.x * GRASS_TWO_PI;
-    const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, t.dist);
-    g_blade.tip = grassTipOffset(lean, grassWindPush(t.wind, u_timeSeconds, phase) * windFade, height);
+        * (u_grass_curvature * u_grass_typeShape[t.type].z * (g_blade.stalk ? 0.35 : 1.0) * height * leanRandom.y);
 
     // Fewer blades far away get WIDER (toward the same coverage, capped), and never narrower than the pixel floor.
     const float widthScale = min(pow(1.0 / thinning, u_grass_widthCompensation), u_grass_maxWidthScale);
-    const float widthSize = grassWidthSize(coverSize);
     // A SEED STALK past the LODs that hold its head is a wider spear (grass.inc.glsl grassStalkCoarse).
     const float stalkCoarse = g_blade.stalk ? grassStalkCoarse(t.dist) : 0.0;
-    const float typeWidth = typeShape.y * (g_blade.stalk ? mix(u_grass_seedWidth, max(u_grass_seedWidth, GRASS_STALK_COARSE_WIDTH), stalkCoarse) : 1.0);
+    const float typeWidth = u_grass_typeShape[t.type].y
+        * (g_blade.stalk ? mix(u_grass_seedWidth, max(u_grass_seedWidth, GRASS_STALK_COARSE_WIDTH), stalkCoarse) : 1.0);
     g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * typeWidth * widthScale * widthSize, t.dist * u_grass_minWidthPerMetre * (1.0 + stalkCoarse));
-    // The normal: NEAR the curve's own (the bent top catches the light), easing into one LINEAR in t from "LOD 2
-    // distance" to "LOD 3 distance" - a LOD 3 blade is ONE triangle, and the curve's tip normal spread over it flipped
-    // it bright or dark at the switch.
-    g_blade.linearBlend = smoothstep(u_grass_lod2Distance, u_grass_lod3Distance, t.dist);
+
+    // THE WIND - at the TUFT's root (one wind for its blades: grass_wind.inc.glsl grassWindPushAt), the blade's own sway
+    // phase. It eases out with the distance ("Wind/Fade start / end"): far blades are a pixel wide, and their motion
+    // only reads as grain. Both frames take the same factor, so the motion vectors stay exact. BOTH PUSHES, THEN THE
+    // TIPS: a push held across the other frame's sample is 2 values, a tip 3.
+    const float phase = phaseVariation.x * GRASS_TWO_PI;
+    const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, t.dist);
+    // Last frame's push is the shader's register peak (about 8). It takes THIS frame's ripple tap - a texture tap less
+    // per vertex (the register count stayed, 54 -> 55: the allocator's noise): the motion vectors leave out the
+    // ripple's travel in one frame, far below a pixel but right at the camera. Tried: the waves' phases formed once for both frames - 2 more; a polynomial sine - 6 more.
+    const float ripple = grassWindRipple(t.xz, u_timeSeconds);
+    const vec2 push = grassWindPushWith(ripple, t.xz, u_timeSeconds, phase) * windFade;
+#ifndef GRASS_NEAR_SHADOW
+    const vec2 pushPrev = grassWindPushWith(ripple, t.xz, u_grass_prevTime, phase) * windFade;
+#endif
+    g_blade.tip = grassTipOffset(lean, push, height);
+#ifndef GRASS_NEAR_SHADOW
+    g_blade.tipPrevDelta = grassTipOffset(lean, pushPrev, height) - g_blade.tip;
+#endif
     // The normals' terms (GrassBlade). The upper half's chord is (0.75 tip.x, 0.25 tip.y, 0.75 tip.z): its normal
     // (tip.y, -3 turn), normalized (its length >= the rise > 0).
     g_blade.turn = dot(g_blade.tip.xz, vec2(sideXZ.y, -sideXZ.x));
     g_blade.tipN = normalize(vec2(g_blade.tip.y, -3.0 * g_blade.turn));
-
-#ifndef GRASS_NEAR_SHADOW
-    g_blade.tipPrevDelta = grassTipOffset(lean, grassWindPush(t.windPrev, u_grass_prevTime, phase) * windFade, height) - g_blade.tip;
-    g_blade.groundN = t.groundN;
-    // The albedo factor: the per-blade variation x the COLD darkening (full at "Cold temperature", none from "Warm
-    // temperature"; the patch's mean temperature - climate is km-scale, so no patch steps show).
-    const float variation = 1.0 + u_grass_colorVariation * (phaseVariation.y * 2.0 - 1.0);
-    const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, p.temperature);
-    const float groundBlend = clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend;
-    g_blade.look = vec4(variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), t.dryness, groundBlend,
-        grassCanopyExtinction(cover, widthSize, t.dist));
-    // THE SEED STALKS' COLOUR ON THE BLADES, from LOD 2 to LOD 3 (the normal's blend: 0 at "LOD 2 distance", 1 at "LOD 3
-    // distance"): a LOD 3 stalk is one triangle a pixel or two wide, tapering to nothing where its seed head is - it
-    // does not show. So every blade of the type takes the stalks' colour (grass.inc.glsl grassStalkColor) by the share of
-    // the view the stalks would cover (grassStalkCover, as the far tier has it), their depth x "Seed stalks/Far blade
-    // colour".
-    float seedCover = 0.0;
-    if (g_blade.linearBlend > 0.0 && !g_blade.stalk)
-    {
-        const vec3 toEye = u_viewPos - g_blade.root;
-        seedCover = g_blade.linearBlend * grassStalkCover(u_grass_typeSeedFar[t.type] * u_grass_seedFarBlade,
-            clamp(dot(t.groundN, toEye) / length(toEye), 0.0, 1.0));
-    }
-    // The type, the seed stalk and that cover (unorm8) for the FS's colours.
-    g_blade.lookBits = t.type | (g_blade.stalk ? 4u : 0u) | (uint(seedCover * 255.0 + 0.5) << 8);
-    // The canopy at this blade: its mean height (the ground under it takes the same).
-    g_blade.canopyHeight = grassCanopyHeight(coverSize);
-#endif
     return true;
 }
-
-#ifndef GRASS_NEAR_SHADOW
-// THE BLADE's FLAT OUTPUT, one uvec4 (grass.fs.glsl unpacks it): x = half2(the albedo factor, dryness), y = half2(the
-// ground normal blend, the canopy extinction), z = the facet normal's x / z (snorm16; its y > 0 rebuilt:
-// grassUnpackGroundNormal), w = the look bits (16) | the WIDTH AXIS << 16 - the normal's frame (grassVertex): its x
-// (15 bits, -1 .. 1) and its z's sign (the top bit); the axis is unit, so the FS rebuilds |z| with one square root -
-// no angle, so no trigonometry on either side.
-uvec4 grassPackFlat()
-{
-    const uint sideBits = uint(clamp(g_blade.side.x * 0.5 + 0.5, 0.0, 1.0) * 32767.0 + 0.5) | (g_blade.side.y < 0.0 ? 0x8000u : 0u);
-    return uvec4(packHalf2x16(g_blade.look.xy), packHalf2x16(g_blade.look.zw), packSnorm2x16(g_blade.groundN.xz),
-        g_blade.lookBits | (sideBits << 16));
-}
-#endif
 
 // One vertex of g_blade.
 struct GrassVertex
@@ -323,15 +365,13 @@ GrassVertex grassVertex(uint vert, uint lod)
     GrassVertex v;
     v.t = float(row) / float(segments);
 
-    // GEOMORPH (the LODs nest: 8 -> 4 -> 2 -> 1 segments): over the last "LOD morph band" before the next LOD's
-    // distance, the odd rows (the coarser LOD drops them) move onto the line between their neighbours, normals
-    // included. At the switch the blade is the coarser one exactly. The patch's LOD comes from its NEAREST point.
+    // GEOMORPH (the LODs nest: 8 -> 4 -> 2 -> 1 segments): toward the ring's outer border (g_blade.morph) the odd rows
+    // (the coarser LOD drops them) move onto the line between their neighbours, normals included. At the border the
+    // blade is the coarser one exactly.
     // The neighbours' midpoint on the curve is the point + h^2 (tip.x, -tip.y, tip.z) exactly (the curve's second
     // derivative is constant): the weights below take it, no more curve points. The width morphs to its neighbours' mean on
     // its own (a blade's is linear in t - its own value; a seed stalk's is not).
-    const float nextLodDist = lod == 0u ? u_grass_lod1Distance : lod == 1u ? u_grass_lod2Distance : u_grass_lod3Distance;
-    const float morph = lod < 3u && (row & 1u) != 0u
-        ? smoothstep(nextLodDist * (1.0 - u_grass_lodMorphBand), nextLodDist, g_blade.dist) : 0.0;
+    const float morph = lod < 3u && (row & 1u) != 0u ? g_blade.morph : 0.0;
     const float h = 1.0 / float(segments);
     float width = grassBladeWidth(v.t);
     if (morph > 0.0)

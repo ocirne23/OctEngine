@@ -4,14 +4,35 @@
 
 ## Procedural grass (`GrassPipeline`, "Grass" tweaks, `GrassParams`)
 
-Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range fade (m)" 100; 1024 blades per 2 m patch, 1 m blades
-0.15 m wide). Past the range the terrain shading carries the look, with THE FAR TIER (below) where grass grows.
+Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range fade (m)" 100; 1024 blades per 1 m base cell,
+1.25 m blades 0.025 m wide). Past the range the terrain shading carries the look, with THE FAR TIER (below) where grass grows.
 
-* **Patches of RANKED blades** (`grass.inc.glsl`): a world grid of patches ("Patch size (m)", 1 m) around the camera.
-  ONE static index buffer (`GrassPipeline::buildIndices`) holds, per LOD (8 / 4 / 2 / 1 segments - they NEST, for the
-  geomorph; switches at "LOD 1/2/3 distance (m)", 10 / 30 / 60 m), "Blades per patch" blades in RANK order; blade k
-  stands in TUFT k % T, the tufts at the points of an R2 low-discrepancy sequence over the patch (offset per patch), so
-  EVERY PREFIX of the ranks is evenly spread over the tufts (see TUFTS below). A patch draws the first K blades. The vertex shader keeps blade k where
+* **RANKED blades in BASE CELLS, drawn in RING CELLS:**
+  * THE BLADES belong to the BASE CELLS of a world grid (`grass.inc.glsl`; "Patch size (m)", 1 m - `grassPatchSize`
+    takes it to the nearest power of two, 1 .. 16 m: every ring cell must lie in ONE terrain chunk, 256 m). A base
+    cell has "Blades per patch" blades (1024; up to `GRASS_MAX_BLADES` = 4096) in RANK order, their places and looks
+    hashed from the cell's coordinates: world-fixed.
+  * THEY ARE DRAWN IN RINGS around the camera (`RendererVKLayout::GRASS_RING_*`, `RendererState::grassRingLayout`,
+    `uploadGrassFrame`): up to 7 LEVELS (as many as the range needs), level k a block of 16 x 16 cells of 2^k base
+    cells a side, without the part the finer level covers - so the cells grow with the distance (1, 2, 4 .. 64 m; the
+    borders at about 8, 16, 32, 64, 128, 256 m) and there are at most 1792 of them (256 + 6 x 192 drawn). A block's centre is the camera SNAPPED TO TWO
+    OF ITS CELLS: its edges then lie on the next level's grid, so that level's cells are all inside it (not drawn) or
+    all outside - no gap, no overlap. The blocks move in steps; the blades do not, so a step shows nothing.
+  * A ring cell draws the SAME blades as its base cells would: a blade's index in the cell = its rank x the cell's
+    base cells + its base cell (`grassBaseCell`, grass_blade.inc.glsl), so the first K blades are the lowest ranks of
+    all its base cells - evenly spread, as a base cell's own prefix.
+  * ONE LOD PER RING (8 / 4 / 2 / 1 segments - they NEST, for the geomorph): the "LOD 1/2/3 distance (m)" tweaks
+    (8 / 32 / 64 m) at the ring's inner border (half a block of the finer level: 0, 8, 16, 32, 64, 128, 256 m -> LOD 0,
+    1, 1, 2, 3, 3, 3), at most one step a ring. So the LOD borders are the ring borders, not the tweaks' circles.
+  * THE BLADE MESH has ONE SECTION PER LOD, sized for THE WORST CASE of the rings that use it
+    (`GrassPipeline::setMesh` / `buildIndices`): the most blades a cell of ring k draws = its base cells x the ranks
+    kept at the ring's NEAREST point (the thinning and the range fade there, 3.5 of its cells from the camera), capped
+    at 16 MB of indices a section. The cull clamps every draw to it. With the defaults: 1024 / 4096 / 16 384 / ~33 000
+    / ~55 000 / ~93 000 / ~139 000 blades a cell by ring, about 1.1 M indices (4.4 MB) in all. The sections follow "Blades per patch",
+    "Patch size", the range, the thinning and the LOD distances: a change of one of them rebuilds the buffer (GPU idle
+    + re-record).
+  * Rank k stands in TUFT k % T, the tufts at the points of an R2 low-discrepancy sequence over the base cell (offset
+    per cell), so EVERY PREFIX of the ranks is evenly spread over the tufts (see TUFTS below). The vertex shader keeps rank k where
   `(k + 0.5) / N < density x thinning` and shrinks it into the ground over the "Cover/Grow band" below that: ONE rule
   thins by density (climate, slope) AND by distance (`(Thinning start / d)^exponent`, faded to none over
   "Range fade (m)"), so a blade fades by shrinking, never pops. Where the COVER fades (the corner densities: climate,
@@ -32,12 +53,24 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   smaller. A member may stand just outside its patch: the cull's box reaches out by the radius too, its ground is the
   root's along the facet's slope (the root is in the patch), and the cover's bilinear weights clamp to the patch.
 * **GRASS TYPES** ("Grass/Types/Type 1..4", `GRASS_TYPES`): each TUFT is one type (`grassType`, at its root): two value
-  noises of "Type patch size (m)" (5; stretched toward an even spread) make four corner weights, one per type
-  (`grassTypeCorners`, grass.inc.glsl), x its "Share" - one type rules an area, any two can meet - with "Type mixing"
-  (0.25) of a random score per tuft; the highest wins. THE DRY PATCHES (`grassDryness`, "Look/Dry amount") are about
+  noises of "Type patch size (m)" (32; stretched toward an even spread) make four corner weights, one per type
+  (`grassTypeCorners`, grass.inc.glsl), x its "Share": the type's SCORE (`grassTypeScores`) - one type rules an area,
+  any two can meet. "TYPE BLENDING" (0 .. 1, default 1) turns the scores into the tuft's type. At 0 the highest score
+  takes every tuft: a hard border. Above 0 the border is a ZONE where the tufts of two types stand mixed: each tuft
+  DRAWS its type by the scores' shares - the scores to the power 1 / blending (`u_grass_typeBlendPower`, the CPU's; 0 = no blending), so the zone
+  widens with the tweak, and at 1 the shares are the scores themselves: a blend all the way between two peaks. Where
+  the pattern is at one type's peak (both noises at an end: the other scores are 0) the grass stays that one type.
+  The far tier's weights are the same shares (`u_grass_typeFarPower`: the power capped at 6, its stand-in for the hard
+  pick). Tried: a random
+  score per type mixed into the pattern's ("Type mixing"), with the hard pick - it dithered the borders a little and
+  put other types into the peaks at high values; and a power curve on the noises - it only moved the hard borders.
+  Both dropped for the draw. THE DRY PATCHES (`grassDryness`, "Look/Dry amount") are about
   2.7 x that size. A type scales the blade tweaks ("Height", "Width", "Curvature") and tints the root / tip colours ("Tint" x
   "Brightness"). UBO: `u_grass_typeShape[4]` (height, width, curvature, share / all shares) and `u_grass_typeTint[4]`
-  (linear tint, seed stalk share) - live arrays. The defaults: fine grass, a broad deep-green arching one, a tall
+  (linear tint, seed stalk share) - live arrays; `u_grass_typeShares` (the four shares as one vec4, for the scores);
+  the far tier's finished colours per type, `u_grass_typeFarBlade[4]` (tip x tint x "Far/Brightness") and
+  `u_grass_typeFarStalk[4]` (0.35 seed colour + 0.325 (the type's tip colour + the dry colour)): `grassFarColor` only
+  weights them. The defaults: fine grass, a broad deep-green arching one, a tall
   yellowish SEEDING one, a short dense one.
   * The LAYER sees their share-weighted means (RendererUbo `grassTypeStats`): the canopy height x
     `u_grass_meanHeightScale`, the canopy and far extinctions x the mean width, a ray hit's tip colour x
@@ -66,20 +99,34 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     colour (half "Seed colour", half "Dry colour" - none of the type's green, which the blade's root and the other
     blades bring), and it loses the canopy's shadow and the root occlusion, because the stalks stand above the canopy -
     as bright as the seed heads near the camera. The far tier uses `grassStalkCover` too (its colour:
-    `grassStalkColor`, with the type's green in it - its layer is closed).
+    `u_grass_typeFarStalk`, with the type's green in it - its layer is closed).
 * **THE BLADE's DETAIL** (grass.fs.glsl; the flat look bits: type | stalk << 2): "Midrib" (0.2): a line along the
   blade's middle (`out_blade.y` = across, -1 .. 1), brighter (or darker if negative), fading up the blade and where the
   blade is a few pixels wide (fwidth of the across coordinate).
 * **THE BLADE MODEL** (`grass_blade.inc.glsl`), in three steps: `grassTuft` (the root, the type, the size, the ground at
-  the root - height + facet normal -, the distance, the dry patch, the relief sink, the wind FIELD at the
-  root this frame and last: `grassWindField`), `grassBuildBlade` (into `g_blade`: the place in the spiral, the density
-  test, the curve - a quadratic Bezier from the root, control point above the root at the tip's height, tip pushed by
-  a random lean + THE wind: the tuft's field x the blade's own sway phase, `grassWindPush`; see "The wind" - its width,
-  its normals' terms, its look), `grassVertex` (a row and side of it, the geomorph, the normal). A blade's ground is its
-  tuft's, followed along the facet's slope; the distance-driven terms (thinning, LODs, wind fade, pixel floor) take the
-  TUFT's distance, the cover the blade's own place. The wind code is `grass_wind.inc.glsl` (`grassBezier` /
-  `grassWind` / `grassTip` / `grassTipOffset`), shared with the clutter flowers. The random values come two per hash
-  (`grassUnit2`: the 16-bit halves).
+  the root - height + facet normal -, the distance, the relief sink), `grassBuildBlade` (into `g_blade`: the place in
+  the spiral, the density test, the curve - a quadratic Bezier from the root, control point above the root at the
+  tip's height, tip pushed by a random lean + THE wind at the tuft's root with the blade's own sway phase,
+  `grassWindPushAt`; see "The wind" - its width, its normals' terms, its look), `grassVertex` (a row and side of it,
+  the geomorph, the normal). A blade's ground is its tuft's, followed along the facet's slope; the distance-driven
+  terms (thinning, LODs, wind fade, pixel floor) take the TUFT's distance, the cover the blade's own place. The wind
+  code is `grass_wind.inc.glsl` (`grassBezier` / `grassWind` / `grassWindPushAt` / `grassWindRipple` + `grassWindPushWith` / `grassTip` / `grassTipOffset`),
+  shared with the clutter flowers. The random values come two per hash (`grassUnit2`: the 16-bit halves).
+  * **THE ORDER IN `grassBuildBlade` KEEPS THE VERTEX SHADER'S REGISTERS DOWN** (55, the near casters 44; with the
+    wind and the dry patch sampled per tuft and every flat value packed at the end it took 64):
+    * a blade that is not drawn returns before any of the work below;
+    * each part of the flat output (`out_flat`, declared by the includer before the file) is WRITTEN when it is
+      known - an output costs no register, a value held to the end does;
+    * the wind comes LAST, when little but the finished blade is held: both frames' pushes first, then both tips (a
+      push held across the other frame's sample is 2 values, a tip 3). `grassWindPushAt` takes the wind VECTOR
+      (`vegetationWindVector`): no direction + speed pair, no length, no divide.
+    * WHAT HOLDS THE REST: last frame's push is the peak - about 8 registers; `grassVertex` is not (stubbed: no
+      change). Tried: the waves' phases formed once for both frames (2 more), a polynomial sine (6 more).
+    * LAST FRAME'S PUSH TAKES THIS FRAME'S RIPPLE TAP (`grassWindRipple` once, `grassWindPushWith` twice): one
+      texture tap less per vertex. The motion vectors leave out the ripple's travel in one frame - far below a pixel
+      but right at the camera. The register count did not follow (55).
+    * The count moves by 2 with unrelated statement changes (the compiler's allocation): a change that gains 2 or
+      less is not a result.
   * **THE VERTEX MATH IS SCALAR** (`GrassBlade`): the blade holds its root and the tip's OFFSET from it
     (`grassTipOffset`), no control point - the point at t is `root + (t^2 tip.x, (2t - t^2) tip.y, t^2 tip.z)`, and
     last frame's point is that + the same weights x `tipPrevDelta` (the root and the width do not move), so no second
@@ -116,11 +163,12 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   of `grass.inc.glsl` needs the texture (`GRASS_NOISE_SAMPLER`, default `u_textures[u_terrain_noiseTex]`): the main
   set's bindless array is visible to the VERTEX stage for the grass and flower VS, and the grass cull and both
   near-shadow caster sets (grass, flowers) bind the texture alone (the cull at 9, the casters at 24).
-* **GEOMORPH:** over the last "LOD morph band" (fraction, 0.3) before the next LOD's distance, the rows the coarser
-  LOD drops (the odd rows) move - positions, last frame's positions and normals - onto the midpoint of their
-  neighbours, by the blade's OWN distance; at the switch the blade is the coarser one exactly. The patch's LOD comes
-  from the nearest point of its box (with slack below the corners), so no blade of a coarser patch is nearer than the
-  switch. On the quadratic Bezier that midpoint is exactly the point + `h^2 (tip.x, -tip.y, tip.z)` (the curve's
+* **GEOMORPH** (a ring whose next ring is one LOD coarser: the record's morph flag): the rows the coarser LOD drops
+  (the odd rows) move - positions, last frame's positions and normals - onto the midpoint of their neighbours, toward
+  the ring's OUTER border. That border is its level's block edge, a square around the camera that moves in steps and
+  is never nearer than (`GRASS_RING_HALF` - 1) = 7 of its cells (a Chebyshev distance): the morph runs over the last
+  "LOD morph band" (fraction, 0.3) of that distance, by the tuft's own Chebyshev distance from the camera, and is
+  complete there - a blade that changes ring has the coarser shape already. On the quadratic Bezier that midpoint is exactly the point + `h^2 (tip.x, -tip.y, tip.z)` (the curve's
   second derivative is constant; tip = the tip's offset) - `morph x h^2` added to the sideways weight and taken from
   the upward one (the width is linear in t) - and the LINEAR normal's midpoint is itself: only the curve normal
   evaluates its neighbours.
@@ -153,7 +201,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   (`terrain_tess.tes.glsl`) is not sampled: the root sinks by "Root sink (m)" + half the relief depth (the same fade and
   slope gate) and the blade grows by as much, so no blade floats over a displaced hollow.
 * **The cull** (`grass_cull.cs.glsl`, a cached compute secondary "Grass cull" before the shadow cull): one thread per
-  patch slot (`GRASS_MAX_PATCHES` = 65536; the range is capped so the grid fits), range and frustum tests, the 4 corner
+  CELL SLOT (`GRASS_MAX_PATCHES` = 1792 = 7 levels x 256 cells; the range is capped at what the levels reach -
+  `grassGridRange`: 448 x the base cell), the test against the finer level's block, range and frustum tests, the 4 corner
   heights and DENSITIES - **the terrain textures' own logic**: `terrainLayers` (terrain_splat.inc.glsl, included with
   `TERRAIN_SPLAT_HEIGHT_ONLY`), fed as the terrain VS feeds it (the baked fields, the temperature at the height, the
   SMOOTH mesh normal from the chunk's vertex normals: `grassGroundSmoothNormal`). Density = what the beach, rock and
@@ -162,20 +211,36 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   sources) x (1 - "Cover/Canopy thinning" x the FOREST FLOOR MAP's canopy (the ground clutter's: the clutter frame at
   binding 8; no map = no thinning): a closed canopy holds little grass. The ground's canopy shading under the blades
   (`grassGroundCanopy`) does not see the thinning. No grass until the terrain texture set is registered (the startup
-  bake). The splat's relief height blend is not applied (linear coverages). Corners are shared, so the bilinear
-  density is continuous across patches. Output per visible patch: a `GrassPatchGpu` record (32 B) and a draw in each
-  list, counted atomically, written as WORDS - a `VkDrawIndexedIndirectCommand` (`firstInstance` = the slot - needs
-  `drawIndirectFirstInstance`, enabled in Device.cpp).
-  The draws are in the cull threads' finish order. Tried: a NEAR-TO-FAR patch order (the thread index mapped to square
-  rings out from the camera's patch, the main list staged by rank and packed by a second compute pass), so the depth
-  test rejects hidden blades before they are shaded; dropped because a toggle against a row-by-row order showed no
-  gain at a grazing view over a dense field (not compared against a far-to-near order).
+  bake). The splat's relief height blend is not applied (linear coverages). Corners are shared by a level's cells, so
+  the bilinear density is continuous across them. THE DENSITY'S DETAIL IS THE CELL'S: a far cell (16 - 32 m) blends its
+  4 corners over its whole size, so a grass edge at a rock or a shore is soft there, and a blade's cover can change a
+  little where its region changes ring (it grows or shrinks, by the grow band).
+  * THE SLOTS: a slot = level x 256 + the cell's place in the block's NEAR-FIRST order (`gf_cellOrder`: the cells by
+    their distance from the block's centre, built once in `GrassPipeline::initialize`). EVERY slot writes its record
+    (`GrassPatchGpu`, 32 B: + the ring's LOD, the level and the morph flag in `resLod`) and its two draws
+    (`VkDrawIndexedIndirectCommand` as words; `firstInstance` = the slot - needs `drawIndirectFirstInstance`, enabled
+    in Device.cpp), EMPTY where the cell is culled. No atomics, no counts (`GrassPipeline::record` fills the draw
+    counts with the slots), and the lists are NEAR TO FAR in every view direction: the depth test rejects hidden
+    blades before they are shaded.
+  * THE FRAME TABLE (`GrassFrameGpu`, std430; host-visible, written in present): the ground chunks (the clutter's cull
+    reads them too), then per level the block (its min corner, its cell size), the mesh (the LOD, its section's first
+    index, the ring's worst case, the morph flag) and the casters' section, and the cell order.
+  * Tried: the same blades in a uniform grid of 1 m patches (65 025 cells, ~12 500 draws in view, the list in the
+    cull threads' finish order); dropped for the rings: fewer and larger draws, a cheaper cull, no range cap at 127 m,
+    and the draw order for free.
 * **The draw:** `m_grassPipeline` in `StaticMeshGraphicsPipeline` (built from the main layout like the tess terrain,
   so the SAME descriptor set binds: the lit core), `drawIndexedIndirectCount` after the tessellated ground and before
   the film; the record is an INSTANCE-RATE vertex attribute (binding 0). Two-sided, no discard (early depth), opaque
   family, writes motion. `grass.fs.glsl`: the lit core's `computeLitColor` **without RTAO** (`LIT_NO_RTAO` compiles
   the AO read out: traced from the depth image, a blade is a near-random normal a few cm over the ground, not in the
-  TLAS - heavy noise; the root occlusion stands in).
+  TLAS - heavy noise; the root occlusion stands in). Both variants also take `LIT_DIELECTRIC` (a blade is never
+  metal), `LIT_NO_UNDERWATER` (the grass cover ends at the water: no water-level fetch) and `LIT_EXTRA_LIGHT`: the
+  sun through the blade goes into `g_litExtraLight`, added right after the lit core's sun, so no value of it is live
+  across the light loop (with it held outside, the FS had 32 B of local memory; now 16 B).
+  * THE FULL VARIANT'S REGISTER PEAK is the local lights' shadow ray: the view vector and the roughness were live
+    across it (64 registers; the hard sun tap alone changed nothing). `LIT_LIGHTS_ROUGHNESS` (the includer's roughness
+    as an expression of frame constants; here `u_grass_roughness`) makes the light loop form the view vector and read
+    the roughness again per light: 56 registers with the highlights kept, the local memory 32 B (64 / 16 without).
   * The sun shadow is looked up from the blade's sun side, moved toward the sun by "Shadow bias (m)" (0.5 m at the
     root, none at the tip): the sunk root sits under the ground's own shadow-map surface (a dark band at every
     blade's foot otherwise).
@@ -184,6 +249,18 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     is a thin, moving surface that TAA resolves: the coarser penumbra grain does not show on it.
   * ALL THE LIGHTING is per fragment. Near the camera the shadow needs it: the near grass cascade draws blade shadows
     across blades, and a blade there is tens of pixels long.
+  * **SIMPLE SHADING for the far rings** ("LOD/Simple shading distance (m)", 32; `GRASS_SIMPLE`,
+    `m_grassSimplePipeline`): the rings are ranges of the draw list (the slots are level-major), so the rings whose
+    inner border is at or past the distance (`GrassRingLayout::firstSimpleLevel`; ring 3 on, with the default) draw
+    with a SECOND pipeline - the same vertex shader, `grass.fs.glsl` with the define. A far blade is a pixel or two
+    wide and the thin triangles shade whole 2 x 2 pixel blocks, so these fragments are most of the grass's cost. The
+    simple variant keeps the lit core and takes its cheap paths: ONE shadow map tap for the sun
+    (`LIT_SUN_SHADOW_HARD`: hardware PCF, the cascade cross-fade dithered - 1 read where the soft search takes 13),
+    no near grass cascade, no underwater light (`LIT_NO_UNDERWATER`), the local lights' diffuse alone
+    (`LIT_LIGHTS_DIFFUSE`). The GI, the canopy and the clouds are the same. The two draws are
+    `drawIndexedIndirectCount` over one command buffer and one count (every slot, or 0 without the cull): each
+    draw's maximum cuts its share out. The split is recorded, so the tweak (and those that move the rings)
+    re-records. With RT sun shadows both variants trace the ray.
   * Albedo root -> tip + per-blade variation + dry patches (sRGB tweaks, linearised in `buildUboGrass`); "Cold
     darkening" scales the albedo down as the patch's mean temperature (the cull's 4 corners, at their height; it rides
     the record's `cellTemperature` half with the cell size) falls from "Warm temperature (C)" to "Cold temperature
@@ -194,7 +271,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   * The normal blends toward the ground's with distance - linearly, to "Ground normal blend" (0.3) at the grass range
     ("Grass/Range (m)", `u_grass_range`) - with NO minimum N·V (the bright
     grazing light is wanted; clamps were tried and removed).
-  * "Blades per patch" rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live (`u_grass*`).
+  * The tweaks that size the blade mesh (above) rebuild the index buffer (GPU idle + re-record); everything else is
+    UBO-live (`u_grass*`).
 * **THE CANOPY: grass self-shadowing without a shadow map** ("Grass/Shadows/Canopy shadow"; 0 = off) - a blade is far
   below a shadow-map texel. The grass layer is a thin VOLUME of blades (`grass.inc.glsl`): its top at the mean blade
   height (`grassCanopyHeight`), its extinction = `u_grass_canopyExtinction` (the CPU fold: Canopy shadow x blades per
@@ -263,10 +341,10 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     the ripple, half with no wind; needs the stripes ("Blade stripes" > 0). All in the normal and the roughness, so the
     lit core does the light and no value lives across it.
   * THE TYPES' COLOUR (`grassFarColor`): per grass type, in the blades' own patches (`grassTypeCorners`: 2 noise
-    taps), so a type's area keeps its look where its blades thin out and past the range. A tuft takes the type with
-    the highest score; here each type's weight is that score with the random at its mean (`mix(corner, 0.5, Type
-    mixing) x share`), to the 6th power, normalized: about the share of the tufts the type wins, and smooth (the 4th
-    power mixed the types too far into each other's areas; the 8th drew the far patches with hard outlines). WHERE A
+    taps), so a type's area keeps its look where its blades thin out and past the range. Each type's weight is the share
+    of the tufts it has there, as the blades draw them: its score (`grassTypeScores`) to the power 1 / "Type
+    blending", normalized. Without blending, and below 1 / 6, the power is the 6th: smooth and close to the hard pick
+    (the 4th mixed the types too far into each other's areas; the 8th drew the far patches with hard outlines). WHERE A
     PIXEL COVERS A PATCH the weights fade to the types' shares (the mean), from half a cell of the finer noise
     per pixel to a whole one. The pixel's ground footprint is `2 d / u_mipPixelScale / max(N.V, 0.25)`: the floor on
     N.V keeps the patches to about 600 m at the default 5 m (gone at ~1.1 km) - a grazing view's true footprint would
@@ -365,11 +443,11 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     camera looking near the horizon meets the ground far ahead, and a larger cap slid the box forward until the near
     grass fell out. The ground is the terrain height under the camera (`Renderer::setCameraGround`, from Procedural's
     TerrainStreamer every frame; unknown: the camera's height - 2 m).
-  * Casters: the cull's SECOND list (count [1], binding 7; the patches within range x 1.5 + 2 m of that centre, in
-    view or not), `grass.vs.glsl` with `GRASS_SHADOW` + `GRASS_NEAR_SHADOW`. `GrassPipeline::recordNearShadow` draws
-    the list (the same records as the main draw, ONE LOD COARSER - `grassCasterLod`: half the segments, a blade's
-    shadow does not show them; the cull sizes the casters' draws with it and `grassPatchIn` builds with it; counts [0]
-    main, [1] near casters, [2] records), depth only,
+  * Casters: the cull's SECOND list (binding 7; the ring cells within range x 1.5 + 2 m of that centre, in
+    view or not; the other slots' draws are empty), `grass.vs.glsl` with `GRASS_SHADOW` + `GRASS_NEAR_SHADOW`.
+    `GrassPipeline::recordNearShadow` draws the list (the same records as the main draw, ONE LOD COARSER -
+    `grassCasterLod`: half the segments, a blade's shadow does not show them; the cull sizes the casters' draws with
+    it, from that LOD's mesh section, and `grassPatchIn` builds with it), depth only,
     the shadow pass's depth bias, both faces, its own set (UBO + vertex mega-buffer); `ClutterPipeline::recordNearShadow`
     adds the clutter in the same secondary - only the clutter cull's near casters (see Ground clutter).
   * Receivers (`grassNearShadow`, grass.inc.glsl, only where the lit core is included): the blades and the ground

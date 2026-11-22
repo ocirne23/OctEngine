@@ -113,7 +113,10 @@ calls `reloadShaders()`.
   never takes it:
   * `LIT_NO_RTAO` - no RTAO read: the grass, the clutter and the tree voxels (a runtime flag kept the whole
     upsample compiled).
-  * `LIT_NO_UNDERWATER` - no water-level fetch, no underwater sun at all: the tree leaves and voxels.
+  * `LIT_NO_UNDERWATER` - no water-level fetch, no underwater sun at all: the tree leaves and voxels, the grass.
+  * `LIT_LIGHTS_ROUGHNESS` (the includer's roughness as an expression of frame constants) - the light loop forms the
+    view vector (from `u_viewPos`) and reads the roughness again per light, so neither is live across a light's
+    shadow ray: the grass FS, 64 / 16 -> 56 / 32.
   * `LIT_CAUSTICS` (the one define that compiles a path IN) - the underwater CAUSTIC pattern
     (`underwaterSunTransmittance`): the terrain ground only. Every other material under the water takes the
     Beer-Lambert absorption alone (`underwaterSunAbsorption`, no ocean-map taps). The pattern is the surface's fold
@@ -349,7 +352,7 @@ VS 30/0 and 46/0), tree FS 64/16
 (its VS 40/0), the voxel trees' march FS 40/0 (its VS 80/0, the far trees' 48/0) and lighting FS 64/0 (the voxel
 shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the voxel pipeline 54/0), tree_volume_march 64/0 (handover 62/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
-cull 46/0, the shadow cull 39/0, grass FS 56/32, grass VS 48/0, clutter / flower FS
+cull 46/0, the shadow cull 39/0, grass FS 56/32 (the far rings' simple variant 56/16), grass VS 55/0 (the near casters 44/0), grass cull 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
 river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the

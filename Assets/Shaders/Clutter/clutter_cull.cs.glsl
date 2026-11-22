@@ -29,9 +29,9 @@ layout (local_size_x = CLUTTER_CANDIDATES) in;
 
 layout (binding = 2, std430) readonly buffer InGrassFrame // RendererVKLayout::GrassFrameGpu: the ground table
 {
-    vec2 gf_gridOrigin;
-    uint gf_gridDim;
+    uint gf_numLevels;  // (the grass's ring levels and base cell: not read here, nor the ring data after the table)
     float gf_patchSize;
+    uint gf_pad0, gf_pad1;
     ivec2 gf_tableMin;
     uint gf_tableDim;
     float gf_chunkSize;

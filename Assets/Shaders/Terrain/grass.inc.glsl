@@ -1,9 +1,10 @@
-// PROCEDURAL GRASS, shared by the patch cull (grass_cull.cs.glsl) and the blade vertex shader (grass.vs.glsl).
-// The world is a grid of PATCHES (u_grass_patchSize metres square). A patch is drawn from ONE static index buffer of N
-// blades in RANK order: blade k sits at the k-th point of an R2 low-discrepancy sequence, so EVERY PREFIX of the ranks
-// is evenly spread. The cull writes one indexed draw per visible patch (the first K blades); the VS keeps blade k where
-// rank (k + 0.5) / N < density x thinning and shrinks it into the ground over the grow band below that. One rule thins
-// by density AND by distance, so a blade fades out by shrinking, never by popping.
+// PROCEDURAL GRASS, shared by the cell cull (grass_cull.cs.glsl) and the blade vertex shader (grass.vs.glsl).
+// The world is a grid of BASE CELLS (u_grass_patchSize metres square), each with N blades in RANK order: blade k sits at
+// the k-th point of an R2 low-discrepancy sequence, so EVERY PREFIX of the ranks is evenly spread. They are drawn in
+// RING CELLS around the camera (2^level base cells a side, larger with the distance): the cull writes one indexed draw
+// per ring cell (the first K ranks of all its base cells); the VS keeps rank k where (k + 0.5) / N < density x thinning
+// and shrinks it into the ground over the grow band below that. One rule thins by density AND by distance, so a blade
+// fades out by shrinking, never by popping.
 // Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices (two triangles per
 // cell, as TerrainGenerator.cpp splits them) - the baked height map (8 m texels) is far too coarse.
 // Needs shared.inc.glsl and the includer's `in_terrainVertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
@@ -28,15 +29,6 @@ uint grassLodSegments(uint lod)
 uint grassIndicesPerBlade(uint lod)
 {
     return (2u * grassLodSegments(lod) - 1u) * 3u;
-}
-
-// The index buffer holds the LODs one after another, each N blades in rank order (GrassPipeline::buildIndices).
-uint grassLodFirstIndex(uint lod, uint blades)
-{
-    uint first = 0u;
-    for (uint l = 0u; l < lod; ++l)
-        first += grassIndicesPerBlade(l) * blades;
-    return first;
 }
 
 // THE NEAR CASTERS draw ONE LOD COARSER than the blades they shade (half the segments; the last LOD its own): a blade's
@@ -103,9 +95,16 @@ vec4 grassTypeCorners(vec2 xz)
     return vec4(n.x * n.y, (1.0 - n.x) * n.y, n.x * (1.0 - n.y), (1.0 - n.x) * (1.0 - n.y));
 }
 
-vec4 grassTypeShares()
+// THE TYPES' SCORES at a point: the pattern's weights x the shares (u_grass_typeShares: the four in one value).
+// "TYPE BLENDING" (0 .. 1): how the scores turn into each type's SHARE OF THE TUFTS at a point. 0: the highest score
+// takes them all - a hard border where two scores cross. Above 0 the shares are the scores to the power 1 / blending:
+// between two types the tufts of both stand mixed, a zone that widens with the tweak (at 1 the shares are the scores
+// themselves - the whole way between two peaks is a blend). At a type's peak the other scores are 0: one type, always.
+// The power comes from the CPU: u_grass_typeBlendPower for the blades' pick (0 = no blending), u_grass_typeFarPower for
+// the far tier's weights.
+vec4 grassTypeScores(vec2 xz)
 {
-    return vec4(u_grass_typeShape[0].w, u_grass_typeShape[1].w, u_grass_typeShape[2].w, u_grass_typeShape[3].w);
+    return grassTypeCorners(xz) * u_grass_typeShares;
 }
 
 // THE DRY PATCHES at xz [0, 1]: "Dry amount" of the ground with dry, straw-coloured grass, in patches about 2.7 x the
@@ -129,20 +128,13 @@ float grassStalkCoarse(float dist)
     return smoothstep(u_grass_lod2Distance * (1.0 - u_grass_lodMorphBand), u_grass_lod2Distance, dist);
 }
 
-// THE SEED STALKS AS A COLOUR over a type's blades (`blades`: its tip colour x its tint), where the stalks themselves
-// are too thin to show - the far tier (grassFarColor) and the blades from LOD 2 to LOD 3 (a LOD 3 stalk is one triangle
-// a pixel or two wide: grass_blade.inc.glsl puts the colour on ALL the type's blades there).
-// The colour: a third their seed heads, the rest the stalks under them (the blade FS's half straw) - matched by eye to
-// the blades' seeding patches near the camera (pure seed colour read too pink).
+// THE SEED STALKS AS A COLOUR over a type's blades, where the stalks themselves are too thin to show - the far tier
+// (grassFarColor: u_grass_typeFarStalk, the CPU's colour) and the blades from LOD 2 to LOD 3 (a LOD 3 stalk is one
+// triangle a pixel or two wide: grass_blade.inc.glsl puts the colour on ALL the type's blades there).
 // Their cover of the view: the stalks stand ABOVE the blades, so the view meets them first - 1 - exp(-their optical
 // depth), the depth = the type's u_grass_typeSeedFar (the CPU's fold: "Far/Seed heads" x stalks per m^2 x the area of a
 // stalk that shows) x tan(the view's angle off the ground normal; NoV = its cosine): a grazing view sees a sheet of
 // seed heads, a view from above the blades between them.
-vec3 grassStalkColor(vec3 blades)
-{
-    return 0.35 * u_grass_seedAlbedo + 0.325 * (blades + u_grass_dryAlbedo);
-}
-
 float grassStalkCover(float depth, float NoV)
 {
     return 1.0 - exp(-depth * (sqrt(max(1.0 - NoV * NoV, 0.0)) / max(NoV, 0.05)));
@@ -364,10 +356,10 @@ vec4 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 
 // THE FAR TIER's GRASS COLOUR, per GRASS TYPE in the blades' own patches (grassTypeCorners: the same pattern, so a
 // type's area keeps its look where its blades thin out and past them):
-// - THE TYPES' WEIGHTS: a tuft takes the type with the highest score (the corner mixed with a random by "Type mixing",
-//   x the share - grassType); here each type's weight is that score with the random at its mean, to the 6th power:
-//   about the share of the tufts it wins, and smooth (the 4th power mixed the types too far into each other's areas;
-//   the 8th drew the far patches with hard outlines). Where a pixel covers a patch or more the weights fade to the
+// - THE TYPES' WEIGHTS: the share of the tufts each type has there, as the blades draw them (grassType): the scores
+//   to the power 1 / "Type blending". Without blending (the highest score takes every tuft) and for a blending below
+//   1 / 6 the power is the 6th: smooth, and close to the hard pick (the 4th mixed the types too far into each other's
+//   areas; the 8th drew the far patches with hard outlines). Where a pixel covers a patch or more the weights fade to the
 //   types' shares (the mean): from half a cell of the finer noise per pixel to a whole one, the pixel's ground
 //   footprint taken along the view at a view angle of 0.25 at the least (a grazing view's true length would lose the
 //   patches a few hundred metres out; they are streaks along the view there).
@@ -383,27 +375,26 @@ vec3 grassFarColor(vec3 pos, vec3 N)
     const float NoV = clamp(dot(N, toEye) / dist, 0.0, 1.0);
     const float footprint = 2.0 * dist / (u_mipPixelScale * max(NoV, 0.25)); // m (inf with no viewport yet: the mean)
     const float local = 1.0 - smoothstep(0.5, 1.0, footprint * u_grass_invTypePatchSize * 1.31);
-    vec4 weights = grassTypeShares(); // sum 1
+    vec4 weights = u_grass_typeShares; // sum 1
     if (local > 0.0)
     {
-        vec4 w = mix(grassTypeCorners(pos.xz), vec4(0.5), u_grass_typeMixing) * weights;
+        vec4 w = grassTypeScores(pos.xz);
         const float top = max(max(w.x, w.y), max(w.z, w.w));
         if (top > 1e-6)
         {
-            w *= 1.0 / top; // the largest = 1: the power cannot underflow
-            const vec4 w2 = w * w;
-            w = w2 * w2 * w2;
+            // The largest = 1: the power cannot underflow. The blades' power with "Type blending" (their exact shares),
+            // at most the 6th - the stand-in for the hard pick (u_grass_typeFarPower).
+            w = pow(w * (1.0 / top), vec4(u_grass_typeFarPower));
             weights = mix(weights, w * (1.0 / (w.x + w.y + w.z + w.w)), local);
         }
     }
-    const vec4 heads = 1.0 - exp(-u_grass_typeSeedFar * (sqrt(1.0 - NoV * NoV) / max(NoV, 0.05)));
-    vec3 color = vec3(0.0);
-    for (uint i = 0u; i < GRASS_TYPES; ++i)
-    {
-        const vec3 blades = u_grass_tipAlbedo * u_grass_typeTint[i].rgb;
-        color += weights[i] * mix(blades * u_grass_farBrightness, grassStalkColor(blades), heads[i]);
-    }
-    return color;
+    // Each type's blades and its stalks, weighted (the colours are the CPU's: u_grass_typeFarBlade / u_grass_typeFarStalk).
+    const vec4 heads = weights * (1.0 - exp(-u_grass_typeSeedFar * (sqrt(1.0 - NoV * NoV) / max(NoV, 0.05))));
+    const vec4 blades = weights - heads;
+    return blades.x * u_grass_typeFarBlade[0].rgb + blades.y * u_grass_typeFarBlade[1].rgb
+        + blades.z * u_grass_typeFarBlade[2].rgb + blades.w * u_grass_typeFarBlade[3].rgb
+        + heads.x * u_grass_typeFarStalk[0].rgb + heads.y * u_grass_typeFarStalk[1].rgb
+        + heads.z * u_grass_typeFarStalk[2].rgb + heads.w * u_grass_typeFarStalk[3].rgb;
 }
 
 // THE FAR TIER's colour: the blades' TIP colour (a far view sees their upper part; the darker depth is "Far/Canopy

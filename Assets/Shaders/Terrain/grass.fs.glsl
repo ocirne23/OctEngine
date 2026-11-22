@@ -31,58 +31,93 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST
+#ifdef GRASS_SIMPLE
+// SIMPLE SHADING (the far rings' pipeline: "Grass/LOD/Simple shading distance", StaticMeshGraphicsPipeline): a far blade
+// is a pixel or two wide and its fragments are most of the grass's cost - the thin triangles shade whole 2 x 2 pixel
+// blocks. The same lit core, the cheap way: ONE shadow map tap for the sun (hardware PCF, the cascade cross-fade
+// dithered - no blocker search, no soft penumbra: 1 read where the search takes 13), no near grass cascade (it ends
+// metres from the camera), no underwater light (grass is never deep under water), the local lights' diffuse alone.
+#define LIT_SUN_SHADOW_HARD
+#define LIT_NO_UNDERWATER
+#define LIT_LIGHTS_DIFFUSE
+#else
 // A LIGHTER SHADOW SEARCH than the scene's 6 gathers + 12 taps (shadows.inc.glsl): the search is this shader's largest
 // cost, and a blade is a thin, moving surface that TAA resolves - the coarser penumbra grain does not show on it.
 #define PCSS_BLOCKER_GATHERS 4
 #define PCSS_FILTER_SAMPLES 8
+#define LIT_NO_UNDERWATER // the grass cover ends at the water: no blade stands deep under it
+// instanced_indirect_lit.inc.glsl: the local lights form the view vector and read the roughness again per light, so
+// neither is live across a light's shadow ray (the register peak: 64 -> 56, the local memory 16 -> 32 B).
+#define LIT_LIGHTS_ROUGHNESS float16_t(u_grass_roughness)
+#endif
 // NO RTAO: the trace works from the depth image, and on a blade that is a near-random normal from a thin sliver of
 // depth a few centimetres over the ground (the blades are not in the TLAS): heavy noise, worst in shadow. The root
 // occlusion stands in.
 #define LIT_NO_RTAO
+#define LIT_DIELECTRIC   // instanced_indirect_lit.inc.glsl: a blade is never metal
+#define LIT_EXTRA_LIGHT  // the sun through the blade, added inside computeLitColor
 #define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: on the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassCanopySun (in_terrainVertices: the lit core's binding 14)
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the blades take the ground's faction look
 
-void main()
+#ifndef GRASS_SIMPLE
+float g_nearWeight = 0.0, g_nearSun = 1.0; // the near grass cascade at the fragment (main: taken before the sun's search)
+#endif
+
+// The blade's normal (one face): across the width axis at the interpolated y, on the upright stem's side, + the edge
+// tilt (grass_blade.inc.glsl: the width axis x the across value x the "Roundness", fading to the tip), turned to the
+// viewer. From the inputs alone: main forms it TWICE (before the shadow search and after) - an input costs no register
+// between two reads, a normal held across the search costs three.
+vec3 grassFragmentNormal()
 {
-    // The position from the pixel's depth (the jitter taken out: the surface at this pixel).
-    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw - taaJitterUv(u_taaJitter.xy);
-    const vec3 rel = viewRelFromDepth(uv, gl_FragCoord.z);
-    const vec3 pos = u_viewPos + rel;
-    const float dist = length(rel);
-    const vec3 V = -rel / dist;
-    const vec3 L = u_sunDirection.xyz;
-    const float t = in_blade.x;
-    // The normal (one face): across the width axis at the interpolated y, on the upright stem's side, + the edge tilt
-    // (grass_blade.inc.glsl: the width axis x the across value x the "Roundness", fading to the tip).
     const uint sideBits = in_flat.w >> 16; // the width axis: its x (15 bits) and its z's sign; unit, so |z| follows
     const float sideX = float(sideBits & 0x7FFFu) * (2.0 / 32767.0) - 1.0;
     const float sideZ = sqrt(max(1.0 - sideX * sideX, 0.0));
     const vec3 side = vec3(sideX, 0.0, (sideBits & 0x8000u) != 0u ? -sideZ : sideZ);
     const float normalY = clamp(in_blade.w, -1.0, 1.0);
-    vec3 bladeN = normalize(vec3(side.z, 0.0, -side.x) * sqrt(1.0 - normalY * normalY) + vec3(0.0, normalY, 0.0)
-        + side * (in_blade.y * u_grass_roundness * (1.0 - t)));
-    if (!gl_FrontFacing)
-        bladeN = -bladeN;
-    const vec2 factorDryness = unpackHalf2x16(in_flat.x); // the albedo factor (variation x cold), dryness
-    const vec2 blendExtinction = unpackHalf2x16(in_flat.y); // the ground normal blend, the canopy extinction
+    const vec3 bladeN = normalize(vec3(side.z, 0.0, -side.x) * sqrt(1.0 - normalY * normalY) + vec3(0.0, normalY, 0.0)
+        + side * (in_blade.y * u_grass_roundness * (1.0 - in_blade.x)));
+    return gl_FrontFacing ? bladeN : -bladeN;
+}
 
-    // THE SHADOW FIRST (the register peak, nothing of the surface live yet), from the blade's SUN side: the side facing
-    // away still needs its real shadow for the transmission. The lookup moves TOWARD THE SUN by "Shadow bias (m)", full
-    // at the root and none at the tip: the root sinks below the terrain mesh, into the ground's own shadow-map surface
-    // (a dark band at the bottom of every blade).
-    const vec3 sunSideN = dot(bladeN, L) >= 0.0 ? bladeN : -bladeN;
-    g_sunShadowFirst = sunShadowVisibility(pos + L * (u_grass_shadowBias * (1.0 - t)), sunSideN);
-    float nearWeight;
-    const float nearSun = grassNearShadow(pos, sunSideN, nearWeight);
+void main()
+{
+    // The position from the pixel's depth (the jitter taken out: the surface at this pixel).
+    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw - taaJitterUv(u_taaJitter.xy);
+    const vec3 pos = u_viewPos + viewRelFromDepth(uv, gl_FragCoord.z);
+    const vec3 L = u_sunDirection.xyz;
+
+    // THE SHADOWS FIRST (the search is the register peak: only the position and the near cascade's two values are live
+    // across it), from the blade's SUN side: the side facing away still needs its real shadow for the transmission.
+    // The lookup moves TOWARD THE SUN by "Shadow bias (m)", full at the root and none at the tip: the root sinks below
+    // the terrain mesh, into the ground's own shadow-map surface (a dark band at the bottom of every blade).
+    {
+        const vec3 bladeN = grassFragmentNormal();
+        const vec3 sunSideN = dot(bladeN, L) >= 0.0 ? bladeN : -bladeN;
+#ifndef GRASS_SIMPLE
+        g_nearSun = grassNearShadow(pos, sunSideN, g_nearWeight);
+#endif
+        g_sunShadowFirst = sunShadowVisibility(pos + L * (u_grass_shadowBias * (1.0 - in_blade.x)), sunSideN);
+    }
+#ifdef GRASS_SIMPLE
+    const float nearWeight = 0.0, nearSun = 1.0; // the far rings: past the near grass cascade
+#else
+    const float nearWeight = g_nearWeight, nearSun = g_nearSun;
+#endif
+    const float t = in_blade.x;
+    const vec3 rel = pos - u_viewPos;
+    const float dist = length(rel);
+    const vec3 V = -rel / dist;
     // THE SEED STALKS ON A FAR BLADE of a seeding type (grass_blade.inc.glsl: from LOD 2 to LOD 3 the stalks themselves
     // stop showing, so the type's blades stand in for them): how much of this point shows as stalks - their cover of the
     // view, less at the root, which they do not hide. The stalks stand ABOVE the canopy, so by that share the point
     // takes their colour, loses the canopy's shadow and the root occlusion: as bright as the seed heads near the camera.
     const uint look = in_flat.w;
     const float seedShown = float((look >> 8) & 0xFFu) * (1.0 / 255.0) * smoothstep(0.0, 0.4, t);
+    const vec2 factorDryness = unpackHalf2x16(in_flat.x); // the albedo factor (variation x cold), dryness
+    const vec2 blendExtinction = unpackHalf2x16(in_flat.y); // the ground normal blend, the canopy extinction
     // THE CANOPY's shadow: the blades above this point along the sun, as a volume - the self-shadowing a shadow map
     // cannot resolve. On the direct sun and the transmission alike. Near the camera the near grass cascade takes over.
     const float canopySun = nearWeight < 1.0 ? mix(grassCanopySun(pos, in_blade.z, blendExtinction.y, dist), 1.0, seedShown) : 1.0;
@@ -102,7 +137,7 @@ void main()
     else
     {
         // The stalks' colour on the blade: half seed heads, half straw - none of the type's green (the far tier's
-        // grassStalkColor has it): the blade's own root and the other blades bring that.
+        // u_grass_typeFarStalk has it): the blade's own root and the other blades bring that.
         albedo = mix(albedo, 0.5 * (u_grass_seedAlbedo + u_grass_dryAlbedo), seedShown);
     }
     albedo = mix(albedo, u_grass_dryAlbedo * mix(0.75, 1.0, t), factorDryness.y);
@@ -116,14 +151,14 @@ void main()
     albedo = terrainFactionTint(albedo, pos.xz, 1.0); // the same rule as the ground under it (terrain_faction.inc.glsl)
     const float ao = mix(mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t)), 1.0, seedShown);
 
-    const vec3 N = normalize(mix(bladeN, grassUnpackGroundNormal(in_flat.z), blendExtinction.x));
-    // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
-    // register peak): only this half colour is live across it.
+    const vec3 N = normalize(mix(grassFragmentNormal(), grassUnpackGroundNormal(in_flat.z), blendExtinction.x));
+    // Lit from behind: the sun through the blade, tinted by it - the lit core's extra light (added right after its sun:
+    // no value of it is live across the light loop, the register peak).
     const float back = max(-dot(N, L), 0.0);
-    const f16vec3 transmit = f16vec3(albedo * (back * g_sunShadowFirst * ao * u_grass_transmission * INV_PI)); // <= 1.28 by the tweak ranges
+    g_litExtraLight = f16vec3(min(albedo * (u_sunTransmittance * u_sunColor.rgb) * (back * g_sunShadowFirst * ao * u_grass_transmission * INV_PI),
+        vec3(MEDIUMP_FLT_MAX)));
 
-    vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grass_roughness), float16_t(0.0), float16_t(ao));
-    color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+    const vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grass_roughness), float16_t(0.0), float16_t(ao));
     out_color = vec4(color, 1.0);
     out_motion = motionVectorNoAo(in_prevWorldDelta);
 }

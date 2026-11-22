@@ -37,6 +37,26 @@ vec2 grassWind(vec2 xz, float time, float phase)
     return grassWindPush(grassWindField(xz, time), time, phase);
 }
 
+// The same push in ONE step, from the wind VECTOR (the field's direction x its speed is that vector: no length, no
+// divide). For a caller that keeps no field (the grass blades: grass_blade.inc.glsl).
+// In two parts: the RIPPLE noise at a point and time (grassWindRipple), and the push with it (grassWindPushWith). A
+// caller with two times (the blades: this frame and the last, for the motion vectors) takes ONE ripple tap for both.
+float grassWindRipple(vec2 xz, float time)
+{
+    return grassValueNoise((xz - u_weather_windDirection * (u_weather_windTravelSpeed * time)) * u_grass_invRippleSize);
+}
+
+vec2 grassWindPushWith(float ripple, vec2 xz, float time, float phase)
+{
+    const float sway = sin(time * u_grass_swayFrequency * GRASS_TWO_PI + phase);
+    return vegetationWindVector(xz, time) * (u_grass_windBend * (0.85 + 0.15 * sway) + u_grass_rippleBend * ripple * (0.8 + 0.2 * sway));
+}
+
+vec2 grassWindPushAt(vec2 xz, float time, float phase)
+{
+    return grassWindPushWith(grassWindRipple(xz, time), xz, time, phase);
+}
+
 // The tip of a blade of height h, from its root: lean + wind sideways (xz, capped at 0.9 h), the rest upward (y). The
 // wind's push x h^2 / (h^2 + "Stiff height"^2): a short blade is stiffer (in blade heights it bent as far as a tall one).
 // The control point stands the same y straight above the root, so the curve at t is

@@ -482,25 +482,32 @@ export struct FoliageParams
 // converts them).
 export struct GrassParams
 {
-    static constexpr int MAX_BLADES = 1024; // = RendererVKLayout::GRASS_MAX_BLADES (static_asserted in Renderer.ixx)
+    static constexpr int MAX_BLADES = 4096; // = RendererVKLayout::GRASS_MAX_BLADES (static_asserted in Renderer.ixx)
 
     bool enabled = true;
     int bladesPerPatch = 1024;     // blades in a full patch (<= MAX_BLADES): the near density is this / patch size^2
     float patchSize = 1.0f;       // m; ideally a divisor of the terrain chunk size
-    float range = 150.0f;          // m: no blade past it
+    float range = 300.0f;          // m: no blade past it
     float rangeFade = 100.0f;      // m: the blades thin out to none over the last metres of the range
     float bladeHeight = 1.25f;     // m
     float heightVariation = 0.55f; // 0..1: the shortest blade is (1 - this) x the height
     float bladeWidth = 0.025f;    // m at the root
     float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
-    float thinStart = 20.0f;      // m: all blades inside it; past it (start / d)^exponent of them
+    float thinStart = 16.0f;      // m: all blades inside it; past it (start / d)^exponent of them
     float thinExponent = 1.25f;
     float widthCompensation = 1.0f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
     float maxWidthScale = 2.0f;
-    float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
-    float lod2Distance = 30.0f;
-    float lod3Distance = 60.0f;
-    float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (>= 0.01)
+    // ONE LOD PER RING of cells around the camera (the rings' inner borders: 8, 16, 32, 64 .. m at a 1 m base cell): a
+    // ring takes 8 segments per blade while its inner border is inside lod1Distance, 4 to LOD 2, 2 to LOD 3, then 1 (a
+    // triangle).
+    float lod1Distance = 8.0f;     // m
+    float lod2Distance = 32.0f;
+    float lod3Distance = 64.0f;
+    float lodMorphBand = 0.3f;    // the blades geomorph into the next ring's LOD over this fraction of the ring's reach (>= 0.01)
+    // SIMPLE SHADING: the rings whose inner border is at or past this distance draw with a cheaper fragment shader - one
+    // shadow map tap for the sun (no soft shadow search), no near blade shadows, no underwater light, no highlights from
+    // local lights. Far blades are a pixel or two wide: the soft shadow's cost does not show on them.
+    float simpleShadingDistance = 32.0f; // m
     float minPixelWidth = 1.2f;    // px: a blade is never narrower (fights the far shimmer)
     float groundBlend = 0.3f;     // the normal's blend to the ground's at the grass range (linear from the camera)
     // The shared wind ("Sky/Wind", wind.inc.glsl: its direction, speed and gusts) bends the blades: the tip's push in
@@ -608,8 +615,8 @@ export struct GrassParams
     float tuftFan = 0.6f;          // 0..1
     float tuftSizeVariation = 0.35f; // 0..1
     // THE GRASS TYPES: each tuft is one of TYPES kinds of grass, sized and coloured from the blade tweaks above. Which
-    // one: two value noises of typePatchSize metres pick the dominant type of an area (each type a corner of the two
-    // noises, x its share), typeMixing of a random pick per tuft mixed in.
+    // one: two value noises of typePatchSize metres give each type its weight at a place (each type a corner of the two
+    // noises, x its share), and a tuft draws its type by those weights (typeBlending).
     struct Type
     {
         float share = 1.0f;     // the type's weight (0 = never)
@@ -624,11 +631,14 @@ export struct GrassParams
     Type types[TYPES] = {
         { 1.0f,  1.0f,  1.0f, 1.0f, glm::vec3(1.0f), 1.0f, 0.0f },                // fine grass
         { 0.5f,  0.65f, 2.2f, 1.3f, glm::vec3(0.82f, 1.0f, 0.78f), 0.9f, 0.0f },  // broad, deep green, arching
-        { 0.35f, 1.5f,  0.7f, 0.6f, glm::vec3(1.0f, 0.95f, 0.75f), 1.1f, 0.15f }, // tall, yellowish, seeding
+        { 0.1f,  1.5f,  0.7f, 0.5f, glm::vec3(1.0f, 0.95f, 0.75f), 1.1f, 0.15f }, // tall, yellowish, seeding
         { 0.3f,  0.45f, 0.8f, 0.8f, glm::vec3(0.9f, 1.0f, 0.92f), 0.95f, 0.0f },  // short, dense
     };
-    float typePatchSize = 5.0f;    // m
-    float typeMixing = 0.25f;      // 0..1
+    float typePatchSize = 32.0f;   // m
+    // How WIDE the zones are where the tufts of two types stand mixed: 0 = a hard border, 1 = a blend all the way between
+    // two types' peaks. Each tuft draws its type by the pattern's shares there (to the power 1 / this); a type's own peak
+    // stays one type.
+    float typeBlending = 1.0f;     // 0..1
     // SEED STALKS: seedHeight x a blade's height, seedWidth x its width; the top seedLength of the stalk is the seed head
     // (seedHeadWidth x the stalk's width at its widest, seedColor).
     float seedHeight = 1.1f;

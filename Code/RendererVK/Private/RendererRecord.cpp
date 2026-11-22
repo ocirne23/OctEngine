@@ -367,7 +367,9 @@ void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, ui
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
     setFullViewport(cb.getCommandBuffer());
-    const GrassPipeline::Draw grassDraw = m_grassPipeline.getDraw(frameIdx);
+    GrassPipeline::Draw grassDraw = m_grassPipeline.getDraw(frameIdx);
+    // The far rings' slots (level-major): the simple fragment shader. A tweak that moves the split re-records.
+    grassDraw.simpleFirst = grassRingLayout().firstSimpleLevel * RendererVKLayout::GRASS_RING_CELLS * RendererVKLayout::GRASS_RING_CELLS;
     const ClutterPipeline::Draw clutterDraw = m_clutterPipeline.getDraw(frameIdx);
     const TreeVoxelFarPipeline::Draw treeVoxelFarDraw = m_treeVoxelFar.getDraw(frameIdx);
     StaticMeshGraphicsPipeline::RecordParams drawParams

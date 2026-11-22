@@ -504,6 +504,10 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 				// the loop's peak.
 #ifdef LIT_LIGHTS_DIFFUSE // the includer's surface takes no highlight from a local light (punctual_lights.inc.glsl doLightDiffuse)
 				const vec3 lit = doLightDiffuse(light, worldPos, N, diffuseColOverPi);
+#elif defined(LIT_LIGHTS_ROUGHNESS)
+				// The includer's roughness is a frame constant (LIT_LIGHTS_ROUGHNESS reads it) and its view vector the
+				// camera's: both are formed again HERE per light, so neither is live across the shadow ray query.
+				const vec3 lit = doLight(light, worldPos, f16vec3(normalize(u_viewPos - worldPos)), N, specularColor, diffuseColOverPi, 0.0, LIT_LIGHTS_ROUGHNESS);
 #else
 				const vec3 lit = doLight(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH);
 #endif

@@ -205,6 +205,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/LOD", "LOD 1 distance (m)", &s.lod1Distance, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Grass/LOD", "LOD 2 distance (m)", &s.lod2Distance, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/LOD", "LOD 3 distance (m)", &s.lod3Distance, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/LOD", "Simple shading distance (m)", &s.simpleShadingDistance, 0.0f, 500.0f, 0.5f); // re-records (the draws' split)
     Tweak::floatVar("Grass/LOD", "Min pixel width", &s.minPixelWidth, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/LOD", "LOD morph band", &s.lodMorphBand, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Bend (per m/s)", &s.windBend, 0.0f, 0.5f, 0.001f);
@@ -266,7 +267,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Tufts", "Fan out", &s.tuftFan, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Tufts", "Tuft size variation", &s.tuftSizeVariation, 0.0f, 0.9f, 0.01f);
     Tweak::floatVar("Grass/Types", "Type patch size (m)", &s.typePatchSize, 0.5f, 100.0f, 0.1f);
-    Tweak::floatVar("Grass/Types", "Type mixing", &s.typeMixing, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Types", "Type blending", &s.typeBlending, 0.0f, 1.0f, 0.01f);
     // The registry keeps the names as views: the categories are static.
     static constexpr oc::string_view typeCategories[GrassParams::TYPES] = { "Grass/Types/Type 1", "Grass/Types/Type 2", "Grass/Types/Type 3", "Grass/Types/Type 4" };
     for (int i = 0; i < GrassParams::TYPES; ++i)

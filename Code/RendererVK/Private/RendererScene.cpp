@@ -1214,14 +1214,17 @@ void Renderer::setGrassGround(float chunkSize, uint32 vertexStride, oc::span<con
     m_grassGround.assign(chunks.begin(), chunks.end());
 }
 
-// This slot's ground table (its fence was waited): the patch grid around the camera, from the patch size and the
-// capped range (grassPatchSize / grassGridRange: u_grass_patchSize / u_grass_range), and the terrain chunks under it - the finest per cell. Then the frame's chunk list is
-// spent: the next frame draws grass only if the terrain hands it over again.
+// This slot's frame table (its fence was waited): THE GRASS RINGS around the camera (grassRingLayout, from the base cell
+// and the capped range: u_grass_patchSize / u_grass_range), and the terrain chunks under them - the finest per cell.
+// Then the frame's chunk list is spent: the next frame draws grass only if the terrain hands it over again.
+// A LEVEL's block: GRASS_RING_CELLS cells per side, its centre the camera SNAPPED TO TWO OF ITS CELLS - so its edges lie
+// on the next level's grid, and the next level's cells are either all inside it (not drawn) or all outside. A block
+// moves in steps; the blades do not (they belong to the base cells), so a step shows nothing.
 void RendererState::uploadGrassFrame(uint32 frameIdx)
 {
-    using RendererVKLayout::GRASS_TABLE_DIM;
-    RendererVKLayout::GrassFrameGpu& frame = m_grassPipeline.frame(frameIdx);
-    frame.gridDim = 0;
+    using namespace RendererVKLayout;
+    GrassFrameGpu& frame = m_grassPipeline.frame(frameIdx);
+    frame.numLevels = 0;
     frame.tableDim = 0;
     m_groundTableValid = false;
     // The GROUND TABLE serves the grass AND the ground clutter (its cull reads the same chunks): it covers groundRange().
@@ -1229,15 +1232,24 @@ void RendererState::uploadGrassFrame(uint32 frameIdx)
     {
         if (grassActive())
         {
+            const GrassRingLayout layout = grassRingLayout();
             const float patchSize = grassPatchSize();
-            const int half = (int)std::ceil(grassGridRange() / patchSize);
-            const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
-            frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
-            frame.gridDim = (uint32)(2 * half + 1);
+            for (uint32 k = 0; k < layout.numLevels; ++k)
+            {
+                const float cell = patchSize * (float)(1u << k);
+                const glm::vec2 centre = glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / (2.0f * cell) + 0.5f) * (2.0f * cell);
+                const uint32 lod = layout.lod[k], casterLod = glm::min(lod + 1, GRASS_LODS - 1);
+                frame.levelBlock[k] = glm::vec4(centre - (float)GRASS_RING_HALF * cell, cell, 0.0f);
+                // The mesh as the pipeline HAS it (a tweak's listener rebuilds it): never past a section.
+                frame.levelMesh[k] = glm::uvec4(lod, m_grassPipeline.lodFirstIndex(lod), glm::min(layout.maxBlades[k], m_grassPipeline.lodBlades(lod)),
+                    k + 1 < layout.numLevels && layout.lod[k + 1] > lod ? 1u : 0u);
+                frame.levelCaster[k] = glm::uvec4(m_grassPipeline.lodFirstIndex(casterLod), glm::min(layout.maxBlades[k], m_grassPipeline.lodBlades(casterLod)), 0u, 0u);
+            }
+            frame.numLevels = layout.numLevels;
             frame.patchSize = patchSize;
         }
 
-        const float range = self().groundRange() + 16.0f; // + the largest patch: a patch grid reaches past its range by up to one
+        const float range = self().groundRange() + 16.0f; // + a margin: a cell past the table gets no ground and draws nothing
         const glm::vec2 camXZ(m_cameraPos.x, m_cameraPos.z);
         const glm::ivec2 tableMin(glm::floor((camXZ - range) / m_grassChunkSize));
         const glm::ivec2 tableMax(glm::floor((camXZ + range) / m_grassChunkSize));

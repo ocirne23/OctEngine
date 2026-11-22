@@ -5,12 +5,19 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE GRASS PATCH CULL (GrassPipeline): one thread per patch of the grid around the camera. A patch on a resident
-// terrain chunk, inside the range and the frustum, with grass at any corner, gets ONE indexed draw of the first K
-// blades of its LOD's blade mesh and its record (the VS's instance-rate attributes, firstInstance = the slot).
+// THE GRASS CELL CULL (GrassPipeline): one thread per CELL SLOT of the rings around the camera.
+// THE RINGS: gf_numLevels nested blocks of GRASS_RING_CELLS^2 cells, level k's cells 2^k base cells wide (the blades
+// belong to the BASE cells of a world grid - grass_blade.inc.glsl - so a cell of any level draws the same blades). A
+// block's edges lie on the next level's grid, so that level's cells are all inside it (not drawn: the finer level has
+// them) or all outside. A slot = level x cells + the cell's place in the block's near-first order (gf_cellOrder): the
+// draw lists are in the slots' order, NEAR TO FAR, with no sort - EVERY slot writes its draw, an empty one where the
+// cell is culled.
+// A cell on a resident terrain chunk, inside the range and the frustum, with grass at any corner, gets ONE indexed draw
+// of the first K blades of its ring's LOD (ONE LOD per ring) and its record (the VS's instance-rate attributes,
+// firstInstance = the slot). K never passes the ring's worst case (gf_levelMesh.z: the mesh section's size).
 // Density per corner: THE TERRAIN TEXTURES' OWN LOGIC (terrainLayers, fed as the terrain VS feeds it): grass only where
 // the GROUND layer shows, times the grass amount of the ground textures the climate picks there. Corners are shared by
-// 4 patches, so the bilinear density the VS reads is continuous across borders.
+// the cells of a level, so the bilinear density the VS reads is continuous across their borders.
 
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
@@ -28,13 +35,18 @@ layout (local_size_x = GRASS_CULL_GROUP) in;
 
 layout (binding = 2, std430) readonly buffer InGrassFrame // RendererVKLayout::GrassFrameGpu
 {
-    vec2 gf_gridOrigin;
-    uint gf_gridDim;
-    float gf_patchSize;
+    uint gf_numLevels;  // ring levels in use (0 = no grass)
+    float gf_patchSize; // m: the base cell
+    uint gf_pad0, gf_pad1;
     ivec2 gf_tableMin;
     uint gf_tableDim;
     float gf_chunkSize;
     uvec2 gf_chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM];
+    vec4 gf_levelBlock[GRASS_RING_LEVELS];   // xy = the block's min corner, z = its cell size (m)
+    uvec4 gf_levelMesh[GRASS_RING_LEVELS];   // x = the ring's LOD, y = that LOD's first index, z = the most blades a cell draws,
+                                             // w = 1: the next ring is one LOD coarser (the blades morph to it)
+    uvec4 gf_levelCaster[GRASS_RING_LEVELS]; // the near casters (one LOD coarser): x = their LOD's first index, y = the most blades
+    uint gf_cellOrder[GRASS_RING_CELLS * GRASS_RING_CELLS]; // a block's cells, nearest its centre first: x | z << 8
 };
 layout (binding = 3, std430) readonly buffer InTerrainVertices { TerrainVertex in_terrainVertices[]; };
 
@@ -51,11 +63,9 @@ struct GrassPatch // RendererVKLayout::GrassPatchGpu
 };
 layout (binding = 4, std430) writeonly buffer OutPatches { GrassPatch out_patches[]; };
 
-// The draw lists, as words: a VkDrawIndexedIndirectCommand per draw (5 words, firstInstance = the patch's record).
+// The draw lists, as words: a VkDrawIndexedIndirectCommand per cell slot (5 words, firstInstance = the slot: its record).
+// The main draws, and the near grass cascade's caster draws. (The draw counts are the slots: GrassPipeline::record.)
 layout (binding = 5, std430) writeonly buffer OutCommands { uint out_commands[]; };
-// [0] = the main draws, [1] = the near grass cascade's caster draws (the draw counts), [2] = the patch records (every
-// list's firstInstance).
-layout (binding = 6, std430) buffer OutCounts { uint out_counts[3]; };
 layout (binding = 7, std430) writeonly buffer OutNearShadowCommands { uint out_nearShadowCommands[]; };
 // THE FOREST FLOOR MAP (the clutter's: ClutterPipeline's frame; floorDim 0 = none): "Canopy thinning" under the crowns.
 #define CLUTTER_FRAME_BINDING 8
@@ -95,16 +105,29 @@ float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temp
         * (1.0 - u_grass_canopyThinning * clutterFloorAt(xz).x);
 }
 
-void main()
+// The cell of `slot`: its record, and its two draws (indexCount, instanceCount, firstIndex, vertexOffset) - left empty
+// where it draws nothing.
+void grassCell(uint slot, inout uvec4 draw, inout uvec4 casterDraw)
 {
-    const uint idx = gl_GlobalInvocationID.x;
-    if (idx >= gf_gridDim * gf_gridDim)
+    const uint cellsPerLevel = uint(GRASS_RING_CELLS * GRASS_RING_CELLS);
+    const uint level = slot / cellsPerLevel;
+    if (level >= gf_numLevels)
         return;
-    const float P = gf_patchSize;
-    const vec2 origin = gf_gridOrigin + vec2(float(idx % gf_gridDim), float(idx / gf_gridDim)) * P;
+    const uint cell = gf_cellOrder[slot % cellsPerLevel];
+    const vec4 block = gf_levelBlock[level];
+    const float P = block.z; // the cell's size
+    const vec2 origin = block.xy + vec2(float(cell & 0xFFu), float(cell >> 8)) * P;
     const vec2 centre = origin + 0.5 * P;
+    // Inside the finer level's block (its edges are on this level's grid): that level draws it.
+    if (level > 0u)
+    {
+        const vec4 inner = gf_levelBlock[level - 1u];
+        const vec2 rel = centre - inner.xy;
+        if (all(greaterThan(rel, vec2(0.0))) && all(lessThan(rel, vec2(float(GRASS_RING_CELLS) * inner.z))))
+            return;
+    }
 
-    // Range, horizontally first (no fetches): the nearest point of the patch's square.
+    // Range, horizontally first (no fetches): the nearest point of the cell's square.
     const vec2 nearestXZ = clamp(u_viewPos.xz, origin, origin + P);
     const float range = u_grass_range;
     if (distance(nearestXZ, u_viewPos.xz) > range)
@@ -133,9 +156,9 @@ void main()
     if (maxDensity <= 0.0)
         return;
 
-    // Bounds: the ground between the corners can rise above them (a finer mesh than the patch), the blades stand on it
-    // and lean with the wind by up to their height - the tallest grass type's (a seed stalk's) - and a tuft's blades
-    // stand up to its radius off its root (which is in the patch).
+    // Bounds: the ground between the corners can rise above them (a finer mesh than the cell: half the cell's size of
+    // slack), the blades stand on it and lean with the wind by up to their height - the tallest grass type's (a seed
+    // stalk's) - and a tuft's blades stand up to its radius off its root (which is in the cell).
     const float bladeH = u_grass_bladeHeight * u_grass_maxHeightScale + u_grass_rootSink;
     const float reach = bladeH + u_grass_tuftRadius;
     const float slack = 0.5 * P + bladeH;
@@ -148,8 +171,8 @@ void main()
         if (dot(vec4(sphereCentre, 1.0), u_frustumPlanes[i]) + sphereRadius < 0.0)
             visible = false;
 
-    // The nearest point of the patch's box, with the box's slack below the corners: the ground between them can dip,
-    // and no blade may be nearer than this (the LOD is picked from it, and the blades geomorph by their own distance).
+    // The nearest point of the cell's box, with the box's slack below the corners: the ground between them can dip,
+    // and no blade may be nearer than this (the kept blades' bound; each blade thins by its own distance).
     const vec3 nearest = clamp(u_viewPos, vec3(origin.x, boxMin.y, origin.y), vec3(origin.x + P, hMax + bladeH, origin.y + P));
     const float dist = distance(nearest, u_viewPos);
 
@@ -161,36 +184,42 @@ void main()
     if (!visible && !nearCaster)
         return;
 
+    // THE BLADES: the first `ranks` of EACH base cell in it (a blade's index = its rank x the cell's base cells + its
+    // base cell: grass_blade.inc.glsl grassBaseCell - so a prefix is the low ranks of them all), at most the ring's
+    // worst case (the mesh section).
     const float keep = grassKeep(dist);
     const uint N = uint(u_grass_bladesPerPatch);
-    const uint blades = min(N, uint(ceil(maxDensity * keep * float(N))));
-    if (blades == 0u)
+    const uint ranks = min(N, uint(ceil(maxDensity * keep * float(N))));
+    if (ranks == 0u)
         return;
-    const uint lod = dist < u_grass_lod1Distance ? 0u : dist < u_grass_lod2Distance ? 1u : dist < u_grass_lod3Distance ? 2u : 3u;
+    const uvec4 mesh = gf_levelMesh[level];
+    const uint lod = mesh.x;
+    const uint blades = ranks << (2u * level);
 
-    const uint slot = atomicAdd(out_counts[2], 1u);
-    if (slot >= GRASS_MAX_PATCHES)
-        return;
-    out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16), packUnorm4x8(density),
-        packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
+    out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16) | (level << 18) | (mesh.w << 21),
+        packUnorm4x8(density), packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
 
     // The same blades in both lists (the caster is the blade the main pass shades), the casters ONE LOD COARSER
-    // (grassCasterLod; the record holds the main LOD): the first `blades` blades of the LOD's mesh.
+    // (grassCasterLod; the record holds the main LOD).
     if (visible)
-    {
-        const uint i = atomicAdd(out_counts[0], 1u); // <= slot < GRASS_MAX_PATCHES
-        const uvec4 indexed = uvec4(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0u);
-        for (uint w = 0u; w < 4u; ++w)
-            out_commands[i * 5u + w] = indexed[w];
-        out_commands[i * 5u + 4u] = slot;
-    }
+        draw = uvec4(min(blades, mesh.z) * grassIndicesPerBlade(lod), 1u, mesh.y, 0u);
     if (nearCaster)
     {
-        const uint i = atomicAdd(out_counts[1], 1u);
-        const uint casterLod = grassCasterLod(lod);
-        const uvec4 indexed = uvec4(blades * grassIndicesPerBlade(casterLod), 1u, grassLodFirstIndex(casterLod, N), 0u);
-        for (uint w = 0u; w < 4u; ++w)
-            out_nearShadowCommands[i * 5u + w] = indexed[w];
-        out_nearShadowCommands[i * 5u + 4u] = slot;
+        const uvec4 caster = gf_levelCaster[level];
+        casterDraw = uvec4(min(blades, caster.y) * grassIndicesPerBlade(grassCasterLod(lod)), 1u, caster.x, 0u);
     }
+}
+
+void main()
+{
+    const uint slot = gl_GlobalInvocationID.x; // < GRASS_MAX_PATCHES: the dispatch is the slots
+    uvec4 draw = uvec4(0u), casterDraw = uvec4(0u);
+    grassCell(slot, draw, casterDraw);
+    for (uint w = 0u; w < 4u; ++w)
+    {
+        out_commands[slot * 5u + w] = draw[w];
+        out_nearShadowCommands[slot * 5u + w] = casterDraw[w];
+    }
+    out_commands[slot * 5u + 4u] = slot;
+    out_nearShadowCommands[slot * 5u + 4u] = slot;
 }

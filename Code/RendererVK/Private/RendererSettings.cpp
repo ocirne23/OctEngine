@@ -102,13 +102,20 @@ void RendererState::attachSettingsListeners()
         m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
         reloadLitShaders();
     });
-    // "Blades per patch" is the blade index buffer's size: GPU idle, rebuild, re-record (the draw binds it).
-    Tweak::onChange(s.grass.bladesPerPatch, this, [this]() {
+    // THE GRASS BLADE MESH's sections are the rings' worst cases (grassRingLayout): the blades per cell, the base cell,
+    // the range, the thinning and the LOD distances size them. GPU idle, rebuild where a section changed, re-record (the
+    // draw binds the buffer; the same tweaks and "Simple shading distance" also move the draws' split between the two
+    // grass pipelines).
+    const auto onGrassMesh = [this]() {
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_grassPipeline.setBladesPerPatch((uint32)m_grassParams.bladesPerPatch);
+        m_grassPipeline.setMesh((uint32)m_grassParams.bladesPerPatch, grassRingLayout().lodBlades);
         setHaveToRecordCommandBuffers();
-    });
+    };
+    Tweak::onChange(s.grass.bladesPerPatch, this, onGrassMesh);
+    for (const float* value : { &s.grass.patchSize, &s.grass.range, &s.grass.rangeFade, &s.grass.thinStart, &s.grass.thinExponent,
+        &s.grass.lod1Distance, &s.grass.lod2Distance, &s.grass.lod3Distance, &s.grass.simpleShadingDistance })
+        Tweak::onChange(*value, this, onGrassMesh);
     // The cloud toggles are baked defines (g_cloudShaders): a change reloads every shader.
     syncCloudDefines();
     const auto onCloudDefines = [this]() {

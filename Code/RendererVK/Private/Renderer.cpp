@@ -181,7 +181,7 @@ void RendererState::initPipelines()
     m_oceanSimPipeline.initialize();
 
     m_terrainWetnessPipeline.initialize();
-    m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch);
+    m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch, grassRingLayout().lodBlades);
     m_clutterPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     m_treeVoxelFar.initialize();
     m_volumetricFogPipeline.initialize();

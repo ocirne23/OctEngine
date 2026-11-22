@@ -816,11 +816,17 @@ export namespace RendererVKLayout
     constexpr uint32 TERRAIN_WET_RES = 1024;    // terrain wetness clipmap texels per axis (power of two: toroidal
                                                 // slot = lattice & (RES-1)); 512 m of coverage at the 0.5 m texel
 
-    // PROCEDURAL GRASS (GrassPipeline; grass.inc.glsl). Patches of ranked blades: the cull writes one indexed draw per
-    // visible patch, and the draw takes the FIRST K blades of the patch mesh (any prefix is evenly spread).
-    constexpr uint32 GRASS_MAX_PATCHES = 65536;     // patch slots per frame (the grid around the camera is capped to it)
+    // PROCEDURAL GRASS (GrassPipeline; grass.inc.glsl). The blades are ranked per BASE CELL of a world grid ("Patch size");
+    // they are drawn in RING CELLS around the camera: GRASS_RING_LEVELS nested blocks of GRASS_RING_CELLS^2 cells, level k's
+    // cells 2^k base cells wide, each block without the part the finer one covers. One indexed draw per cell, in a FIXED
+    // slot (level-major, near cells first): near to far, and an empty draw where the cell is culled.
+    constexpr uint32 GRASS_RING_HALF = 8;           // cells per half width of a level's block (even, >= 4: the finer block fits)
+    constexpr uint32 GRASS_RING_CELLS = 2 * GRASS_RING_HALF;
+    constexpr uint32 GRASS_RING_LEVELS = 7;         // at most (3 bits in the record): the range picks how many (a level reaches
+                                                    // (HALF - 1) cells: 448 base cells with 7)
+    constexpr uint32 GRASS_MAX_PATCHES = GRASS_RING_LEVELS * GRASS_RING_CELLS * GRASS_RING_CELLS; // cell slots = the cull's threads
     constexpr uint32 GRASS_TABLE_DIM = 16;          // the ground-chunk table around the camera, chunks per axis
-    constexpr uint32 GRASS_MAX_BLADES = 1024;       // blades per patch, max
+    constexpr uint32 GRASS_MAX_BLADES = 4096;       // blades per base cell, max
     constexpr uint32 GRASS_BLADE_VERTEX_SHIFT = 5;  // a vertex id is blade << 5 | vertex in the blade (2 x 8 + 1 vertices)
     constexpr uint32 GRASS_LODS = 4;
     // grass.inc.glsl grassLodSegments. Each LOD HALVES the one before (they nest): grass.vs.glsl geomorphs the dropped rows.
@@ -830,29 +836,42 @@ export namespace RendererVKLayout
     // TerrainResources' noise texture, texels per side: also the grass value noise's lattice period (its A channel).
     constexpr uint32 TERRAIN_NOISE_SIZE = 512;
 
-    // One visible patch: the cull's output, read by the grass VS as INSTANCE-RATE attributes (firstInstance = slot).
+    static_assert(GRASS_MAX_PATCHES % GRASS_CULL_GROUP == 0, "the cull's dispatch covers every cell slot");
+    static_assert(GRASS_RING_HALF % 2 == 0 && GRASS_RING_HALF >= 4, "a level's block must hold the finer one on its own grid");
+
+    // One ring cell: the cull's output, read by the grass VS as INSTANCE-RATE attributes (firstInstance = its slot).
     struct GrassPatchGpu
     {
-        glm::vec2 origin;      // the patch's min corner, world XZ
+        glm::vec2 origin;      // the cell's min corner, world XZ
         glm::vec2 chunkOrigin; // its terrain chunk's origin, world XZ
         uint32 firstVertex;    // the chunk mesh's first vertex in the vertex mega-buffer
-        uint32 resLod;         // the chunk's grid cells per side (bits 0-15) | the blade LOD << 16
+        uint32 resLod;         // the chunk's grid cells per side (bits 0-15) | the blade LOD << 16 | the cell's level << 18 |
+                               // (the next ring is one LOD coarser: the blades morph to it) << 21
         uint32 density;        // the 4 corner densities, unorm8 (x0z0, x1z0, x0z1, x1z1)
-        uint32 cellTemperature; // packHalf2x16(the chunk grid's cell (m), the patch's mean temperature (C): the cold tint)
+        uint32 cellTemperature; // packHalf2x16(the chunk grid's cell (m), the cell's mean temperature (C): the cold tint)
     };
     static_assert(sizeof(GrassPatchGpu) == 32);
 
-    // The per-frame GROUND TABLE (host-visible; grass_cull.cs.glsl): the patch grid and the terrain chunks under it.
+    // The per-frame table (host-visible; grass_cull.cs.glsl, std430): the terrain chunks around the camera (the ground
+    // clutter's cull reads them too) and the grass ring levels.
     struct GrassFrameGpu
     {
-        glm::vec2 gridOrigin;  // min corner of the patch grid, world XZ
-        uint32 gridDim;        // patches per axis
-        float patchSize;       // m
+        uint32 numLevels;      // ring levels in use (0 = no grass)
+        float patchSize;       // m: the base cell
+        uint32 pad[2];
         glm::ivec2 tableMin;   // the chunk coordinate of table cell (0, 0)
         uint32 tableDim;       // cells per axis (<= GRASS_TABLE_DIM)
         float chunkSize;       // m
         glm::uvec2 chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM]; // x = the mesh's first vertex, y = grid cells per side (0 = none)
+        glm::vec4 levelBlock[GRASS_RING_LEVELS];   // xy = the block's min corner (world XZ), z = its cell size (m)
+        glm::uvec4 levelMesh[GRASS_RING_LEVELS];   // x = the ring's LOD, y = that LOD's first index, z = the most blades one of its
+                                                   // cells draws (the ring's WORST CASE), w = 1: the next ring is one LOD coarser
+        glm::uvec4 levelCaster[GRASS_RING_LEVELS]; // the near casters (one LOD coarser): x = their LOD's first index, y = the most blades
+        uint32 cellOrder[GRASS_RING_CELLS * GRASS_RING_CELLS]; // a block's cells, nearest its centre first: x | z << 8
     };
+    // No padding anywhere (every member is 4-byte aligned and the vec4 arrays start at a multiple of 16): the std430 block.
+    static_assert(sizeof(GrassFrameGpu) == 32 + 8 * GRASS_TABLE_DIM * GRASS_TABLE_DIM + 3 * 16 * GRASS_RING_LEVELS + 4 * GRASS_RING_CELLS * GRASS_RING_CELLS);
+    static_assert((32 + 8 * GRASS_TABLE_DIM * GRASS_TABLE_DIM) % 16 == 0);
 
     // GROUND CLUTTER (ClutterPipeline; clutter.inc.glsl, Docs/Context/Procedural/Clutter.md): pebbles, branches, mushrooms and
     // flowers, placed on the GPU every frame. A grid of PATCHES around the camera; per patch and clutter TYPE a ranked

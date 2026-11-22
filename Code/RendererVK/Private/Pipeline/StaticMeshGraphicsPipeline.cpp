@@ -792,13 +792,17 @@ void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout
         else if (!pipeline.reloadShaders(m_renderPass, layout))
             printf("StaticMeshGraphicsPipeline: %s shader reload failed, keeping previous pipeline\n", name);
     };
-    GraphicsPipelineLayout grassLayout, clutterLayout, flowerLayout, texturedFlowerLayout;
+    GraphicsPipelineLayout grassLayout, grassSimpleLayout, clutterLayout, flowerLayout, texturedFlowerLayout;
     buildGrassLayout(main, grassLayout);
+    // The far rings' pipeline: the same layout and vertex shader, the fragment shader's simple shading.
+    buildGrassLayout(main, grassSimpleLayout);
+    grassSimpleLayout.fragmentShader.defines.push_back(ShaderDefine{ "GRASS_SIMPLE", "1" });
     buildClutterLayout(main, clutterLayout, false);
     buildClutterLayout(main, flowerLayout, true);
     buildClutterLayout(main, texturedFlowerLayout, true);
     texturedFlowerLayout.fragmentShader.defines.push_back(ShaderDefine{ "CLUTTER_TEXTURED", "1" });
     build(m_grassPipeline, m_grassBuilt, grassLayout, "grass");
+    build(m_grassSimplePipeline, m_grassSimpleBuilt, grassSimpleLayout, "grass (simple)");
     build(m_clutterPipeline, m_clutterBuilt, clutterLayout, "clutter");
     build(m_flowerPipeline, m_flowerBuilt, flowerLayout, "flower");
     build(m_texturedFlowerPipeline, m_texturedFlowerBuilt, texturedFlowerLayout, "textured flower");
@@ -1306,18 +1310,32 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         drawSequences(m_terrainTessPipeline.getPipelineVariant(0), m_terrainTessPipeline.getPipelineLayout(), params.terrainTessCommandBuffer, 2);
     }
     // The GRASS after the ground (its depth rejects the buried blade parts early), before the film (which then stays
-    // under the blades): one indexed draw per visible patch, the patch record an instance-rate attribute, the blade
-    // index buffer of vertex ids (grass.vs.glsl). No vertex buffer of geometry.
+    // under the blades): one indexed draw per ring cell slot, the slots near to far, the cell record an instance-rate
+    // attribute, the blade index buffer of vertex ids (grass.vs.glsl). No vertex buffer of geometry.
+    // TWO PIPELINES over the slots: the near rings with the full fragment shader, the far rings (from grass.simpleFirst)
+    // with the simple one (GRASS_SIMPLE). The count is every slot, or 0 on a frame without the cull: each draw's maximum
+    // cuts its share out of it.
     if (params.grass && m_grassBuilt)
     {
         drawGroup("Grass");
         const GrassPipeline::Draw& grass = *params.grass;
-        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipeline());
-        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        const uint32 stride = 5 * sizeof(uint32); // VkDrawIndexedIndirectCommand
+        const uint32 simpleFirst = m_grassSimpleBuilt ? oc::min(grass.simpleFirst, grass.maxDraws) : grass.maxDraws;
         vkCommandBuffer.bindVertexBuffers(0, { grass.patches->getBuffer() }, { 0 });
         vkCommandBuffer.bindIndexBuffer(grass.indices->getBuffer(), 0, vk::IndexType::eUint32);
-        vkCommandBuffer.drawIndexedIndirectCount(grass.commands->getBuffer(), 0, grass.count->getBuffer(), 0, grass.maxDraws,
-            5 * sizeof(uint32)); // VkDrawIndexedIndirectCommand
+        if (simpleFirst > 0)
+        {
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+            vkCommandBuffer.drawIndexedIndirectCount(grass.commands->getBuffer(), 0, grass.count->getBuffer(), 0, simpleFirst, stride);
+        }
+        if (simpleFirst < grass.maxDraws)
+        {
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassSimplePipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassSimplePipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+            vkCommandBuffer.drawIndexedIndirectCount(grass.commands->getBuffer(), (vk::DeviceSize)simpleFirst * stride, grass.count->getBuffer(), 0,
+                grass.maxDraws - simpleFirst, stride);
+        }
     }
     // THE GROUND CLUTTER, with the grass (before the film: a pebble in a puddle stays under its water): one indexed
     // draw per bucket of ClutterPipeline's sorted records - the rigid meshes' (mesh, LOD) buckets, their count written

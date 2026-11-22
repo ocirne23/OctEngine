@@ -643,8 +643,21 @@ protected:
     float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround: the near grass cascade and the far-tree volume (NaN: the baked sea level)
     bool grassActive() const; // desktop only
     float grassRange() const; // m; 0 = no grass
-    float grassPatchSize() const; // the patch grid (uploadGrassFrame) and u_grass_patchSize
-    float grassGridRange() const; // capped so the grid fits GRASS_MAX_PATCHES: the grid and u_grass_range
+    float grassPatchSize() const; // the base cell (a power of two: the ring cells stay inside one terrain chunk): u_grass_patchSize
+    float grassGridRange() const; // capped at what GRASS_RING_LEVELS levels reach: the rings and u_grass_range
+    // THE GRASS RINGS (uploadGrassFrame -> grass_cull.cs.glsl): the levels the range needs, and per level its LOD (ONE per
+    // ring: the LOD distances at the ring's inner border) and the most blades one of its cells draws - the ring's WORST
+    // CASE, at its nearest point (the thinning and the range fade there). lodBlades: per LOD the largest of them, the
+    // blade mesh's sections (GrassPipeline::setMesh).
+    struct GrassRingLayout
+    {
+        uint32 numLevels = 0;
+        uint32 firstSimpleLevel = 0; // the rings from here draw with the simple fragment shader ("Simple shading distance"); numLevels = none
+        oc::array<uint32, RendererVKLayout::GRASS_RING_LEVELS> lod{};
+        oc::array<uint32, RendererVKLayout::GRASS_RING_LEVELS> maxBlades{};
+        GrassPipeline::LodBlades lodBlades{};
+    };
+    GrassRingLayout grassRingLayout() const;
     // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
     // map - the cascades' pass that this layer must follow).
     bool grassNearShadowActive() const;

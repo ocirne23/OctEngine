@@ -12,14 +12,16 @@ import :Sampler;
 import :Layout;
 
 // PROCEDURAL GRASS, its compute half and its buffers (the blades draw in StaticMeshGraphicsPipeline: they need the
-// lit core's descriptor set). The model is in grass.inc.glsl: a grid of patches around the camera, each drawn as the
-// first K blades of ONE ranked blade mesh.
+// lit core's descriptor set). The model is in grass.inc.glsl: the blades are ranked per base cell of a world grid, and
+// drawn in RING CELLS around the camera (RendererVKLayout::GRASS_RING_*), each the first K blades of its LOD's mesh.
 //
-// Per frame slot: the GROUND TABLE (host-visible: the patch grid + the terrain chunks under it, written in present by
-// writeFrame), and the cull's outputs - the patch records (instance-rate vertex attributes), two lists of one indexed
-// draw per patch (the main view's; the NEAR GRASS CASCADE's casters - in view or not, around its box) and the counts
-// ([0] main, [1] near casters, [2] records). The cull (grass_cull.cs.glsl) is a cached secondary: its dispatch covers
-// every patch slot, and threads past the grid return.
+// Per frame slot: the FRAME TABLE (host-visible: the ring levels + the terrain chunks under them, written in present),
+// and the cull's outputs - the cell records (instance-rate vertex attributes) and two lists of one indexed draw per
+// CELL SLOT (the main view's; the NEAR GRASS CASCADE's casters - in view or not, around its box): every slot is
+// written each frame, an empty draw where the cell is culled, so the lists are in the slots' order - near to far.
+// The cull (grass_cull.cs.glsl) is a cached secondary: one thread per slot.
+// THE BLADE MESH (the index buffer of vertex ids): one section per LOD, sized for the ring cell that draws the most
+// blades at that LOD (setMesh: the renderer's ring layout) - a cell never draws past its ring's worst case.
 // The near CASTERS draw here too (recordNearShadow): the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant, depth
 // only, into the near grass cascade's own map (it binds the UBO, the vertex mega-buffer and the noise only - its own set). The
 // blades never cast into the scene cascades.
@@ -30,13 +32,17 @@ public:
     ~GrassPipeline() = default;
     GrassPipeline(const GrassPipeline&) = delete;
 
-    void initialize(uint32 bladesPerPatch);
+    using LodBlades = oc::array<uint32, RendererVKLayout::GRASS_LODS>; // blades in each LOD's section of the mesh
+    void initialize(uint32 bladesPerPatch, const LodBlades& lodBlades);
     // The near grass cascade's caster pipeline: against its ShadowMap's pass.
     void initializeNearShadow(vk::RenderPass nearShadowRenderPass);
     void reloadShaders();
-    // Rebuilds the blade index buffer (the caller idles the GPU and re-records: the draw binds it).
-    void setBladesPerPatch(uint32 bladesPerPatch);
+    // The blades per base cell and the mesh sections. Rebuilds the index buffer when a section changes; true then (the
+    // caller has idled the GPU and re-records: the draw binds the buffer).
+    bool setMesh(uint32 bladesPerPatch, const LodBlades& lodBlades);
     uint32 getBladesPerPatch() const { return m_bladesPerPatch; }
+    uint32 lodBlades(uint32 lod) const { return m_lodBlades[lod]; }
+    uint32 lodFirstIndex(uint32 lod) const { return m_lodFirstIndex[lod]; }
 
     struct RecordParams
     {
@@ -47,7 +53,7 @@ public:
         Buffer* clutterFrame = nullptr; // that frame slot's ClutterFrameGpu (the forest floor map: "Canopy thinning")
         vk::ImageView noiseView;        // the terrain noise texture (TerrainResources): the splat's crag wander, the grass value noise
     };
-    // The cull: count reset, dispatch, and the barrier to the draw (indirect + vertex attribute + index reads).
+    // The cull: the draw counts (every slot), dispatch, and the barrier to the draw (indirect + vertex attribute reads).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
     // A frame without the cull: no draws (the recorded draws read the counts).
     void recordClear(vk::CommandBuffer primary, uint32 frameIdx);
@@ -64,11 +70,12 @@ public:
 
     struct Draw
     {
-        Buffer* patches = nullptr;  // GrassPatchGpu per draw (instance-rate vertex binding 0)
-        Buffer* commands = nullptr; // VkDrawIndexedIndirectCommand per draw
-        Buffer* count = nullptr;    // the draw counts: the main one is the uint at 0
-        Buffer* indices = nullptr;  // the blade mesh: vertex ids, the LODs one after another
-        uint32 maxDraws = 0;
+        Buffer* patches = nullptr;  // GrassPatchGpu per cell slot (instance-rate vertex binding 0)
+        Buffer* commands = nullptr; // VkDrawIndexedIndirectCommand per cell slot
+        Buffer* count = nullptr;    // the draw counts (the slots, or 0 without the cull): the main one is the uint at 0
+        Buffer* indices = nullptr;  // the blade mesh: vertex ids, a section per LOD
+        uint32 maxDraws = 0;        // the cell slots
+        uint32 simpleFirst = 0;     // the slots from here draw with the simple fragment shader (the caller's: the far rings)
     };
     Draw getDraw(uint32 frameIdx);
 
@@ -92,4 +99,6 @@ private:
     Buffer m_indices;
     Sampler m_noiseSampler; // repeat: the noise texture tiles
     uint32 m_bladesPerPatch = 0;
+    LodBlades m_lodBlades{};
+    LodBlades m_lodFirstIndex{};
 };

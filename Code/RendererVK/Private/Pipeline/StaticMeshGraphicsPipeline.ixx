@@ -172,6 +172,8 @@ private:
     // The grass blades: also outside the execution set, one indexed indirect draw per visible patch (GrassPipeline).
     GraphicsPipeline m_grassPipeline;
     bool m_grassBuilt = false;
+    GraphicsPipeline m_grassSimplePipeline; // the far rings: grass.fs.glsl with GRASS_SIMPLE
+    bool m_grassSimpleBuilt = false;
     // The ground clutter (ClutterPipeline): one indexed indirect draw per bucket, outside the execution set too.
     GraphicsPipeline m_clutterPipeline;
     GraphicsPipeline m_flowerPipeline;

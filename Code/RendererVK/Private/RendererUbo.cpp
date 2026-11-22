@@ -391,16 +391,66 @@ namespace
     float terrainFilmFlowMinSlopeRad(const TerrainSettings& w) { return glm::radians(glm::clamp(w.wetFilmFlowMinSlope, 0.0f, 80.0f)); }
 }
 
+// The base cell: "Patch size" to the nearest power of two (1 .. 16 m). A ring cell is 2^level base cells wide and reads
+// its ground from ONE terrain chunk, so every cell size must divide the chunk size (256 m by default).
 float RendererState::grassPatchSize() const
 {
-    return glm::clamp(m_grassParams.patchSize, 1.0f, 16.0f);
+    return std::exp2(glm::round(std::log2(glm::clamp(m_grassParams.patchSize, 1.0f, 16.0f))));
 }
 
-// Capped so the patch grid fits GRASS_MAX_PATCHES.
+// Capped at what the levels reach: a level's block ends at least (HALF - 1) of its cells from the camera.
 float RendererState::grassGridRange() const
 {
-    const uint32 maxHalf = (uint32)std::sqrt((float)RendererVKLayout::GRASS_MAX_PATCHES) / 2u - 1u; // (2 half + 1)^2 patches
-    return glm::min(m_grassParams.range, grassPatchSize() * (float)maxHalf);
+    using namespace RendererVKLayout;
+    return glm::min(m_grassParams.range, grassPatchSize() * (float)((GRASS_RING_HALF - 1) << (GRASS_RING_LEVELS - 1)));
+}
+
+RendererState::GrassRingLayout RendererState::grassRingLayout() const
+{
+    using namespace RendererVKLayout;
+    const GrassParams& g = m_grassParams;
+    const float P = grassPatchSize(), range = grassGridRange();
+    const float rangeFade = glm::clamp(g.rangeFade, 0.5f, range), thinStart = glm::max(g.thinStart, 0.1f);
+    // grass.inc.glsl grassKeep: the share of the blades kept at a distance.
+    const auto keep = [&](float d) {
+        return (d > thinStart ? std::pow(thinStart / d, g.thinExponent) : 1.0f) * (1.0f - glm::smoothstep(range - rangeFade, range, d));
+    };
+    const float lodDistance[GRASS_LODS - 1] = { g.lod1Distance, grassLod2Distance(g), glm::max(g.lod3Distance, grassLod2Distance(g)) };
+    const uint32 N = (uint32)glm::clamp(g.bladesPerPatch, 1, (int)GRASS_MAX_BLADES);
+    // A section's cap (16 MB of indices): past it a cell draws fewer blades than the thinning asks (extreme tweak values).
+    constexpr uint32 MAX_SECTION_INDICES = 4u << 20;
+
+    GrassRingLayout layout;
+    for (uint32 k = 0; k < GRASS_RING_LEVELS; ++k)
+    {
+        const float cell = P * (float)(1u << k);
+        // The ring's borders from the camera (Chebyshev): the finer block's edge is (HALF / 2) cells away, +- half a cell by
+        // its snapping. The LOD from the nominal border, the blade count from the nearest it can be.
+        const float inner = k == 0 ? 0.0f : 0.5f * (float)GRASS_RING_HALF * cell;
+        const float nearest = k == 0 ? 0.0f : 0.5f * (float)(GRASS_RING_HALF - 1) * cell;
+        uint32 lod = 0;
+        while (lod < GRASS_LODS - 1 && inner >= lodDistance[lod])
+            ++lod;
+        if (k > 0)
+            lod = glm::min(lod, layout.lod[k - 1] + 1); // one step a ring: the blades morph to the next ring's LOD
+        layout.lod[k] = lod;
+        const uint32 ranks = glm::min(N, (uint32)std::ceil(keep(nearest) * (float)N) + 1u); // + 1: the shader's own rounding
+        const uint32 indicesPerBlade = (2 * GRASS_LOD_SEGMENTS[lod] - 1) * 3;
+        layout.maxBlades[k] = glm::min(ranks << (2 * k), MAX_SECTION_INDICES / indicesPerBlade);
+        layout.numLevels = k + 1;
+        if (inner < g.simpleShadingDistance)
+            layout.firstSimpleLevel = k + 1;
+        if ((float)(GRASS_RING_HALF - 1) * cell >= range) // this level's block reaches the range
+            break;
+    }
+    for (uint32 k = 0; k < layout.numLevels; ++k)
+    {
+        // The ring's cells, and its near casters one LOD coarser (grass.inc.glsl grassCasterLod).
+        const uint32 lod = layout.lod[k], casterLod = glm::min(lod + 1, GRASS_LODS - 1);
+        layout.lodBlades[lod] = glm::max(layout.lodBlades[lod], layout.maxBlades[k]);
+        layout.lodBlades[casterLod] = glm::max(layout.lodBlades[casterLod], layout.maxBlades[k]);
+    }
+    return layout;
 }
 
 // Renderer: THE FRAME UBO (UboBlock). EVERY value is one line with its sources, by subject, in registerUboValues at the
@@ -2119,6 +2169,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_canopyThinning", [&] { return glm::clamp(g.canopyThinning, 0.0f, 1.0f); }, g.canopyThinning);
         // THE TUFTS (grass_blade.inc.glsl): tufts per patch, and the most blades one holds (they are dealt in turn).
         list.add("grass_tufts", [&g] { return (float)grassTufts(g); }, g.bladesPerPatch, g.bladesPerTuft);
+        // A tuft root's jitter off its R2 point, in cells: half the mean spacing of the tufts.
+        list.add("grass_tuftJitter", [&g] { return 0.5f / glm::sqrt((float)grassTufts(g)); }, g.bladesPerPatch, g.bladesPerTuft);
         list.add("grass_tuftMembers", [&g] { return (float)grassTuftMembers(g); }, g.bladesPerPatch, g.bladesPerTuft);
         list.add("grass_tuftRadius", [&] { return glm::max(g.tuftRadius, 0.0f); }, g.tuftRadius);
         list.add("grass_tuftFan", [&] { return glm::clamp(g.tuftFan, 0.0f, 1.0f); }, g.tuftFan);
@@ -2127,11 +2179,37 @@ void RendererState::registerUboValues(UboBlock& list)
         // all the shares) and (rgb = its tint x brightness, linear; w = its seed stalk share). Live: arrays (a baked array
         // would be one constant).
         list.add("grass_invTypePatchSize", [&] { return 1.0f / glm::max(g.typePatchSize, 0.5f); }, g.typePatchSize);
-        list.add("grass_typeMixing", [&] { return glm::clamp(g.typeMixing, 0.0f, 1.0f); }, g.typeMixing);
+        // "TYPE BLENDING" as the power on the types' scores (grass.inc.glsl): the blades' (1 / blending; 0 = no blending,
+        // the highest score takes every tuft) and the far tier's (the same, at most the 6th - its stand-in for the hard pick).
+        list.add("grass_typeBlendPower", [&] { return g.typeBlending > 0.0f ? 1.0f / glm::min(g.typeBlending, 1.0f) : 0.0f; }, g.typeBlending);
+        list.add("grass_typeFarPower", [&] { return g.typeBlending > 0.0f ? glm::min(1.0f / glm::min(g.typeBlending, 1.0f), 6.0f) : 6.0f; }, g.typeBlending);
+
         list.addArray("grass_typeShape", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
             {
                 const GrassParams::Type& t = g.types[i];
                 return glm::vec4(glm::max(t.height, 0.1f), glm::max(t.width, 0.1f), glm::max(t.curvature, 0.0f), grassTypeShare(g, (int)i));
+            }, UboLive);
+        // The four shares as one value (the types' scores: grass.inc.glsl grassTypeScores).
+        list.add("grass_typeShares", [&g]
+            {
+                return glm::vec4(grassTypeShare(g, 0), grassTypeShare(g, 1), grassTypeShare(g, 2), grassTypeShare(g, 3));
+            }, UboLive);
+        // THE FAR TIER's COLOURS per type (grass.inc.glsl grassFarColor), linear:
+        // - its BLADES: the tip colour x its tint x "Far/Brightness" (the view into the blades meets darker parts than
+        //   their tips);
+        // - its SEED STALKS, where they are too thin to show as stalks: a third their seed heads, the rest the stalks
+        //   under them (the blade FS's half straw, half the type's blades) - matched by eye to the blades' seeding patches
+        //   near the camera (pure seed colour read too pink). At FULL brightness: they are the layer's top.
+        list.addArray("grass_typeFarBlade", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
+            {
+                const GrassParams::Type& t = g.types[i];
+                return glm::vec4(srgbToLinear(g.tipColor) * srgbToLinear(t.tint) * (glm::max(t.brightness, 0.0f) * glm::max(g.farBrightness, 0.0f)), 0.0f);
+            }, UboLive);
+        list.addArray("grass_typeFarStalk", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
+            {
+                const GrassParams::Type& t = g.types[i];
+                const glm::vec3 blades = srgbToLinear(g.tipColor) * srgbToLinear(t.tint) * glm::max(t.brightness, 0.0f);
+                return glm::vec4(0.35f * srgbToLinear(g.seedColor) + 0.325f * (blades + srgbToLinear(g.dryColor)), 0.0f);
             }, UboLive);
         list.addArray("grass_typeTint", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
             {

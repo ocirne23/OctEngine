@@ -29,20 +29,32 @@ void GrassPipeline::buildLayout(ComputePipelineLayout& layout)
     layout.descriptorBindingFlags[1] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
-void GrassPipeline::initialize(uint32 bladesPerPatch)
+void GrassPipeline::initialize(uint32 bladesPerPatch, const LodBlades& lodBlades)
 {
     m_noiseSampler.initialize();
     ComputePipelineLayout layout;
     buildLayout(layout);
     m_pipeline.initialize(layout);
     using RendererVKLayout::GRASS_MAX_PATCHES;
+    // A block's cells, those nearest its centre first (the camera is within a cell of it): the slots of a level are in
+    // this order, so its draws run near to far. The same for every level and frame.
+    using RendererVKLayout::GRASS_RING_CELLS;
+    oc::array<uint32, GRASS_RING_CELLS * GRASS_RING_CELLS> cellOrder;
+    for (uint32 i = 0; i < cellOrder.size(); ++i)
+        cellOrder[i] = (i % GRASS_RING_CELLS) | ((i / GRASS_RING_CELLS) << 8);
+    const auto centreDistance = [](uint32 cell) {
+        const float x = (float)(cell & 0xFF) + 0.5f - 0.5f * (float)GRASS_RING_CELLS, z = (float)(cell >> 8) + 0.5f - 0.5f * (float)GRASS_RING_CELLS;
+        return x * x + z * z;
+    };
+    oc::stable_sort(cellOrder.begin(), cellOrder.end(), [&](uint32 a, uint32 b) { return centreDistance(a) < centreDistance(b); });
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_sets[i].initialize(m_pipeline.getDescriptorSetLayout(), "GrassCull");
         m_frames[i].initialize(sizeof(RendererVKLayout::GrassFrameGpu), vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "GrassFrame", BufferHostAccess::eSequentialWrite);
         m_mappedFrames[i] = (RendererVKLayout::GrassFrameGpu*)m_frames[i].mapMemory().data();
-        *m_mappedFrames[i] = RendererVKLayout::GrassFrameGpu{}; // gridDim 0: the cull draws nothing
+        *m_mappedFrames[i] = RendererVKLayout::GrassFrameGpu{}; // no levels: the cull draws nothing
+        memcpy(m_mappedFrames[i]->cellOrder, cellOrder.data(), sizeof(cellOrder));
         m_frames[i].flushMappedMemory(sizeof(RendererVKLayout::GrassFrameGpu));
         m_patches[i].initialize(GRASS_MAX_PATCHES * sizeof(RendererVKLayout::GrassPatchGpu),
             vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eVertexBuffer,
@@ -58,7 +70,7 @@ void GrassPipeline::initialize(uint32 bladesPerPatch)
         const uint32 zero[4] = {};
         m_counts[i].upload(sizeof(zero), zero);
     }
-    setBladesPerPatch(bladesPerPatch);
+    setMesh(bladesPerPatch, lodBlades);
 }
 
 // The near grass cascade's casters: the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant (its own matrix, a
@@ -144,18 +156,20 @@ void GrassPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameI
         m_counts[frameIdx].getBuffer(), sizeof(uint32), RendererVKLayout::GRASS_MAX_PATCHES, GRASS_COMMAND_SIZE);
 }
 
-void GrassPipeline::setBladesPerPatch(uint32 bladesPerPatch)
+bool GrassPipeline::setMesh(uint32 bladesPerPatch, const LodBlades& lodBlades)
 {
-    bladesPerPatch = oc::clamp(bladesPerPatch, 1u, RendererVKLayout::GRASS_MAX_BLADES);
-    if (bladesPerPatch == m_bladesPerPatch && m_indices.getSize() > 0)
-        return;
-    m_bladesPerPatch = bladesPerPatch;
+    m_bladesPerPatch = oc::clamp(bladesPerPatch, 1u, RendererVKLayout::GRASS_MAX_BLADES);
+    if (lodBlades == m_lodBlades && m_indices.getSize() > 0)
+        return false;
+    m_lodBlades = lodBlades;
     buildIndices();
+    return true;
 }
 
-// The blade mesh: per LOD (GRASS_LOD_SEGMENTS), N blades in RANK order, each a strip of S segments - rows of two
-// vertices (left, right) and one tip vertex. A vertex id is blade << GRASS_BLADE_VERTEX_SHIFT | vertex; grass.vs.glsl
-// builds the vertex from it, so there is no vertex buffer.
+// The blade mesh: per LOD (GRASS_LOD_SEGMENTS) a SECTION of m_lodBlades[lod] blades, each a strip of S segments - rows
+// of two vertices (left, right) and one tip vertex. A vertex id is blade << GRASS_BLADE_VERTEX_SHIFT | vertex;
+// grass.vs.glsl builds the vertex from it (the blade: its base cell in the ring cell and its rank there), so there is
+// no vertex buffer.
 void GrassPipeline::buildIndices()
 {
     using namespace RendererVKLayout;
@@ -164,7 +178,9 @@ void GrassPipeline::buildIndices()
     for (uint32 lod = 0; lod < GRASS_LODS; ++lod)
     {
         const uint32 segments = GRASS_LOD_SEGMENTS[lod];
-        for (uint32 blade = 0; blade < m_bladesPerPatch; ++blade)
+        m_lodFirstIndex[lod] = (uint32)indices.size();
+        indices.reserve(indices.size() + (size_t)oc::max(m_lodBlades[lod], 1u) * (2 * segments - 1) * 3);
+        for (uint32 blade = 0; blade < oc::max(m_lodBlades[lod], 1u); ++blade) // at least one: never an empty buffer
         {
             const uint32 base = blade << GRASS_BLADE_VERTEX_SHIFT;
             for (uint32 row = 0; row + 1 < segments; ++row)
@@ -198,7 +214,7 @@ void GrassPipeline::flushFrame(uint32 frameIdx)
 GrassPipeline::Draw GrassPipeline::getDraw(uint32 frameIdx)
 {
     return Draw{ .patches = &m_patches[frameIdx], .commands = &m_commands[frameIdx], .count = &m_counts[frameIdx],
-        .indices = &m_indices, .maxDraws = RendererVKLayout::GRASS_MAX_PATCHES };
+        .indices = &m_indices, .maxDraws = RendererVKLayout::GRASS_MAX_PATCHES, .simpleFirst = RendererVKLayout::GRASS_MAX_PATCHES };
 }
 
 void GrassPipeline::recordClear(vk::CommandBuffer primary, uint32 frameIdx)
@@ -219,13 +235,14 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     Buffer& count = m_counts[frameIdx];
 
-    // The counts restart at 0; the slot's last draws (which read these buffers) retired with its fence.
-    cmd.fillBuffer(count.getBuffer(), 0, 4 * sizeof(uint32), 0u);
+    // Both lists draw EVERY cell slot (the cull writes each one, empty where culled); the slot's last draws (which read
+    // these buffers) retired with its fence.
+    cmd.fillBuffer(count.getBuffer(), 0, 4 * sizeof(uint32), RendererVKLayout::GRASS_MAX_PATCHES);
     const vk::MemoryBarrier2 before{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect,
+        .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
 
