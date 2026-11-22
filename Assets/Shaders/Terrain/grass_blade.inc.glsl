@@ -336,6 +336,14 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     return true;
 }
 
+// The shading normal's y at t, as a vertex passes it on (the fragments interpolate THIS value): mix(curve, linear) by
+// linearBlend, normalized.
+float grassBladeNormalY(float t)
+{
+    const vec2 curve = g_blade.linearBlend < 1.0 ? grassBladeCurveNormal(t) : vec2(0.0);
+    return normalize(mix(curve, mix(vec2(1.0, 0.0), g_blade.tipN, t), g_blade.linearBlend)).y;
+}
+
 // One vertex of g_blade.
 struct GrassVertex
 {
@@ -380,15 +388,17 @@ GrassVertex grassVertex(uint vert, uint lod)
 #ifndef GRASS_NEAR_SHADOW
     v.prevDelta = weights * g_blade.tipPrevDelta; // the root and the width are the same in both frames
     v.sideSign = sideSign;
-    // The normal without its edge tilt (the FS adds that back from the across value), in the normals' plane.
-    vec2 normal = vec2(0.0);
-    if (g_blade.linearBlend < 1.0)
-    {
-        normal = grassBladeCurveNormal(v.t);
-        if (morph > 0.0)
-            normal = mix(normal, 0.5 * (grassBladeCurveNormal(v.t - h) + grassBladeCurveNormal(v.t + h)), morph);
-    }
-    v.normalY = normalize(mix(normal, mix(vec2(1.0, 0.0), g_blade.tipN, v.t), g_blade.linearBlend)).y;
+    // The normal without its edge tilt (the FS adds that back from the across value): its y. THE MORPH TAKES THE
+    // NEIGHBOURS' OWN Y VALUES, averaged - exactly what the coarser LOD's fragments interpolate at this t. (The mean of
+    // the neighbours' normal VECTORS, normalized, is up to 5 % larger in y on a bent blade - the vectors' mean is
+    // shorter than 1 by the cosine of half their angle: the highlights of a whole ring jumped where the ring border
+    // passed, every step of the ring block.)
+    // ONE call site in a loop (three inlined copies of the normal were 512 B more of shader): the vertex's own y, then -
+    // only while it morphs - its two neighbours'.
+    const uint normalCount = morph > 0.0 ? 3u : 1u;
+    v.normalY = 0.0;
+    for (uint i = 0u; i < normalCount; ++i)
+        v.normalY += grassBladeNormalY(v.t + (i == 0u ? 0.0 : i == 1u ? -h : h)) * (i == 0u ? 1.0 - morph : 0.5 * morph);
 #endif
     return v;
 }

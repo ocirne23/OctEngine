@@ -170,8 +170,12 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   "LOD morph band" (fraction, 0.3) of that distance, by the tuft's own Chebyshev distance from the camera, and is
   complete there - a blade that changes ring has the coarser shape already. On the quadratic Bezier that midpoint is exactly the point + `h^2 (tip.x, -tip.y, tip.z)` (the curve's
   second derivative is constant; tip = the tip's offset) - `morph x h^2` added to the sideways weight and taken from
-  the upward one (the width is linear in t) - and the LINEAR normal's midpoint is itself: only the curve normal
-  evaluates its neighbours.
+  the upward one (the width is linear in t). THE NORMAL morphs to the mean of its neighbours' Y VALUES
+  (`grassBladeNormalY` at t - h and t + h): the interface carries the normal's y, so that mean is exactly what the
+  coarser LOD's fragments interpolate there. ONE call site in a loop (1 pass, 3 while the vertex morphs): three
+  inlined copies of the normal were 1.3 KB more of shader. Tried: the mean of the neighbours' normal VECTORS, normalized - up to 5 %
+  larger in y on a bent blade (the mean is shorter than 1 by the cosine of half their angle), so the highlights of a
+  ring changed where the ring border passed, in jumps with every step of the ring block.
 * **Two shading normals:** NEAR, the curve's own normal + the full edge tilt; it eases (per blade) between "LOD 2
   distance" and "LOD 3 distance" into a normal LINEAR in t (root normal -> the upper-half chord's normal, edge tilt x
   (1 - t)), which every LOD interpolates the same. The curve normal spread over the single-triangle LOD made a
