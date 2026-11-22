@@ -101,7 +101,8 @@ namespace
     bool cloudUpperOn(const CloudParams& c) { return c.upperEnabled; } // density and coverage are >= 0.01 (the tweak mins)
     float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainReachBottom(c), cloudUpperBottom(c)) : cloudMainReachBottom(c); }
     float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainReachTop(c), cloudUpperTop(c)) : cloudMainReachTop(c); }
-    float cloudCoverage(const CloudParams& c) { return glm::clamp(c.coverage, 0.0f, 1.0f); }
+    // The coverage in use: "Coverage" + its day variation, or the game's override (CloudParams::coverageNow).
+    float cloudCoverage(const CloudParams& c) { return c.coverageNow(Globals::settings.sky); }
     // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
     float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
     // The eye as the shader cuts it: x the LIVE "Eye size scale" (the hole grows), 10 m at least. The outer radius keeps the unscaled eye.
@@ -467,9 +468,8 @@ RendererState::GrassRingLayout RendererState::grassRingLayout() const
 // It runs wherever beginFrame runs (the desktop "Begin frame job" or main in VR), so everything it reads is written only
 // outside that quiescent window. The outputs consumers read directly (m_centerViewProj, m_sunCascadeViewProj, m_views,
 // the returned frustum) are contractually valid once beginFrame's job is joined.
-// "Sky/Sun cycle": the time of day advances on the SIM clock (the pause holds the sun) x the speed, wraps at 24 h, and
+// THE SUN CYCLE (the tweaks at the top of "Sky"): the time of day advances on the SIM clock (the pause holds the sun) x the speed, wraps at 24 h, and
 // sets the sun direction - every frame while on, so a dragged time or latitude shows at once even at speed 0.
-// "Sky/Clouds/Day cycle": then "Coverage" = dayCoverage(), unless the game drives it (coverageDrivenByGame).
 void RendererState::advanceSunCycle()
 {
     SkyParams& s = m_skyParams;
@@ -482,8 +482,6 @@ void RendererState::advanceSunCycle()
         }
         s.sunDirection = s.cycleSunDirection();
     }
-    if (m_cloudParams.dayCycle && !m_cloudParams.coverageDrivenByGame)
-        m_cloudParams.coverage = m_cloudParams.dayCoverage(s);
 }
 
 void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
@@ -711,48 +709,6 @@ void RendererState::buildUboGrass(const Camera& camera)
         a.old = a.now;
         a.now = m_cameraPos;
         a.blend = 0.0f;
-    }
-
-    // THE SUN FLECKS' FRAME: the fleck noise is stretched along the sun's horizontal direction, a linear map that turns and
-    // scales with the sun. Around the world origin a point km away then moved many flecks per frame while the sun cycle ran:
-    // whole spots flashing. So the frame is HELD: its origin sits near the camera (small coordinates) and the axis and the
-    // stretch stay fixed until the camera is "Fleck fade distance" from the origin, or the sun has moved enough to show
-    // (the axis error x how stretched the flecks are, plus the stretch error, > 0.05); then the old frame crossfades out
-    // over FLECK_FADE_SEC. Between steps the pattern is world-fixed; only the sun path's entry point drifts with the sun.
-    constexpr float FLECK_FADE_SEC = 1.0f;
-    const glm::vec3 L = skySunDirection(Globals::settings.sky);
-    const glm::vec2 sunH(L.x, L.z);
-    const float sunHLen = glm::length(sunH);
-    const glm::vec2 along = sunHLen > 1e-4f ? sunH / sunHLen : glm::vec2(1.0f, 0.0f);
-    const float invStretch = 1.0f / glm::clamp(1.0f + glm::max(g.fleckStretch, 0.0f) * sunHLen / glm::max(L.y, 0.1f), 1.0f, 16.0f);
-    const glm::vec2 cameraXZ(m_cameraPos.x, m_cameraPos.z);
-    GrassFleckFrame& f = m_grassFleckFrame;
-    const auto take = [&](glm::vec4& frame, float& frameInvStretch) {
-        frame = glm::vec4(cameraXZ, along);
-        frameInvStretch = invStretch;
-    };
-    if (!f.valid)
-    {
-        take(f.now, f.invStretchNow);
-        f.old = f.now;
-        f.invStretchOld = f.invStretchNow;
-        f.blend = 1.0f;
-        f.valid = true;
-    }
-    if (f.blend < 1.0f)
-        f.blend = glm::min(f.blend + (float)Globals::time.getDeltaSec() / FLECK_FADE_SEC, 1.0f);
-    else
-    {
-        const float axisError = glm::length(glm::vec2(f.now.z, f.now.w) - along) * (1.0f - invStretch);
-        const float stretchError = glm::abs(f.invStretchNow - invStretch);
-        const float travelled = glm::distance(cameraXZ, glm::vec2(f.now.x, f.now.y));
-        if (axisError + stretchError > 0.05f || travelled > glm::max(g.fleckFadeDistance, 1.0f))
-        {
-            f.old = f.now;
-            f.invStretchOld = f.invStretchNow;
-            take(f.now, f.invStretchNow);
-            f.blend = 0.0f;
-        }
     }
 }
 
@@ -2059,23 +2015,17 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_nearTexel", [this] { return 2.0f * m_grassNear.range / (float)GRASS_NEAR_SHADOW_RESOLUTION; }, UboLive); // the receivers' normal offset
         // The pixel floor as world width per metre of distance: one pixel spans 2 d / m_mipPixelScale.
         list.add("grass_minWidthPerMetre", [this, &g] { return m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f; }, UboLive);
-        // The canopy's base extinction (1/m; grass.inc.glsl): "Canopy shadow" x blades per m^2 x the mean blade width
-        // (half the root width, x the types' mean width). 0 without grass: the terrain FS then skips the canopy.
-        list.add("grass_canopyExtinction", [this, &g]
-            {
-                const float patchSize = grassPatchSize();
-                const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
-                return grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth * grassTypeStats(g).meanWidth : 0.0f;
-            }, UboLive);
+        // 1 with grass (the terrain FS: the ground under the blades takes their root occlusion).
+        list.add("grass_active", [this] { return grassActive() ? 1.0f : 0.0f; }, UboLive);
         // THE FAR TIER's extinction (1/m; grass.inc.glsl grassGroundCanopy): "Far/Thickness" x blades per m^2 x the mean
-        // blade width - the view's, not the sun's ("Canopy shadow" is not in it). 0 = off.
+        // blade width (half the root width, x the types' mean width) - the view's, not the sun's. 0 = off.
         list.add("grass_farExtinction", [this, &g]
             {
                 const float patchSize = grassPatchSize();
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
                 return grassActive() ? glm::max(g.farThickness, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth * grassTypeStats(g).meanWidth : 0.0f;
             }, UboLive);
-        // The far tier's own canopy sun extinction (as grass_canopyExtinction, with "Far/Canopy shadow") and its look.
+        // The far tier's canopy sun extinction (1/m: "Far/Canopy shadow" x the same fold) and its look.
         list.add("grass_farSunExtinction", [this, &g]
             {
                 const float patchSize = grassPatchSize();
@@ -2136,7 +2086,9 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_growBand", [&] { return glm::max(g.growBand, 0.01f); }, g.growBand);
         list.add("grass_sizeByCover", [&] { return glm::clamp(g.sizeByCover, 0.0f, 1.0f); }, g.sizeByCover);
         list.add("grass_widthByHeight", [&] { return g.widthByHeight; }, g.widthByHeight);
+        // The root occlusion inside the near grass cascade, and outside it ("Shadows/Far root occlusion").
         list.add("grass_rootOcclusion", g.rootOcclusion);
+        list.add("grass_farRootOcclusion", [&] { return glm::clamp(g.farRootOcclusion, 0.0f, 4.0f); }, g.farRootOcclusion); // above 1: the shaders floor the light at 0
         list.add("grass_transmission", g.transmission);
         list.add("grass_roundness", g.roundness);
         list.add("grass_viewTurn", [&] { return glm::clamp(g.viewTurn, 0.0f, 1.0f); }, g.viewTurn);
@@ -2145,25 +2097,21 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_warmTemperature", [&] { return glm::max(g.warmTemperature, g.coldTemperature + 0.01f); }, g.warmTemperature, g.coldTemperature);
         list.add("grass_coldDarkening", [&] { return glm::clamp(g.coldDarkening, 0.0f, 1.0f); }, g.coldDarkening);
         list.add("grass_shadowBias", [&] { return glm::max(g.shadowBias, 0.0f); }, g.shadowBias);
-        list.add("grass_invFleckSize", [&] { return 1.0f / glm::max(g.fleckSize, 0.01f); }, g.fleckSize);
-        list.add("grass_fleckContrast", [&] { return glm::clamp(g.fleckContrast, 0.0f, 1.0f); }, g.fleckContrast);
-        list.add("grass_fleckFadeDistance", [&] { return glm::max(g.fleckFadeDistance, 1.0f); }, g.fleckFadeDistance);
-        list.add("grass_fleckStretch", [&] { return glm::max(g.fleckStretch, 0.0f); }, g.fleckStretch);
-        // The canopy's sun path (grass.inc.glsl grassCanopySun; live: the sun). The sun's elevation floored at 0.1:
-        // sunToXZ = XZ per metre of height along the sun, invSunY = 1 / the floored elevation. The flecks' HELD frames (the
-        // new and the old: origin, streak axis, 1 / stretch) and their blend - see the update above.
+        // The far tier's sun path through its layer (grass.inc.glsl grassGroundCanopy; live: the sun): 1 / the sun's
+        // elevation, floored at 0.1.
         const SkyParams& sky = Globals::settings.sky;
-        const auto sunY = [&sky] { return glm::max(skySunDirection(sky).y, 0.1f); };
-        const auto sunHorizontal = [&sky] { const glm::vec3 L = skySunDirection(sky); return glm::vec2(L.x, L.z); };
-        list.add("grass_sunToXZ", [sunY, sunHorizontal] { return sunHorizontal() / sunY(); }, UboLive);
-        list.add("grass_invSunY", [sunY] { return 1.0f / sunY(); }, UboLive);
-        list.add("grass_fleckNew", [this] { return m_grassFleckFrame.now; }, UboLive);  // xy = the origin, zw = the streak axis
-        list.add("grass_fleckOld", [this] { return m_grassFleckFrame.old; }, UboLive);
-        list.add("grass_fleckFrame", [this]  // x = 1 / the new stretch, y = 1 / the old one, z = the blend (0 old .. 1 new)
+        // "Far root occlusion" as it is on the DIRECT SUN (live: the sun): x 1 + "by sun height" at the horizon, x 1 at
+        // the "neutral sun angle", x 1 - it overhead; linear in sun.y on each side of the neutral height.
+        list.add("grass_farRootSun", [&g, &sky]
             {
-                const GrassFleckFrame& f = m_grassFleckFrame;
-                return glm::vec4(f.invStretchNow, f.invStretchOld, f.blend, 0.0f);
+                const float sunY = glm::clamp(skySunDirection(sky).y, 0.0f, 1.0f);
+                const float neutral = glm::sin(glm::radians(glm::clamp(g.farRootOcclusionNeutralAngle, 5.0f, 85.0f)));
+                const float bySun = sunY < neutral ? 1.0f - sunY / neutral : -(sunY - neutral) / (1.0f - neutral); // +1 horizon .. 0 .. -1 overhead
+                return glm::clamp(g.farRootOcclusion, 0.0f, 4.0f) * (1.0f + glm::clamp(g.farRootOcclusionBySun, 0.0f, 1.0f) * bySun);
             }, UboLive);
+        list.add("grass_invSunY", [&sky] { return 1.0f / glm::max(skySunDirection(sky).y, 0.1f); }, UboLive);
+        // Where the near cascade's weight starts to fall, as a share of its reach (grass.inc.glsl grassNearShadow).
+        list.add("grass_nearBlendStart", [&] { return 1.0f - glm::clamp(g.nearShadowBlend, 0.02f, 1.0f); }, g.nearShadowBlend);
         list.add("grass_nearStrength", [&] { return glm::clamp(g.nearShadowStrength, 0.0f, 1.0f); }, g.nearShadowStrength);
         list.add("grass_nearBias", [&] { return glm::max(g.nearShadowBias, 0.0f); }, g.nearShadowBias);
         list.add("grass_canopyThinning", [&] { return glm::clamp(g.canopyThinning, 0.0f, 1.0f); }, g.canopyThinning);

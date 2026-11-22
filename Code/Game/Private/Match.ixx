@@ -669,7 +669,7 @@ private:
     float m_beaconGlow = 0.0f;    // 0..1: the short beam on the Base brightens, before the climb
     float m_beaconClimb = 0.0f;   // 0..1: the beam's tip on its way from the Base to the cloud base
     float m_beaconIgnite = 0.0f;   // 0..1: the pierce, after the climb (the hole opens, the beam runs to its full height)
-    struct BeaconSaved { bool vortexEnabled; float centreXKm, centreZKm, strength, spin, coverage, coverageVariation, macroVariation, eyeScale, lightIntensity; glm::vec3 lightColor; } m_beaconSaved{};
+    struct BeaconSaved { bool vortexEnabled; float centreXKm, centreZKm, strength, spin, coverageVariation, macroVariation, eyeScale, lightIntensity; glm::vec3 lightColor; } m_beaconSaved{};
     float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):
                                          // each spawned unit spends its type's cost (waveCostOf)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring

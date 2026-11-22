@@ -356,11 +356,16 @@ which is a baked define).
   (Gaussian over the traced texels around, `(0, 0, 0, 1)` with none), and skips holes in the blur. The final image
   holds no hole.
 
-## The sun cycle ("Sky/Sun cycle" tweaks)
+## The sun cycle (the tweaks at the top of "Sky")
 
-On by default, starting at 5 h (before a sunrise); "Paused" holds the time (the direction still follows a dragged time /
-latitude). While "Enabled", `Renderer::advanceSunCycle` (main, in `kickBeginFrameJob`, before the begin-frame job
-reads the sky) advances "Time of day (h)" by the SIM delta x "Speed (x real time)" (1 = real time, 60 = a day in 24
+"Sky" holds the cycle ("Sun cycle", "Sun cycle paused", "Time of day (h)", "Sun cycle speed (x real time)", "Latitude
+(deg)", "Day of year"); "Sky/Sun" holds the sun and its light ("Sun Direction", "Sun Color", "Ambient", "Sky Radiance",
+"Night sky radiance", "Ground Albedo", "Ground Horizon", "Sun Angle Cos", "Sun Glow"). The sky draw's switch is
+"Sky/Atmosphere/Enabled".
+
+On by default, starting at 5 h (before a sunrise); "Sun cycle paused" holds the time (the direction still follows a dragged time /
+latitude). While "Sun cycle" is on, `Renderer::advanceSunCycle` (main, in `kickBeginFrameJob`, before the begin-frame job
+reads the sky) advances "Time of day (h)" by the SIM delta x "Sun cycle speed (x real time)" (1 = real time, 60 = a day in 24
 minutes; the pause holds the sun), wraps it at 24 h and WRITES the "Sun Direction" tweak every frame (`SkyParams::cycleSunDirection`, in Settings so the game reads the same sun through `SkyParams::sunHeight`:
 the declination from "Day of year", the hour angle 15 degrees per hour from noon, "Latitude (deg)"; east +X, up +Y,
 north -Z) - a hand edit of the direction is overwritten while it runs, a dragged time / latitude shows at once even at

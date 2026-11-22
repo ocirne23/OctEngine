@@ -34,14 +34,16 @@ variant (`sky.fs.glsl`) draws NO clouds.
   (weather.r - 0.5) x "Coverage variation", the variation faded in over the first `CLOUD_VARIATION_RAMP` (0.25)
   of the base coverage. With a constant spread the weather map's peaks stayed clouds at coverage 0. The upper
   layer ramps on its own effective coverage (upper x main).
-* **THE DAY CYCLE** ("Sky/Clouds/Day cycle", all live): while "Enabled", `RendererState::advanceSunCycle` (main, before
-  the begin-frame job) WRITES the "Coverage" tweak every frame = `CloudParams::dayCoverage(sky)`, so the panel shows the
-  number in use: "Base coverage" + "Low sun coverage" (0.15) with the sun at the horizon, gone at "Low sun span (deg)"
-  (20) of elevation above or below it (smoothstep) - more clouds at sunrise and sunset - + "Daily variation" (0.05) x
-  a slow drift: three harmonics of the 24 h day (periods 8, 4.8 and 3.4 h), so it joins at midnight and is the same
-  each day. With the sun cycle off it is the base alone; base 0 stays clear. Off, "Coverage" is the user's again.
-  **The co-op game drives "Coverage" itself** (the night shroud, `GameMatch::tickBeacon`): it sets
-  `coverageDrivenByGame` (no tweak) so the renderer stands back, and takes `dayCoverage()` as its day value.
+* **"COVERAGE" IS THE USER'S, ALWAYS** ("Sky/Clouds/Coverage"): nothing writes the tweak. The renderer draws
+  `CloudParams::coverageNow(sky)` (RendererUbo `cloudCoverage`): the coverage + THE DAY VARIATION ("Sky/Clouds/Day
+  variation", all live; `dayCoverage`) - "Low sun coverage" (0.15) with the sun at the horizon, gone at "Low sun span
+  (deg)" (20) of elevation above or below it (smoothstep) - more clouds at sunrise and sunset - + "Drift" (0.05) x
+  three harmonics of the 24 h day (periods 8, 4.8 and 3.4 h), so it joins at midnight and is the same each day. Both
+  at 0: the coverage alone. With the sun cycle off it is the coverage alone too; coverage 0 stays clear.
+  **The co-op game sets `coverageOverride`** (no tweak; >= 0 = the coverage in use) for its night shroud
+  (`GameMatch::tickBeacon`): `dayCoverage()` by day, going to the shroud's coverage by night; -1 again at the end.
+  Tried: a "Day cycle" switch that wrote the "Coverage" tweak from a "Base coverage" every frame - dropped: the
+  coverage tweak did nothing while it was on.
 * **MACRO COVERAGE** ("Macro size (km)" 100, "Macro variation" 1; `cloudColumnCoverage`): the weather map's
   coverage channel read over its OWN, much larger period (rotated, mip `CLOUD_MACRO_LOD` 2), added to the column
   coverage with the variation's ramp: whole regions clear or overcast. The weather period's features are the clouds'
@@ -372,7 +374,7 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
   a non-physical gain on the SUN in-scatter only (froxels, far field, reflection fog) - sunlit fog and the
   shafts brighten, shadowed fog and the extinction do not: strong god rays without fogging up the world.
 * **The fog's sky-SH ambient is cloud-shadowed too**: the sky SH is ONE probe for every point, and holds the
-  sunlit ground below the horizon (`skyGroundSun`, plus the "Sky/Ground Horizon" share above it), never
+  sunlit ground below the horizon (`skyGroundSun`, plus the "Sky/Sun/Ground Horizon" share above it), never
   cloud-shadowed. `giSkySunIrradiance` (gi_probe.inc.glsl) is that part in closed form; `giEvalSkySHCloud`
   subtracts its shadowed share: the froxels' GI-off ambient, `giIrradiance`'s out-of-field fallback (its
   `cloudSunTransmittanceSoft`, so surfaces too), and the far field (weighted by `sunW`, no extra taps). The sun

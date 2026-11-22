@@ -472,7 +472,7 @@ change → re-measure without looking at the screen.** It always overrides `Time
   **Sandbox GPU timings: `-Fullscreen -After 20`** - the terrain + tree streaming has settled by then (a forest view
   reads the same at 20 s and at 45 s). Rendering work is the sandbox (`--sandbox` in `-AppArgs`: with no mode flag
   App opens the main menu; `-Game` is PvP).
-* **PIN THE SUN for a GPU comparison:** `-Tweak "Sky/Sun cycle/Paused=1","Sky/Sun cycle/Time of day (h)=13"` (an array
+* **PIN THE SUN for a GPU comparison:** `-Tweak "Sky/Sun cycle paused=1","Sky/Time of day (h)=13"` (an array
   works when the script is called directly, not through `powershell -File`). The cycle starts before sunrise (5.40 h),
   where the sun moves fast: the shadow draw and every shadow lookup then cost a different amount in each run. Pinned,
   three runs of one build agree within ~0.03 ms on "Static meshes". `--camera x y z dx dy dz` (in `-AppArgs`, with

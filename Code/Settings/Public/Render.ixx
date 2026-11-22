@@ -42,7 +42,7 @@ export struct SkyParams
     float sunIntensity = 5.0f;
     float sunAngularCos = 0.99985f;     // cos of the disc radius (1 = disc off)
     float sunGlow = 1.0f;               // sun halo strength (>= 0.01, ~0.5 subtle, 2 = heavy); HG forward lobe in sky.fs
-    // THE SUN CYCLE ("Sky/Sun cycle"): while on, the sun direction follows the time of day (advanced on the SIM clock, so
+    // THE SUN CYCLE (the tweaks at the top of "Sky"): while on, the sun direction follows the time of day (advanced on the SIM clock, so
     // the pause holds it) at the latitude and day of year - east +X, north -Z - and the Sky Radiance the shaders see is
     // x 1 by day, x nightSkyRadiance at night (a smooth step over the sun's elevation). The tweaks keep their values.
     bool  sunCycle = true;
@@ -151,29 +151,31 @@ export struct CloudParams
     // Shape
     float bottom = 700.0f;             // shell bottom altitude (m)
     float top = 2500.0f;               // shell top altitude (m)
-    float coverage = 0.2f;            // 0 = clear, 1 = overcast (the day cycle WRITES it while on)
-    // THE DAY CYCLE ("Sky/Clouds/Day cycle"): while on (with the sun cycle), the renderer writes "Coverage" every frame
-    // (advanceSunCycle) = dayCoverage(): the base, more around sunrise and sunset, and a slow drift over the day.
-    bool  dayCycle = true;
-    float baseCoverage = 0.2f;         // the day cycle's coverage with the sun high and no drift
+    float coverage = 0.2f;            // THE coverage, the user's: 0 = clear, 1 = overcast. Nothing writes it.
+    // THE DAY VARIATION ("Sky/Clouds/Day variation"): ADDED to the coverage while the sun cycle runs (dayCoverage) -
+    // more around sunrise and sunset, and a slow drift over the day. Both 0 = the coverage alone.
     float lowSunCoverage = 0.15f;      // added with the sun at the horizon
     float lowSunCoverageSpanDeg = 20.0f; // gone at this sun elevation above or below the horizon (smoothstep)
     float dayCoverageVariation = 0.05f; // +- this, a slow drift over the 24 h day (the same each day)
-    // No tweak: the co-op game drives "Coverage" itself (the night shroud) and takes dayCoverage() as its day value, so
-    // the renderer does not write it.
-    bool  coverageDrivenByGame = false;
-    // The day cycle's coverage now (0..1): the base + "Low sun coverage" x (1 - smoothstep(0, span, |sun elevation|)) +
-    // "Daily variation" x three harmonics of the 24 h day (periods 8, 4.8, 3.4 h: it joins at midnight). The base
-    // alone with the sun cycle off; base 0 stays clear.
+    // No tweak: >= 0 = the coverage in use, set by the co-op game (its night shroud, mixed from dayCoverage()); < 0 = none.
+    float coverageOverride = -1.0f;
+    // The coverage over the day (0..1): "Coverage" + "Low sun coverage" x (1 - smoothstep(0, span, |sun elevation|)) +
+    // "Drift" x three harmonics of the 24 h day (periods 8, 4.8, 3.4 h: it joins at midnight). The coverage alone
+    // with the sun cycle off; coverage 0 stays clear.
     float dayCoverage(const SkyParams& sky) const
     {
-        if (!sky.sunCycle || baseCoverage <= 0.0f)
-            return glm::clamp(baseCoverage, 0.0f, 1.0f);
+        if (!sky.sunCycle || coverage <= 0.0f)
+            return glm::clamp(coverage, 0.0f, 1.0f);
         const float elev = glm::degrees(std::asin(glm::clamp(sky.sunHeight(), -1.0f, 1.0f)));
         const float lowSun = lowSunCoverage * (1.0f - glm::smoothstep(0.0f, glm::max(lowSunCoverageSpanDeg, 0.1f), std::abs(elev)));
         const float w = glm::two_pi<float>() * sky.timeOfDay / 24.0f;
         const float drift = 0.5f * std::sin(3.0f * w + 1.3f) + 0.3f * std::sin(5.0f * w + 4.1f) + 0.2f * std::sin(7.0f * w + 2.2f);
-        return glm::clamp(baseCoverage + lowSun + dayCoverageVariation * drift, 0.0f, 1.0f);
+        return glm::clamp(coverage + lowSun + dayCoverageVariation * drift, 0.0f, 1.0f);
+    }
+    // THE COVERAGE IN USE this frame (what the renderer draws): the game's override, else the coverage over the day.
+    float coverageNow(const SkyParams& sky) const
+    {
+        return coverageOverride >= 0.0f ? glm::min(coverageOverride, 1.0f) : dayCoverage(sky);
     }
     float coverageVariation = 2.0f;  // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     // MACRO COVERAGE: the weather map's coverage read over a much larger period, added to every column's coverage (both
@@ -546,23 +548,26 @@ export struct GrassParams
     float rootOcclusion = 0.8f;
     float shadowBias = 0.5f;       // m: the blade's sun shadow lookup moves this far toward the sun at the root (none at
                                    // the tip) - the sunk root sits under the ground's shadow-map surface otherwise
-    // THE CANOPY's self-shadowing (grass.inc.glsl): the grass layer as a volume of blades - the sun reaching a point
-    // below its top is exp(-extinction x the path along the sun), extinction = this x blades per m^2 x the mean blade
-    // width x the local density. On the blades and on the ground under them. 0 = off.
-    float canopyShadow = 0.10f;
-    // SUN FLECKS: the light through the canopy in bright and dark spots of about this size (m), at this contrast (0 =
-    // an even gray), faded out from half the fade distance to it (m).
-    float fleckSize = 0.08f;
-    float fleckContrast = 0.7f;
-    float fleckFadeDistance = 40.0f;
-    float fleckStretch = 1.0f;     // the flecks stretch along the sun into streaks: x 1 / tan(sun elevation) (0 = round)
+    // The root occlusion OUTSIDE the near grass cascade (rootOcclusion: inside it, where the blades also get real blade
+    // shadows): the blades and the ground under them blend from one to the other over the cascade's outer part. There
+    // is no blade shadow outside, so this one is on the direct sun too, not only on the ambient and the transmission.
+    // ABOVE 1 the dark part climbs the blade: the light at t along it is max(1 - this x (1 - smoothstep(t)), 0), so at 2
+    // the lower half gets none.
+    float farRootOcclusion = 0.8f; // 0..4
+    // How much the SUN's height changes that occlusion on the direct sun (a low sun crosses more blades on its way to a
+    // root): x (1 + this) with the sun at the horizon, x 1 at farRootOcclusionNeutralAngle (the sun's elevation, degrees),
+    // x (1 - this) straight overhead; linear in the sun's height (sin elevation) on each side. 0 = none.
+    float farRootOcclusionBySun = 1.0f;
+    float farRootOcclusionNeutralAngle = 25.0f;
     // THE NEAR GRASS CASCADE: real blade shadows around the camera - its own shadow map (2048^2) over a box
     // of +-nearShadowRange metres (texel = 2 x range / 2048), the blades only, on the blades and the ground under them.
-    // It blends into the canopy over the box's outer part. nearShadowBias: the receiver's shift toward the sun (m).
+    // It fades out over the box's outer part. nearShadowBias: the receiver's shift toward the sun (m).
     bool nearShadows = true;
     float nearShadowRange = 8.0f;
-    float nearShadowBias = 0.0f;
-    float nearShadowStrength = 1.0f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
+    float nearShadowBlend = 0.4f;  // 0..1: the outer share of the cascade's reach over which its blade shadows fade into
+                                   // farRootOcclusion (1 = from the centre on)
+    float nearShadowBias = 0.1f;
+    float nearShadowStrength = 0.8f; // 0..1: how dark the near blade shadows get
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
     float viewTurn = 0.85f;       // 0..1: how far a blade seen edge-on turns its face toward the view (1 = always face-on)
@@ -570,7 +575,7 @@ export struct GrassParams
     // THE FAR TIER (terrain FS, grass.inc.glsl grassGroundCanopy): where the blades fade out, the ground takes the grass
     // layer's look by how much of the view the layer covers: x farThickness on its optical depth (blades per m^2 x the
     // mean blade width x the cover x the height / N.V; 0 = off). Its own look, apart from the blades': the canopy's sun
-    // self-shadowing (as canopyShadow), the tip colour x farBrightness, the roughness, and the layer's shading NORMAL: the
+    // self-shadowing (farCanopyShadow), the tip colour x farBrightness, the roughness, and the layer's shading NORMAL: the
     // upright blades' sides turned to the view (farUpright: the tilt from the ground normal toward the viewer, by how
     // grazing the view is) and the blades' lean (farNormalVariation: a sideways tilt per blade stripe).
     float farThickness = 1.0f;

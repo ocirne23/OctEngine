@@ -18,11 +18,11 @@
 
 #include "shared.inc.glsl"
 
-layout (location = 0) in vec4 in_blade;          // x = along the blade (0 root .. 1 tip), y = across (-1 .. 1), z = the depth
-                                                 // below the canopy top (m), w = the normal's y (without the edge tilt)
+layout (location = 0) in vec3 in_blade;          // x = along the blade (0 root .. 1 tip), y = across (-1 .. 1), z = the normal's y
+                                                 // (without the edge tilt)
 layout (location = 1) in vec3 in_prevWorldDelta; // to last frame's point
-layout (location = 2) flat in uvec4 in_flat;     // x = half2(albedo factor, dryness), y = half2(ground normal blend, canopy
-                                                 // extinction (1/m)), z = the facet normal (grassUnpackGroundNormal), w = the
+layout (location = 2) flat in uvec4 in_flat;     // x = half2(albedo factor, dryness), y = the ground normal blend (float
+                                                 // bits), z = the facet normal (grassUnpackGroundNormal), w = the
                                                  // look bits (the grass type | seed stalk << 2 | the seed stalks' cover << 8) | the
                                                  // width axis (its x, 15 bits | its z's sign) << 16
 
@@ -58,7 +58,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 #define LIT_EXTRA_LIGHT  // the sun through the blade, added inside computeLitColor
 #define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: on the ground under the trees' canopy
 #include "instanced_indirect_lit.inc.glsl"
-#include "grass.inc.glsl" // grassCanopySun (in_terrainVertices: the lit core's binding 14)
+#include "grass.inc.glsl" // grassNearShadow, grassRootOcclusion (in_terrainVertices: the lit core's binding 14)
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the blades take the ground's faction look
 
@@ -76,7 +76,7 @@ vec3 grassFragmentNormal()
     const float sideX = float(sideBits & 0x7FFFu) * (2.0 / 32767.0) - 1.0;
     const float sideZ = sqrt(max(1.0 - sideX * sideX, 0.0));
     const vec3 side = vec3(sideX, 0.0, (sideBits & 0x8000u) != 0u ? -sideZ : sideZ);
-    const float normalY = clamp(in_blade.w, -1.0, 1.0);
+    const float normalY = clamp(in_blade.z, -1.0, 1.0);
     const vec3 bladeN = normalize(vec3(side.z, 0.0, -side.x) * sqrt(1.0 - normalY * normalY) + vec3(0.0, normalY, 0.0)
         + side * (in_blade.y * u_grass_roundness * (1.0 - in_blade.x)));
     return gl_FrontFacing ? bladeN : -bladeN;
@@ -112,16 +112,17 @@ void main()
     const vec3 V = -rel / dist;
     // THE SEED STALKS ON A FAR BLADE of a seeding type (grass_blade.inc.glsl: from LOD 2 to LOD 3 the stalks themselves
     // stop showing, so the type's blades stand in for them): how much of this point shows as stalks - their cover of the
-    // view, less at the root, which they do not hide. The stalks stand ABOVE the canopy, so by that share the point
-    // takes their colour, loses the canopy's shadow and the root occlusion: as bright as the seed heads near the camera.
+    // view, less at the root, which they do not hide. The stalks stand ABOVE the blades, so by that share the point
+    // takes their colour and loses the root occlusion: as bright as the seed heads near the camera.
     const uint look = in_flat.w;
     const float seedShown = float((look >> 8) & 0xFFu) * (1.0 / 255.0) * smoothstep(0.0, 0.4, t);
     const vec2 factorDryness = unpackHalf2x16(in_flat.x); // the albedo factor (variation x cold), dryness
-    const vec2 blendExtinction = unpackHalf2x16(in_flat.y); // the ground normal blend, the canopy extinction
-    // THE CANOPY's shadow: the blades above this point along the sun, as a volume - the self-shadowing a shadow map
-    // cannot resolve. On the direct sun and the transmission alike. Near the camera the near grass cascade takes over.
-    const float canopySun = nearWeight < 1.0 ? mix(grassCanopySun(pos, in_blade.z, blendExtinction.y, dist), 1.0, seedShown) : 1.0;
-    g_sunShadowFirst *= mix(canopySun, nearSun, nearWeight);
+    // The blades' shadows on each other, on the direct sun and the transmission alike: the near grass cascade; outside
+    // it "Shadows/Far root occlusion" stands in ON THE SUN TOO (full at the root, none at the tip, none on the share
+    // that shows as seed stalks) - there is no blade shadow there, and on the ambient alone it could not get dark.
+    // (u_grass_farRootSun: the tweak x the sun's height factor - more with a low sun, less with a high one.)
+    // The far value may be above 1: the light is floored at 0, so the dark part climbs the blade.
+    g_sunShadowFirst *= mix(mix(max(1.0 - u_grass_farRootSun * (1.0 - smoothstep(0.0, 1.0, t)), 0.0), 1.0, seedShown), nearSun, nearWeight);
 
     // THE COLOUR: root -> tip x the grass type's tint; a SEED STALK half straw, its seed head (the top "Seed head
     // length") in "Seed colour". Then the dry patches.
@@ -149,9 +150,11 @@ void main()
     albedo *= 1.0 + u_grass_midrib * rib * (1.0 - 0.6 * t) * (stalk ? 0.0 : 1.0);
     albedo *= factorDryness.x; // the per-blade variation and the cold darkening (grass_blade.inc.glsl)
     albedo = terrainFactionTint(albedo, pos.xz, 1.0); // the same rule as the ground under it (terrain_faction.inc.glsl)
-    const float ao = mix(mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t)), 1.0, seedShown);
+    // THE ROOT OCCLUSION: "Look/Root occlusion" inside the near grass cascade, "Shadows/Far root occlusion" outside it
+    // (grass.inc.glsl grassRootOcclusion), full at the root and none at the tip.
+    const float ao = mix(max(1.0 - grassRootOcclusion(nearWeight) * (1.0 - smoothstep(0.0, 1.0, t)), 0.0), 1.0, seedShown);
 
-    const vec3 N = normalize(mix(grassFragmentNormal(), grassUnpackGroundNormal(in_flat.z), blendExtinction.x));
+    const vec3 N = normalize(mix(grassFragmentNormal(), grassUnpackGroundNormal(in_flat.z), uintBitsToFloat(in_flat.y)));
     // Lit from behind: the sun through the blade, tinted by it - the lit core's extra light (added right after its sun:
     // no value of it is live across the light loop, the register peak).
     const float back = max(-dot(N, L), 0.0);

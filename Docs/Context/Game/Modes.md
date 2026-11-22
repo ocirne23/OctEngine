@@ -85,7 +85,7 @@ outer radius + the query margin to `TerrainCollider::update`), so a unit that go
 #### The light rules
 
 The sun is the wave clock. `SkyParams::sunHeight()` (Settings: the sun cycle's elevation from "Time of day (h)", valid
-the moment the time is written) is the one input; a day's length is "Sky/Sun cycle" "Speed (x real time)".
+the moment the time is written) is the one input; a day's length is "Sky/Sun cycle speed (x real time)".
 
 | Rule | What |
 |---|---|
@@ -227,10 +227,9 @@ structure roster. "Game/Beacon" tweaks. **The cloud hole is the clouds' VORTEX**
   over a sun-height span of 0.2 down to "Shroud full at sun height (dusk)" (0); at dawn they open from 0 to 0.25. The
   night's first wave waits for the ignition (`tickWaves`).
 * **Per frame, three LIVE cloud values** (no re-bake): the vortex "Strength" = power × max(the pierce, "Day hole
-  strength" × the daylight of the shroud) - the hole follows the ignition, not the shroud; "Spin (deg/min)" = "Calm spin" .. "Pressure spin" by night × the missing charge; "Coverage" = the clouds'
-  day cycle (`CloudParams::dayCoverage`; while it is off, the value at the match start) by day, "Shroud coverage" (1)
-  at night (`daylight()`). The beacon sets `coverageDrivenByGame`, so the renderer's day cycle does not write
-  "Coverage" over it; the restore clears it. **The night's deck is uniform:** "Coverage
+  strength" × the daylight of the shroud) - the hole follows the ignition, not the shroud; "Spin (deg/min)" = "Calm spin" .. "Pressure spin" by night × the missing charge; the coverage in use
+  (`CloudParams::coverageOverride`; the "Coverage" tweak stays the user's) = the clouds' coverage over the day
+  (`CloudParams::dayCoverage`) by day, "Shroud coverage" (1) at night (`daylight()`); the restore sets it back to -1. **The night's deck is uniform:** "Coverage
   variation" and "Macro variation" go from their match-start values by day to 0 at night, so the shroud covers the
   whole sky. A panel edit of those rows does not hold while the beacon runs.
 * **The beam is TWO records:** the tall beam is the glow in the air alone (`Renderer::addBeamColumn`; its glow fades

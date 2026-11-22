@@ -352,7 +352,7 @@ VS 30/0 and 46/0), tree FS 64/16
 (its VS 40/0), the voxel trees' march FS 40/0 (its VS 80/0, the far trees' 48/0) and lighting FS 64/0 (the voxel
 shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the voxel pipeline 54/0), tree_volume_march 64/0 (handover 62/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
-cull 46/0, the shadow cull 39/0, grass FS 56/32 (the far rings' simple variant 56/16), grass VS 55/0 (the near casters 44/0), grass cull 48/0, clutter / flower FS
+cull 46/0, the shadow cull 39/0, grass FS 56/32 (the far rings' simple variant 56/16), grass VS 53/0 (the near casters 44/0), grass cull 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
 river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the

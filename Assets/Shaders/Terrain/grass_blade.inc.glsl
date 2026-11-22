@@ -138,10 +138,8 @@ struct GrassBlade
     vec2 tipN;           // the linear normal's tip end (its root end: n0 = (1, 0))
     bool stalk;
     float morph;         // the geomorph to the next ring's LOD (0 .. 1; grassBuildBlade)
-    float groundY;       // the ground under the root (the canopy depth)
 #ifndef GRASS_NEAR_SHADOW
     vec3 tipPrevDelta;   // last frame's tip offset - this frame's
-    float canopyHeight;
 #endif
 };
 
@@ -179,7 +177,7 @@ vec2 grassBladeCurveNormal(float t)
 // One BLADE of tuft `t`: rank `blade` (its place in the patch's ranked list) = member `member` of the tuft. False = not
 // drawn (thinned out, or - the near casters - out of the cascade's reach). Fills g_blade, and WRITES THE FLAT OUTPUT
 // (the includer's `flat out uvec4 out_flat`, declared before this file; grass.fs.glsl unpacks it): x = half2(the albedo
-// factor, dryness), y = half2(the ground normal blend, the canopy extinction), z = the facet normal's x / z (snorm16;
+// factor, dryness), y = the ground normal blend (float bits), z = the facet normal's x / z (snorm16;
 // its y > 0 rebuilt: grassUnpackGroundNormal), w = the look bits (the type | seed stalk << 2 | the seed stalks' cover of
 // this blade (unorm8) << 8) | the width axis << 16.
 // The random values: two per hash (16-bit halves) - bladeHash: its place in the spiral; +1: height, facing; +2: lean
@@ -196,7 +194,7 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     const vec2 xz = t.xz + offset;
 #ifdef GRASS_NEAR_SHADOW
     // THE NEAR GRASS CASCADE's caster: nothing past its half size x 1.5 + 2 m from the box's centre (the receivers' disc,
-    // and casters up-sun of it). The blades never cast into the scene cascades: the canopy and this cascade replace that.
+    // and casters up-sun of it). The blades never cast into the scene cascades: this cascade and the root occlusion replace that.
     if (distance(xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
         return false;
 #endif
@@ -229,16 +227,14 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     const float variation = 1.0 + u_grass_colorVariation * (phaseVariation.y * 2.0 - 1.0);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, p.temperature);
     out_flat.x = packHalf2x16(vec2(variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), grassDryness(t.xz)));
-    // The ground normal blend, the canopy extinction; the facet normal.
-    out_flat.y = packHalf2x16(vec2(clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend, grassCanopyExtinction(cover, widthSize, t.dist)));
+    // The ground normal blend; the facet normal.
+    out_flat.y = floatBitsToUint(clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend);
     out_flat.z = packSnorm2x16(t.groundN.xz);
-    // The canopy at this blade: its mean height (the ground under it takes the same).
-    g_blade.canopyHeight = grassCanopyHeight(coverSize);
 #endif
 
     // The ground under it: the tuft's, along the facet's slope.
     const vec3 n = t.groundN;
-    g_blade.groundY = t.groundY - (n.x * offset.x + n.z * offset.y) / n.y;
+    const float groundY = t.groundY - (n.x * offset.x + n.z * offset.y) / n.y;
     // THE GEOMORPH to the next ring's LOD (p.morph: it is one LOD coarser): the LOD is the RING's, and a ring ends at
     // its level's block - a square around the camera that moves in steps. The block's edge is never nearer than
     // (GRASS_RING_HALF - 1) of its cells (a Chebyshev distance), so the morph is complete there, over the last "LOD morph
@@ -258,7 +254,7 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     g_blade.stalk = grassUnit2(grassHash(bladeHash + 4u)).x < u_grass_typeTint[t.type].w;
     const float typeHeight = u_grass_typeShape[t.type].x * t.size * (g_blade.stalk ? u_grass_seedHeight : 1.0);
     const float height = (u_grass_bladeHeight * typeHeight * mix(1.0 - u_grass_heightVariation, 1.0, heightFacing.x) * coverSize + t.sink) * grow;
-    g_blade.root = vec3(xz.x, g_blade.groundY - t.sink, xz.y);
+    g_blade.root = vec3(xz.x, groundY - t.sink, xz.y);
     // The normal: NEAR the curve's own (the bent top catches the light), easing into one LINEAR in t from "LOD 2
     // distance" to "LOD 3 distance" - a LOD 3 blade is ONE triangle, and the curve's tip normal spread over it flipped
     // it bright or dark at the switch.
@@ -352,7 +348,6 @@ struct GrassVertex
     // stem's side of it (its dot with cross(up, side) is the tangent's rise, >= 0) - so its y and the flat width axis
     // rebuild it (grass.fs.glsl), and the tilt from the across value.
     float normalY;
-    float canopyDepth; // m below the canopy top
 #endif
 };
 
@@ -385,8 +380,6 @@ GrassVertex grassVertex(uint vert, uint lod)
 #ifndef GRASS_NEAR_SHADOW
     v.prevDelta = weights * g_blade.tipPrevDelta; // the root and the width are the same in both frames
     v.sideSign = sideSign;
-    // The depth below the canopy top, capped at its height (the sunk root is below the ground).
-    v.canopyDepth = clamp(g_blade.canopyHeight - (v.pos.y - g_blade.groundY), 0.0, g_blade.canopyHeight);
     // The normal without its edge tilt (the FS adds that back from the across value), in the normals' plane.
     vec2 normal = vec2(0.0);
     if (g_blade.linearBlend < 1.0)

@@ -383,7 +383,7 @@ vec3 giSkySHRadiance(vec3 d)
 }
 
 // The sky SH's SUN part, in closed form: the sunlit ground below the horizon (skyGroundSun, constant G) plus the
-// "Sky/Ground Horizon" share w of it above (projectSkySH). The L1 irradiance of G over the lower hemisphere is
+// "Sky/Sun/Ground Horizon" share w of it above (projectSkySH). The L1 irradiance of G over the lower hemisphere is
 // G (pi/2)(1 - n.up); the constant w G above adds pi w G. The sky SH is ONE probe (seen from the camera), so this lets a
 // point out of the probe field dim the sun part by its own cloud shadow.
 vec3 giSkySunIrradiance(vec3 n)

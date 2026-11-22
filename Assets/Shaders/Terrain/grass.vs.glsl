@@ -31,13 +31,11 @@ layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, 
                                                // << 18 | morph << 21, z = the corner densities (unorm8 x 4), w = packHalf2x16(the
                                                // chunk's cell size (m), the cell's temperature (C))
 
-// THE INTERFACE: 7 interpolated components and one flat uvec4 - no position (the FS rebuilds it from its depth) and the
+// THE INTERFACE: 6 interpolated components and one flat uvec4 - no position (the FS rebuilds it from its depth) and the
 // normal as ONE value (GrassVertex::normalY + the flat width axis).
-// THE CANOPY (grass.inc.glsl): the point's depth below the canopy top (m); the depth is linear along the blade, so it
-// interpolates exactly.
 #ifndef GRASS_NEAR_SHADOW
-layout (location = 0) out vec4 out_blade;          // x = along the blade (0 root .. 1 tip), y = across (-1 .. 1: the midrib at 0),
-                                                   // z = the canopy depth, w = the normal's y
+layout (location = 0) out vec3 out_blade;          // x = along the blade (0 root .. 1 tip), y = across (-1 .. 1: the midrib at 0),
+                                                   // z = the normal's y
 layout (location = 1) out vec3 out_prevWorldDelta; // to last frame's point
 layout (location = 2) flat out uvec4 out_flat;     // written by grassBuildBlade, part by part (grass_blade.inc.glsl)
 #endif
@@ -69,7 +67,7 @@ void main()
 #else
     gl_Position = u_mvp * vec4(v.pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
-    out_blade = vec4(v.t, v.sideSign, v.canopyDepth, v.normalY);
+    out_blade = vec3(v.t, v.sideSign, v.normalY);
     out_prevWorldDelta = v.prevDelta;
 #endif
 }

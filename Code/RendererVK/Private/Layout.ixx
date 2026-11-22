@@ -712,7 +712,7 @@ export namespace RendererVKLayout
         LitTransparent = 1,
         UnlitOpaque    = 2,
         UnlitTransparent = 3,
-        Sky            = 4, // analytic sky + sun disc: drawn directly ("Sky/Enabled"), never on a material
+        Sky            = 4, // analytic sky + sun disc: drawn directly ("Sky/Atmosphere/Enabled"), never on a material
         WireframeTransparent = 5, // tangent-debug color, line polygon mode, alpha-blended, no depth write (debug overlay)
         GizmoUI        = 6, // tangent-debug color, vertex shader forces NDC z=0 (nearest) so it draws on top of everything and nothing draws over it (world UI)
         GizmoWorld     = 7, // tangent-debug color, depth tested, alpha-blended, no depth write (world-space gizmo occluded by geometry)

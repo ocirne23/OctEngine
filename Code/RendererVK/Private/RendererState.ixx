@@ -236,7 +236,7 @@ protected:
     void checkFrameCapacities();
     void snapshotLodStats(PerFrameData& frameData);
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
-    void advanceSunCycle(); // "Sky/Sun cycle": the time of day on the sim clock -> the sun direction (main, kickBeginFrameJob)
+    void advanceSunCycle(); // the sun cycle ("Sky"): the time of day on the sim clock -> the sun direction (main, kickBeginFrameJob)
     // The FRAME STATE the live UBO values read (buildFrameUbo runs these, then evaluates the block): what has a side
     // effect, carries over from the last frame, or comes out of one calculation with several results.
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
@@ -305,17 +305,6 @@ protected:
         float blend = 1.0f;        // 0 = all old .. 1 = all new
         bool valid = false;
     } m_grassStripeAnchor;
-    // The canopy's sun FLECKS' frame (buildUboGrass; grass.inc.glsl grassCanopySun): the noise's origin (XZ, near the
-    // camera), its streak axis and 1 / its stretch - HELD between steps, the old one crossfading to the new.
-    struct GrassFleckFrame
-    {
-        glm::vec4 now{ 0.0f, 0.0f, 1.0f, 0.0f }; // xy = the origin, zw = the streak axis (unit XZ)
-        glm::vec4 old{ 0.0f, 0.0f, 1.0f, 0.0f };
-        float invStretchNow = 1.0f;
-        float invStretchOld = 1.0f;
-        float blend = 1.0f;        // 0 = all old .. 1 = all new
-        bool valid = false;
-    } m_grassFleckFrame;
     glm::vec3 m_forceBakeMin{ 0.0f };
     glm::vec3 m_forceBakeInvSize{ 0.0f };
     TerrainResources::WetnessTick m_wetTick{};

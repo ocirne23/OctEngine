@@ -282,7 +282,7 @@ void projectSkySH(uint lane)
     const vec3 dir = sampleSphere(lane, 64u, vec2(0.0));
     vec3 rad = skyMiss(dir);
     const vec3 up = u_skyUp;
-    // "Sky/Ground Horizon": on rolling terrain part of the upper hemisphere is other sunlit ground, not sky - real probes
+    // "Sky/Sun/Ground Horizon": on rolling terrain part of the upper hemisphere is other sunlit ground, not sky - real probes
     // see that as geometry hits; blend the ground in.
     if (dot(dir, up) > 0.0)
         rad = mix(rad, skyMiss(-up), u_sky_groundHorizon);

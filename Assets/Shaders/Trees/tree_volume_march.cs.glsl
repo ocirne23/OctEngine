@@ -378,7 +378,7 @@ void marchAt(ivec2 px)
     // The TRANSMISSION ("Far transmission"): light THROUGH the leaves, ADDED to the sun term the same from every side.
     const float transmitLobe = u_foliage_farTransmission;
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
-    // + the SKY RADIANCE delta light from straight up ("Sky/Sky Radiance": moonlight / space light): the sky map holds
+    // + the SKY RADIANCE delta light from straight up ("Sky/Sun/Sky Radiance": moonlight / space light): the sky map holds
     // only its atmosphere-scattered part; the lit surfaces take the direct part through the GI probes (gi_probe_trace's
     // projection, ~E x max(N.up, 0)), so on an upward surface its irradiance is u_sky_radiance itself - added as such.
     const vec3 skyBase = (skyMean * PI + u_sky_radiance) * u_foliage_farAmbient;

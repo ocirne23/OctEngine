@@ -852,7 +852,7 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
   registered mesh count) is the slot count it walks.
 * Tried: a sort of the opaque list by pipeline. Dropped because a co-op battle measured 128 draws with 35 pipeline
   changes after compaction: slot order already keeps short runs, and the ~25 binds it saves are not worth a second walk.
-* **THE SKY DRAW**: no entity, no mesh, no cull. The `Sky/Enabled` tweak (`SkyParams::enabled`, default
+* **THE SKY DRAW**: no entity, no mesh, no cull. The `Sky/Atmosphere/Enabled` tweak (`SkyParams::enabled`, default
   on; a change re-records) gates ONE `draw(3)` in `StaticMeshGraphicsPipeline::record` on the Sky variant: a fullscreen
   triangle (`sky.vs.glsl`) at z = 0, the reversed-Z far plane and the depth clear value, depth test GREATER_OR_EQUAL,
   no depth write. It draws after the opaque execute, the tessellated ground, the grass, the clutter and the film -

@@ -323,10 +323,9 @@ void GameMatch::tickBeacon(float deltaSec)
     if (!m_beaconSet)
     {
         m_beaconSaved = { clouds.vortexEnabled, clouds.vortexCentreXKm, clouds.vortexCentreZKm, clouds.vortexStrength,
-            clouds.vortexSpinDegPerMin, clouds.coverage, clouds.coverageVariation, clouds.macroVariation, clouds.vortexEyeScale,
+            clouds.vortexSpinDegPerMin, clouds.coverageVariation, clouds.macroVariation, clouds.vortexEyeScale,
             clouds.vortexLightIntensity, clouds.vortexLightColor };
         clouds.vortexEnabled = true;
-        clouds.coverageDrivenByGame = true; // the shroud below writes "Coverage"; the renderer's day cycle stands back
         clouds.vortexCentreXKm = basePos.x * 0.001f;
         clouds.vortexCentreZKm = basePos.z * 0.001f;
         Tweak::notifyChanged(clouds.vortexEnabled);
@@ -398,10 +397,9 @@ void GameMatch::tickBeacon(float deltaSec)
     clouds.vortexEyeScale = pierce >= dayHole && pierce > 0.0f ? grow : 1.0f;
     clouds.vortexStrength = m_beaconPower * glm::max(pierce, dayHole);
     clouds.vortexSpinDegPerMin = glm::mix(m_settings.beaconCalmSpin, m_settings.beaconPressureSpin, night * (1.0f - charge));
-    // The day's coverage: the clouds' day cycle when it is on (more at sunrise / sunset, a drift over the day), else
-    // the coverage at the match start.
-    const float dayCoverage = clouds.dayCycle ? clouds.dayCoverage(Globals::settings.sky) : m_beaconSaved.coverage;
-    clouds.coverage = glm::mix(dayCoverage, m_settings.shroudCoverage, night);
+    // The coverage in use (the override: the "Coverage" tweak stays the user's): the day's - "Coverage" with its day
+    // variation (more at sunrise / sunset, a drift over the day) - going to the shroud's by night.
+    clouds.coverageOverride = glm::clamp(glm::mix(clouds.dayCoverage(Globals::settings.sky), m_settings.shroudCoverage, night), 0.0f, 1.0f);
     // The night's deck is UNIFORM: no weather-map or macro spread, so the shroud covers the whole sky.
     clouds.coverageVariation = m_beaconSaved.coverageVariation * (1.0f - night);
     clouds.macroVariation = m_beaconSaved.macroVariation * (1.0f - night);
@@ -879,8 +877,7 @@ void GameMatch::restoreBeacon()
     clouds.vortexCentreZKm = m_beaconSaved.centreZKm;
     clouds.vortexStrength = m_beaconSaved.strength;
     clouds.vortexSpinDegPerMin = m_beaconSaved.spin;
-    clouds.coverage = m_beaconSaved.coverage;
-    clouds.coverageDrivenByGame = false; // the day cycle writes "Coverage" again
+    clouds.coverageOverride = -1.0f; // the renderer takes "Coverage" (+ its day variation) again
     clouds.coverageVariation = m_beaconSaved.coverageVariation;
     clouds.macroVariation = m_beaconSaved.macroVariation;
     clouds.vortexEyeScale = m_beaconSaved.eyeScale;

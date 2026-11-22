@@ -225,7 +225,7 @@ The multiplayer lobby has no world block: a client would not get the seed or the
 have to ride the game's GMp event), so the seeded world is single-player only.
 
 **The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): the procedural world (the sky
-is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are
+is no entity: the renderer draws it under `Sky/Atmosphere/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are
 switched ON through tweak OVERRIDES (applied at once) and switched off again in `exitToMenu`, so every
 other mode keeps its own default of off. A sandbox SERVER also spawns `Entities/Debug/networkTest.pre`.
 **Co-op in the sandbox world** (`GameMatch::sandboxWorld()`, the default) throws the same two overrides right after the

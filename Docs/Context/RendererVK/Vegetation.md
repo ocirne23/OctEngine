@@ -39,7 +39,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   slope, water, snow) the blades are also shorter by it ("Size by cover"), not only fewer: fewer
   full-size blades read as sparse long stalks. Their WIDTH goes the other way (`grassWidthSize`, "Width by height",
   0.5): x (the size by cover)^-that, floored at 0.05 and capped at 4 - short grass gets
-  wider blades (1 = the same blade area, 0 = one width). The canopy and far-tier extinctions take the same factor (the
+  wider blades (1 = the same blade area, 0 = one width). The far tier's extinctions take the same factor (the
   blade area is width x height). THE PATCHES in the grass are the GRASS TYPES' (below): areas of taller, broader or
   seeding grass. Tried: a clump noise on the density and the height (bare / thin spots, "Patchiness"), also gating the
   seed stalks; dropped because the type patches did the same job and looked better. The kept blades widen by `(1 / kept)^Width compensation` (capped by "Max width scale") and are never
@@ -72,8 +72,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   `u_grass_typeFarStalk[4]` (0.35 seed colour + 0.325 (the type's tip colour + the dry colour)): `grassFarColor` only
   weights them. The defaults: fine grass, a broad deep-green arching one, a tall
   yellowish SEEDING one, a short dense one.
-  * The LAYER sees their share-weighted means (RendererUbo `grassTypeStats`): the canopy height x
-    `u_grass_meanHeightScale`, the canopy and far extinctions x the mean width, a ray hit's tip colour x
+  * The LAYER sees their share-weighted means (RendererUbo `grassTypeStats`): the layer's height x
+    `u_grass_meanHeightScale`, the far tier's extinctions x the mean width, a ray hit's tip colour x
     `u_grass_meanTint`. The cull's bounds take the tallest (`u_grass_maxHeightScale`: x "Seed stalks/Height"
     for a type with stalks).
   * THE FAR TIER's COLOUR follows the SAME patches (`grassFarColor`, see The far tier): a type's area keeps its tint
@@ -97,7 +97,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     "Seed stalks/Far blade colour" (0.65) x the tangent of the view's angle off the facet normal) x the normal's LOD 2 -> 3 blend, as a unorm8
     in the look bits (<< 8). In the FS that share of the blade (less at the root) SHOWS AS STALKS: it takes their
     colour (half "Seed colour", half "Dry colour" - none of the type's green, which the blade's root and the other
-    blades bring), and it loses the canopy's shadow and the root occlusion, because the stalks stand above the canopy -
+    blades bring), and it loses the root occlusion, because the stalks stand above the blades -
     as bright as the seed heads near the camera. The far tier uses `grassStalkCover` too (its colour:
     `u_grass_typeFarStalk`, with the type's green in it - its layer is closed).
 * **THE BLADE's DETAIL** (grass.fs.glsl; the flat look bits: type | stalk << 2): "Midrib" (0.2): a line along the
@@ -112,7 +112,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   terms (thinning, LODs, wind fade, pixel floor) take the TUFT's distance, the cover the blade's own place. The wind
   code is `grass_wind.inc.glsl` (`grassBezier` / `grassWind` / `grassWindPushAt` / `grassWindRipple` + `grassWindPushWith` / `grassTip` / `grassTipOffset`),
   shared with the clutter flowers. The random values come two per hash (`grassUnit2`: the 16-bit halves).
-  * **THE ORDER IN `grassBuildBlade` KEEPS THE VERTEX SHADER'S REGISTERS DOWN** (55, the near casters 44; with the
+  * **THE ORDER IN `grassBuildBlade` KEEPS THE VERTEX SHADER'S REGISTERS DOWN** (53, the near casters 44; with the
     wind and the dry patch sampled per tuft and every flat value packed at the end it took 64):
     * a blade that is not drawn returns before any of the work below;
     * each part of the flat output (`out_flat`, declared by the includer before the file) is WRITTEN when it is
@@ -134,9 +134,9 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     `cross(a, side) = a.y n0 - dot(a.xz, n0.xz) up` - so the normals are `vec2`s in that plane from two scalars, the
     tip's rise and `turn` (the tip offset across the blade's face): no cross product, no 3D normalize per vertex.
   * No integer division (a GPU emulates it): blade / T is a float division (exact: the values are below 2^16).
-* **THE INTERFACE** (grass.vs.glsl -> grass.fs.glsl) is SMALL: 7 interpolated components - t, across (-1 .. 1), the
-  canopy depth, the NORMAL'S Y; last frame's offset - and ONE flat `uvec4` (`grassPackFlat`: half2(albedo factor, dryness),
-  half2(ground blend, canopy extinction), the facet normal's x / z as snorm16 (its y rebuilt), the look bits | the WIDTH
+* **THE INTERFACE** (grass.vs.glsl -> grass.fs.glsl) is SMALL: 6 interpolated components - t, across (-1 .. 1), the
+  NORMAL'S Y; last frame's offset - and ONE flat `uvec4` (written part by part in `grassBuildBlade`: half2(albedo factor, dryness),
+  the ground blend (float bits), the facet normal's x / z as snorm16 (its y rebuilt), the look bits | the WIDTH
   AXIS << 16: its x in 15 bits and its z's sign - the axis is unit, so the FS rebuilds |z| with one square root. An
   angle there cost an atan per blade and a sin + cos per fragment).
   * No POSITION: the FS rebuilds it from its depth (`viewRelFromDepth` at the unjittered pixel: camera-relative).
@@ -156,7 +156,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     in every form. A blade is a few vertices and its fragments are few past the near blades, so the work per blade
     (hidden blades included) and the workgroup's own cost ate what the mesh stage saved. An earlier form with shared
     memory between the threads cost ~3 ms.
-* **VALUE NOISE** (`grassValueNoise`: the type patches, the dry spots, the wind ripple, the canopy's sun path and flecks, the
+* **VALUE NOISE** (`grassValueNoise`: the type patches, the dry spots, the wind ripple, the
   far tier's ripple, the clutter's placement and textures) is ONE bilinear tap: the lattice is the terrain noise
   texture's A channel ([Terrain](Terrain.md)), sampled at the smoothstepped fraction, so the hardware's blend is the
   noise's own. The cell wraps in the shader (`TERRAIN_NOISE_SIZE`), so the sampler never sees large UVs. Every includer
@@ -209,7 +209,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   snow layers leave of the GROUND x the grass amount of its climate pick's textures (`u_terrain_splatGrass` per slot,
   `TerrainSplatMaterial::grass`, set per ground source in Procedural's `TERRAIN_TEX_SOURCES`; 0 for non-ground
   sources) x (1 - "Cover/Canopy thinning" x the FOREST FLOOR MAP's canopy (the ground clutter's: the clutter frame at
-  binding 8; no map = no thinning): a closed canopy holds little grass. The ground's canopy shading under the blades
+  binding 8; no map = no thinning): a closed canopy holds little grass. The ground's shading under the blades
   (`grassGroundCanopy`) does not see the thinning. No grass until the terrain texture set is registered (the startup
   bake). The splat's relief height blend is not applied (linear coverages). Corners are shared by a level's cells, so
   the bilinear density is continuous across them. THE DENSITY'S DETAIL IS THE CELL'S: a far cell (16 - 32 m) blends its
@@ -265,43 +265,36 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     darkening" scales the albedo down as the patch's mean temperature (the cull's 4 corners, at their height; it rides
     the record's `cellTemperature` half with the cell size) falls from "Warm temperature (C)" to "Cold temperature
     (C)".
-  * "Root occlusion" stands in for the blades shadowing each other (they are not in the TLAS and never cast into the
-    scene cascades - the canopy and the near grass cascade, below, do that work). "Transmission" lights a blade from
-    behind.
+  * THE ROOT OCCLUSION stands in for the blades shadowing each other (they are not in the TLAS and never cast into the
+    scene cascades): on the ambient and the transmission, full at the root, none at the tip. TWO values
+    (`grassRootOcclusion`, grass.inc.glsl), mixed by the near grass cascade's weight at the point: "Look/Root
+    occlusion" INSIDE the cascade (real blade shadows are there too), "Shadows/Far root occlusion" OUTSIDE it (no
+    blade shadows: the occlusion is all there is, so the far value is ALSO on the direct sun - the same root-to-tip
+    shape on the blades, x the cover on the ground under them; on the ambient alone it could not get dark enough). On the sun it follows the
+    SUN'S HEIGHT (`u_grass_farRootSun`, the CPU's): x 1 + "Far root occlusion by sun height" (1) with the sun at
+    the horizon, x 1 at "Far root occlusion neutral sun angle (deg)" (25), x 1 - it overhead (linear in sun.y on each
+    side). "Far root occlusion" goes to 4: ABOVE 1 the light is floored at 0, so the dark part climbs the blade (at 2
+    the lower half gets none; on the ground: none from half cover) - a low sun crosses more blades on its way to a root.
+    The simple variant is always outside. "Transmission" lights a
+    blade from behind.
   * The normal blends toward the ground's with distance - linearly, to "Ground normal blend" (0.3) at the grass range
     ("Grass/Range (m)", `u_grass_range`) - with NO minimum N·V (the bright
     grazing light is wanted; clamps were tried and removed).
   * The tweaks that size the blade mesh (above) rebuild the index buffer (GPU idle + re-record); everything else is
     UBO-live (`u_grass*`).
-* **THE CANOPY: grass self-shadowing without a shadow map** ("Grass/Shadows/Canopy shadow"; 0 = off) - a blade is far
-  below a shadow-map texel. The grass layer is a thin VOLUME of blades (`grass.inc.glsl`): its top at the mean blade
-  height (`grassCanopyHeight`), its extinction = `u_grass_canopyExtinction` (the CPU fold: Canopy shadow x blades per
-  m^2 x half the blade width) x the COVER x the width factor. Its RESULT (the sun term with the flecks, and the
-  ground's canopy ambient) fades linearly with the blades' "Range fade" (`grassRangeFade`); fading the extinction kept
-  exp(-extinction x path) nearly black until the band's last metres - an edge.
-  * Sun at a point `depth` below the top (`grassCanopySun`): `exp(-extinction x depth / max(sun.y, 0.1))`.
-  * SUN FLECKS: a 2-octave noise at the path's ENTRY into the canopy turns T into lit / dark spots ("Fleck size (m)",
-    "Fleck contrast"; the mean stays about T), STRETCHED along the sun's horizontal direction into streaks (x 1 +
-    "Fleck stretch" / tan(sun elevation), capped at 16), shared by every point of that path (a fleck lights a blade
-    and the soil under it), faded out from half "Fleck fade distance (m)" to it.
-  * **THE FLECK FRAME IS HELD** (`GrassFleckFrame`, `buildUboGrass`; `grassFleck`): the stretch is a linear map that turns
-    and scales with the sun, and around the WORLD origin a point km away moved many flecks per frame while the sun cycle
-    ran - whole spots flashing. The frame (its origin near the camera, the streak axis, the stretch) stays fixed until
-    the camera is "Fleck fade distance" from its origin or the sun has moved enough to show (axis error x (1 - 1 /
-    stretch) + the stretch error > 0.05); then the old frame crossfades out over 1 s (two fleck evaluations only then).
-    Between steps the pattern is world-fixed; only the path's entry point drifts with the sun.
-  * The BLADES: the VS passes depth + extinction (location 5; the depth is linear along the blade), the FS multiplies
-    the sun visibility (direct + transmission).
-  * THE GROUND under them (`instanced_indirect_terrain.fs.glsl`, both paths): `grassGroundCanopy` from the SAME
-    `terrainLayers` the splat uses - the sun at the full canopy depth into `g_sunVisMaterial` (the ground's sun only;
-    the film keeps its own), and the blades' "Root occlusion" x the canopy's opacity on the ambient. Formed right
-    after the layers. The tessellated path packs the four values (the sun, the ambient, the far tier's weight and its
-    stripe scale) into ONE `packUnorm4x8` uint across the splat: four halves live there took that FS from 64 to 72
-    registers.
-  * The shadow map keeps the big casters (trees, terrain); the canopy multiplies them.
+* **THE BLADES' SHADOWS ON EACH OTHER** are the near grass cascade (below) and the root occlusion, nothing else. Tried:
+  a canopy volume ("Canopy shadow": the sun through the layer as exp(-extinction x depth), with sun flecks in a held
+  noise frame) - dropped: the near cascade and the two root occlusions do the work.
+  * THE GROUND under the blades (`instanced_indirect_terrain.fs.glsl`, both paths): `grassGroundCanopy` from the SAME
+    `terrainLayers` the splat uses - the near cascade's blade shadows into `g_sunVisMaterial` (the ground's sun only;
+    the film keeps its own; none outside the cascade), and the root occlusion (`grassRootOcclusion`, as the blades) x
+    the grass cover x the range fade on the ambient. Both blend into the far tier's light by its weight. Off without
+    grass (`u_grass_active`). Formed right after the layers. The tessellated path packs the four values (the sun, the
+    ambient, the far tier's weight and its stripe scale) into ONE `packUnorm4x8` uint across the splat: four halves
+    live there took that FS from 64 to 72 registers.
 * **THE FAR TIER** ("Grass/Far" tweaks): where the blades thin and fade out, the GROUND takes the grass layer's look, out
   to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (1; 0 = off), "Canopy shadow" (1;
-  `u_grass_farSunExtinction`, built as the blades' `u_grass_canopyExtinction`), "Brightness" (0.67), "Roughness" (0.5),
+  `u_grass_farSunExtinction`: x blades per m^2 x half the blade width x the types' mean width), "Brightness" (0.67), "Roughness" (0.5),
   "Upright normal" (0.1) + "Normal variation" (1) + "Diffuse variation" (0.3) + "Sun glint" (0.25) + "Ripple
   lean" (1.5) + "Ripple glint" (0.3), "Blade light" (0.5) + "Transmission" (2) + "Transmission focus" (25) +
   "Transmission glow" (2), the
@@ -430,7 +423,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     across the light loop. The ambient, sky and specular keep the near-up
     normal.
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
-  shadows around the camera, the canopy beyond.
+  shadows around the camera; beyond it "Far root occlusion" alone.
   * Its OWN one-layer `ShadowMap` per frame slot (`grassNearShadowMap`, `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
     through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 27, the set's highest). Drawn in the primary after
     the cascades' pass ("Grass near shadow"). Tried: an extra layer of the sun array - it took the array's size, so
@@ -452,11 +445,11 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     adds the clutter in the same secondary - only the clutter cull's near casters (see Ground clutter).
   * Receivers (`grassNearShadow`, grass.inc.glsl, only where the lit core is included): the blades and the ground
     under them - also bare ground in the box - 4 bilinear PCF taps, the receiver moved toward the sun by "Near shadow
-    bias (m)" and off its normal by a texel, x "Near shadow strength"; its weight fades over the box's edge (85-98 %)
-    AND over 1.0-1.3 x the range from the box's centre (the box is square in light space: on the ground it reaches
-    range / sin(sun elevation) along the sun, past the casters - an empty, lit band there shows as a gap) into the
-    canopy term, which it REPLACES inside. The ground clutter reads it too (its rigid and flower fragments).
-  * The blades do NOT cast into the scene cascades (removed: the canopy and this cascade replace it).
+    bias (m)" and off its normal by a texel, x "Near shadow strength"; its weight fades over the box's edge (to 98 %)
+    AND to 1.3 x the range from the box's centre, each over the outer "Near shadow blend" (0.4) share of that reach
+    (`u_grass_nearBlendStart`) - the band where the blade shadows fade into "Far root occlusion" (the box is square in light space: on the ground it reaches
+    range / sin(sun elevation) along the sun, past the casters - an empty map there would read as lit). The ground clutter reads it too (its rigid and flower fragments).
+  * The blades do NOT cast into the scene cascades (removed: this cascade and the root occlusion replace it).
 
 ## Ground clutter (`ClutterPipeline`, "Clutter" tweaks, `ClutterSettings`)
 
@@ -883,7 +876,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
   UNORM image) is mixed toward its Rec. 709 luminance by "Far saturation scale" (0.8; 0 grey .. 1 as baked .. 2). The SKY term is the real sky: pi x the cosine-weighted mean radiance
   of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45° down 4 x 0.15:
   one cloud overhead does not set it alone), baked once per frame by the sky-map bake into `SKY_MAP_TREE_SKY_TEXEL`
-  (one `texelFetch` per ray), + the SKY RADIANCE delta light from straight up (`u_sky_radiance`, "Sky/Sky Radiance":
+  (one `texelFetch` per ray), + the SKY RADIANCE delta light from straight up (`u_sky_radiance`, "Sky/Sun/Sky Radiance":
   the sky map holds only its atmosphere-scattered part, the lit surfaces take the direct part through the GI probes'
   projection - on an upward surface its irradiance is `u_sky_radiance` itself), x "Far ambient" (0.7; 1 = physical). The sky
   map is baked in the GI stage, before "Far trees".

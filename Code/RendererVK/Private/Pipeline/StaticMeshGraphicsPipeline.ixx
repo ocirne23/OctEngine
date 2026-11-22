@@ -41,7 +41,7 @@ public:
         Buffer& terrainFilmCommandBuffer;         // terrain film sequences (plain indirect draws)
         Buffer& treeVoxelCommandBuffer;           // the trees' voxel-tier sequences (plain indirect draws: FragDepth)
         Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] film, [4] tree voxels
-        bool drawSky;                             // "Sky/Enabled": one fullscreen triangle on the far plane
+        bool drawSky;                             // "Sky/Atmosphere/Enabled": one fullscreen triangle on the far plane
 
         Buffer& lightInfosBuffer;
 		Buffer& lightGridsBuffer;

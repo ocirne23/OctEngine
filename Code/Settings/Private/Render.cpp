@@ -22,24 +22,26 @@ namespace
 void Settings::registerSky(SkyParams& s)
 {
     SkyParams* p = &s;
-    Tweak::boolean("Sky", "Enabled", &s.enabled);
-    Tweak::float3("Sky", "Sun Direction", &s.sunDirection, 0.01f, [p]() { p->sunDirection = glm::normalize(p->sunDirection); }, ETweakFlags::Runtime);
-    Tweak::color3("Sky", "Sun Color", &s.sunColor, &s.sunIntensity, 0.0f, FLT_MAX, 0.05f, {}, ETweakFlags::Runtime);
-    Tweak::color3("Sky", "Ambient", &s.ambientColor, &s.ambientIntensity, 0.0f, 0.2f, 0.001f, {}, ETweakFlags::Runtime);
-    Tweak::color3("Sky", "Sky Radiance", &s.skyRadianceColor, &s.skyRadianceIntensity, 0.0f, 1.2f, 0.001f);
-    Tweak::color3("Sky", "Ground Albedo", &s.groundColor, &s.groundIntensity, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Sky", "Ground Horizon", &s.groundHorizon, 0.0f, 0.5f, 0.01f);
+    // THE SUN CYCLE, at the top of "Sky". It writes the time and the sun direction every frame: Runtime (never baked,
+    // editable under the lock).
+    Tweak::boolean("Sky", "Sun cycle", &s.sunCycle, {}, ETweakFlags::Runtime);
+    Tweak::boolean("Sky", "Sun cycle paused", &s.sunCyclePaused, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky", "Time of day (h)", &s.timeOfDay, 0.0f, 24.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky", "Sun cycle speed (x real time)", &s.sunCycleSpeed, 0.0f, 3600.0f, 1.0f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky", "Latitude (deg)", &s.latitude, -90.0f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky", "Day of year", &s.dayOfYear, 1.0f, 365.0f, 1.0f, {}, ETweakFlags::Runtime);
+    // "Sky/Sun": the sun itself and the light that goes with it.
+    Tweak::float3("Sky/Sun", "Sun Direction", &s.sunDirection, 0.01f, [p]() { p->sunDirection = glm::normalize(p->sunDirection); }, ETweakFlags::Runtime);
+    Tweak::color3("Sky/Sun", "Sun Color", &s.sunColor, &s.sunIntensity, 0.0f, FLT_MAX, 0.05f, {}, ETweakFlags::Runtime);
+    Tweak::color3("Sky/Sun", "Ambient", &s.ambientColor, &s.ambientIntensity, 0.0f, 0.2f, 0.001f, {}, ETweakFlags::Runtime);
+    Tweak::color3("Sky/Sun", "Sky Radiance", &s.skyRadianceColor, &s.skyRadianceIntensity, 0.0f, 1.2f, 0.001f);
+    Tweak::floatVar("Sky/Sun", "Night sky radiance", &s.nightSkyRadiance, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime); // x "Sky Radiance" with the sun down
+    Tweak::color3("Sky/Sun", "Ground Albedo", &s.groundColor, &s.groundIntensity, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Sky/Sun", "Ground Horizon", &s.groundHorizon, 0.0f, 0.5f, 0.01f);
     Tweak::floatVar("Sky/Sun", "Sun Angle Cos", &s.sunAngularCos, 0.9995f, 1.0f, 0.000001f);
     Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.01f, 5.0f, 0.01f);
-    // The cycle writes the time and the sun direction every frame: Runtime (never baked, editable under the lock).
-    Tweak::boolean("Sky/Sun cycle", "Enabled", &s.sunCycle, {}, ETweakFlags::Runtime);
-    Tweak::boolean("Sky/Sun cycle", "Paused", &s.sunCyclePaused, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Sun cycle", "Time of day (h)", &s.timeOfDay, 0.0f, 24.0f, 0.01f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Sun cycle", "Speed (x real time)", &s.sunCycleSpeed, 0.0f, 3600.0f, 1.0f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Sun cycle", "Latitude (deg)", &s.latitude, -90.0f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Sun cycle", "Day of year", &s.dayOfYear, 1.0f, 365.0f, 1.0f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Sun cycle", "Night sky radiance", &s.nightSkyRadiance, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
 
+    Tweak::boolean("Sky/Atmosphere", "Enabled", &s.enabled); // the sky draw (the atmosphere, the sun disc, the stars)
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
     Tweak::floatVar("Sky/Atmosphere", "Saturation", &s.saturation, 0.0f, 3.0f, 0.01f);
     // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
@@ -230,13 +232,12 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Look", "Roughness", &s.roughness, 0.05f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Root occlusion", &s.rootOcclusion, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Shadow bias (m)", &s.shadowBias, 0.0f, 5.0f, 0.01f);
-    Tweak::floatVar("Grass/Shadows", "Canopy shadow", &s.canopyShadow, 0.0f, 4.0f, 0.005f);
-    Tweak::floatVar("Grass/Shadows", "Fleck size (m)", &s.fleckSize, 0.01f, 2.0f, 0.005f);
-    Tweak::floatVar("Grass/Shadows", "Fleck contrast", &s.fleckContrast, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Shadows", "Fleck fade distance (m)", &s.fleckFadeDistance, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Grass/Shadows", "Fleck stretch", &s.fleckStretch, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Grass/Shadows", "Far root occlusion", &s.farRootOcclusion, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/Shadows", "Far root occlusion by sun height", &s.farRootOcclusionBySun, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Shadows", "Far root occlusion neutral sun angle (deg)", &s.farRootOcclusionNeutralAngle, 5.0f, 85.0f, 0.5f);
     Tweak::boolean("Grass/Shadows", "Near shadows", &s.nearShadows);
     Tweak::floatVar("Grass/Shadows", "Near shadow range (m)", &s.nearShadowRange, 1.0f, 100.0f, 0.1f);    Tweak::floatVar("Grass/Shadows", "Near shadow bias (m)", &s.nearShadowBias, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Shadows", "Near shadow blend", &s.nearShadowBlend, 0.02f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Shadows", "Near shadow strength", &s.nearShadowStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Transmission", &s.transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roundness", &s.roundness, 0.0f, 2.0f, 0.01f);
@@ -340,12 +341,11 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds", "Bottom (m)", &s.bottom, 0.0f, 12000.0f, 10.0f, [p]() { p->top = oc::max(p->top, p->bottom + 100.0f); }, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Top (m)", &s.top, 100.0f, 10000.0f, 10.0f, [p]() { p->bottom = oc::min(p->bottom, p->top - 100.0f); }, ETweakFlags::Runtime);
     // Live under the "Sky/Clouds" lock: the values it feeds (upper coverage, the shadow's mean) are never baked.
+    // "Coverage" is THE coverage, always the user's. The "Day variation" tweaks ADD to it over the day (0 = none).
     Tweak::floatVar("Sky/Clouds", "Coverage", &s.coverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
-    Tweak::boolean("Sky/Clouds/Day cycle", "Enabled", &s.dayCycle, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Clouds/Day cycle", "Base coverage", &s.baseCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Clouds/Day cycle", "Low sun coverage", &s.lowSunCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Clouds/Day cycle", "Low sun span (deg)", &s.lowSunCoverageSpanDeg, 0.1f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
-    Tweak::floatVar("Sky/Clouds/Day cycle", "Daily variation", &s.dayCoverageVariation, 0.0f, 0.5f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day variation", "Low sun coverage", &s.lowSunCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day variation", "Low sun span (deg)", &s.lowSunCoverageSpanDeg, 0.1f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Day variation", "Drift", &s.dayCoverageVariation, 0.0f, 0.5f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro size (km)", &s.macroSizeKm, 10.0f, 1000.0f, 1.0f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro variation", &s.macroVariation, 0.0f, 3.0f, 0.01f, {}, ETweakFlags::Runtime);
