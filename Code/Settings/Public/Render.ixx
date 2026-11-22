@@ -583,7 +583,7 @@ export struct GrassParams
     // heads cover (they stand above the blades: stalks per m^2 x a head's area x the view's slant) x this. 0 = off.
     float farSeedHeads = 1.0f;
     float farCanopyShadow = 1.0f;
-    float farBrightness = 0.67f;
+    float farBrightness = 0.55f;
     float farRoughness = 0.5f;
     float farUpright = 0.1f;
     float farNormalVariation = 1.0f;
@@ -608,7 +608,7 @@ export struct GrassParams
     // (farTransmission, the blades' "Transmission") with the sun ahead - instead of as flat ground (sin(elevation)).
     // Plus a forward-scatter lobe: farTransmissionGlow x (-V.L)^farTransmissionFocus, a glow under the sun (0 = off).
     float farBladeLight = 0.5f;
-    float farTransmission = 2.0f;
+    float farTransmission = 1.5f;
     float farTransmissionFocus = 25.0f;
     float farTransmissionGlow = 2.0f;
     // THE TUFTS: the blades grow in tufts, not as an even carpet. A patch holds "Blades per patch" / bladesPerTuft tufts

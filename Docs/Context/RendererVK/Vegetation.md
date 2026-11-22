@@ -298,9 +298,9 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     live there took that FS from 64 to 72 registers.
 * **THE FAR TIER** ("Grass/Far" tweaks): where the blades thin and fade out, the GROUND takes the grass layer's look, out
   to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (1; 0 = off), "Canopy shadow" (1;
-  `u_grass_farSunExtinction`: x blades per m^2 x half the blade width x the types' mean width), "Brightness" (0.67), "Roughness" (0.5),
+  `u_grass_farSunExtinction`: x blades per m^2 x half the blade width x the types' mean width), "Brightness" (0.55), "Roughness" (0.5),
   "Upright normal" (0.1) + "Normal variation" (1) + "Diffuse variation" (0.3) + "Sun glint" (0.25) + "Ripple
-  lean" (1.5) + "Ripple glint" (0.3), "Blade light" (0.5) + "Transmission" (2) + "Transmission focus" (25) +
+  lean" (1.5) + "Ripple glint" (0.3), "Blade light" (0.5) + "Transmission" (1.5) + "Transmission focus" (25) +
   "Transmission glow" (2), the
   stripes below. All lockable but the two extinctions (live: the blade count). (A tuft-scale colour grain, growing with
   the distance, was tried and removed: the stripes carry the pattern. A weight cap, a root-to-tip colour pick and a
