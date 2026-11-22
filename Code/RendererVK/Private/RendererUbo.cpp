@@ -117,6 +117,53 @@ namespace
     glm::vec3 srgbToLinear(const glm::vec3& srgb) { return glm::pow(glm::clamp(srgb, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(2.2f)); }
     float grassLod2Distance(const GrassParams& g) { return glm::max(g.lod2Distance, g.lod1Distance); }
 
+    // THE TUFTS per patch: the blades / "Blades per tuft" (at least 1); the most blades a tuft holds.
+    int grassTufts(const GrassParams& g)
+    {
+        const int blades = glm::clamp(g.bladesPerPatch, 1, (int)RendererVKLayout::GRASS_MAX_BLADES);
+        return glm::max((int)glm::round((float)blades / (float)glm::max(g.bladesPerTuft, 1)), 1);
+    }
+    int grassTuftMembers(const GrassParams& g)
+    {
+        const int blades = glm::clamp(g.bladesPerPatch, 1, (int)RendererVKLayout::GRASS_MAX_BLADES);
+        return (blades + grassTufts(g) - 1) / grassTufts(g);
+    }
+
+    // THE GRASS TYPES as the layer the canopy, the far tier and the cull see: the share-weighted MEAN height, width and
+    // tint (x brightness, linear), and the tallest a blade can get (x "Height", a seed stalk's x "Seed stalks/Height").
+    // No type with a share: the tufts all pick type 1 (grass.vs.glsl's argmax), so it alone counts.
+    struct GrassTypeStats
+    {
+        float maxHeight = 1.0f;
+        float meanHeight = 1.0f;
+        float meanWidth = 1.0f;
+        glm::vec3 meanTint{ 1.0f };
+    };
+    float grassTypeShare(const GrassParams& g, int i)
+    {
+        float total = 0.0f;
+        for (const GrassParams::Type& t : g.types)
+            total += glm::max(t.share, 0.0f);
+        return total > 0.0f ? glm::max(g.types[i].share, 0.0f) / total : (i == 0 ? 1.0f : 0.0f);
+    }
+    GrassTypeStats grassTypeStats(const GrassParams& g)
+    {
+        GrassTypeStats s{ 0.0f, 0.0f, 0.0f, glm::vec3(0.0f) };
+        for (int i = 0; i < GrassParams::TYPES; ++i)
+        {
+            const GrassParams::Type& t = g.types[i];
+            const float w = grassTypeShare(g, i);
+            if (w <= 0.0f)
+                continue;
+            const float height = glm::max(t.height, 0.1f);
+            s.maxHeight = glm::max(s.maxHeight, height * (t.seedStalks > 0.0f ? glm::max(g.seedHeight, 1.0f) : 1.0f));
+            s.meanHeight += w * height;
+            s.meanWidth += w * glm::max(t.width, 0.1f);
+            s.meanTint += w * srgbToLinear(t.tint) * glm::max(t.brightness, 0.0f);
+        }
+        return s;
+    }
+
     float rockCoverStart(const RockParams& r) { return glm::clamp(r.coverSlopeStart, 0.0f, 1.0f); }
 
     float forceIsoThreshold(const ForceFieldParams& f) { return glm::max(f.isoThreshold, 1e-3f); }
@@ -1963,12 +2010,12 @@ void RendererState::registerUboValues(UboBlock& list)
         // The pixel floor as world width per metre of distance: one pixel spans 2 d / m_mipPixelScale.
         list.add("grass_minWidthPerMetre", [this, &g] { return m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f; }, UboLive);
         // The canopy's base extinction (1/m; grass.inc.glsl): "Canopy shadow" x blades per m^2 x the mean blade width
-        // (half the root width). 0 without grass: the terrain FS then skips the canopy.
+        // (half the root width, x the types' mean width). 0 without grass: the terrain FS then skips the canopy.
         list.add("grass_canopyExtinction", [this, &g]
             {
                 const float patchSize = grassPatchSize();
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
-                return grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+                return grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth * grassTypeStats(g).meanWidth : 0.0f;
             }, UboLive);
         // THE FAR TIER's extinction (1/m; grass.inc.glsl grassGroundCanopy): "Far/Thickness" x blades per m^2 x the mean
         // blade width - the view's, not the sun's ("Canopy shadow" is not in it). 0 = off.
@@ -1976,14 +2023,14 @@ void RendererState::registerUboValues(UboBlock& list)
             {
                 const float patchSize = grassPatchSize();
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
-                return grassActive() ? glm::max(g.farThickness, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+                return grassActive() ? glm::max(g.farThickness, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth * grassTypeStats(g).meanWidth : 0.0f;
             }, UboLive);
         // The far tier's own canopy sun extinction (as grass_canopyExtinction, with "Far/Canopy shadow") and its look.
         list.add("grass_farSunExtinction", [this, &g]
             {
                 const float patchSize = grassPatchSize();
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
-                return grassActive() ? glm::max(g.farCanopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+                return grassActive() ? glm::max(g.farCanopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth * grassTypeStats(g).meanWidth : 0.0f;
             }, UboLive);
         list.add("grass_farBrightness", [&g] { return glm::max(g.farBrightness, 0.0f); }, g.farBrightness);
         list.add("grass_farRoughness", [&g] { return glm::clamp(g.farRoughness, 0.05f, 1.0f); }, g.farRoughness); // the BRDF's alpha floor
@@ -2036,10 +2083,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_windFadeStart", g.windFadeStart);
         list.add("grass_windFadeEnd", [&] { return glm::max(g.windFadeEnd, g.windFadeStart + 0.01f); }, g.windFadeEnd, g.windFadeStart);
         list.add("grass_curvature", g.curvature);
-        list.add("grass_invClumpSize", [&] { return 1.0f / glm::max(g.clumpSize, 0.01f); }, g.clumpSize);
-        list.add("grass_patchiness", [&] { return glm::clamp(g.patchiness, 0.0f, 1.0f); }, g.patchiness);
         list.add("grass_growBand", [&] { return glm::max(g.growBand, 0.01f); }, g.growBand);
-        list.add("grass_bareFraction", [&] { return glm::clamp(g.bareFraction, 0.0f, 1.0f); }, g.bareFraction);
         list.add("grass_sizeByCover", [&] { return glm::clamp(g.sizeByCover, 0.0f, 1.0f); }, g.sizeByCover);
         list.add("grass_widthByHeight", [&] { return g.widthByHeight; }, g.widthByHeight);
         list.add("grass_rootOcclusion", g.rootOcclusion);
@@ -2073,6 +2117,66 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_nearStrength", [&] { return glm::clamp(g.nearShadowStrength, 0.0f, 1.0f); }, g.nearShadowStrength);
         list.add("grass_nearBias", [&] { return glm::max(g.nearShadowBias, 0.0f); }, g.nearShadowBias);
         list.add("grass_canopyThinning", [&] { return glm::clamp(g.canopyThinning, 0.0f, 1.0f); }, g.canopyThinning);
+        // THE TUFTS (grass_blade.inc.glsl): tufts per patch, and the most blades one holds (they are dealt in turn).
+        list.add("grass_tufts", [&g] { return (float)grassTufts(g); }, g.bladesPerPatch, g.bladesPerTuft);
+        list.add("grass_tuftMembers", [&g] { return (float)grassTuftMembers(g); }, g.bladesPerPatch, g.bladesPerTuft);
+        list.add("grass_tuftRadius", [&] { return glm::max(g.tuftRadius, 0.0f); }, g.tuftRadius);
+        list.add("grass_tuftFan", [&] { return glm::clamp(g.tuftFan, 0.0f, 1.0f); }, g.tuftFan);
+        list.add("grass_tuftSizeVariation", [&] { return glm::clamp(g.tuftSizeVariation, 0.0f, 0.9f); }, g.tuftSizeVariation);
+        // THE GRASS TYPES: per type (x = height, y = width, z = curvature - the blade tweaks' factors -, w = its share of
+        // all the shares) and (rgb = its tint x brightness, linear; w = its seed stalk share). Live: arrays (a baked array
+        // would be one constant).
+        list.add("grass_invTypePatchSize", [&] { return 1.0f / glm::max(g.typePatchSize, 0.5f); }, g.typePatchSize);
+        list.add("grass_typeMixing", [&] { return glm::clamp(g.typeMixing, 0.0f, 1.0f); }, g.typeMixing);
+        list.addArray("grass_typeShape", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
+            {
+                const GrassParams::Type& t = g.types[i];
+                return glm::vec4(glm::max(t.height, 0.1f), glm::max(t.width, 0.1f), glm::max(t.curvature, 0.0f), grassTypeShare(g, (int)i));
+            }, UboLive);
+        list.addArray("grass_typeTint", RendererVKLayout::GRASS_TYPES, [&g](uint32 i)
+            {
+                const GrassParams::Type& t = g.types[i];
+                return glm::vec4(srgbToLinear(t.tint) * glm::max(t.brightness, 0.0f), glm::clamp(t.seedStalks, 0.0f, 1.0f));
+            }, UboLive);
+        // THE FAR TIER's SEED STALKS (grass.inc.glsl grassFarColor): per type their optical depth for a view at 45
+        // degrees - "Far/Seed heads" x its seed stalks per m^2 x the area of a stalk that shows over the blades, in units
+        // of the stalk's height (the blade height x the type's x "Seed stalks/Height", at the mean height variation) x its
+        // width (the blade width x the type's x "Seed stalks/Width"):
+        // - the HEAD: "Seed head length" x "Seed head width" x 0.447 (the mean of grassBladeWidth's head profile,
+        //   sin(pi s) (1 - s^2));
+        // - the STALK under it, down to 0.6 of the blades' height (they thin to their tips, so it shows between them), at
+        //   its mean width there (0.75).
+        list.add("grass_typeSeedFar", [this, &g]
+            {
+                glm::vec4 depth(0.0f);
+                if (!grassActive())
+                    return depth;
+                const float patchSize = grassPatchSize();
+                const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
+                const float seedHeight = glm::max(g.seedHeight, 0.5f), seedLength = glm::clamp(g.seedLength, 0.05f, 0.6f);
+                const float shown = seedLength * glm::max(g.seedHeadWidth, 1.0f) * 0.447f + glm::max(1.0f - 0.6f / seedHeight - seedLength, 0.0f) * 0.75f;
+                const float stalkHeight = g.bladeHeight * seedHeight * (1.0f - 0.5f * g.heightVariation);
+                const float stalkWidth = g.bladeWidth * glm::max(g.seedWidth, 0.05f);
+                for (int i = 0; i < GrassParams::TYPES; ++i)
+                {
+                    const GrassParams::Type& t = g.types[i];
+                    depth[i] = glm::max(g.farSeedHeads, 0.0f) * bladesPerM2 * glm::clamp(t.seedStalks, 0.0f, 1.0f)
+                        * shown * stalkHeight * glm::max(t.height, 0.1f) * stalkWidth * glm::max(t.width, 0.1f);
+                }
+                return depth;
+            }, UboLive);
+        // The layer's means (the canopy height, the far tier's colour) and the tallest blade (the cull's bounds).
+        list.add("grass_maxHeightScale", [&g] { return grassTypeStats(g).maxHeight; }, UboLive);
+        list.add("grass_meanHeightScale", [&g] { return grassTypeStats(g).meanHeight; }, UboLive);
+        list.add("grass_meanTint", [&g] { return grassTypeStats(g).meanTint; }, UboLive);
+        // SEED STALKS and the blade's detail.
+        list.add("grass_seedHeight", [&] { return glm::max(g.seedHeight, 0.5f); }, g.seedHeight);
+        list.add("grass_seedWidth", [&] { return glm::max(g.seedWidth, 0.05f); }, g.seedWidth);
+        list.add("grass_seedLength", [&] { return glm::clamp(g.seedLength, 0.05f, 0.6f); }, g.seedLength);
+        list.add("grass_seedHeadWidth", [&] { return glm::max(g.seedHeadWidth, 1.0f); }, g.seedHeadWidth);
+        list.add("grass_seedAlbedo", [&] { return srgbToLinear(g.seedColor); }, g.seedColor);
+        list.add("grass_seedFarBlade", [&] { return glm::max(g.seedFarBlade, 0.0f); }, g.seedFarBlade);
+        list.add("grass_midrib", [&] { return glm::clamp(g.midrib, -1.0f, 1.0f); }, g.midrib);
     }
     {
         // ---- Ground clutter ("Clutter": clutter_cull.cs.glsl and the clutter / flower shaders)

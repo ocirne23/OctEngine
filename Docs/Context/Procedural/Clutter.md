@@ -101,7 +101,7 @@ ClutterType <name>
 		Density (per m^2 at full fit) · Temperature min max (C) · Precipitation min max (mm/yr) · ClimateWidth
 		Cluster size coverage (m, 0..1: drifts / groups) · Slope max (rise / run) · Altitude min (m above the water)
 		THE TERMS - each `a b`: the density x mix(a, b, its measure 0..1); one value = both; default 1 1 (no matter):
-		Grass bare full (the GRASS AS DRAWN: the terrain's cover x the blades' clumps x the canopy thinning;
+		Grass bare full (the GRASS AS DRAWN: the terrain's cover x the canopy thinning;
 		        every flower type has bare 0: no flower where no grass) · Crag none full (bedrock showing) · Beach none full ·
 		Canopy open shaded (crowns overhead) · Trunk far near · Rock far near (a rock's foot) · Wet dry wet (humidity) ·
 		River none full [curve] (the river influence: 1 in a channel or over a lake, 0 past the floodplain - linear

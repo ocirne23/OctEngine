@@ -10,6 +10,7 @@ import :Layout;
 
 static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS, "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.Render cannot import :Layout)");
 static_assert(GrassParams::MAX_BLADES == (int)RendererVKLayout::GRASS_MAX_BLADES, "GrassParams::MAX_BLADES (the \"Blades per patch\" range) must match GRASS_MAX_BLADES");
+static_assert(GrassParams::TYPES == (int)RendererVKLayout::GRASS_TYPES, "GrassParams::TYPES must match GRASS_TYPES");
 
 RendererState::RendererState()
     : m_farTreeParams(Globals::settings.farTree)

@@ -299,7 +299,7 @@ void main()
         const float climateFit = exp(-0.5 * dot(scaled, scaled));
         // THE CLIMATE FIRST: it needs two of the measures, and a type outside its climate keeps almost no rank. The most
         // the type can still keep = its bound (Density x every term at its largest) x the fit; a rank past it never passes,
-        // and takes none of the measures below (the other grid values, the floor map's fetch, the clump noise).
+        // and takes none of the measures below (the other grid values, the floor map's fetch).
         if (rank >= type.bound.x * climateFit * (countScale * rangeFade * 1.0001)) // + a rounding margin
             continue;
 
@@ -307,9 +307,8 @@ void main()
         const float water = dot(vec4(s_water[i00], s_water[i10], s_water[i01], s_water[i11]), w);
         const vec3 river = s_river[i00] * w.x + s_river[i10] * w.y + s_river[i01] * w.z + s_river[i11] * w.w;
         const vec4 floorMap = clutterFloorAt(xz); // the forest floor
-        // THE GRASS AS DRAWN (the `Grass` term's measure): cover x the blades' clumps x the canopy thinning, as grass_cull
-        // keeps them - so no flower stands in a bare spot between the clumps.
-        const float grass = cover.x * grassClump(xz) * (1.0 - u_grass_canopyThinning * floorMap.x);
+        // THE GRASS AS DRAWN (the `Grass` term's measure): cover x the canopy thinning, as grass_cull keeps the blades.
+        const float grass = cover.x * (1.0 - u_grass_canopyThinning * floorMap.x);
 
         float density = type.placement.x * climateFit;
         density *= mix(type.terms0.x, type.terms0.y, grass) * mix(type.terms0.z, type.terms0.w, cover.y)

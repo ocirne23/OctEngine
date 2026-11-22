@@ -826,6 +826,7 @@ export namespace RendererVKLayout
     // grass.inc.glsl grassLodSegments. Each LOD HALVES the one before (they nest): grass.vs.glsl geomorphs the dropped rows.
     constexpr uint32 GRASS_LOD_SEGMENTS[GRASS_LODS] = { 8, 4, 2, 1 };
     constexpr uint32 GRASS_CULL_GROUP = 64;
+    constexpr uint32 GRASS_TYPES = 4;              // the grass types a tuft picks from (u_grass_typeShape / typeTint)
     // TerrainResources' noise texture, texels per side: also the grass value noise's lattice period (its A channel).
     constexpr uint32 TERRAIN_NOISE_SIZE = 512;
 

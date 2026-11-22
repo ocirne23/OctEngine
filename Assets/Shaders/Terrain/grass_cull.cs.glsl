@@ -51,19 +51,12 @@ struct GrassPatch // RendererVKLayout::GrassPatchGpu
 };
 layout (binding = 4, std430) writeonly buffer OutPatches { GrassPatch out_patches[]; };
 
-struct DrawIndexedIndirect // VkDrawIndexedIndirectCommand
-{
-    uint indexCount;
-    uint instanceCount;
-    uint firstIndex;
-    int vertexOffset;
-    uint firstInstance;
-};
-layout (binding = 5, std430) writeonly buffer OutCommands { DrawIndexedIndirect out_commands[]; };
+// The draw lists, as words: a VkDrawIndexedIndirectCommand per draw (5 words, firstInstance = the patch's record).
+layout (binding = 5, std430) writeonly buffer OutCommands { uint out_commands[]; };
 // [0] = the main draws, [1] = the near grass cascade's caster draws (the draw counts), [2] = the patch records (every
 // list's firstInstance).
 layout (binding = 6, std430) buffer OutCounts { uint out_counts[3]; };
-layout (binding = 7, std430) writeonly buffer OutNearShadowCommands { DrawIndexedIndirect out_nearShadowCommands[]; };
+layout (binding = 7, std430) writeonly buffer OutNearShadowCommands { uint out_nearShadowCommands[]; };
 // THE FOREST FLOOR MAP (the clutter's: ClutterPipeline's frame; floorDim 0 = none): "Canopy thinning" under the crowns.
 #define CLUTTER_FRAME_BINDING 8
 #include "clutter.inc.glsl"
@@ -141,11 +134,13 @@ void main()
         return;
 
     // Bounds: the ground between the corners can rise above them (a finer mesh than the patch), the blades stand on it
-    // and lean with the wind by up to their height.
-    const float bladeH = u_grass_bladeHeight + u_grass_rootSink;
+    // and lean with the wind by up to their height - the tallest grass type's (a seed stalk's) - and a tuft's blades
+    // stand up to its radius off its root (which is in the patch).
+    const float bladeH = u_grass_bladeHeight * u_grass_maxHeightScale + u_grass_rootSink;
+    const float reach = bladeH + u_grass_tuftRadius;
     const float slack = 0.5 * P + bladeH;
-    const vec3 boxMin = vec3(origin.x - bladeH, hMin - u_grass_rootSink - 1.0, origin.y - bladeH);
-    const vec3 boxMax = vec3(origin.x + P + bladeH, hMax + slack, origin.y + P + bladeH);
+    const vec3 boxMin = vec3(origin.x - reach, hMin - u_grass_rootSink - 1.0, origin.y - reach);
+    const vec3 boxMax = vec3(origin.x + P + reach, hMax + slack, origin.y + P + reach);
     const vec3 sphereCentre = 0.5 * (boxMin + boxMax);
     const float sphereRadius = 0.5 * length(boxMax - boxMin);
     bool visible = true;
@@ -179,10 +174,23 @@ void main()
     out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16), packUnorm4x8(density),
         packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
 
-    // The same draw in both lists (the same LOD: the caster is the blade the main pass shades).
-    const DrawIndexedIndirect draw = DrawIndexedIndirect(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0, slot);
+    // The same blades in both lists (the caster is the blade the main pass shades), the casters ONE LOD COARSER
+    // (grassCasterLod; the record holds the main LOD): the first `blades` blades of the LOD's mesh.
     if (visible)
-        out_commands[atomicAdd(out_counts[0], 1u)] = draw; // <= slot < GRASS_MAX_PATCHES
+    {
+        const uint i = atomicAdd(out_counts[0], 1u); // <= slot < GRASS_MAX_PATCHES
+        const uvec4 indexed = uvec4(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0u);
+        for (uint w = 0u; w < 4u; ++w)
+            out_commands[i * 5u + w] = indexed[w];
+        out_commands[i * 5u + 4u] = slot;
+    }
     if (nearCaster)
-        out_nearShadowCommands[atomicAdd(out_counts[1], 1u)] = draw;
+    {
+        const uint i = atomicAdd(out_counts[1], 1u);
+        const uint casterLod = grassCasterLod(lod);
+        const uvec4 indexed = uvec4(blades * grassIndicesPerBlade(casterLod), 1u, grassLodFirstIndex(casterLod, N), 0u);
+        for (uint w = 0u; w < 4u; ++w)
+            out_nearShadowCommands[i * 5u + w] = indexed[w];
+        out_nearShadowCommands[i * 5u + 4u] = slot;
+    }
 }

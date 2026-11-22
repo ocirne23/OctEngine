@@ -235,11 +235,10 @@ See [Procedural Rocks](Context/Procedural/Rocks.md).
 ## Grass
 
 * Far tier G2: the terrain FS blends toward the grass colour / BRDF so the range edge shows no ring.
-* Interaction (trampling), clump / flower scatter.
+* Interaction (trampling), flower scatter.
 * No VR. Roots do not sample the tessellated relief; the splat relief blend does not affect density.
 * Blades: no RTAO, not in the TLAS, no scene-cascade shadows. Other objects do not read the near
   grass cascade.
-* Mesh shaders only if a profile asks.
 
 ## Clouds
 

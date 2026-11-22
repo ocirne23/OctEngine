@@ -380,6 +380,7 @@ static oc::string buildLayoutPreamble()
     def("GRASS_LOD2_SEGMENTS", GRASS_LOD_SEGMENTS[2], "u");
     def("GRASS_LOD3_SEGMENTS", GRASS_LOD_SEGMENTS[3], "u");
     def("GRASS_CULL_GROUP", GRASS_CULL_GROUP);
+    def("GRASS_TYPES", GRASS_TYPES); // an array size: no "u"
     def("TERRAIN_NOISE_SIZE", TERRAIN_NOISE_SIZE);
     def("CLUTTER_CANDIDATES", CLUTTER_CANDIDATES); // a workgroup size: no "u" (a layout qualifier)
     def("CLUTTER_MAX_PATCHES", CLUTTER_MAX_PATCHES, "u");

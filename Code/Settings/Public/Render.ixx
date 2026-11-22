@@ -486,22 +486,22 @@ export struct GrassParams
 
     bool enabled = true;
     int bladesPerPatch = 1024;     // blades in a full patch (<= MAX_BLADES): the near density is this / patch size^2
-    float patchSize = 1.5f;       // m; ideally a divisor of the terrain chunk size
+    float patchSize = 1.0f;       // m; ideally a divisor of the terrain chunk size
     float range = 150.0f;          // m: no blade past it
     float rangeFade = 100.0f;      // m: the blades thin out to none over the last metres of the range
-    float bladeHeight = 1.0f;      // m
-    float heightVariation = 0.6f;  // 0..1: the shortest blade is (1 - this) x the height
-    float bladeWidth = 0.04f;     // m at the root
+    float bladeHeight = 1.25f;     // m
+    float heightVariation = 0.55f; // 0..1: the shortest blade is (1 - this) x the height
+    float bladeWidth = 0.025f;    // m at the root
     float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
     float thinStart = 20.0f;      // m: all blades inside it; past it (start / d)^exponent of them
-    float thinExponent = 2.0f;
-    float widthCompensation = 0.5f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
+    float thinExponent = 1.25f;
+    float widthCompensation = 1.0f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
     float maxWidthScale = 2.0f;
     float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
     float lod2Distance = 30.0f;
     float lod3Distance = 60.0f;
     float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (>= 0.01)
-    float minPixelWidth = 1.0f;    // px: a blade is never narrower (fights the far shimmer)
+    float minPixelWidth = 1.2f;    // px: a blade is never narrower (fights the far shimmer)
     float groundBlend = 0.3f;     // the normal's blend to the ground's at the grass range (linear from the camera)
     // The shared wind ("Sky/Wind", wind.inc.glsl: its direction, speed and gusts) bends the blades: the tip's push in
     // blade heights per m/s, plus a small-scale ripple (value noise moving with the mean wind).
@@ -515,9 +515,6 @@ export struct GrassParams
     float windFadeStart = 100.0f;
     float windFadeEnd = 200.0f;
     float curvature = 0.4f;        // the blades' own lean, in blade heights (random direction)
-    float clumpSize = 5.0f;        // m: the size of the clumps and bare spots
-    float patchiness = 0.25f;      // 0 = even cover, 1 = clumps with bare ground between
-    float bareFraction = 0.25f;    // about this share of the ground is the bare / thin part of the clump pattern
     float growBand = 0.7f;         // a blade shrinks into the ground over this fraction of the kept range (no pops)
     float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter by
                                    // the cover - not only fewer (sparse long stalks otherwise)
@@ -537,7 +534,7 @@ export struct GrassParams
     float coldDarkening = 0.7f;
     float coldTemperature = 0.0f;
     float warmTemperature = 20.0f;
-    float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches)
+    float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches ~2.7 x typePatchSize)
     float roughness = 0.5f;
     float rootOcclusion = 0.8f;
     float shadowBias = 0.5f;       // m: the blade's sun shadow lookup moves this far toward the sun at the root (none at
@@ -557,12 +554,12 @@ export struct GrassParams
     // It blends into the canopy over the box's outer part. nearShadowBias: the receiver's shift toward the sun (m).
     bool nearShadows = true;
     float nearShadowRange = 8.0f;
-    float nearShadowBias = 0.15f;
-    float nearShadowStrength = 0.9f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
+    float nearShadowBias = 0.0f;
+    float nearShadowStrength = 1.0f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
-    float viewTurn = 0.4f;        // 0..1: how far a blade seen edge-on turns its face toward the view (1 = always face-on)
-    float viewTurnBand = 0.15f;    // the edge-on share of the view (|side . view perpendicular|) over which the turn fades in
+    float viewTurn = 0.85f;       // 0..1: how far a blade seen edge-on turns its face toward the view (1 = always face-on)
+    float viewTurnBand = 0.01f;    // the edge-on share of the view (|side . view perpendicular|) over which the turn fades in
     // THE FAR TIER (terrain FS, grass.inc.glsl grassGroundCanopy): where the blades fade out, the ground takes the grass
     // layer's look by how much of the view the layer covers: x farThickness on its optical depth (blades per m^2 x the
     // mean blade width x the cover x the height / N.V; 0 = off). Its own look, apart from the blades': the canopy's sun
@@ -570,6 +567,9 @@ export struct GrassParams
     // upright blades' sides turned to the view (farUpright: the tilt from the ground normal toward the viewer, by how
     // grazing the view is) and the blades' lean (farNormalVariation: a sideways tilt per blade stripe).
     float farThickness = 1.0f;
+    // THE SEED HEADS in the far tier: a seeding type's patches take the seed colour by how much of the view its seed
+    // heads cover (they stand above the blades: stalks per m^2 x a head's area x the view's slant) x this. 0 = off.
+    float farSeedHeads = 1.0f;
     float farCanopyShadow = 1.0f;
     float farBrightness = 0.67f;
     float farRoughness = 0.5f;
@@ -599,6 +599,49 @@ export struct GrassParams
     float farTransmission = 2.0f;
     float farTransmissionFocus = 25.0f;
     float farTransmissionGlow = 2.0f;
+    // THE TUFTS: the blades grow in tufts, not as an even carpet. A patch holds "Blades per patch" / bladesPerTuft tufts
+    // (the R2 points), and its blades are dealt to them in turn, so a thinning prefix keeps every tuft (its inner
+    // blades) and only makes it sparser. A tuft's blades stand within tuftRadius of its root, inner blades first, and
+    // lean OUT from it by tuftFan (0 = random leans); a tuft is up to tuftSizeVariation smaller than full size.
+    int bladesPerTuft = 12;
+    float tuftRadius = 0.07f;      // m
+    float tuftFan = 0.6f;          // 0..1
+    float tuftSizeVariation = 0.35f; // 0..1
+    // THE GRASS TYPES: each tuft is one of TYPES kinds of grass, sized and coloured from the blade tweaks above. Which
+    // one: two value noises of typePatchSize metres pick the dominant type of an area (each type a corner of the two
+    // noises, x its share), typeMixing of a random pick per tuft mixed in.
+    struct Type
+    {
+        float share = 1.0f;     // the type's weight (0 = never)
+        float height = 1.0f;    // x "Blade/Height"
+        float width = 1.0f;     // x "Blade/Width"
+        float curvature = 1.0f; // x "Blade/Curvature"
+        glm::vec3 tint = glm::vec3(1.0f); // sRGB, x the root / tip colours (x brightness)
+        float brightness = 1.0f;
+        float seedStalks = 0.0f; // the share of its blades that are SEED STALKS (thin, taller, a seed head at the top)
+    };
+    static constexpr int TYPES = 4; // = RendererVKLayout::GRASS_TYPES
+    Type types[TYPES] = {
+        { 1.0f,  1.0f,  1.0f, 1.0f, glm::vec3(1.0f), 1.0f, 0.0f },                // fine grass
+        { 0.5f,  0.65f, 2.2f, 1.3f, glm::vec3(0.82f, 1.0f, 0.78f), 0.9f, 0.0f },  // broad, deep green, arching
+        { 0.35f, 1.5f,  0.7f, 0.6f, glm::vec3(1.0f, 0.95f, 0.75f), 1.1f, 0.15f }, // tall, yellowish, seeding
+        { 0.3f,  0.45f, 0.8f, 0.8f, glm::vec3(0.9f, 1.0f, 0.92f), 0.95f, 0.0f },  // short, dense
+    };
+    float typePatchSize = 5.0f;    // m
+    float typeMixing = 0.25f;      // 0..1
+    // SEED STALKS: seedHeight x a blade's height, seedWidth x its width; the top seedLength of the stalk is the seed head
+    // (seedHeadWidth x the stalk's width at its widest, seedColor).
+    float seedHeight = 1.1f;
+    float seedWidth = 0.35f;
+    float seedLength = 0.3f;
+    float seedHeadWidth = 5.0f;
+    glm::vec3 seedColor = glm::vec3(0.62f, 0.55f, 0.36f);
+    // FAR OUT (from LOD 2 to LOD 3) a stalk is too thin to show, so the seeding type's BLADES take the stalks' colour by
+    // how much of the view the stalks would cover (as the far tier's "Far/Seed heads") x this. 0 = off.
+    float seedFarBlade = 0.65f;
+    // THE BLADE's detail up close: midrib = the brightness of the line along its middle (faded out where the blade is a
+    // few pixels wide).
+    float midrib = 0.2f;
 };
 
 // THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no

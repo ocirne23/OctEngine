@@ -8,9 +8,14 @@
 #define PCSS_MIN_PENUMBRA_TEXELS 1.0   // floor so contact shadows stay crisp
 // The blocker search GATHERS: each tap is one textureGather (2x2 neighbour texels), so 6 taps read 24 texels with
 // few fetches (L1TEX latency is the Static meshes range's top stall). The taps stay spread over the Vogel disk.
+// An includer may define both counts first (the grass blades take fewer: grass.fs.glsl).
+#ifndef PCSS_BLOCKER_GATHERS
 #define PCSS_BLOCKER_GATHERS 6
+#endif
 #define PCSS_BLOCKER_TEXELS (PCSS_BLOCKER_GATHERS * 4)
+#ifndef PCSS_FILTER_SAMPLES
 #define PCSS_FILTER_SAMPLES 12
+#endif
 #define GOLDEN_ANGLE 2.39996323
 
 // Per-cascade scalars are stashed in the matrix's bottom row; restore [0,0,0,1] before using it.

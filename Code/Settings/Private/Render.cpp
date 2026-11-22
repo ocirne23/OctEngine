@@ -214,9 +214,6 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Wind", "Sway frequency (Hz)", &s.swayFrequency, 0.0f, 5.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Fade start (m)", &s.windFadeStart, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/Wind", "Fade end (m)", &s.windFadeEnd, 0.0f, 500.0f, 0.5f);
-    Tweak::floatVar("Grass/Cover", "Clump size (m)", &s.clumpSize, 0.2f, 50.0f, 0.05f);
-    Tweak::floatVar("Grass/Cover", "Patchiness", &s.patchiness, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Cover", "Bare fraction", &s.bareFraction, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Grow band", &s.growBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Cover", "Size by cover", &s.sizeByCover, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Width by height", &s.widthByHeight, -1.0f, 2.0f, 0.01f);
@@ -245,6 +242,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Look", "Turn to view", &s.viewTurn, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Turn band", &s.viewTurnBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Look", "Ground normal blend", &s.groundBlend, 0.0f, 1.0f, 0.01f);    Tweak::floatVar("Grass/Far", "Thickness", &s.farThickness, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Seed heads", &s.farSeedHeads, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Canopy shadow", &s.farCanopyShadow, 0.0f, 4.0f, 0.005f);
     Tweak::floatVar("Grass/Far", "Brightness", &s.farBrightness, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Roughness", &s.farRoughness, 0.05f, 1.0f, 0.01f);
@@ -263,6 +261,32 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Far", "Stripe length", &s.farStripeLength, 0.005f, 1.0f, 0.001f);
     Tweak::floatVar("Grass/Far", "Stripe anchor step (m)", &s.farStripeAnchorStep, 1.0f, 1000.0f, 0.5f);
     Tweak::floatVar("Grass/Far", "Stripe anchor fade (s)", &s.farStripeAnchorFade, 0.0f, 5.0f, 0.01f);
+    Tweak::intVar("Grass/Tufts", "Blades per tuft", &s.bladesPerTuft, 1, 64, 1.0f);
+    Tweak::floatVar("Grass/Tufts", "Tuft radius (m)", &s.tuftRadius, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Tufts", "Fan out", &s.tuftFan, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Tufts", "Tuft size variation", &s.tuftSizeVariation, 0.0f, 0.9f, 0.01f);
+    Tweak::floatVar("Grass/Types", "Type patch size (m)", &s.typePatchSize, 0.5f, 100.0f, 0.1f);
+    Tweak::floatVar("Grass/Types", "Type mixing", &s.typeMixing, 0.0f, 1.0f, 0.01f);
+    // The registry keeps the names as views: the categories are static.
+    static constexpr oc::string_view typeCategories[GrassParams::TYPES] = { "Grass/Types/Type 1", "Grass/Types/Type 2", "Grass/Types/Type 3", "Grass/Types/Type 4" };
+    for (int i = 0; i < GrassParams::TYPES; ++i)
+    {
+        GrassParams::Type& t = s.types[i];
+        Tweak::floatVar(typeCategories[i], "Share", &t.share, 0.0f, 4.0f, 0.01f);
+        Tweak::floatVar(typeCategories[i], "Height", &t.height, 0.1f, 4.0f, 0.01f);
+        Tweak::floatVar(typeCategories[i], "Width", &t.width, 0.1f, 8.0f, 0.01f);
+        Tweak::floatVar(typeCategories[i], "Curvature", &t.curvature, 0.0f, 3.0f, 0.01f);
+        Tweak::color3(typeCategories[i], "Tint", &t.tint);
+        Tweak::floatVar(typeCategories[i], "Brightness", &t.brightness, 0.1f, 3.0f, 0.01f);
+        Tweak::floatVar(typeCategories[i], "Seed stalks", &t.seedStalks, 0.0f, 1.0f, 0.01f);
+    }
+    Tweak::floatVar("Grass/Seed stalks", "Height", &s.seedHeight, 0.5f, 3.0f, 0.01f);
+    Tweak::floatVar("Grass/Seed stalks", "Width", &s.seedWidth, 0.05f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Seed stalks", "Seed head length", &s.seedLength, 0.05f, 0.6f, 0.01f);
+    Tweak::floatVar("Grass/Seed stalks", "Seed head width", &s.seedHeadWidth, 1.0f, 8.0f, 0.01f);
+    Tweak::color3("Grass/Seed stalks", "Seed colour", &s.seedColor);
+    Tweak::floatVar("Grass/Seed stalks", "Far blade colour", &s.seedFarBlade, 0.0f, 16.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Midrib", &s.midrib, -1.0f, 1.0f, 0.01f);
 }
 
 void Settings::registerFog(FogParams& s)
