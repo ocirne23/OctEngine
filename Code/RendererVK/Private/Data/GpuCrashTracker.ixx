@@ -77,6 +77,9 @@ private:
 
     // Helper for writing a GPU crash dump to a file.
     void WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const uint32_t gpuCrashDumpSize);
+    // ONE archive per crash, Local/<base>.zip (Linux: .tar.gz): the dump, its .json, the log so far, the driver's
+    // shader-*.nvdbg and Local/CrashShaders - all a look at the crash on another PC needs. Through the system's tar.
+    void writeCrashArchive(const oc::string& baseFileName);
 
     // Helper for writing shader debug information to a file
     void WriteShaderDebugInformationToFile(

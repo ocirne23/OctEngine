@@ -3,10 +3,12 @@ module;
 #ifndef _MSC_VER
 #include <cstdio> // stdout: no macro crosses `import std`
 #endif
+#include <cstdlib> // std::system: the crash archive's tar
 
 module RendererVK;
 
 import Core;
+import Core.Log;
 import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.Windows;
 import :Aftermath;
@@ -355,6 +357,37 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
 
     // Destroy the GPU crash dump decoder object.
     AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_DestroyDecoder(decoder));
+
+    writeCrashArchive(baseFileName);
+}
+
+void GpuCrashTracker::writeCrashArchive(const oc::string& baseFileName)
+{
+    // The log so far, next to the dump.
+    const oc::string logName = baseFileName + ".log";
+    oc::string log;
+    for (const Log::Message& message : Log::getMessages())
+    {
+        const char level = message.level == Log::Level::Verbose ? 'V' : message.level == Log::Level::Info ? 'I'
+            : message.level == Log::Level::Warning ? 'W' : 'E';
+        log += oc::format("[{}] {}\n", level, message.text);
+    }
+    FileSystem::writeFileStr(dumpFolder + logName, log, /*allowMainThread*/ true);
+
+    // The entries, relative to Local/ (no wildcards: tar on Windows expands none).
+    oc::string entries = oc::format("\"{0}.nv-gpudmp\" \"{0}.nv-gpudmp.json\" \"{1}\" CrashShaders", baseFileName, logName);
+    for (const auto& debugInfo : m_shaderDebugInfo)
+        entries += oc::format(" \"shader-{}.nvdbg\"", oc::fromStd(std::to_string(debugInfo.first)));
+    const oc::string local = FileSystem::resolve(dumpFolder);
+#ifdef _MSC_VER
+    const oc::string archive = FileSystem::resolve(dumpFolder + baseFileName + ".zip");
+    const oc::string command = oc::format("tar -a -c -f \"{}\" -C \"{}\" {}", archive, local, entries); // -a: zip by the suffix
+#else
+    const oc::string archive = FileSystem::resolve(dumpFolder + baseFileName + ".tar.gz");
+    const oc::string command = oc::format("tar -czf \"{}\" -C \"{}\" {}", archive, local, entries);
+#endif
+    const int result = std::system(command.c_str());
+    printf("GpuCrashTracker: crash archive %s (%s)\n", archive.c_str(), result == 0 ? "written" : "tar FAILED");
 }
 
 // Helper for writing shader debug information to a file

@@ -92,6 +92,14 @@ bool Device::initialize()
     const bool relaxedExtendedInstruction = supportsExtensions({ vk::KHRShaderRelaxedExtendedInstructionExtensionName });
     if (relaxedExtendedInstruction)
         deviceExtensions.push_back(vk::KHRShaderRelaxedExtendedInstructionExtensionName);
+    // Optional, "Renderer/GPU crash diagnostics (restart)": Aftermath's shader debug info + resource tracking (the dump then
+    // names the GLSL line and a freed resource). Needs the extension; Aftermath itself is enabled before this device.
+    const bool crashDiagnostics = Globals::settings.renderer.gpuCrashDiagnostics && supportsExtensions({ vk::NVDeviceDiagnosticsConfigExtensionName });
+    if (crashDiagnostics)
+    {
+        deviceExtensions.push_back(vk::NVDeviceDiagnosticsConfigExtensionName);
+        printf("Device: GPU crash diagnostics on (shader debug info, resource tracking)\n");
+    }
     // What DLSS asks for (none when Streamline is not loaded); an unsupported one only costs DLSS. Streamline lists
     // VK_EXT_buffer_device_address next to the KHR one, and a device must not enable both (VUID-VkDeviceCreateInfo-
     // ppEnabledExtensionNames-03328): the EXT one is dropped - the feature is core (vk12Features.bufferDeviceAddress).
@@ -214,6 +222,12 @@ bool Device::initialize()
     };
     if (relaxedExtendedInstruction)
         featureChain = &relaxedExtendedInstructionFeatures;
+    vk::DeviceDiagnosticsConfigCreateInfoNV diagnosticsConfig{
+        .pNext = featureChain,
+        .flags = vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableShaderDebugInfo | vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableResourceTracking,
+    };
+    if (crashDiagnostics)
+        featureChain = &diagnosticsConfig;
     vk::DeviceCreateInfo deviceCreateInfo{
         .pNext = featureChain,
         .queueCreateInfoCount = (uint32)deviceQueueCreateInfos.size(),

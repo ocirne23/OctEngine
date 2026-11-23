@@ -1202,6 +1202,10 @@ export struct RendererSettings
 {
     bool vsync = true;               // "Time/VSync": FIFO present (Time's stable-dt snap relies on it); a change re-creates the swapchain
     bool logPipelineStats = false;   // "Renderer/Log pipeline stats": F5 re-creates the pipelines with it
+    // "Renderer/GPU crash diagnostics (restart)": with the Aftermath DLL, the device is made with VK_NV_device_diagnostics_config
+    // (shader debug info + resource tracking): a GPU crash dump then maps the faulting instruction to its GLSL line and says
+    // whether the address was a freed resource. Off by default (a little driver overhead). Saved, read at device creation.
+    bool gpuCrashDiagnostics = false;
     // "Renderer/Label static mesh draws": a debug label around each draw group of the "Static meshes" stage (Nsight's
     // sub-ranges: StaticMeshGraphicsPipeline::record). Off by default: the labels sit in a cached secondary. Re-records.
     bool labelStaticMeshDraws = false;
