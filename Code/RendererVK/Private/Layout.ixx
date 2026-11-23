@@ -531,8 +531,8 @@ export namespace RendererVKLayout
     constexpr size_t INITIAL_INDEX_DATA = 45 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
 #else
     // Linux: the diffusion models share VRAM with the renderer, and the driver does not page video memory out. The
-    // sandbox uses ~256 MB of vertex and ~60 MB of index data, so these still cover it with ~1.5x to spare.
-    constexpr size_t INITIAL_VERTEX_DATA = 400ull * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
+    // sandbox's load reaches ~460 MB of vertex and ~60 MB of index data, so these still cover it.
+    constexpr size_t INITIAL_VERTEX_DATA = 512ull * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
     constexpr size_t INITIAL_INDEX_DATA = 25 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
 #endif
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);

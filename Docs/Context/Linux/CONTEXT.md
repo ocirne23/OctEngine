@@ -95,9 +95,10 @@ clang warns about an ANGLED include in a module purview.
   it until their dtors join them, so on Linux its lifetime is `g_diffusionRuntimeLifetime` in `GeneratorV3.ixx`
   (trivial storage in the `.cpp`), and the partitions of the procedural globals import `:GeneratorV3`.
   **Libraries loaded at run time come last of all**: glibc runs exit handlers newest first, and cuDNN registers its
-  statics during the first inferences, so they die before any App global. `main()` therefore ends, on Linux only, with
-  the one explicit teardown call, `TerrainGenV3::shutdownInference()` (unloads the models, waiting out an inference in
-  flight, and destroys the `Ort::Env`), while cuDNN is whole.
+  statics during the first inferences, so they die before any App global; the driver's NGX core (DLSS) does the same
+  at its init. `main()` therefore ends, on Linux only, with the explicit teardown calls, while those libraries are
+  whole: `TerrainGenV3::shutdownInference()` (unloads the models, waiting out an inference in flight, and destroys the
+  `Ort::Env`) and `Renderer::releaseDriverLibraries()` (NGX shutdown; `~Device`'s own call then has nothing to do).
 * **Crash reports**: the unattended fatal-signal handler (`UnattendedRun.ixx`) prints the faulting thread's stack, then
   re-raises the signal, so systemd-coredump keeps a core with every thread (`coredumpctl debug <pid>`).
 * **GPU profiler timeline**: the `QueryPerformanceCounter` shim reads `CLOCK_MONOTONIC`, so `GpuProfiler` calibrates
@@ -106,9 +107,18 @@ clang warns about an ANGLED include in a module purview.
   is a different clock (measured: 0.37 s apart), so the shim and the domain must change together.
 * **Swapchain on Wayland**: the surface reports no current extent, so the swapchain takes the window's pixel size; an
   unsupported present mode falls back to mailbox, then FIFO.
-* **Off on Linux**: DLSS / Streamline (Windows-only SDK; the not-loaded paths), Nsight Aftermath (asks for the Windows
-  DLL name), script fault containment (no SEH), runtime script DLL compilation (MSVC command line; `SCRIPTS_STATIC`
-  builds the scripts into App).
+* **DLSS through NGX, not Streamline** (Streamline is Windows-only): the `Streamline::` functions keep their contract,
+  and on Linux `Streamline.cpp` drives NVIDIA's NGX SDK through `libocngx.so`, a C shim (`Linux/Include/ocngx.h`,
+  `Linux/Ngx/ocngx.cpp`). The SDK's static loader needs libstdc++, so `Linux/Linux.cmake` builds the shim with the
+  flake's GCC (`OC_NGX_CXX`) against the pinned SDK (`OC_NGX_SDK`, 310.9.16), with libstdc++ linked statically and
+  hidden, and puts it and the DLSS model (`libnvidia-ngx-dlss.so.*`) next to App; App `dlopen`s it `RTLD_LOCAL`, and
+  NGX finds the model next to the shim. The driver supplies the NGX core (`libnvidia-ngx.so.1`). No swapchain proxies,
+  no extra queues: the upscale is recorded into the frame's command buffer, and the feature is (re)created only when
+  the mode, preset or a size changes, on an idle queue. Motion vectors go in as render pixels (scale 1). NGX rejects an
+  output under 32x32, so such a frame (one at startup) falls back to the engine's own resolve. Without the shim, on
+  another GPU or an old driver, DLSS is off as on Windows without the Streamline DLLs.
+* **Off on Linux**: Nsight Aftermath (asks for the Windows DLL name), script fault containment (no SEH), runtime script
+  DLL compilation (MSVC command line; `SCRIPTS_STATIC` builds the scripts into App).
 * **Diffusion terrain on CUDA**: ONNX Runtime 1.24.4 (the version of the vendored headers) comes as Microsoft's prebuilt
   GPU package from NuGet (`flake.nix`; the GitHub release page is gone), with the CUDA 12 / cuDNN 9 runtime from
   nixpkgs and the NVIDIA driver's libcuda (`/run/opengl-driver/lib`). `Onnx.cpp` appends the CUDA provider where
@@ -119,11 +129,12 @@ clang warns about an ANGLED include in a module purview.
   inference`; their tiles go to `<seed>_fp16`, so tiles made from the fp32 models are not read), latent and coarse
   batches of 2 (the noise is per window, so the batch size does not change the tiles), the sequential executor, the
   cuDNN heuristic search without the maximum workspace, an arena that grows by the request and shrinks after every
-  run, and smaller starting mesh pools (`INITIAL_VERTEX_DATA` 400 MB, `INITIAL_INDEX_DATA` 100 MB in `Layout.ixx`; the
-  sandbox fills ~256 / ~60 MB of them). The streaming budgets are no lever here: meshes stream inside those fixed pools,
-  and a freed texture stays in its VMA block. Even so inference can still run out of memory: the renderer grows with the resolution and the desktop's share
-  varies. A tile whose own inference fails is not saved, but the stage caches keep a failed batch's zero output, and a
-  later tile that reads those windows is saved as if it were real terrain.
+  run, and smaller starting mesh pools (`INITIAL_VERTEX_DATA` 512 MB, `INITIAL_INDEX_DATA` 100 MB in `Layout.ixx`; the
+  sandbox's load reaches ~460 / ~60 MB). The streaming budgets are no lever here: meshes stream inside those fixed
+  pools, and a freed texture stays in its VMA block. Inference can still run out of memory when the desktop or the
+  resolution takes more; a failed inference is then retried and never saved ("A failed inference never reaches a
+  cache" in [`Procedural/Generator.md`](../Procedural/Generator.md)). DLSS lowers the render resolution, and with it
+  the renderer's share.
 
 ## After every upstream pull
 

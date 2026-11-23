@@ -75,6 +75,17 @@
           postFixup = "addDriverRunpath $out/lib/libonnxruntime_providers_cuda.so";
         };
 
+        # NVIDIA DLSS SDK (NGX) 310.9.16, the Linux parts only: the headers, the static NGX loader and the release DLSS model.
+        # Linux/Linux.cmake builds Linux/Ngx/ocngx.cpp against it with GCC (the loader needs libstdc++) and puts the shim and
+        # the model next to App. Distributed under the NVIDIA RTX SDK license (Dependencies/Dll/nvngx_dlss.license.txt).
+        ngx-sdk = pkgs.fetchgit {
+          url = "https://github.com/NVIDIA/DLSS.git";
+          rev = "refs/tags/v310.9.16";
+          sparseCheckout = [ "include" "lib/Linux_x86_64/libnvsdk_ngx.a" "lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.16" ];
+          nonConeMode = true;
+          hash = "sha256-Avu0jXlZv70+iS9A6IDF4RGhRiDWy3QbpgflipAItKw=";
+        };
+
         # The libraries the engine calls through a C++ API (std::string / std::vector in the signatures) must be built
         # against libc++ like the engine; nixpkgs builds them against libstdc++, whose std:: names mangle differently.
         withLibcxx = drv: (drv.override { stdenv = llvm.libcxxStdenv; }).overrideAttrs { doCheck = false; };
@@ -125,6 +136,8 @@
           OC_MESHOPTIMIZER_SRC = "${meshoptimizer-src}";
           OC_PHONON_LIB = "${phonon}/lib";
           OC_ONNXRUNTIME_LIB = "${onnxruntime-gpu}/lib";
+          OC_NGX_SDK = "${ngx-sdk}";
+          OC_NGX_CXX = "${pkgs.gcc}/bin/g++";
           # The wrapped scanner: the unwrapped one does not see the libc++ / glibc include paths the clang wrapper adds.
           OC_CLANG_SCAN_DEPS = "${llvm.clang-tools.override { clang = llvm.libcxxClang; }}/bin/clang-scan-deps";
           # std.cppm / std.compat.cppm: built as an ordinary module target (CMake's own `import std` is still behind a

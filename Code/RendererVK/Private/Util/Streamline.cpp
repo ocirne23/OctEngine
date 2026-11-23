@@ -13,6 +13,10 @@ module;
 #include <sl/sl_helpers_vk.h>
 #include <sl/sl_security.h>
 #pragma warning(pop)
+#else
+#include <dlfcn.h>
+#include <unistd.h>
+#include "ocngx.h"
 #endif
 
 module RendererVK;
@@ -23,18 +27,200 @@ import :VK;
 import :Streamline;
 
 #ifndef _MSC_VER
-// Linux: NVIDIA ships Streamline for Windows only. Every call behaves as the Windows build does when sl.interposer.dll
-// is absent: no DLSS, and the swapchain calls go straight to the device.
-bool Streamline::loaded() { return false; }
-bool Streamline::dlssAvailable() { return false; }
-bool Streamline::load(const oc::string&, bool) { return false; }
-void Streamline::shutdown() {}
-void Streamline::appendInstanceExtensions(oc::vector<const char*>&) {}
-void Streamline::appendDeviceExtensions(oc::vector<const char*>&) {}
+import :Device;
+
+// Linux: NVIDIA ships Streamline for Windows only. DLSS goes through the NGX SDK itself, in libocngx.so next to the
+// executable (Linux/Include/ocngx.h: a GCC-built C shim, because the SDK needs libstdc++). NGX needs no swapchain
+// proxies and no queues of its own: the swapchain calls go straight to the device, and the upscale is recorded into the
+// frame's command buffer. Without the library, on another GPU or an old driver, every call behaves as the Windows build
+// does without sl.interposer.dll.
+namespace
+{
+    struct Ngx
+    {
+        PFN_ocngx_required_extensions requiredExtensions = nullptr;
+        PFN_ocngx_init init = nullptr;
+        PFN_ocngx_dlss_available dlssAvailable = nullptr;
+        PFN_ocngx_dlss_optimal_size optimalSize = nullptr;
+        PFN_ocngx_dlss_create create = nullptr;
+        PFN_ocngx_dlss_evaluate evaluate = nullptr;
+        PFN_ocngx_dlss_release release = nullptr;
+        PFN_ocngx_shutdown shutdown = nullptr;
+    };
+    Ngx g_ngx;
+    bool g_loadAttempted = false;
+    bool g_loaded = false;      // the shim resolved: its extension lists are in
+    bool g_initialized = false; // ocngx_init succeeded on the device
+    bool g_verbose = false;
+    oc::string g_exeDir;
+    oc::vector<const char*> g_instanceExtensions;
+    oc::vector<const char*> g_deviceExtensions;
+
+    // What the feature was last created with: creation is only repeated on a change.
+    struct AppliedOptions
+    {
+        int mode = -1;
+        int preset = -1;
+        glm::uvec2 renderSize{ 0 };
+        glm::uvec2 outputSize{ 0 };
+    };
+    AppliedOptions g_applied;
+
+    constexpr const char* PROJECT_ID = "5c0b6e1a-8f42-4d7e-9a31-b7d2e4c8f615"; // the Windows build's (Streamline)
+
+    // NVSDK_NGX_PerfQuality_Value and NVSDK_NGX_DLSS_Feature_Flags (nvsdk_ngx_defs.h).
+    int toNgxQuality(Streamline::DlssMode mode)
+    {
+        switch (mode)
+        {
+        case Streamline::DlssMode::DLAA:             return 5;
+        case Streamline::DlssMode::Quality:          return 2;
+        case Streamline::DlssMode::Balanced:         return 1;
+        case Streamline::DlssMode::Performance:      return 0;
+        case Streamline::DlssMode::UltraPerformance: return 3;
+        default:                                     return -1;
+        }
+    }
+    constexpr int NGX_FLAG_IS_HDR = 1 << 0;
+    constexpr int NGX_FLAG_MV_LOW_RES = 1 << 1;     // motion vectors at render resolution
+    constexpr int NGX_FLAG_DEPTH_INVERTED = 1 << 3; // reversed-Z
+    constexpr int NGX_FLAG_AUTO_EXPOSURE = 1 << 6;  // the engine's exposure runs after the upscale
+
+    void logMessage(const char* message)
+    {
+        if (g_verbose)
+            printf("NGX: %s", message);
+    }
+
+    OcNgxImage toNgx(const Streamline::Image& image)
+    {
+        return OcNgxImage{
+            .image = static_cast<VkImage>(image.image), .view = static_cast<VkImageView>(image.view),
+            .format = (uint32_t)static_cast<VkFormat>(image.format), .width = image.size.x, .height = image.size.y,
+            .aspectMask = (uint32_t)static_cast<VkImageAspectFlags>(image.aspect) };
+    }
+
+    // The previous frames may still be reading the feature's resources: it is only replaced or freed on an idle queue.
+    void releaseFeature()
+    {
+        if (g_applied.mode < 0)
+            return;
+        (void)Globals::device.graphicsQueueWaitIdle();
+        g_ngx.release();
+        g_applied = AppliedOptions{};
+    }
+}
+
+bool Streamline::loaded() { return g_loaded; }
+bool Streamline::dlssAvailable() { return g_initialized && g_ngx.dlssAvailable(); }
+
+bool Streamline::load(const oc::string&, bool verbose)
+{
+    if (g_loadAttempted)
+        return g_loaded;
+    g_loadAttempted = true;
+    g_verbose = verbose;
+
+    char exe[4096];
+    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (length <= 0)
+        return false;
+    exe[length] = '\0';
+    char* slash = strrchr(exe, '/');
+    if (!slash)
+        return false;
+    *slash = '\0';
+    g_exeDir = exe;
+    const oc::string path = g_exeDir + "/libocngx.so";
+    // RTLD_LOCAL: the shim's symbols stay out of the global scope (it carries its own hidden libstdc++).
+    void* module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!module)
+    {
+        printf("NGX: %s not loaded (%s), DLSS off\n", path.c_str(), dlerror());
+        return false;
+    }
+    bool ok = true;
+    auto resolve = [&](auto& fn, const char* name)
+    {
+        fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(dlsym(module, name));
+        ok &= fn != nullptr;
+    };
+    PFN_ocngx_abi abi = nullptr;
+    resolve(abi, "ocngx_abi");
+    resolve(g_ngx.requiredExtensions, "ocngx_required_extensions");
+    resolve(g_ngx.init, "ocngx_init");
+    resolve(g_ngx.dlssAvailable, "ocngx_dlss_available");
+    resolve(g_ngx.optimalSize, "ocngx_dlss_optimal_size");
+    resolve(g_ngx.create, "ocngx_dlss_create");
+    resolve(g_ngx.evaluate, "ocngx_dlss_evaluate");
+    resolve(g_ngx.release, "ocngx_dlss_release");
+    resolve(g_ngx.shutdown, "ocngx_shutdown");
+    if (!ok || abi() != OCNGX_ABI)
+    {
+        printf("NGX: libocngx.so is missing entry points or has another ABI version, DLSS off\n");
+        g_ngx = Ngx{};
+        return false; // the module stays mapped: nothing it owns is live, and unmapping it buys nothing
+    }
+
+    uint32_t instanceCount = 0, deviceCount = 0;
+    const char* const* instanceExtensions = nullptr;
+    const char* const* deviceExtensions = nullptr;
+    const int result = g_ngx.requiredExtensions(&instanceCount, &instanceExtensions, &deviceCount, &deviceExtensions);
+    if (result != 0)
+    {
+        printf("NGX: the extension query failed (0x%08x), DLSS off\n", (unsigned)result);
+        g_ngx = Ngx{};
+        return false;
+    }
+    g_instanceExtensions.assign(instanceExtensions, instanceExtensions + instanceCount);
+    g_deviceExtensions.assign(deviceExtensions, deviceExtensions + deviceCount);
+    g_loaded = true;
+    return true;
+}
+
+void Streamline::shutdown()
+{
+    if (g_initialized)
+    {
+        releaseFeature();
+        g_ngx.shutdown();
+    }
+    g_initialized = false;
+}
+
+void Streamline::appendInstanceExtensions(oc::vector<const char*>& extensions)
+{
+    for (const char* name : g_instanceExtensions)
+        if (oc::find_if(extensions.begin(), extensions.end(), [&](const char* have) { return strcmp(have, name) == 0; }) == extensions.end())
+            extensions.push_back(name);
+}
+
+void Streamline::appendDeviceExtensions(oc::vector<const char*>& extensions)
+{
+    for (const char* name : g_deviceExtensions)
+        if (oc::find_if(extensions.begin(), extensions.end(), [&](const char* have) { return strcmp(have, name) == 0; }) == extensions.end())
+            extensions.push_back(name);
+}
+
 uint32 Streamline::extraGraphicsQueues() { return 0; }
 uint32 Streamline::extraComputeQueues() { return 0; }
 void Streamline::mergeDeviceFeatures(vk::PhysicalDeviceVulkan12Features&, vk::PhysicalDeviceVulkan13Features&) {}
-void Streamline::onDeviceCreated(vk::Instance, vk::PhysicalDevice, vk::Device, uint32, uint32, uint32, uint32) {}
+
+void Streamline::onDeviceCreated(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk::Device device,
+    uint32, uint32, uint32, uint32)
+{
+    if (!g_loaded)
+        return;
+    const int result = g_ngx.init(PROJECT_ID, g_exeDir.c_str(), static_cast<VkInstance>(instance),
+        static_cast<VkPhysicalDevice>(physicalDevice), static_cast<VkDevice>(device),
+        reinterpret_cast<void*>(&vkGetInstanceProcAddr), reinterpret_cast<void*>(&vkGetDeviceProcAddr), g_verbose ? 1 : 0, &logMessage);
+    if (result != 0)
+    {
+        printf("NGX: initialization failed (0x%08x), DLSS off\n", (unsigned)result);
+        return;
+    }
+    g_initialized = true;
+    printf(g_ngx.dlssAvailable() ? "NGX: DLSS available\n" : "NGX: DLSS is not supported on this device or driver\n");}
 
 vk::Result Streamline::createSwapchain(vk::Device device, const vk::SwapchainCreateInfoKHR& info, vk::SwapchainKHR& out)
 {
@@ -67,9 +253,61 @@ vk::Result Streamline::queuePresent(vk::Queue queue, const vk::PresentInfoKHR& i
     return queue.presentKHR(info);
 }
 
-glm::uvec2 Streamline::getDlssRenderSize(DlssMode, glm::uvec2 outputSize) { return outputSize; }
-bool Streamline::evaluateDlss(vk::CommandBuffer, const DlssFrame&) { return false; }
-void Streamline::freeDlss() {}
+glm::uvec2 Streamline::getDlssRenderSize(DlssMode mode, glm::uvec2 outputSize)
+{
+    if (!dlssAvailable() || mode == DlssMode::Off || outputSize.x == 0 || outputSize.y == 0)
+        return outputSize;
+    uint32_t width = 0, height = 0;
+    if (g_ngx.optimalSize(toNgxQuality(mode), outputSize.x, outputSize.y, &width, &height) != 0 || width == 0 || height == 0)
+        return outputSize;
+    return glm::uvec2(width, height);
+}
+
+bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
+{
+    if (!dlssAvailable() || frame.mode == DlssMode::Off)
+        return false;
+    if (frame.outputSize.x < 32 || frame.outputSize.y < 32)
+        return false; // NGX rejects a smaller output (InvalidParameter); a startup frame can be that small
+    VkCommandBuffer vkCmd = static_cast<VkCommandBuffer>(cmd);
+
+    if (g_applied.mode != (int)frame.mode || g_applied.preset != frame.preset
+        || g_applied.renderSize != frame.renderSize || g_applied.outputSize != frame.outputSize)
+    {
+        releaseFeature();
+        const int flags = NGX_FLAG_IS_HDR | NGX_FLAG_MV_LOW_RES | NGX_FLAG_DEPTH_INVERTED | NGX_FLAG_AUTO_EXPOSURE;
+        const bool outputSubrect = frame.outputOffset != glm::uvec2(0);
+        const int result = g_ngx.create(vkCmd, toNgxQuality(frame.mode), frame.preset, frame.renderSize.x, frame.renderSize.y,
+            frame.outputSize.x, frame.outputSize.y, flags, outputSubrect ? 1 : 0);
+        if (result != 0)
+        {
+            printf("NGX: creating the DLSS feature failed (0x%08x)\n", (unsigned)result);
+            return false;
+        }
+        g_applied = AppliedOptions{ .mode = (int)frame.mode, .preset = frame.preset, .renderSize = frame.renderSize, .outputSize = frame.outputSize };
+    }
+
+    // The motion vectors are already render pixels (Windows tells Streamline 1 / renderSize, its unit being the screen).
+    OcNgxEval eval{
+        .colorIn = toNgx(frame.colorIn), .colorOut = toNgx(frame.colorOut), .depth = toNgx(frame.depth),
+        .motion = toNgx(frame.motion), .bias = toNgx(frame.biasCurrentColor),
+        .renderOffsetX = frame.renderOffset.x, .renderOffsetY = frame.renderOffset.y,
+        .renderWidth = frame.renderSize.x, .renderHeight = frame.renderSize.y,
+        .outputOffsetX = frame.outputOffset.x, .outputOffsetY = frame.outputOffset.y,
+        .jitterX = frame.jitterPx.x, .jitterY = frame.jitterPx.y,
+        .mvScaleX = 1.0f, .mvScaleY = 1.0f,
+        .reset = frame.reset ? 1 : 0 };
+    const int result = g_ngx.evaluate(vkCmd, &eval);
+    if (result != 0)
+        printf("NGX: evaluating DLSS failed (0x%08x)\n", (unsigned)result);
+    return result == 0;
+}
+
+void Streamline::freeDlss()
+{
+    if (dlssAvailable())
+        releaseFeature();
+}
 #else
 
 namespace

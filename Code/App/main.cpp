@@ -158,7 +158,12 @@ int main(int argc, char* argv[])
     if (options.mainMenu())
         session.enterMainMenu();
     else if (!session.startFromCommandLine())
+    {
+#ifndef _MSC_VER
+        Globals::rendererVK.releaseDriverLibraries(); // see the end of main
+#endif
         return 1;
+    }
 
     Camera camera;
     camera.viewMatrix = glm::mat4(1.0f);
@@ -398,6 +403,7 @@ int main(int argc, char* argv[])
     // during the first inferences - after every App global - so they die before the terrain could stop an inference
     // in flight. Unload the models (waits that inference out) and release ORT while cuDNN is whole.
     Procedural::TerrainGenV3::shutdownInference();
+    Globals::rendererVK.releaseDriverLibraries(); // NGX (DLSS) registers its statics late too
 #endif
     return 0;
 }

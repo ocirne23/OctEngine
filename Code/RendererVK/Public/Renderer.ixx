@@ -277,6 +277,13 @@ public:
     void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
     GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
     static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }
+
+#ifndef _MSC_VER
+    // ---- Process exit (Linux) ----
+    // Shuts down the driver libraries loaded at run time (NGX / DLSS) while they are whole: they register their statics
+    // after every global, so glibc's exit handlers destroy them before ~Device could. main() calls it last.
+    void releaseDriverLibraries();
+#endif
 };
 
 // ---- Batched submission [Concurrency: LOCK-FREE, one batch per job] ----

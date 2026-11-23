@@ -959,6 +959,14 @@ void Renderer::submitEntityPreview(EntityPreviewFrame& frame)
     slot.hasPending.store(true, oc::memory_order_release);
 }
 
+#ifndef _MSC_VER
+void Renderer::releaseDriverLibraries()
+{
+    (void)Globals::device.graphicsQueueWaitIdle();
+    Streamline::shutdown(); // ~Device's own call then finds nothing to do
+}
+#endif
+
 void Renderer::present()
 {
     ProfileScope presentScope("Present", EProfileCategory::Renderer);

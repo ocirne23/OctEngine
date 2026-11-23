@@ -342,7 +342,8 @@ The constraints that shape it:
 * The procedural systems go FIRST — they free render residency and collider bodies and may wait on
   in-flight jobs. **Order among them is link-order-undefined and deliberately independent.**
 
-**main() has NO explicit teardown calls** (on Windows; Linux has one, `TerrainGenV3::shutdownInference()`, see
+**main() has NO explicit teardown calls** (on Windows; Linux has two, `TerrainGenV3::shutdownInference()` and
+`Renderer::releaseDriverLibraries()`, see
 [`Docs/Context/Linux/CONTEXT.md`](../Docs/Context/Linux/CONTEXT.md)). A new global that holds EntityPtrs, or whose dtor calls
 another library's global, **must slot into InitSeg.h.** Globals in *different* libraries otherwise
 have no defined construction order — see `ScriptEventManager::initialize` for the register-from-main
@@ -450,7 +451,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Sound](../Docs/Context/Game/Sound.md) | **Game sound**: cues, the voice limits for crowds, the battle / horde beds, ambience, building loops, the synthesized sounds + `Sounds/Game/*.wav` overrides |
 | [DslCompiler](../Docs/Context/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
 | [ScriptEditorSim](../Docs/Context/ScriptEditorSim/CONTEXT.md) | **The Script Editor with simulated keys, no window or engine** — how Claude iterates on the editor's UX: key programs, traces, screenshots, the random-key test, the typing regression file |
-| [Linux](../Docs/Context/Linux/CONTEXT.md) | **The Linux (NixOS) build**: the flake, `Linux/Linux.cmake`, the rules a code change follows to keep building with clang (header-unit wrappers, `ImguiGmf.h` / `AssimpGmf.h`, `OC_FWD_ATTACH`), fibers, InitSeg.h's teardown as imports, CUDA diffusion, what is off |
+| [Linux](../Docs/Context/Linux/CONTEXT.md) | **The Linux (NixOS) build**: the flake, `Linux/Linux.cmake`, the rules a code change follows to keep building with clang (header-unit wrappers, `ImguiGmf.h` / `AssimpGmf.h`, `OC_FWD_ATTACH`), fibers, InitSeg.h's teardown as imports, CUDA diffusion, DLSS through NGX, what is off |
 
 ---
 

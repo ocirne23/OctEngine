@@ -212,3 +212,33 @@ oc_alias(Bcrypt "-lcrypto") # Network's Crypto.cpp: OpenSSL in place of CNG
 foreach(winlib ntdll Winmm Setupapi Cfgmgr32 Version Imm32 Ws2_32 wintrust crypt32)
 	oc_alias(${winlib})
 endforeach()
+
+# ---- DLSS: libocngx.so (Linux/Include/ocngx.h) ----
+# Built with the flake's GCC, not the engine's compiler: the NGX SDK's static loader needs libstdc++, which the shim links
+# statically and hides. It lands next to App with the DLSS model, where Streamline.cpp looks for it (the place the Windows
+# build copies the Streamline DLLs to). Without the SDK, App runs without DLSS.
+if("$ENV{OC_NGX_SDK}" STREQUAL "" OR "$ENV{OC_NGX_CXX}" STREQUAL "")
+	message(WARNING "OC_NGX_SDK / OC_NGX_CXX are not set: no DLSS (configure from inside `nix develop`)")
+else()
+	set(OC_NGX_SDK "$ENV{OC_NGX_SDK}")
+	set(OC_NGX_OUT "${CMAKE_BINARY_DIR}/Code/App")
+	file(GLOB OC_NGX_MODEL "${OC_NGX_SDK}/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.*")
+	get_filename_component(OC_NGX_MODEL_NAME "${OC_NGX_MODEL}" NAME)
+	add_custom_command(
+		OUTPUT "${OC_NGX_OUT}/libocngx.so"
+		COMMAND "${CMAKE_COMMAND}" -E make_directory "${OC_NGX_OUT}"
+		COMMAND "$ENV{OC_NGX_CXX}" -std=c++17 -O2 -fPIC -fvisibility=hidden -shared
+			-Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers
+			"-I${OC_NGX_SDK}/include" "-I${ROOT_DIR}/Dependencies/Include" "-I${ROOT_DIR}/Linux/Include"
+			"${ROOT_DIR}/Linux/Ngx/ocngx.cpp" "${OC_NGX_SDK}/lib/Linux_x86_64/libnvsdk_ngx.a"
+			-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,--no-undefined -ldl
+			-o "${OC_NGX_OUT}/libocngx.so"
+		COMMAND "${CMAKE_COMMAND}" -E rm -f "${OC_NGX_OUT}/${OC_NGX_MODEL_NAME}"
+		COMMAND "${CMAKE_COMMAND}" -E copy "${OC_NGX_MODEL}" "${OC_NGX_OUT}/${OC_NGX_MODEL_NAME}"
+		COMMAND chmod u+w "${OC_NGX_OUT}/${OC_NGX_MODEL_NAME}" # the store's copy is read-only
+		DEPENDS "${ROOT_DIR}/Linux/Ngx/ocngx.cpp" "${ROOT_DIR}/Linux/Include/ocngx.h"
+		COMMENT "Building libocngx.so (DLSS)"
+		VERBATIM)
+	add_custom_target(oc_ngx DEPENDS "${OC_NGX_OUT}/libocngx.so")
+	cmake_language(DEFER CALL add_dependencies App oc_ngx) # App is defined after this file
+endif()
