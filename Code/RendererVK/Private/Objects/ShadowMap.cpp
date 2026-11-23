@@ -78,7 +78,9 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     };
     oc::array<vk::SubpassDependency2, 2> dependencies{
         // Wait for prior shader reads of this layer to finish before we overwrite the depth.
-        // Compute included: GI probe trace and volumetric fog sample the cascades from compute.
+        // Compute included: GI probe trace and volumetric fog sample the cascades from compute. ONE copy serves every frame
+        // slot (RendererState m_shadowMap), so this also orders the PREVIOUS frame's reads: a reader in another stage must
+        // be added here.
         vk::SubpassDependency2{
             .srcSubpass = vk::SubpassExternal,
             .dstSubpass = 0,

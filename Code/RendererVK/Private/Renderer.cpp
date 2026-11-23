@@ -232,16 +232,14 @@ void RendererState::initPipelines()
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
 
     m_shadowCullComputePipeline.initialize(); // writes the main cull's out buffers (it runs first)
-    // + the NEAR GRASS CASCADE's own one-layer map (GrassPipeline, ClutterPipeline; the lit set's binding 23).
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        perFrame.shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES);
-        perFrame.grassNearShadowMap.initialize("GrassNearShadowMap", RendererVKLayout::GRASS_NEAR_SHADOW_RESOLUTION, 1);
-    }
-    m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
+    // + the NEAR GRASS CASCADE's own one-layer map (GrassPipeline, ClutterPipeline; the lit set's binding 23). One copy each,
+    // shared by the frame slots (RendererState m_shadowMap).
+    m_shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES);
+    m_grassNearShadowMap.initialize("GrassNearShadowMap", RendererVKLayout::GRASS_NEAR_SHADOW_RESOLUTION, 1);
+    m_shadowMapGraphicsPipeline.initialize(m_shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
     m_staticMeshGraphicsPipeline.reserveOpaquePreprocess(m_shadowMapGraphicsPipeline.getPreprocessRequirement());
-    m_grassPipeline.initializeNearShadow(m_perFrameData[0].grassNearShadowMap.getRenderPass());
-    m_clutterPipeline.initializeNearShadow(m_perFrameData[0].grassNearShadowMap.getRenderPass());
+    m_grassPipeline.initializeNearShadow(m_grassNearShadowMap.getRenderPass());
+    m_clutterPipeline.initializeNearShadow(m_grassNearShadowMap.getRenderPass());
     // The weather volume's top-down rain occlusion map: a ray-query pass over the TLAS (no cull, no instance buffers),
     // allocated only while a rain / snow volume asks for it (present). Here: the sampler + 1x1 placeholders.
     m_rainOcclusionPipeline.initialize();

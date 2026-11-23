@@ -906,11 +906,16 @@ protected:
     // locked leaves. The parallel entity PASS never takes it.
     std::recursive_mutex m_spawnMutex;
 
+    // THE SUN'S CASCADES and the near grass cascade: ONE copy each, not one per frame slot. The GPU draws and reads them
+    // inside one frame (the lit passes, the fog and the GI trace: fragment and compute), the frames run in order on one
+    // queue, and the shadow pass's own dependency (ShadowMap's render pass) waits for every earlier fragment / compute read
+    // before it writes - the previous frame's included. A reader in ANOTHER stage must join that dependency.
+    ShadowMap m_shadowMap;
+    ShadowMap m_grassNearShadowMap; // the near grass cascade (one layer; GrassPipeline + ClutterPipeline cast into it)
+
     struct PerFrameData
     {
         SceneColor sceneColor; // colour + scene depth (no prepass: every depth reader samples this one)
-        ShadowMap shadowMap;
-        ShadowMap grassNearShadowMap; // the near grass cascade (one layer; GrassPipeline + ClutterPipeline cast into it)
 
         oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet; // Per-eye in VR
         DescriptorSet compositeDescriptorSet;

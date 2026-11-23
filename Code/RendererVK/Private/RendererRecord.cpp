@@ -233,7 +233,7 @@ void RendererState::recordShadowCull(uint32 frameIdx)
 void RendererState::recordShadowDraw(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& shadowMap = frameData.shadowMap;
+    ShadowMap& shadowMap = m_shadowMap;
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getRenderPass() };
     CommandBuffer& cb = frameData.shadowDrawCommandBuffer;
     vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
@@ -272,7 +272,7 @@ void RendererState::recordShadowDraw(uint32 frameIdx)
 void RendererState::recordGrassNearShadow(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& shadowMap = frameData.grassNearShadowMap;
+    ShadowMap& shadowMap = m_grassNearShadowMap;
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getRenderPass() };
     CommandBuffer& cb = frameData.grassNearShadowCommandBuffer;
     vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
@@ -531,11 +531,11 @@ void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, ui
         .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .meshInfoBuffer = m_meshInfos.getBuffer(),
         .rtMeshInstancesBuffer = instances.meshInstances,
-        .shadowMapView = frameData.shadowMap.getSampleView(),
-        .shadowMapSampler = frameData.shadowMap.getSampler(),
-        .shadowMapDepthSampler = frameData.shadowMap.getDepthSampler(),
-        .grassNearShadowView = frameData.grassNearShadowMap.getSampleView(),
-        .grassNearShadowSampler = frameData.grassNearShadowMap.getSampler(),
+        .shadowMapView = m_shadowMap.getSampleView(),
+        .shadowMapSampler = m_shadowMap.getSampler(),
+        .shadowMapDepthSampler = m_shadowMap.getDepthSampler(),
+        .grassNearShadowView = m_grassNearShadowMap.getSampleView(),
+        .grassNearShadowSampler = m_grassNearShadowMap.getSampler(),
         .prevDepthView = m_perFrameData[(frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT].sceneColor.getDepthView(eyeIndex),
         .prevDepthSampler = frameData.sceneColor.getDepthSampler(),
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
@@ -955,8 +955,8 @@ void RendererState::recordVolumetricFog(uint32 frameIdx)
             .fogVolumesBuffer = submission.fogVolumes,
             .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
             .giVolume = m_giProbePipeline.getVolumeDescriptors(),
-            .shadowMapView = frameData.shadowMap.getSampleView(),
-            .shadowMapSampler = frameData.shadowMap.getSampler(),
+            .shadowMapView = m_shadowMap.getSampleView(),
+            .shadowMapSampler = m_shadowMap.getSampler(),
             .oceanMapsView = m_oceanSimPipeline.getMapsView(),
             .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
             .tlas = tlas,
@@ -1429,8 +1429,8 @@ void RendererState::recordGlobalIllum(uint32 frameIdx)
         .meshInstances = instances.meshInstances,
         .materialInfos = m_materials.getBuffer(),
         .tlas = tlas,
-        .shadowMapView = frameData.shadowMap.getSampleView(),
-        .shadowMapSampler = frameData.shadowMap.getSampler(),
+        .shadowMapView = m_shadowMap.getSampleView(),
+        .shadowMapSampler = m_shadowMap.getSampler(),
     };
     m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
 
@@ -1743,9 +1743,9 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
         vk::ClearValue shadowClear;
         shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
         const vk::RenderPassBeginInfo shadowRpBegin{
-            .renderPass = frameData.shadowMap.getRenderPass(),
-            .framebuffer = frameData.shadowMap.getFramebuffer(),
-            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ frameData.shadowMap.getResolution(), frameData.shadowMap.getResolution() } },
+            .renderPass = m_shadowMap.getRenderPass(),
+            .framebuffer = m_shadowMap.getFramebuffer(),
+            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ m_shadowMap.getResolution(), m_shadowMap.getResolution() } },
             .clearValueCount = 1,
             .pClearValues = &shadowClear,
         };
@@ -1813,7 +1813,7 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
     if (shadowCascades && m_sceneViewCount == 1 && grassNearShadowActive())
     {
         m_gpuProfiler.beginScope(primary, "Grass near shadow");
-        ShadowMap& shadowMap = frameData.grassNearShadowMap;
+        ShadowMap& shadowMap = m_grassNearShadowMap;
         vk::ClearValue shadowClear;
         shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
         const vk::RenderPassBeginInfo nearRpBegin{

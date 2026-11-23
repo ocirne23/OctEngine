@@ -428,7 +428,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
     normal.
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
   shadows around the camera; beyond it "Far root occlusion" alone.
-  * Its OWN one-layer `ShadowMap` per frame slot (`grassNearShadowMap`, `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
+  * Its OWN one-layer `ShadowMap`, one copy (`m_grassNearShadowMap`, as the cascades': Sun shadow draw cost in
+    [Lighting.md](Lighting.md); `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
     through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 27, the set's highest). Drawn in the primary after
     the cascades' pass ("Grass near shadow"). Tried: an extra layer of the sun array - it took the array's size, so
     the 4096 cascades made it 4096 too (4x the fill and clear for the blades).

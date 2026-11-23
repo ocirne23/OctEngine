@@ -432,8 +432,12 @@ which is also the self-shadow bias. **Deterministic — no jitter, no temporal i
 
 ## Sun shadow draw cost
 
-The map: `SHADOW_MAP_RESOLUTION` (Layout.ixx) 4096² D32 x `NUM_SHADOW_CASCADES` (4) layers per frame slot - 256 MiB a
-slot, 512 MiB for the two. The cascades are ONE MULTIVIEW pass over ONE caster list (the cull packs each caster's cascade mask; the VS makes the
+The map: `SHADOW_MAP_RESOLUTION` (Layout.ixx) 4096² D32 x `NUM_SHADOW_CASCADES` (4) layers - 256 MiB, ONE copy
+(`RendererState::m_shadowMap`, not per frame slot; the near grass cascade's map too). Only the GPU writes and reads it, all
+inside one frame (the lit passes, ocean, river: fragment; the fog scatter and the GI probe trace: compute), the frames run
+in order on one queue, and the pass's EXTERNAL dependency (ShadowMap.cpp) waits for every earlier fragment / compute read
+before it writes - the previous frame's included. **A reader in another stage must join that dependency's source
+stages.** A copy per frame slot cost 272 MiB more (the two maps) and bought nothing. The cascades are ONE MULTIVIEW pass over ONE caster list (the cull packs each caster's cascade mask; the VS makes the
 triangles of the other cascades degenerate). The pass is nearly all TERRAIN, and it is VERTEX-bound, not
 raster-bound: with every terrain triangle made degenerate it still cost ~70% of its time (sandbox, 1440p).
 
