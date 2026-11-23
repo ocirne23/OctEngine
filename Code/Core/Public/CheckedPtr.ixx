@@ -4,7 +4,7 @@ import Core;
 
 constexpr static size_t MAX_ITEMS_PER_BUCKET = 20;
 
-export template<size_t Size>
+export OC_FWD_ATTACH template<size_t Size>
 class RefCountTracker
 {
 private:
@@ -116,7 +116,9 @@ public:
 
 // Fit to 4k page
 alignas(4096) RefCountTracker<102> g_refCounter;
+#ifdef _MSC_VER // an SRWLOCK shared_mutex is 8 bytes; glibc's pthread_rwlock_t is 56, so on Linux this spans pages
 static_assert(sizeof(g_refCounter) <= 4096);
+#endif
 
 inline void registerRefCheckable(const void* obj)
 {
@@ -143,7 +145,7 @@ inline uint16 getRefCount(const void* obj)
 	return g_refCounter.getRefCount(obj);
 }
 
-export class RefCheckable
+export OC_FWD_ATTACH class RefCheckable
 {
 public:
 
@@ -158,7 +160,7 @@ public:
 export template <typename T>
 concept IsRefCheckable = std::is_base_of<RefCheckable, T>::value;
 
-export template<IsRefCheckable T>
+export OC_FWD_ATTACH template<IsRefCheckable T>
 class CheckedPtr
 {
 public:

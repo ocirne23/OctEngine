@@ -1,6 +1,10 @@
 export module Core.fwd;
 
+#ifdef _MSC_VER
 import <type_traits>;
+#else
+import std.compat;
+#endif
 
 export extern "C++"
 {

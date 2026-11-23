@@ -5,7 +5,7 @@ import File.fwd;
 import Core;
 import Core.glm;
 
-export class IMaterialData
+export OC_FWD_ATTACH class IMaterialData
 {
 public:
     virtual ~IMaterialData() = default;

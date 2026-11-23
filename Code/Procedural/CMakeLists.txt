@@ -37,4 +37,9 @@ apply_compile_settings(${PROJECT_NAME})
 #    the .cpp files below, where /wd5050 acknowledges it: these TUs import /fp:fast modules on purpose, and
 #    none of the inline code they pull in is FP-critical.
 file(GLOB_RECURSE DIFFUSION_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/Private/Diffusion/*.cpp")
-set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "/fp:precise;/wd5050")
+if(MSVC)
+	set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "/fp:precise;/wd5050")
+else()
+	# -fno-math-errno: clang will not load a module interface built with a different math-errno setting
+	set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-model=precise;-ffp-contract=on;-fno-math-errno")
+endif()

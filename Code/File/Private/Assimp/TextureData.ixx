@@ -3,7 +3,7 @@ export module File:TextureData;
 import Core;
 import :ITextureData;
 
-export struct aiTexture;
+export OC_FWD_ATTACH struct aiTexture;
 
 export class TextureData final : public ITextureData
 {

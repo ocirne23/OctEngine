@@ -2,7 +2,7 @@ export module Core.Transform;
 
 import Core.glm;
 
-export struct Transform
+export OC_FWD_ATTACH struct Transform
 {
     Transform() : pos(0, 0, 0), scale(1.0f), quat(1, 0, 0, 0) {}
     Transform(glm::vec3 pos) : pos(pos), scale(1.0f), quat(1, 0, 0, 0) {}
@@ -31,7 +31,9 @@ export inline Transform composeTransform(const Transform& parent, const Transfor
         parent.quat * local.quat);
 }
 
+OC_FWD_ATTACH_BEGIN
 inline Transform Transform::operator*(const Transform& child) const
 {
     return composeTransform(*this, child);
 }
+OC_FWD_ATTACH_END

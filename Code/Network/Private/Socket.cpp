@@ -1,9 +1,48 @@
 module;
 
+#ifdef _MSC_VER
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#else
+// Linux: Berkeley sockets under the Winsock names this file uses.
+#include <arpa/inet.h>
+#include <cerrno>
+#include <csignal>
+#include <ctime>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+using SOCKET = int;
+using u_long = unsigned long;
+constexpr SOCKET INVALID_SOCKET = -1;
+constexpr int SOCKET_ERROR = -1;
+constexpr int WSAEWOULDBLOCK = EWOULDBLOCK;
+#define SIO_UDP_CONNRESET 0 // Linux reports no ICMP errors on an unconnected UDP socket
+// A non-blocking connect reports EINPROGRESS where Winsock reports WSAEWOULDBLOCK.
+inline int WSAGetLastError() { return errno == EINPROGRESS ? EWOULDBLOCK : errno; }
+inline int closesocket(SOCKET s) { return ::close(s); }
+inline int ioctlsocket(SOCKET s, long command, u_long* argument) { int value = int(*argument); return ::ioctl(s, command, &value); }
+inline int WSAIoctl(SOCKET, unsigned long, void*, unsigned long, void*, unsigned long, unsigned long*, void*, void*) { return 0; }
+inline int getsockname(SOCKET s, sockaddr* address, int* length) { socklen_t l = socklen_t(*length); const int r = ::getsockname(s, address, &l); *length = int(l); return r; }
+inline int getpeername(SOCKET s, sockaddr* address, int* length) { socklen_t l = socklen_t(*length); const int r = ::getpeername(s, address, &l); *length = int(l); return r; }
+inline SOCKET accept(SOCKET s, sockaddr* address, int* length) { socklen_t l = socklen_t(*length); const SOCKET r = ::accept(s, address, &l); *length = int(l); return r; }
+inline ssize_t recvfrom(SOCKET s, char* buffer, int size, int flags, sockaddr* address, int* length) { socklen_t l = socklen_t(*length); const ssize_t r = ::recvfrom(s, buffer, size_t(size), flags, address, &l); *length = int(l); return r; }
+// MSG_NOSIGNAL: a send on a peer-closed TCP socket must fail, not raise SIGPIPE.
+inline ssize_t send(SOCKET s, const char* data, int size, int flags) { return ::send(s, static_cast<const void*>(data), size_t(size), flags | MSG_NOSIGNAL); }
+using BOOL = int;
+using DWORD = unsigned long;
+constexpr BOOL FALSE = 0;
+inline unsigned long long GetTickCount64() { timespec now; clock_gettime(CLOCK_MONOTONIC, &now); return (unsigned long long)now.tv_sec * 1000 + now.tv_nsec / 1000000; }
+inline void Sleep(unsigned milliseconds) { usleep(milliseconds * 1000); }
+#endif
 
 module Network;
 
@@ -17,16 +56,23 @@ import :Socket;
 #define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
 #endif
 
+#ifdef _MSC_VER
 static_assert(sizeof(SOCKET) == sizeof(uint64));
+#endif
 
 static bool ensureWinsock()
 {
+#ifndef _MSC_VER
+    signal(SIGPIPE, SIG_IGN); // belt and braces next to MSG_NOSIGNAL: nothing in the engine wants SIGPIPE
+    return true;
+#else
     static const bool ok = []
     {
         WSADATA data;
         return WSAStartup(MAKEWORD(2, 2), &data) == 0;
     }();
     return ok;
+#endif
 }
 
 static SOCKET toSocket(uint64 handle) { return (SOCKET)handle; }
@@ -261,6 +307,18 @@ ETcpState TcpSocket::poll()
     if (m_state != ETcpState::Connecting || !isOpen())
         return m_state;
     const SOCKET s = toSocket(m_handle);
+#ifndef _MSC_VER
+    // Linux: a finished connect is POLLOUT; a failed one is POLLOUT/POLLERR with SO_ERROR set (no except set).
+    pollfd entry{ s, POLLOUT, 0 };
+    if (::poll(&entry, 1, 0) > 0)
+    {
+        int error = 0;
+        socklen_t length = sizeof(error);
+        getsockopt(s, SOL_SOCKET, SO_ERROR, &error, &length);
+        m_state = (error != 0 || (entry.revents & (POLLERR | POLLHUP))) ? ETcpState::Failed : ETcpState::Connected;
+    }
+    return m_state;
+#endif
     fd_set writeSet, exceptSet;
     FD_ZERO(&writeSet);
     FD_ZERO(&exceptSet);

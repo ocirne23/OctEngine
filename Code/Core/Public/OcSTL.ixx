@@ -39,9 +39,45 @@ module;
     #undef EASTL
 #endif
 
+#if !defined(_MSC_VER) && defined(OC_EASTL)
+// clang (Linux): CMake drives no header units outside MSVC, so EASTL is a textual GMF include here, and the free
+// operators the header units would have exported are re-exported by name at the end of the eastl shims below.
+#include <EASTL/algorithm.h>
+#include <EASTL/allocator.h>
+#include <EASTL/array.h>
+#include <EASTL/atomic.h>
+#include <EASTL/bitset.h>
+#include <EASTL/deque.h>
+#include <EASTL/functional.h>
+#include <EASTL/heap.h>
+#include <EASTL/iterator.h>
+#include <EASTL/list.h>
+#include <EASTL/map.h>
+#include <EASTL/memory.h>
+#include <EASTL/numeric_limits.h>
+#include <EASTL/optional.h>
+#include <EASTL/priority_queue.h>
+#include <EASTL/queue.h>
+#include <EASTL/set.h>
+#include <EASTL/shared_ptr.h>
+#include <EASTL/sort.h>
+#include <EASTL/span.h>
+#include <EASTL/stack.h>
+#include <EASTL/string.h>
+#include <EASTL/string_view.h>
+#include <EASTL/tuple.h>
+#include <EASTL/unique_ptr.h>
+#include <EASTL/unordered_map.h>
+#include <EASTL/unordered_set.h>
+#include <EASTL/utility.h>
+#include <EASTL/variant.h>
+#include <EASTL/vector.h>
+#include <EASTL/weak_ptr.h>
+#endif
+
 export module Core.OcSTL;
 
-#ifdef OC_EASTL
+#if defined(OC_EASTL) && defined(_MSC_VER)
 // HEADER UNITS, not textual includes in the global module fragment: a GMF include leaves EASTL's
 // free operators (string ==, string +, container comparisons) unreachable to every importer of
 // Core, since only the class templates are decl-reachable from the aliases below. Imported this
@@ -79,7 +115,7 @@ export import <EASTL/vector.h>;
 export import <EASTL/weak_ptr.h>;
 #endif
 
-#ifndef OC_EASTL
+#if !defined(OC_EASTL) && defined(_MSC_VER)
 // PRIVATE: the headers behind the oc:: aliases. Not re-exported -- the aliases stay usable anyway,
 // since an exported alias keeps its target reachable. This does NOT make std::vector unreachable
 // for importers: a header unit re-exports its entire include closure, so the exported <iostream>
@@ -113,6 +149,7 @@ import <vector>;
 // Needed by BOTH backings: EASTL has no atomic_ref, and it does not define its own initializer_list
 // (EASTL/initializer_list.h defers to std::initializer_list, which is what the compiler generates
 // braced lists as anyway).
+#ifdef _MSC_VER
 import <atomic>;
 import <initializer_list>;
 
@@ -136,6 +173,12 @@ export import <type_traits>;
 export import <new>;
 export import <cmath>;
 export import <random>;
+#else
+// clang (Linux): the std named module in place of the header units above. std.compat: the header units also hand out
+// the global C names (size_t, printf, memcpy). It exports all of std, so std:: containers are reachable too - the same
+// convention-only wall as the header units' include closure.
+export import std.compat;
+#endif
 
 #ifdef OC_EASTL
 // EASTL knows nothing about <iostream> or <format>, so the handoff points would each need a manual
@@ -179,6 +222,26 @@ export namespace std
         }
     };
 }
+
+#ifndef _MSC_VER
+// The GMF includes above leave EASTL's free operators unreachable to importers (only what the aliases name is), so
+// re-export them by name, the way libc++'s own std.cppm does: string ==/+, container comparisons, iterator arithmetic.
+export namespace eastl
+{
+    using eastl::operator==;
+    using eastl::operator!=;
+    using eastl::operator<;
+    using eastl::operator>;
+    using eastl::operator<=;
+    using eastl::operator>=;
+    using eastl::operator+;
+    using eastl::operator-;
+    using eastl::swap;
+    using eastl::begin;
+    using eastl::end;
+    using eastl::get; // structured bindings over pair / tuple find it by ADL
+}
+#endif
 #endif
 
 // WHAT THE SWITCH COSTS BEYOND THIS FILE. oc::string stops BEING std::string, so every handoff to a
@@ -290,7 +353,12 @@ export namespace oc
     template<typename... Ts> using variant = ocstl::variant<Ts...>;
     using nullopt_t = ocstl::nullopt_t;
     using monostate = ocstl::monostate;
+#if defined(OC_EASTL) && !defined(_MSC_VER)
+    // eastl::nullopt is a namespace-scope constexpr variable, i.e. internal linkage, which clang refuses to re-export.
+    inline constexpr nullopt_t nullopt{ocstl::nullopt_tag_t{}};
+#else
     using ocstl::nullopt;
+#endif
     using ocstl::get;
     using ocstl::get_if;
     using ocstl::holds_alternative;
@@ -521,6 +589,12 @@ export namespace oc
     template<typename... Args>
     string format(std::format_string<Args...> spec, Args&&... args)
     {
+#ifdef _MSC_VER
         return fromStd(std::format(spec, std::forward<Args>(args)...));
+#else
+        // libc++: std::format's overload set instantiates wformat_string<Args...> for a const char* argument, a hard
+        // error; vformat has no wide overload to consider. spec was checked at compile time already.
+        return fromStd(std::vformat(spec.get(), std::make_format_args(args...)));
+#endif
     }
 }

@@ -1,3 +1,4 @@
+#include "ImguiGmf.h" // Linux: imgui is a textual include (see Docs/Context/Linux); nothing on MSVC
 import App.UnattendedRun;
 import Core;
 import Core.imgui;

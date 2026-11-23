@@ -13,7 +13,7 @@ import :EntityPreviewTypes;
 import :Layout;
 import :ObjectContainerState; // the load steps and the bookkeeping
 
-export class RenderNode;
+export OC_FWD_ATTACH class RenderNode;
 
 export enum NodeSpawnIdx : uint16
 {
@@ -39,7 +39,7 @@ export struct ContainerMaterialOverrides
 };
 
 // A loaded model: its meshes, materials and node tree in the renderer's tables, spawned as RenderNodes. The state is in ObjectContainerState.ixx.
-export class ObjectContainer final : public ObjectContainerState
+export OC_FWD_ATTACH class ObjectContainer final : public ObjectContainerState
 {
 public:
 

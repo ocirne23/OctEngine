@@ -5,6 +5,8 @@ import Core;
 import :SceneData;
 import :ProceduralSceneData;
 
+OC_FWD_ATTACH_BEGIN
+
 oc::unique_ptr<ISceneData> ISceneData::createAssimpLoader()
 {
 	return oc::make_unique<SceneData>();
@@ -23,3 +25,5 @@ oc::unique_ptr<ISceneData> ISceneData::createMeshScene(const MeshGeometryDesc& g
 		return nullptr;
 	return scene;
 }
+
+OC_FWD_ATTACH_END

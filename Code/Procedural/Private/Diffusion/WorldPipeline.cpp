@@ -48,8 +48,15 @@ namespace Procedural::Diffusion
 		// that neither bigger batches nor fp16 nor IO binding has anything left to reclaim. The only wins
 		// left are algorithmic - do less work (see the stride above), not dispatch it better.
 		// Both models take a dynamic batch dim, and a partial final batch is fine.
+#ifdef _MSC_VER
 		constexpr int32 LATENT_BATCH = 8;
 		constexpr int32 COARSE_BATCH = 8;
+#else
+		// CUDA on Linux shares the GPU with the renderer (~2.4 GB left on an 8 GB card): batch 8 ran out of memory. The
+		// noise is seeded per window, so the batch size does not change the tiles.
+		constexpr int32 LATENT_BATCH = 2;
+		constexpr int32 COARSE_BATCH = 2;
+#endif
 		constexpr int32 DECODER_TILE_SIZE = 256;
 		// Unlike the latent stride above, this one IS a real overlap/cost dial: every value tried (192, 224,
 		// 240, 256) reproduces the reference elevation to within ~0.1% (3017..5708 m -> 3024..5706 at 224),
@@ -353,10 +360,7 @@ namespace Procedural::Diffusion
 		auto failed = [&]() -> oc::vector<FloatTensor>
 		{
 			m_inferenceFailed = true;
-			oc::vector<FloatTensor> r;
-			for (int32 b = 0; b < batch; b++)
-				r.emplace_back(oc::array<int32, 3>{ 7, S, S });
-			return r;
+			return oc::vector<FloatTensor>((size_t)batch); // empty tensors: failed windows, never cached
 		};
 
 		for (int32 step = 0; step < COARSE_STEPS; step++)
@@ -430,12 +434,14 @@ namespace Procedural::Diffusion
 		return results;
 	}
 
-	FloatTensor WorldPipeline::getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1)
+	bool WorldPipeline::getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1, FloatTensor& out)
 	{
 		assert(m_valid);
 		const int32 start[3] = { 0, ci0, cj0 };
 		const int32 end[3] = { 7, ci1, cj1 };
-		return m_coarse->getSlice(start, end);
+		m_inferenceFailed = false;
+		out = m_coarse->getSlice(start, end);
+		return !m_inferenceFailed;
 	}
 
 	// =====================================================================================================
@@ -604,8 +610,7 @@ namespace Procedural::Diffusion
 		if (!m_baseModel.run(inputs, pred))
 		{
 			m_inferenceFailed = true;
-			for (int32 b = 0; b < batch; b++)
-				results.emplace_back(oc::array<int32, 3>{ 6, S, S });
+			results.resize((size_t)batch); // empty tensors: failed windows, never cached
 			return results;
 		}
 		assert(pred.size() == (size_t)batch * chans * plane);
@@ -701,7 +706,7 @@ namespace Procedural::Diffusion
 		if (!m_decoderModel.run(inputs, rawPred))
 		{
 			m_inferenceFailed = true;
-			return result;
+			return FloatTensor{}; // empty: a failed window, never cached
 		}
 		assert(rawPred.size() == plane);
 

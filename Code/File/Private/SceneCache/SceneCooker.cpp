@@ -29,8 +29,10 @@ module File;
 
 // File IS the filesystem library: its readers stream binary ranges directly (Core no longer
 // exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+#ifdef _MSC_VER // Linux: Core's `import std.compat` carries both
 import <filesystem>;
 import <fstream>;
+#endif
 
 import Core;
 import Core.glm;
@@ -1131,6 +1133,8 @@ namespace
     }
 }
 
+OC_FWD_ATTACH_BEGIN
+
 oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options)
 {
     // Scene import/cook: main thread at spawn (cached afterwards) and on the terrain jobs.
@@ -1254,6 +1258,8 @@ bool ISceneData::importClipAssets(const char* filePath, oc::vector<ImportedClip>
         *error = oc::string("'") + filePath + (all.empty() ? "' has no animations" : "' has no animation that passes the filters");
     return out.size() > before;
 }
+
+OC_FWD_ATTACH_END
 
 uint32 TextureConvert::blockBytes(EBlockFormat format)
 {

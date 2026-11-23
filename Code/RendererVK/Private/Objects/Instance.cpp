@@ -50,16 +50,16 @@ static vk::Bool32 debugCallback(
 {
     if (pCallbackData->messageIdNumber == 0x76589099)
     {
-        printf(pCallbackData->pMessage + 94);
+        printf("%s", pCallbackData->pMessage + 94);
         return vk::False;
     }
-    if (pCallbackData->messageIdNumber == 0x92394c89)
+    if (pCallbackData->messageIdNumber == int32_t(0x92394c89))
         return vk::False;
-    if (pCallbackData->messageIdNumber == 0xa5625282)
+    if (pCallbackData->messageIdNumber == int32_t(0xa5625282))
         return vk::False;
-    if (pCallbackData->messageIdNumber == 0xd90fc835) //vkCmdExecuteGeneratedCommandsEXT() : command can't be executed on a secondary command buffer.
+    if (pCallbackData->messageIdNumber == int32_t(0xd90fc835)) //vkCmdExecuteGeneratedCommandsEXT() : command can't be executed on a secondary command buffer.
         return vk::False;
-    if (pCallbackData->messageIdNumber == 0xc81ad50e) // vkCreateGraphicsPipelines(): pCreateInfos[X].pVertexInputState Vertex attribute at location X not consumed by X shader.
+    if (pCallbackData->messageIdNumber == int32_t(0xc81ad50e)) // vkCreateGraphicsPipelines(): pCreateInfos[X].pVertexInputState Vertex attribute at location X not consumed by X shader.
         return vk::False;
     // The SteamVR OpenXR runtime creates its swapchain images (inside xrCreateSwapchain) with external
     // D3D11 memory and a PREINITIALIZED initialLayout, which the spec forbids for external-memory images.

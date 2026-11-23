@@ -18,6 +18,7 @@ Surface::~Surface()
 
 bool Surface::initialize(Window& window)
 {
+    m_window = &window;
     if (m_surface)
     {
         Globals::instance.getInstance().destroySurfaceKHR(m_surface);

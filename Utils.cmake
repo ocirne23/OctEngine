@@ -51,6 +51,39 @@ function(apply_compile_settings target)
 	target_compile_options(${target} PRIVATE ${COMPILE_OPTIONS})
 	target_link_options(${target} PRIVATE ${LINK_OPTIONS})
 
+	if(NOT MSVC)
+		# Ninja needs every module interface in a CXX_MODULES file set (the VS generator finds them by itself), and
+		# the nixpkgs headers of the libraries that link from nixpkgs must win over the vendored Windows copies.
+		get_target_property(all_sources ${target} SOURCES)
+		set(kept_sources "")
+		set(interfaces "")
+		foreach(source ${all_sources})
+			if(source MATCHES "\\.ixx$")
+				# An .ixx with no module declaration (a parked, commented-out one) compiles to nothing on MSVC; Ninja
+				# rejects it as a module source, so it leaves the target here.
+				file(READ "${source}" text)
+				string(REGEX REPLACE "/\\*.*\\*/" "" text "${text}")
+				if(text MATCHES "(^|\n)[^a-zA-Z/\n]*export[ \t]+module[ \t]") # [^a-zA-Z/\n]*: whitespace, or a UTF-8 BOM
+					list(APPEND interfaces "${source}")
+				endif()
+			else()
+				list(APPEND kept_sources "${source}")
+			endif()
+		endforeach()
+		set_property(TARGET ${target} PROPERTY SOURCES ${kept_sources})
+		if(interfaces)
+			target_sources(${target} PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${ROOT_DIR}" FILES ${interfaces})
+		endif()
+		# Dependencies/Include becomes the vendored-header folder of Linux.cmake (a plain -I, so it keeps coming before
+		# the nixpkgs -isystem folders; its headers count as system headers through OC_VENDORED_HEADER_FLAGS).
+		get_target_property(include_dirs ${target} INCLUDE_DIRECTORIES)
+		list(TRANSFORM include_dirs REPLACE "^${CMAKE_SOURCE_DIR}/Dependencies/Include/?$" "${OC_VENDORED_INCLUDE}")
+		set_property(TARGET ${target} PROPERTY INCLUDE_DIRECTORIES ${include_dirs})
+		target_include_directories(${target} BEFORE PRIVATE ${OC_LINUX_INCLUDES})
+		target_compile_options(${target} PRIVATE ${OC_VENDORED_HEADER_FLAGS})
+		target_link_libraries(${target} PUBLIC oc_std)
+	endif()
+
     group_sources_by_folder(${target})
 
 endfunction()

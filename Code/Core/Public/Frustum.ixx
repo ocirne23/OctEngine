@@ -12,7 +12,7 @@ export enum class EFrustumTest : uint8
     Inside,
 };
 
-export struct Frustum
+export OC_FWD_ATTACH struct Frustum
 {
     glm::vec4 planes[6];
     enum ESide { LEFT = 0, RIGHT = 1, TOP = 2, BOTTOM = 3, BACK = 4, FRONT = 5 };

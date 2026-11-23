@@ -1763,7 +1763,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     // restarting the sequence mid-run. ONE GENERATOR PER THREAD -- scripts tick in parallel, and a shared
     // std::mt19937 is a data race. Seeds come off a fixed base so a run is still reproducible per thread;
     // the interleaving across threads is not, which parallel script scheduling had already given up.
-    std::mt19937& scriptRng()
+    extern "C++" std::mt19937& scriptRng() // a helper, not a thunk: C++ linkage inside the extern "C" block
     {
         static oc::atomic<uint32> nextSeed{ 0x5eed5eedu };
         thread_local std::mt19937 rng(nextSeed.fetch_add(0x9e3779b9u, oc::memory_order_relaxed));
@@ -1880,10 +1880,18 @@ EngineScriptContext::EngineScriptContext()
     }
 {
     // Here, not at namespace scope: `parent` is EntityState-protected, and this class is its friend.
+    // offsetof on the non-standard-layout Entity is deliberate: these checks ARE the ABI mirror (clang warns, MSVC not).
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+#endif
     static_assert(offsetof(Entity, pos) == 0, "ScriptAPI.h Entity mirror out of sync: pos");
     static_assert(offsetof(Entity, scale) == 12, "ScriptAPI.h Entity mirror out of sync: scale");
     static_assert(offsetof(Entity, rot) == 16, "ScriptAPI.h Entity mirror out of sync: rot");
     static_assert(offsetof(Entity, parent) == 32, "ScriptAPI.h Entity mirror out of sync: parent");
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 }
 
 void EngineScriptContext::update(const Camera& camera, float newDeltaSeconds, float newElapsedSeconds)

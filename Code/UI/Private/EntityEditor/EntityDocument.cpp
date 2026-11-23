@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Transform;
 import Entity;
 import File;
+import Physics; // EPhysicsShapeType
 import :EntityDocument;
 
 static void readTemplateComponents(const EntitySpawnTemplate& tmpl, EntityDocNode& node, uint64& nextId)

@@ -2,7 +2,9 @@
 
 > Part of the Procedural documentation ([`Docs/Context/Procedural/CONTEXT.md`](CONTEXT.md)) — read that first.
 
-`:GeneratorV3`, `Private/Diffusion/`. An ONNX Runtime + DirectML pipeline behind `ITerrainSampler`.
+`:GeneratorV3`, `Private/Diffusion/`. An ONNX Runtime + DirectML pipeline behind `ITerrainSampler`. On Linux it runs
+on CUDA with smaller batches and its own runtime lifetime: "Diffusion terrain on CUDA" and "Global teardown" in
+[`Docs/Context/Linux/CONTEXT.md`](../Linux/CONTEXT.md).
 
 **Why the class looks the way it does:** an `ITerrainSampler` looks like a pure function of (x, z),
 but this one generates **256×256-pixel TILES through three ONNX models.**
@@ -34,6 +36,14 @@ budget is under the working set. Each plane is quantized, delta-coded and zstd'd
 (the format notes are at `TILE_CACHE_VERSION`). **`decodePlane` is the ONE dequantization** (AVX2: the running sum and
 an explicit FMA, 16 values per step): the loader decodes through it, and the writer's in-place roundtrip decodes its own
 bytes through it, so RAM and disk hold bit-identical tiles (the crack-free chunk borders rest on that).
+
+**A failed inference never reaches a cache.** A stage function returns an EMPTY tensor for a window whose model run
+failed (out of memory, say); `InfiniteTensor` does not cache it, nor a window of the next stage whose input slice
+misses it (`getSlice` leaves the failed window out; the dependent window then counts as failed too), and the request
+that saw the failure reports it
+(`WorldPipeline::get` / `getCoarseSlice` return false), so neither the full tile nor the coarse tile is kept or saved.
+The next request computes the window again. Caching a failed window as zeros would let a LATER tile that reads it be
+saved as real terrain, with no failure reported.
 
 ### World origin
 

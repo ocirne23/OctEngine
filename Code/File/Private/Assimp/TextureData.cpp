@@ -1,3 +1,7 @@
+module;
+
+#include "AssimpGmf.h"
+
 module File;
 
 import Core;

@@ -18,7 +18,7 @@ import :TreeVoxelFarPipeline;
 import :SnowCapPipeline;
 
 class CommandBuffer;
-class ObjectContainer;
+OC_FWD_ATTACH class ObjectContainer;
 
 export class StaticMeshGraphicsPipeline final
 {

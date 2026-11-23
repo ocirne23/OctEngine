@@ -2,6 +2,7 @@ module Game;
 
 import Core;
 import Core.glm;
+import Core.Transform;
 import Entity;
 import :Structures;
 

@@ -11,6 +11,9 @@ import Settings;
 
 import :TerrainSampler;
 import :HeightMapBaker;
+#ifndef _MSC_VER
+import :GeneratorV3; // teardown order on Linux: this global dies before the diffusion runtime (GeneratorV3.ixx)
+#endif
 
 export namespace Procedural
 {

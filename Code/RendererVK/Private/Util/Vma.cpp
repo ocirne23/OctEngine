@@ -35,9 +35,13 @@
 // is visible in the debugger's Output window where the assert dialog also appears.
 #include <cstdio>
 #include <cstdarg>
+#ifdef _MSC_VER
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#else
+static void OutputDebugStringA(const char*) {} // Linux: stderr above is the only sink
+#endif
 static void vmaLeakLog(const char* format, ...)
 {
     char buffer[1024];

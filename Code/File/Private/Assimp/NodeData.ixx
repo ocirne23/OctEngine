@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import :INodeData;
 
-export class aiNode;
+export OC_FWD_ATTACH class aiNode;
 
 export class NodeData final : public INodeData
 {

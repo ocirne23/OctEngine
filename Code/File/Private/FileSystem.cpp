@@ -6,8 +6,10 @@ import Core.Windows;
 import Core.BitPathTrie;
 // The ONLY place these two live now (Core deliberately stops exporting them - see Core.ixx):
 // every other library reaches the disk through the FileSystem API below.
+#ifdef _MSC_VER // Linux: Core's `import std.compat` carries both
 import <filesystem>;
 import <fstream>;
+#endif
 
 import :FileSystem;
 import :NativeFile;
@@ -389,6 +391,8 @@ namespace
     }
 }
 
+OC_FWD_ATTACH_BEGIN
+
 FileSystem::AllowMainThreadIO::AllowMainThreadIO() { ++t_allowMainThreadDepth; }
 FileSystem::AllowMainThreadIO::~AllowMainThreadIO() { --t_allowMainThreadDepth; }
 
@@ -469,7 +473,9 @@ bool FileSystem::initialize(bool mountExecutablePacks)
         std::filesystem::path dllDir = std::filesystem::path(rootDir.string() + DLL_DIR);
         if (std::filesystem::exists(dllDir))
         {
+#ifdef _MSC_VER // Linux: no runtime-loaded DLLs from here (onnxruntime links from nixpkgs)
             AddDllDirectory(dllDir.wstring().c_str());
+#endif
         }
     }
 
@@ -510,11 +516,17 @@ oc::string FileSystem::resolve(oc::string_view path)
 
 oc::string FileSystem::executableDir()
 {
+#ifndef _MSC_VER
+    std::error_code ec;
+    const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? oc::string() : fromPath(exe.parent_path());
+#else
     wchar_t buffer[4096];
     const DWORD length = GetModuleFileNameW(nullptr, buffer, (DWORD)oc::size(buffer));
     if (length == 0 || length >= oc::size(buffer))
         return oc::string();
     return fromPath(std::filesystem::path(std::wstring_view(buffer, length)).parent_path());
+#endif
 }
 
 // ---------------------------------------------------------------- reads / writes
@@ -1274,6 +1286,8 @@ FileSystem::ESource FileSystem::sourceOf(const oc::string& path, oc::string* out
     }
     return diskExists(path) ? ESource::Disk : ESource::Missing;
 }
+
+OC_FWD_ATTACH_END
 
 // ---------------------------------------------------------------- FileReader
 

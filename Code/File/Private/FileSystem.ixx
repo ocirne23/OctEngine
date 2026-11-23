@@ -30,7 +30,7 @@ class PackFile;
 // the first that has the file serves it. Writes always go to the disk, and a path this process wrote,
 // removed or renamed is served from the disk from then on, so it never reads back a stale packed copy.
 // Only paths under Assets/ (relative, or absolute below it) are looked up in packs.
-export class FileSystem final
+export OC_FWD_ATTACH class FileSystem final
 {
 public:
 

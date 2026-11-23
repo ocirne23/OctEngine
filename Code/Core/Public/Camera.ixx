@@ -23,7 +23,7 @@ export inline glm::mat4 reverseZProjection(glm::mat4 proj, float nearZ, float fa
     return proj;
 }
 
-export struct Camera
+export OC_FWD_ATTACH struct Camera
 {
 public:
 

@@ -11,6 +11,9 @@ import Settings;
 import :TerrainSampler;
 import :ClutterType;
 import :MeshCache;
+#ifndef _MSC_VER
+import :GeneratorV3; // teardown order on Linux: this global dies before the diffusion runtime (GeneratorV3.ixx)
+#endif
 
 // GROUND CLUTTER ("Clutter" tweaks; Docs/Context/Procedural/Clutter.md): pebbles, fallen branches, mushrooms and flowers. The
 // objects themselves are placed on the GPU every frame (RendererVK ClutterPipeline, clutter_cull.cs.glsl) - nothing per

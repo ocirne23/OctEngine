@@ -39,8 +39,8 @@ bool Device::initialize()
         {
             if (!m_physicalDevice)
                 m_physicalDevice = physDevice;
-            else if (physDevice.getProperties().limits.maxMemoryAllocationCount > m_physicalDevice.getProperties().limits.maxMemoryAllocationCount
-                && physDevice.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu
+            else if ((physDevice.getProperties().limits.maxMemoryAllocationCount > m_physicalDevice.getProperties().limits.maxMemoryAllocationCount
+                && physDevice.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
                 || m_physicalDevice.getProperties().deviceType != vk::PhysicalDeviceType::eDiscreteGpu)
             {
                 m_physicalDevice = physDevice;
@@ -552,6 +552,7 @@ void Device::destroy()
         m_device.destroy();
     }
     m_device = nullptr;
+    m_graphicsQueue = nullptr; // a later graphicsQueueWaitIdle() (a data manager's dtor) must not wait on the dead queue
 }
 
 void Device::setDebugName(vk::ObjectType type, uint64 handle, const char* name) const

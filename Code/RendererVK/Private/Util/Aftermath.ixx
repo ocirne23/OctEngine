@@ -1,12 +1,31 @@
+module;
+
+#ifndef _MSC_VER
+#include "LinuxGmfPrelude.h"
+#include <vulkan/vulkan.h>
+#endif
+
 export module RendererVK:Aftermath;
 
 import Core;
 import Core.Windows;
 
+#ifdef _MSC_VER
 export import <Aftermath/GFSDK_Aftermath_Defines.h>;
 export import <Aftermath/GFSDK_Aftermath.h>;
 export import <Aftermath/GFSDK_Aftermath_GpuCrashDump.h>;
 export import <Aftermath/GFSDK_Aftermath_GpuCrashDumpDecoding.h>;
+#else
+// Linux: the same SDK headers. load() asks for the Windows DLL name, which dlopen does not find, so there are no GPU
+// crash dumps - the Windows behaviour without the DLL.
+export extern "C++"
+{
+#include "Aftermath/GFSDK_Aftermath_Defines.h" // quoted: no "angled include in the module purview" warning
+#include "Aftermath/GFSDK_Aftermath.h"
+#include "Aftermath/GFSDK_Aftermath_GpuCrashDump.h"
+#include "Aftermath/GFSDK_Aftermath_GpuCrashDumpDecoding.h"
+}
+#endif
 
 #undef GFSDK_Aftermath_SUCCEED
 export constexpr bool GFSDK_Aftermath_SUCCEED(int value)

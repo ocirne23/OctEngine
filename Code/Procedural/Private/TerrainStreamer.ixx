@@ -17,6 +17,9 @@ import :TerrainChunk;
 import :HeightMapBaker;
 import :OceanGenerator;
 import :RiverSystem;
+#ifndef _MSC_VER
+import :GeneratorV3; // teardown order on Linux: Globals::terrain dies before the diffusion runtime (GeneratorV3.ixx)
+#endif
 
 export namespace Procedural
 {

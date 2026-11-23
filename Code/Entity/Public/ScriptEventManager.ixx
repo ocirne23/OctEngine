@@ -10,7 +10,7 @@ import Script;
 
 // Global named script events (Globals::scriptEvents) and the deferred, thread-safe queue of script-driven entity changes (destroy, reparent, spawn requests)
 // that the main loop drains through takeEntityChanges(). The state is in ScriptEventManagerState.ixx; the multi-line bodies are below the class.
-export class ScriptEventManager final : public ScriptEventManagerState
+export OC_FWD_ATTACH class ScriptEventManager final : public ScriptEventManagerState
 {
 public:
 
@@ -48,6 +48,7 @@ OC_INIT_SEG(OC_SEG_SCRIPT_EVENTS)
 
 // ---- Inline bodies ----
 
+OC_FWD_ATTACH_BEGIN
 inline void ScriptEventManager::initialize()
 {
     Globals::scriptHost.m_scriptLoadedCallback = [](const ScriptModule* script, const oc::vector<oc::string>& oldNames) { Globals::scriptEvents.onScriptLoadedCallback(script, oldNames); };
@@ -101,3 +102,4 @@ inline void ScriptEventManager::addSpawnRequest(oc::string path, const glm::vec3
     const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
     m_entityChanges.emplace_back(EntityChange::SpawnAtPosition{ oc::move(path), position });
 }
+OC_FWD_ATTACH_END

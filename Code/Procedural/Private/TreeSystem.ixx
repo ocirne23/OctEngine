@@ -14,6 +14,9 @@ import :TerrainSampler;
 import :TreeSpecies;
 import :TreeGenerator;
 import :TreeWorld;
+#ifndef _MSC_VER
+import :GeneratorV3; // teardown order on Linux: this global dies before the diffusion runtime (GeneratorV3.ixx)
+#endif
 import :MeshCache;
 
 // Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library and its baked

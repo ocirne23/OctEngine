@@ -1,3 +1,6 @@
+#ifndef _MSC_VER
+#include <csignal> // the headless server's Ctrl+C / SIGTERM (SetConsoleCtrlHandler on Windows)
+#endif
 import Core;
 import Core.Allocator;
 import Core.Log;
@@ -124,7 +127,14 @@ int main(int argc, char* argv[])
     Rect heldViewportRect;
     SystemEventListenerHandle systemEventListener;
     if (headlessServer)
+    {
+#ifdef _MSC_VER
         SetConsoleCtrlHandler([](DWORD) -> BOOL { g_running = false; return TRUE; }, TRUE);
+#else
+        signal(SIGINT, [](int) { g_running = false; });  // Ctrl+C
+        signal(SIGTERM, [](int) { g_running = false; }); // kill / systemd stop
+#endif
+    }
     else
     {
         systemEventListener = Globals::input.addSystemEventListener();
@@ -148,7 +158,12 @@ int main(int argc, char* argv[])
     if (options.mainMenu())
         session.enterMainMenu();
     else if (!session.startFromCommandLine())
+    {
+#ifndef _MSC_VER
+        Globals::rendererVK.releaseDriverLibraries(); // see the end of main
+#endif
         return 1;
+    }
 
     Camera camera;
     camera.viewMatrix = glm::mat4(1.0f);
@@ -384,5 +399,12 @@ int main(int argc, char* argv[])
     Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
     Globals::world.joinSelection();
     Globals::forceSystem.joinMerge();
+#ifndef _MSC_VER
+    // The one explicit teardown call. glibc runs exit handlers newest first, and cuDNN registers its statics lazily
+    // during the first inferences - after every App global - so they die before the terrain could stop an inference
+    // in flight. Unload the models (waits that inference out) and release ORT while cuDNN is whole.
+    Procedural::TerrainGenV3::shutdownInference();
+    Globals::rendererVK.releaseDriverLibraries(); // NGX (DLSS) registers its statics late too
+#endif
     return 0;
 }

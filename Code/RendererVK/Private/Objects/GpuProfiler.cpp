@@ -88,7 +88,12 @@ void GpuProfiler::collect(uint32 frameIdx)
     {
         const oc::array<vk::CalibratedTimestampInfoKHR, 2> infos{
             vk::CalibratedTimestampInfoKHR{ .timeDomain = vk::TimeDomainKHR::eDevice },
+#ifdef _MSC_VER
             vk::CalibratedTimestampInfoKHR{ .timeDomain = vk::TimeDomainKHR::eQueryPerformanceCounter },
+#else
+            // The clock Core.Windows' QueryPerformanceCounter reads. NVIDIA answers a QPC request here with VK_SUCCESS and 0.
+            vk::CalibratedTimestampInfoKHR{ .timeDomain = vk::TimeDomainKHR::eClockMonotonic },
+#endif
         };
         oc::array<uint64, 2> timestamps = {};
         uint64 maxDeviation = 0;

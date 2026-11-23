@@ -38,6 +38,9 @@ export namespace Procedural::Diffusion
 		// `name` is only for diagnostics.
 		bool load(const oc::string& modelPath, oc::string_view name, EInferenceDevice device);
 		bool isValid() const;
+		// Linux: destroys the process-wide ORT environment (and with it the execution providers). Only with no model
+		// loaded; the next load() creates a new one. Windows: does nothing.
+		static void releaseEnvironment();
 
 		// Runs the model and copies OUTPUT 0 into `out` (resized to the element count). Any further outputs
 		// are ignored, as in the reference - these models have exactly one.

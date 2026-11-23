@@ -45,6 +45,8 @@ export namespace Procedural::Diffusion
 	class MemoryTileStore;
 
 	// windowIndex -> the tile. args[depIdx] is this window's slice of dependency depIdx.
+	// A FAILED window (an inference error) is an EMPTY tensor (ndim 0): it is not cached, so the next request computes it
+	// again, and the caller that saw the failure must not keep what it built from it.
 	using TensorFn = oc::function<FloatTensor(oc::span<const int32> windowIndex, oc::span<const FloatTensor> args)>;
 	// Batched variant. NOTE args is DEP-MAJOR: args[depIdx][batchIdx], matching the reference.
 	using BatchTensorFn = oc::function<oc::vector<FloatTensor>(
@@ -75,6 +77,7 @@ export namespace Procedural::Diffusion
 		TensorFn m_fn;
 		BatchTensorFn m_batchFn;
 		int32 m_batchSize = 0;
+		bool m_windowFailed = false; // a window of this tensor failed since the current getSlice began
 		TensorWindow m_outputWindow;
 		oc::vector<InfiniteTensor*> m_deps;      // non-owning; the store owns every tensor
 		oc::vector<TensorWindow> m_depWindows;

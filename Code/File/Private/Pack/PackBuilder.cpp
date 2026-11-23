@@ -4,7 +4,9 @@ module;
 
 module File;
 
+#ifdef _MSC_VER // Linux: Core's `import std.compat` carries it
 import <filesystem>;
+#endif
 
 import Core;
 import Core.Log;

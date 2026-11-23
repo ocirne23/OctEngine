@@ -5,7 +5,7 @@ import File.fwd;
 import Core;
 import Core.glm;
 
-export class INodeData
+export OC_FWD_ATTACH class INodeData
 {
 public:
     virtual ~INodeData() = default;

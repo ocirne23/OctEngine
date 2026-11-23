@@ -395,7 +395,6 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
         assert(false && "Failed to get image format properties");
         return false;
 	}
-	auto imageFormatProperties = imageFormatPropertiesresult.value;
 
     if (!Globals::gpuAllocator.createImage(imageCreateInfo, m_image, m_imageMemory, debugName))
         return false;

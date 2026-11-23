@@ -3,13 +3,16 @@ module;
 #include <assimp/material.h>
 #include <assimp/GltfMaterial.h>
 #include <cstring>
+#include "AssimpGmf.h"
 
 module File;
 
 // File IS the filesystem library: its readers stream binary ranges directly (Core no longer
 // exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+#ifdef _MSC_VER // Linux: Core's `import std.compat` carries both
 import <filesystem>;
 import <fstream>;
+#endif
 
 import Core;
 import Core.glm;

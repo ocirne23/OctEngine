@@ -136,6 +136,7 @@ inline bool interlockedIsListEmpty(SInterlockedLinkedListHeader& rHeader)
     return false;
 }
 
+#ifdef _MSC_VER // no users; its body does not pass clang's two-phase lookup (pEntry->Next, void* -> Entry*)
 export template <typename T>
 class LockFreeList final
 {
@@ -187,3 +188,4 @@ public:
         return interlockedPopWholeList(m_listHead);
     }
 };
+#endif

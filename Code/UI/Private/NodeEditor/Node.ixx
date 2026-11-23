@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 export module UI:Node;
 
 import Core;
@@ -7,7 +11,11 @@ import :NodeDef;
 
 namespace NodeEditor
 {
+#ifdef _MSC_VER
 class Node;
+#else
+export class Node; // clang: exporting a declaration that was first declared unexported is an error
+#endif
 
 export enum EPinShape : uint8
 {

@@ -7,7 +7,7 @@ import :Entity;
 import Script;
 
 export struct ScriptComponent; // declared before its friend line
-export class ScriptEventManager;
+export OC_FWD_ATTACH class ScriptEventManager; // global module: ScriptHost (module Script) befriends it
 
 // Everything of ScriptEventManager but its public API (ScriptEventManager.ixx): the event-name keys, the listener registry and the deferred change queue.
 export class ScriptEventManagerState

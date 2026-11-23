@@ -3,6 +3,10 @@ export module RendererVK:MeshStreamer;
 import Core;
 import :Layout;
 import Settings.fwd;
+#ifndef _MSC_VER
+import :Device;    // Linux: InitSeg.h's order as imports - the data managers go before the device and the GPU allocator
+import :Allocator;
+#endif
 
 // Mesh data streaming (counterpart of the TextureStreamer): cooked scenes register each source mesh
 // (plus its generated LOD levels - they share the vertex range) as a "mesh set" with the byte ranges

@@ -337,7 +337,7 @@ void JobSystemStress::selfTest()
                     if (inside.fetch_add(1, oc::memory_order_relaxed) != 0)
                         m_violations.fetch_add(1, oc::memory_order_relaxed);
                     shared += 1;
-                    for (volatile int spin = 0; spin < 50; ++spin) {}
+                    for (volatile int spin = 0; spin < 50; spin = spin + 1) {} // ++ on a volatile is deprecated (C++20)
                     inside.fetch_sub(1, oc::memory_order_relaxed);
                 }, { "testMutex" }, EJobPriority::Normal, &counter);
         std::thread external([&mutex, &shared, &inside, this]
@@ -413,14 +413,14 @@ void JobSystemStress::selfTest()
                     started.fetch_add(1, oc::memory_order_relaxed);
                     while (highDone.load(oc::memory_order_relaxed) < numHigh && Clock::now() - start < std::chrono::seconds(2))
                         if (!Globals::jobSystem.preemptionPoint())
-                            for (volatile int spin = 0; spin < 50; ++spin) {}
+                            for (volatile int spin = 0; spin < 50; spin = spin + 1) {}
                 }, { "testPreemptLow" }, EJobPriority::Low, &lowCounter);
         while (started.load(oc::memory_order_relaxed) < numSpinners && Clock::now() - start < std::chrono::seconds(1))
             std::this_thread::yield(); // every worker is inside a spinner before the High work lands
         for (uint32 i = 0; i < numHigh; ++i)
             jobSystem.submit([&highDone]
                 {
-                    for (volatile int spin = 0; spin < 2000; ++spin) {}
+                    for (volatile int spin = 0; spin < 2000; spin = spin + 1) {}
                     highDone.fetch_add(1, oc::memory_order_relaxed);
                 }, { "testPreemptHigh" }, EJobPriority::High, &highCounter);
         jobSystem.wait(highCounter);

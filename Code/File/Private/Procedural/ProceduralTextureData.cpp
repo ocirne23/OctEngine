@@ -117,6 +117,8 @@ uint32       ProceduralTextureData::getWidth()      const { return m_width; }
 uint32       ProceduralTextureData::getHeight()     const { return m_height; }
 const char*  ProceduralTextureData::getFormatInfo() const { return "rgba8888"; }
 
+OC_FWD_ATTACH_BEGIN
+
 oc::unique_ptr<ITextureData> ITextureData::createFallbackDiffuseTexture()
 {
 	auto pTex = oc::make_unique<ProceduralTextureData>();
@@ -137,3 +139,5 @@ oc::unique_ptr<ITextureData> ITextureData::createFallbackNormalTexture()
 	pTex->initialize(EProceduralTextureType::FlatNormal, 8, 8);
 	return pTex;
 }
+
+OC_FWD_ATTACH_END

@@ -94,8 +94,11 @@ import :RendererTypes;
 
 import Core.fwd;
 
-export class Renderer;
-export class RenderBatch;      // Renderer.ixx
+export OC_FWD_ATTACH class Renderer;
+export OC_FWD_ATTACH class RenderBatch; // Renderer.ixx
+#ifndef _MSC_VER // clang: the friend line below would otherwise introduce a module-attached ObjectContainerState
+export OC_FWD_ATTACH class ObjectContainerState;
+#endif
 export class MeshStreamer;     // declared before their friend lines
 export class RenderMaterial;
 export class RenderTexture;
@@ -108,7 +111,7 @@ export enum class EVr;         // Renderer.ixx
 
 // Everything of the Renderer but its public API (Renderer.ixx): the state and the private helpers. A helper reaches
 // the API through self().
-export class RendererState : public RendererTypes
+export OC_FWD_ATTACH class RendererState : public RendererTypes
 {
 protected:
     struct PerFrameData;
@@ -450,7 +453,7 @@ protected:
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes); // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.
 
     // -- Skinning resources --
-    friend class AnimatorComponent;
+    friend struct AnimatorComponent;
     using SkinnedInstanceBundle = SkinnedMeshRegistry::Bundle;
     uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources) { return m_skinned.addSources(sources); }
     const RendererVKLayout::SkinnedMeshSource& getSkinnedMeshSource(uint32 idx) const { return m_skinned.getSource(idx); }
@@ -467,8 +470,12 @@ protected:
         m_skinned.setInstance(jobIdx, baseVertexOffset, skinVertexOffset, outVertexOffset, vertexCount, paletteHandle, meshIdx, firstIndex, indexCount);
     }
 
+#ifdef _MSC_VER
+    // Unused; their dtors still run with the renderer's (~Instance destroys Globals::device). Linux leaves them out: there
+    // the data managers outlive the renderer (see Docs/Context/Linux, Global teardown) and still need the device.
     Instance m_instance;
     Device m_device;
+#endif
     Surface m_surface;
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;

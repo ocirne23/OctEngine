@@ -13,6 +13,10 @@ import Core;
 import Core.glm;
 import Core.VrSession;
 import :VK;
+#ifndef _MSC_VER
+import :Device;   // Linux: InitSeg.h's order as imports - the XR session goes before the device and the instance
+import :Instance;
+#endif
 
 // Minimal OpenXR session wrapper (Milestone 1: lifecycle + a cleared stereo image to the headset).
 // Owns the XrInstance/system/session/reference-space and a single arraySize=2 swapchain that matches

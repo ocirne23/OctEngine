@@ -63,7 +63,7 @@ struct AllocationTail
 // (align > 16) MUST free through deallocateAligned with that same align - _aligned_malloc and malloc
 // blocks cannot be told apart. Every engine path knows the alignment at the free: the align_val_t
 // delete forms, and oc::allocator<T> (Core.OcSTL) for the EASTL containers.
-export class Allocator final
+export OC_FWD_ATTACH class Allocator final
 {
 public:
 
@@ -87,8 +87,12 @@ public:
             return allocate(size);
 #ifdef ALLOCATION_HEADER
         return allocateWithHeader(size, align);
-#else
+#elif defined(_MSC_VER)
         void* ptr = _aligned_malloc(size, align);
+        callMemoryAllocHook(ptr, size);
+        return ptr;
+#else
+        void* ptr = std::aligned_alloc(align, (size + align - 1) & ~(align - 1)); // size must be a multiple of align
         callMemoryAllocHook(ptr, size);
         return ptr;
 #endif
@@ -111,8 +115,10 @@ public:
         callMemoryFreeHook(ptr);
 #ifdef ALLOCATION_HEADER
         freeWithHeader(ptr);
-#else
+#elif defined(_MSC_VER)
         _aligned_free(ptr);
+#else
+        std::free(ptr);
 #endif
     }
 
@@ -229,25 +235,25 @@ void* operator new[](std::size_t n, std::size_t align, [[maybe_unused]] std::siz
     return Globals::allocator.allocate(n);
 }
 
-void operator delete(void* p)
+void operator delete(void* p) noexcept
 {
     if (p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete(void* p, std::align_val_t align)
+void operator delete(void* p, std::align_val_t align) noexcept
 {
     if (p)
         Globals::allocator.deallocateAligned(p, (size_t)align);
 }
 
-void operator delete[](void* p)
+void operator delete[](void* p) noexcept
 {
     if (p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete[](void* p, std::align_val_t align)
+void operator delete[](void* p, std::align_val_t align) noexcept
 {
     if (p)
         Globals::allocator.deallocateAligned(p, (size_t)align);

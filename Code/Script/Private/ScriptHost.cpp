@@ -1,7 +1,13 @@
-#ifdef SCRIPTS_STATIC
 module;
+#ifdef SCRIPTS_STATIC
 // Cooked build: the registry the compiled-in scripts self-register with needs the ABI structs (ScriptStaticEntries).
 #include "ScriptAPI.h"
+#endif
+#ifndef _MSC_VER
+// Linux: the DLL calls come from Core.Windows (dlopen). Building a script DLL at run time stays MSVC-only (findVcvars
+// finds nothing and the compile reports it); the default SCRIPTS_STATIC build compiles the scripts into App.
+#include <cstdlib>
+#include <sys/wait.h>
 #endif
 module Script;
 
@@ -57,6 +63,10 @@ namespace
     // Runs a full command line synchronously, no console window. Returns the child exit code, or -1.
     int runProcess(const oc::string& cmdLine)
     {
+#ifndef _MSC_VER
+        const int status = std::system(cmdLine.c_str());
+        return status == -1 ? -1 : WEXITSTATUS(status);
+#else
         STARTUPINFOA si{}; si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
         oc::vector<char> buffer(cmdLine.begin(), cmdLine.end());
@@ -69,6 +79,7 @@ namespace
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         return (int)code;
+#endif
     }
 
     oc::string readTextFile(const oc::string& path)

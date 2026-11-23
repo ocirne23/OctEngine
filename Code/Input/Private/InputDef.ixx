@@ -1,25 +1,38 @@
+module;
+
+#ifndef _MSC_VER // clang: SDL's own SDL_Scancode (no fixed underlying type) cannot merge with an opaque `: int` one
+#include "LinuxGmfPrelude.h"
+#include <SDL3/SDL_scancode.h>
+#endif
+
 export module Input:Input;
 
 import Core;
 import Core.fwd; // Window (the event-source pointer below)
 
-export struct SDL_MouseWheelEvent;
-export struct SDL_MouseMotionEvent;
-export struct SDL_MouseButtonEvent;
+export OC_FWD_ATTACH struct SDL_MouseWheelEvent;
+export OC_FWD_ATTACH struct SDL_MouseMotionEvent;
+export OC_FWD_ATTACH struct SDL_MouseButtonEvent;
 
-export struct SDL_TextEditingEvent;
-export struct SDL_TextInputEvent;
-export struct SDL_KeyboardEvent;
+export OC_FWD_ATTACH struct SDL_TextEditingEvent;
+export OC_FWD_ATTACH struct SDL_TextInputEvent;
+export OC_FWD_ATTACH struct SDL_KeyboardEvent;
 
-export struct SDL_JoyButtonEvent;
-export struct SDL_JoyAxisEvent;
-export struct SDL_JoyHatEvent;
+export OC_FWD_ATTACH struct SDL_JoyButtonEvent;
+export OC_FWD_ATTACH struct SDL_JoyAxisEvent;
+export OC_FWD_ATTACH struct SDL_JoyHatEvent;
 
-export struct SDL_WindowEvent;
+export OC_FWD_ATTACH struct SDL_WindowEvent;
 
+#ifdef _MSC_VER
 export enum SDL_Scancode : int;
+#endif
 
-export class MouseListener
+#ifndef _MSC_VER // clang: the listeners' friend lines would otherwise introduce a module-attached Input
+export OC_FWD_ATTACH class Input;
+#endif
+
+export OC_FWD_ATTACH class MouseListener
 {
 public:
     oc::function<void(const SDL_MouseMotionEvent&)> onMouseMoved;
@@ -28,7 +41,7 @@ public:
     oc::function<void(const SDL_MouseButtonEvent&)> onMouseReleased;
 };
 
-export class KeyboardListener
+export OC_FWD_ATTACH class KeyboardListener
 {
 public:
     oc::function<void(const SDL_TextEditingEvent&)> onTextEditing;
@@ -37,14 +50,14 @@ public:
     oc::function<void(const SDL_KeyboardEvent&)>    onKeyReleased;
 };
 
-export class SystemEventListener
+export OC_FWD_ATTACH class SystemEventListener
 {
 public:
     oc::function<void(const SDL_WindowEvent&)> onWindowEvent;
     oc::function<void()> onQuit;
 };
 
-export class JoystickListener
+export OC_FWD_ATTACH class JoystickListener
 {
 public:
     virtual void joyButtonPressed(const SDL_JoyButtonEvent& evt, int button) {}
@@ -89,7 +102,7 @@ export using MouseListenerHandle       = InputListenerHandle<MouseListener>;
 export using KeyboardListenerHandle    = InputListenerHandle<KeyboardListener>;
 export using SystemEventListenerHandle = InputListenerHandle<SystemEventListener>;
 
-export class Input final
+export OC_FWD_ATTACH class Input final
 {
 public:
 
@@ -149,7 +162,11 @@ export namespace Globals
     Input input;
 }
 
+#ifdef _MSC_VER
 export template<typename T>
+#else
+template<typename T> // clang: an out-of-class member definition cannot be exported (the class already is)
+#endif
 void InputListenerHandle<T>::reset()
 {
     if (m_listener)

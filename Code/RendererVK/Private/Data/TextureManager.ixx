@@ -6,6 +6,10 @@ import File.fwd;
 import :VK;
 import :Layout;
 import :Texture;
+#ifndef _MSC_VER
+import :Device;    // Linux: InitSeg.h's order as imports - the data managers go before the device and the GPU allocator
+import :Allocator;
+#endif
 
 export class TextureManager final
 {

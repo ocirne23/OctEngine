@@ -78,7 +78,8 @@ reads it). "TAA/Enabled" re-records the command buffers on change (`Tweak::onCha
 ## DLSS (NVIDIA Streamline 2.14.1, "Post/DLSS" tweaks)
 
 DLSS Super Resolution + DLAA, **desktop only; any mode but Off REPLACES TAA** (`taaActive()` = TAA on AND no
-DLSS; `resolveActive()` = either). No frame generation / Reflex.
+DLSS; `resolveActive()` = either). No frame generation / Reflex. On Linux the same `Streamline::` calls run on NVIDIA's
+NGX SDK instead (Streamline is Windows-only): "DLSS through NGX" in [`Docs/Context/Linux/CONTEXT.md`](../Linux/CONTEXT.md).
 
 **Resizes apply on RELEASE** (`setResizeHold`, App's resize hold): while a window-border or ImGui-splitter drag holds
 the left mouse button, the viewport rect and the window size stay the last ones, and an out-of-date swapchain skips

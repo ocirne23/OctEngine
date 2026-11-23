@@ -10,7 +10,7 @@ import Core.glm;
 //   "quoted value"             -> a single value, may contain spaces
 //   0, 0, 0                    -> commas are treated as separators (vectors)
 //   # ... or // ...            -> comment line
-export struct AssetNode
+export OC_FWD_ATTACH struct AssetNode
 {
     oc::string key;
     oc::vector<oc::string> values;

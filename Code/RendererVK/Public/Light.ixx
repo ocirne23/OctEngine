@@ -5,7 +5,7 @@ import Core.glm;
 
 import :Layout;
 
-export struct PointLight : RendererVKLayout::LightInfo
+export OC_FWD_ATTACH struct PointLight : RendererVKLayout::LightInfo
 {
     PointLight() = default;
     PointLight(const glm::vec3& pos, float range, const glm::vec3& color, float intensity)
@@ -19,7 +19,7 @@ export struct PointLight : RendererVKLayout::LightInfo
     }
 };
 
-export struct AreaLight : RendererVKLayout::LightInfo
+export OC_FWD_ATTACH struct AreaLight : RendererVKLayout::LightInfo
 {
     AreaLight() = default;
     AreaLight(const glm::vec3& pos, float range, const glm::vec3& color, float intensity, const glm::vec3& direction, float width, float height, float rotation = 0.0f)
@@ -54,7 +54,7 @@ export struct BeamLight : RendererVKLayout::LightInfo
     }
 };
 
-export struct SpotLight : RendererVKLayout::LightInfo
+export OC_FWD_ATTACH struct SpotLight : RendererVKLayout::LightInfo
 {
     SpotLight() = default;
     SpotLight(const glm::vec3& pos, float range, const glm::vec3& color, float intensity, const glm::vec3& direction, float coneHalfAngleRad, float edgeSoftness = 0.1f)

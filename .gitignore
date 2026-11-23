@@ -1,6 +1,7 @@
 .vs
 Build/
 Build-Cooked/
+Build-Linux/
 Assets/Local
 *.blend1
 Docs/GDD*

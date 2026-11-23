@@ -3,7 +3,7 @@ export module Core.AABB;
 import Core;
 import Core.glm;
 
-export struct AABB final
+export OC_FWD_ATTACH struct AABB final
 {
     glm::vec3 min;
     glm::vec3 max;

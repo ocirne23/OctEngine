@@ -5,8 +5,10 @@ module;
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <onnxruntime/onnxruntime_cxx_api.h>
+#ifdef _MSC_VER
 #include <onnxruntime/dml_provider_factory.h>
 #include <comdef.h>
+#endif
 
 module Procedural;
 
@@ -17,6 +19,12 @@ import :Diffusion.Onnx;
 
 namespace Procedural::Diffusion
 {
+#ifdef _MSC_VER
+	constexpr const char* c_gpuProvider = "DirectML";
+#else
+	constexpr const char* c_gpuProvider = "CUDA";
+#endif
+
 	namespace
 	{
 		// The ORT environment is a process-wide singleton and is never destroyed (matching the reference,
@@ -28,11 +36,22 @@ namespace Procedural::Diffusion
 		// on the CPU because they compute tensor metadata, and a GPU round-trip per op to produce a few
 		// integers would be slower. Nothing here reads ORT's warning stream: a DirectML EP that genuinely
 		// fails to attach THROWS, and is reported below as an explicit error plus "inference provider: CPU".
+#ifdef _MSC_VER
 		Ort::Env& ortEnv()
 		{
 			static Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "OctEngine.Diffusion");
 			return env;
 		}
+#else
+		// Linux: namespace scope, so releaseEnvironment() can destroy it before exit (see TerrainGenV3::shutdownInference).
+		oc::optional<Ort::Env> g_ortEnv;
+		Ort::Env& ortEnv()
+		{
+			if (!g_ortEnv)
+				g_ortEnv.emplace(ORT_LOGGING_LEVEL_ERROR, "OctEngine.Diffusion");
+			return *g_ortEnv;
+		}
+#endif
 
 		std::mutex g_providerMutex;
 		oc::string g_resolvedProvider;
@@ -47,6 +66,13 @@ namespace Procedural::Diffusion
 		}
 
 		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
+#ifndef _MSC_VER
+		// Linux: ORTCHAR_T is char, so the session takes the UTF-8 path as it is.
+		oc::string widenPath(const oc::string& path)
+		{
+			return FileSystem::resolve(path);
+		}
+#else
 		oc::wstring widenPath(const oc::string& path)
 		{
 			const oc::string p = FileSystem::resolve(path);
@@ -56,6 +82,7 @@ namespace Procedural::Diffusion
 				MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), wide.data(), len);
 			return wide;
 		}
+#endif
 	}
 
 	struct OnnxModel::Impl
@@ -88,6 +115,13 @@ namespace Procedural::Diffusion
 	OnnxModel::OnnxModel() : m_impl(oc::make_unique<Impl>()) {}
 	OnnxModel::~OnnxModel() = default;
 
+	void OnnxModel::releaseEnvironment()
+	{
+#ifndef _MSC_VER
+		g_ortEnv.reset();
+#endif
+	}
+
 	bool OnnxModel::isValid() const
 	{
 		return m_impl && m_impl->session.has_value();
@@ -117,28 +151,52 @@ namespace Procedural::Diffusion
 			bool dml = false;
 			if (device != EInferenceDevice::Cpu)
 			{
+#ifdef _MSC_VER
 				// DirectML REQUIRES both of these. The Java addDirectML sets them for you; the C++ API does
 				// not, and session creation fails without them.
 				opts.DisableMemPattern();
 				//opts.SetExecutionMode(ORT_SEQUENTIAL);
 				opts.SetExecutionMode(ORT_PARALLEL);
+#else
+				// CUDA: sequential. The CUDA provider runs its kernels on one stream, so the parallel executor buys nothing
+				// and only runs nodes on ORT's own threads.
+				opts.SetExecutionMode(ORT_SEQUENTIAL);
+#endif
 				try
 				{
+#ifdef _MSC_VER
 					Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(opts, 0));
 					dml = true;
+#else
+					// Linux: the CUDA provider stands in for DirectML (`dml` means "the GPU provider" from here on). It logs
+					// through ORT's default logger while it is appended, which the Env registers: create that first.
+					(void)ortEnv();
+					// The renderer shares this VRAM. The defaults grow the arena by powers of two, run cuDNN's
+					// exhaustive convolution search and let it take the largest workspace: all of that ran out of
+					// memory on an 8 GB laptop GPU. The arena is also shrunk after every run (see run()).
+					Ort::CUDAProviderOptions cuda;
+					cuda.Update({ // the ORT C++ API takes std:: types
+						{ "device_id", "0" },
+						{ "arena_extend_strategy", "kSameAsRequested" },
+						{ "cudnn_conv_algo_search", "HEURISTIC" },
+						{ "cudnn_conv_use_max_workspace", "0" },
+					});
+					opts.AppendExecutionProvider_CUDA_V2(*cuda);
+					dml = true;
+#endif
 				}
 				catch (const Ort::Exception& e)
 				{
 					if (device == EInferenceDevice::Gpu)
 					{
-						Log::error(oc::format("[Diffusion] DirectML requested but unavailable: {}", e.what()));
+						Log::error(oc::format("[Diffusion] {} requested but unavailable: {}", c_gpuProvider, e.what()));
 						return false;
 					}
-					Log::warning(oc::format("[Diffusion] DirectML unavailable ({}), falling back to CPU. "
-					                         "Inference will be very slow.", e.what()));
+					Log::warning(oc::format("[Diffusion] {} unavailable ({}), falling back to CPU. "
+					                         "Inference will be very slow.", c_gpuProvider, e.what()));
 				}
 			}
-			setResolvedProviderOnce(dml ? "DirectML" : "CPU");
+			setResolvedProviderOnce(dml ? c_gpuProvider : "CPU");
 
 			const auto t0 = Clock::now();
 			m_impl->session.emplace(ortEnv(), widenPath(modelPath).c_str(), opts);
@@ -187,8 +245,16 @@ namespace Procedural::Diffusion
 			}
 
 			const char* outName = m_impl->outputNames[0].c_str();
+#ifdef _MSC_VER
+			Ort::RunOptions runOptions{ nullptr };
+#else
+			// Each session's arena otherwise keeps its high-water mark: the base stage's peak would stay allocated
+			// while the decoder (and the renderer) need the memory.
+			Ort::RunOptions runOptions;
+			runOptions.AddConfigEntry("memory.enable_memory_arena_shrinkage", "gpu:0");
+#endif
 			std::vector<Ort::Value> results = m_impl->session->Run( // Ort::Value is move-only; keep the ONNX container
-				Ort::RunOptions{ nullptr }, names.data(), values.data(), values.size(), &outName, 1);
+				runOptions, names.data(), values.data(), values.size(), &outName, 1);
 
 			const Ort::Value& r = results[0];
 			const size_t count = r.GetTensorTypeAndShapeInfo().GetElementCount();

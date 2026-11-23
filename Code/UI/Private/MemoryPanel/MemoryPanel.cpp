@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 module UI;
 
 import Core;
@@ -249,6 +253,7 @@ void MemoryPanel::buildSnapshot(uint32 idx, const MemScopeNode* node)
         case EMetric::Live:       view.selfBytes = oc::max<int64>(liveBytes, 0); break;
         case EMetric::Cumulative: view.selfBytes = (int64)view.cumBytes; break;
         case EMetric::Churn:      view.selfBytes = (int64)oc::max(view.rateBytes, 0.0f); break;
+        case EMetric::Vram:       break; // the VRAM view lists GPU allocations, not this CPU tree
         }
     }
     // Reserve the children's CONTIGUOUS block first, then descend: everything the subtrees append

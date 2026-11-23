@@ -13,13 +13,22 @@ import :RendererTypes;
 import :RendererState; // the state and the private helpers; through it, every partition the API names
 
 import Core.fwd;
+#ifndef _MSC_VER
+// Linux: InitSeg.h's order as DIRECT imports (a module unit's globals are constructed after those of the units it imports
+// directly, so destructed before them): the renderer goes before the device, the GPU allocator, the XR session and the
+// instance.
+import :Device;
+import :Allocator;
+import :OpenXRSession;
+import :Instance;
+#endif
 
 export enum class EValidation { ENABLED, DISABLED };
 export enum class EVr { ENABLED, DISABLED };
 
 // THE RENDERER'S API. The value types it takes are in RendererTypes.ixx (Renderer::X), the state and the private helpers in RendererState.ixx. The multi-line
 // bodies are below the class.
-export class Renderer final : public RendererState
+export OC_FWD_ATTACH class Renderer final : public RendererState
 {
 public:
 
@@ -286,6 +295,13 @@ public:
     void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
     GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
     static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }
+
+#ifndef _MSC_VER
+    // ---- Process exit (Linux) ----
+    // Shuts down the driver libraries loaded at run time (NGX / DLSS) while they are whole: they register their statics
+    // after every global, so glibc's exit handlers destroy them before ~Device could. main() calls it last.
+    void releaseDriverLibraries();
+#endif
 };
 
 // ---- Batched submission [Concurrency: LOCK-FREE, one batch per job] ----
@@ -293,7 +309,7 @@ public:
 // count add per distinct mesh instead of one per node. The per-node work (the streaming notes, the transform upload, the pass mask) still runs at the push.
 // Holds no pointer to a node (a node may die after its push) and no thread-local state, so a fiber wait inside its life is harmless. It MUST flush
 // before present(): the destructor does. A node with more instances than the batch holds is pushed on its own.
-export class RenderBatch final
+export OC_FWD_ATTACH class RenderBatch final
 {
 public:
     explicit RenderBatch(Renderer& renderer) : m_renderer(renderer) {}
@@ -339,6 +355,7 @@ OC_INIT_SEG(OC_SEG_VK_RENDERER)
 
 // ---- Inline bodies ----
 
+OC_FWD_ATTACH_BEGIN
 inline void Renderer::addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color)
 {
     oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
@@ -419,3 +436,4 @@ inline oc::span<const uint16> Renderer::getOceanDisplacementReadback(uint32& out
     outRes = OceanSimulationPipeline::READBACK_RES;
     return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
 }
+OC_FWD_ATTACH_END

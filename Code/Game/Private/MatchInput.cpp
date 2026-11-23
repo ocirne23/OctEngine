@@ -2,6 +2,7 @@ module Game;
 
 import Core;
 import Core.glm;
+import Core.Transform;
 import Core.SDL;
 import Core.Log;
 import Core.Time; // the hover cards' real-clock cadence

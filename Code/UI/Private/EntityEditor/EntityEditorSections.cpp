@@ -3,6 +3,7 @@ module;
 // the Script Data section needs the real struct to read it. In the GLOBAL module fragment -- a plain #include
 // after `module UI;` lands in the module purview and collides with the std header units Core re-exports.
 #include "ScriptAPI.h"
+#include "ImguiGmf.h"
 module UI;
 
 import Core;

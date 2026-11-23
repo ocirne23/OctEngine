@@ -2,6 +2,9 @@ export module RendererVK:Device;
 
 import Core;
 import :VK;
+#ifndef _MSC_VER
+import :Instance; // Linux: InitSeg.h's order as an import - the device goes before the instance
+#endif
 
 export class Device final
 {
@@ -30,7 +33,8 @@ public:
     // (Known hole, main-thread-only by construction: OpenXR submits internally at xrEndFrame - the VR
     // path keeps beginFrame/present synchronous on main.)
     std::mutex& getGraphicsQueueMutex() { return m_graphicsQueueMutex; }
-    vk::Result graphicsQueueWaitIdle() { std::lock_guard<std::mutex> lock(m_graphicsQueueMutex); return m_graphicsQueue.waitIdle(); }
+    // No queue = the device was never created (a headless server's teardown): the Vulkan loader aborts on the null queue.
+    vk::Result graphicsQueueWaitIdle() { std::lock_guard<std::mutex> lock(m_graphicsQueueMutex); return m_graphicsQueue ? m_graphicsQueue.waitIdle() : vk::Result::eSuccess; }
     bool supportsExtensions(oc::vector<const char*> extensions);
     bool supportsCalibratedTimestamps() const { return m_supportsCalibratedTimestamps; }
     vk::DeviceSize getNonCoherentAtomSize() const { return m_nonCoherentAtomSize; }

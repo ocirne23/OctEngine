@@ -12,6 +12,9 @@ import Settings;
 import :TerrainSampler;
 import :RockType;
 import :RockGenerator;
+#ifndef _MSC_VER
+import :GeneratorV3; // teardown order on Linux: this global dies before the diffusion runtime (GeneratorV3.ixx)
+#endif
 
 // Procedural rocks ("Rocks" tweaks; Docs/Context/Procedural/Rocks.md). Loads every Assets/Rocks/*.rock type and generates its
 // variants (an SDF each, meshed by surface nets into a regular mesh LOD chain) for the WORLD (TreeWorld's rock records,

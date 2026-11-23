@@ -13,6 +13,8 @@ import :InstanceStream;
 import :TextureManager; // the rock materials' textures (the far volume)
 import Settings;
 
+OC_FWD_ATTACH_BEGIN
+
 // The BAKED TREE RECORDS' CPU side (tree_cull.inc.glsl): sets of placed pieces uploaded ONCE to device-local
 // memory. The culls build each piece's four records from the camera distance inside a range of the frame's instance
 // stream (tree_cull.inc.glsl: what each slot holds per type and band); per frame the CPU only lists the drawn
@@ -127,6 +129,8 @@ uint32 RendererState::allocTreeSet()
     return setId;
 }
 
+OC_FWD_ATTACH_END
+
 RenderTreeSet RenderTreeSet::create(oc::span<const Type> types, uint32 pieceCapacity)
 {
     RenderTreeSet set;
@@ -161,6 +165,8 @@ void RenderTreeSet::render(oc::span<const ChunkDraw> chunks, float distanceScale
 {
     Globals::rendererVK.renderTreeSet(m_setId, chunks, distanceScale, forceFar);
 }
+
+OC_FWD_ATTACH_BEGIN
 
 uint32 RendererState::createTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
 {
@@ -812,3 +818,5 @@ void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> ch
     m_treeCullDistanceScale = distanceScale;
     m_treeCullForceFar = forceFar;
 }
+
+OC_FWD_ATTACH_END

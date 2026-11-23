@@ -1,4 +1,8 @@
-﻿module RendererVK;
+﻿module;
+
+#include "ImguiGmf.h"
+
+module RendererVK;
 
 import RendererVK.fwd;
 
@@ -30,11 +34,16 @@ import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
 
+OC_FWD_ATTACH_BEGIN
 
 Renderer& RendererState::self() { return static_cast<Renderer&>(*this); }
 
 RendererState::~RendererState()
 {
+    // A headless server never initializes the renderer: nothing to wait on or shut down (the Vulkan loader aborts on a
+    // wait on the null queue, and ImGui_ImplVulkan_Shutdown dereferences a backend that was never created).
+    if (!m_initialized)
+        return;
     auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
@@ -969,6 +978,14 @@ void Renderer::submitEntityPreview(EntityPreviewFrame& frame)
     slot.hasPending.store(true, oc::memory_order_release);
 }
 
+#ifndef _MSC_VER
+void Renderer::releaseDriverLibraries()
+{
+    (void)Globals::device.graphicsQueueWaitIdle();
+    Streamline::shutdown(); // ~Device's own call then finds nothing to do
+}
+#endif
+
 void Renderer::present()
 {
     ProfileScope presentScope("Present", EProfileCategory::Renderer);
@@ -1453,4 +1470,6 @@ void RendererState::initImgui(Window& window)
     pipeline_create.MSAASamples = {};
     ImGui_ImplVulkan_CreateMainPipeline(&pipeline_create);
 }
+
+OC_FWD_ATTACH_END
 

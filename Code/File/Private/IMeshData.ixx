@@ -6,7 +6,7 @@ import Core;
 import Core.glm;
 import Core.AABB;
 
-export class IMeshData
+export OC_FWD_ATTACH class IMeshData
 {
 public:
     virtual ~IMeshData() = default;
