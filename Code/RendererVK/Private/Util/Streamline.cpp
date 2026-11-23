@@ -1,5 +1,6 @@
 module;
 
+#ifdef _MSC_VER
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
@@ -12,6 +13,7 @@ module;
 #include <sl/sl_helpers_vk.h>
 #include <sl/sl_security.h>
 #pragma warning(pop)
+#endif
 
 module RendererVK;
 
@@ -19,6 +21,56 @@ import Core;
 import Core.glm;
 import :VK;
 import :Streamline;
+
+#ifndef _MSC_VER
+// Linux: NVIDIA ships Streamline for Windows only. Every call behaves as the Windows build does when sl.interposer.dll
+// is absent: no DLSS, and the swapchain calls go straight to the device.
+bool Streamline::loaded() { return false; }
+bool Streamline::dlssAvailable() { return false; }
+bool Streamline::load(const oc::string&, bool) { return false; }
+void Streamline::shutdown() {}
+void Streamline::appendInstanceExtensions(oc::vector<const char*>&) {}
+void Streamline::appendDeviceExtensions(oc::vector<const char*>&) {}
+uint32 Streamline::extraGraphicsQueues() { return 0; }
+uint32 Streamline::extraComputeQueues() { return 0; }
+void Streamline::mergeDeviceFeatures(vk::PhysicalDeviceVulkan12Features&, vk::PhysicalDeviceVulkan13Features&) {}
+void Streamline::onDeviceCreated(vk::Instance, vk::PhysicalDevice, vk::Device, uint32, uint32, uint32, uint32) {}
+
+vk::Result Streamline::createSwapchain(vk::Device device, const vk::SwapchainCreateInfoKHR& info, vk::SwapchainKHR& out)
+{
+    auto result = device.createSwapchainKHR(info);
+    out = result.value;
+    return result.result;
+}
+
+void Streamline::destroySwapchain(vk::Device device, vk::SwapchainKHR swapchain)
+{
+    device.destroySwapchainKHR(swapchain);
+}
+
+vk::Result Streamline::getSwapchainImages(vk::Device device, vk::SwapchainKHR swapchain, oc::vector<vk::Image>& out)
+{
+    auto result = device.getSwapchainImagesKHR(swapchain);
+    out = oc::fromStd(result.value);
+    return result.result;
+}
+
+vk::Result Streamline::acquireNextImage(vk::Device device, vk::SwapchainKHR swapchain, uint64 timeoutNs, vk::Semaphore semaphore, uint32& imageIndex)
+{
+    auto result = device.acquireNextImageKHR(swapchain, timeoutNs, semaphore);
+    imageIndex = result.value;
+    return result.result;
+}
+
+vk::Result Streamline::queuePresent(vk::Queue queue, const vk::PresentInfoKHR& info)
+{
+    return queue.presentKHR(info);
+}
+
+glm::uvec2 Streamline::getDlssRenderSize(DlssMode, glm::uvec2 outputSize) { return outputSize; }
+bool Streamline::evaluateDlss(vk::CommandBuffer, const DlssFrame&) { return false; }
+void Streamline::freeDlss() {}
+#else
 
 namespace
 {
@@ -508,3 +560,4 @@ void Streamline::freeDlss()
     g_sl.freeResources(sl::kFeatureDLSS, sl::ViewportHandle(0u));
     g_applied = AppliedOptions{};
 }
+#endif

@@ -1,3 +1,6 @@
+#ifndef _MSC_VER
+#include <csignal> // the headless server's Ctrl+C / SIGTERM (SetConsoleCtrlHandler on Windows)
+#endif
 import Core;
 import Core.Allocator;
 import Core.Log;
@@ -124,7 +127,14 @@ int main(int argc, char* argv[])
     Rect heldViewportRect;
     SystemEventListenerHandle systemEventListener;
     if (headlessServer)
+    {
+#ifdef _MSC_VER
         SetConsoleCtrlHandler([](DWORD) -> BOOL { g_running = false; return TRUE; }, TRUE);
+#else
+        signal(SIGINT, [](int) { g_running = false; });  // Ctrl+C
+        signal(SIGTERM, [](int) { g_running = false; }); // kill / systemd stop
+#endif
+    }
     else
     {
         systemEventListener = Globals::input.addSystemEventListener();
@@ -383,5 +393,14 @@ int main(int argc, char* argv[])
     Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
     Globals::world.joinSelection();
     Globals::forceSystem.joinMerge();
+#ifndef _MSC_VER
+    // Linux: no global teardown. InitSeg.h orders it with init_seg, and ELF has no way to give the engine globals that
+    // order (clang ignores init_priority in a module interface, where they are defined; seen: ~EntityAllocator ran
+    // before ~World and ~World crashed). So the exit is the one-shot tools' _Exit after a flush, plus the one thing a
+    // global dtor would persist: a Saved tweak still inside its write debounce (~TweakRegistry).
+    TweakRegistry::get().update(1.0e9f);
+    fflush(nullptr);
+    _Exit(0);
+#endif
     return 0;
 }

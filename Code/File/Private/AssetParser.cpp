@@ -62,6 +62,8 @@ static oc::vector<oc::string> tokenizeLine(oc::string_view line)
 // species load).
 static const oc::string s_emptyValue;
 
+OC_FWD_ATTACH_BEGIN
+
 const oc::string& AssetNode::asString(size_t idx) const
 {
     return idx < values.size() ? values[idx] : s_emptyValue;
@@ -167,6 +169,8 @@ AssetNode& AssetNode::set(oc::string a_key, const glm::vec3& value)
     }
     return node;
 }
+
+OC_FWD_ATTACH_END
 
 bool parseAssetText(oc::string_view text, AssetNode& outRoot, oc::string& outError)
 {

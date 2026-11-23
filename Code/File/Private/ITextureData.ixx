@@ -4,7 +4,7 @@ import File.fwd;
 
 import Core;
 
-export class ITextureData
+export OC_FWD_ATTACH class ITextureData
 {
 public:
     virtual ~ITextureData() = default;

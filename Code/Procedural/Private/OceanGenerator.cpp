@@ -7,6 +7,7 @@ module Procedural;
 import Core;
 import Core.glm;
 import Core.Camera;
+import Core.Sphere;
 import Core.Transform;
 import Core.Time;
 import Settings;

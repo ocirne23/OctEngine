@@ -19,7 +19,7 @@ export enum class EVr { ENABLED, DISABLED };
 
 // THE RENDERER'S API. The value types it takes are in RendererTypes.ixx (Renderer::X), the state and the private helpers in RendererState.ixx. The multi-line
 // bodies are below the class.
-export class Renderer final : public RendererState
+export OC_FWD_ATTACH class Renderer final : public RendererState
 {
 public:
 
@@ -275,7 +275,7 @@ public:
 // count add per distinct mesh instead of one per node. The per-node work (the streaming notes, the transform upload, the pass mask) still runs at the push.
 // Holds no pointer to a node (a node may die after its push) and no thread-local state, so a fiber wait inside its life is harmless. It MUST flush
 // before present(): the destructor does. A node with more instances than the batch holds is pushed on its own.
-export class RenderBatch final
+export OC_FWD_ATTACH class RenderBatch final
 {
 public:
     explicit RenderBatch(Renderer& renderer) : m_renderer(renderer) {}
@@ -321,6 +321,7 @@ OC_INIT_SEG(OC_SEG_VK_RENDERER)
 
 // ---- Inline bodies ----
 
+OC_FWD_ATTACH_BEGIN
 inline void Renderer::addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color)
 {
     oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
@@ -401,3 +402,4 @@ inline oc::span<const uint16> Renderer::getOceanDisplacementReadback(uint32& out
     outRes = OceanSimulationPipeline::READBACK_RES;
     return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
 }
+OC_FWD_ATTACH_END

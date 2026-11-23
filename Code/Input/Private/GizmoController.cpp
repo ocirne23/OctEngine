@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 module Input;
 
 import Core;

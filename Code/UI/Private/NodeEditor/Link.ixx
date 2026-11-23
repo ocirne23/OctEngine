@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 export module UI:Link;
 
 import :imgui_node_editor;

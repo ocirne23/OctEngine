@@ -5,8 +5,10 @@ module;
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <onnxruntime/onnxruntime_cxx_api.h>
+#ifdef _MSC_VER
 #include <onnxruntime/dml_provider_factory.h>
 #include <comdef.h>
+#endif
 
 module Procedural;
 
@@ -47,6 +49,13 @@ namespace Procedural::Diffusion
 		}
 
 		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
+#ifndef _MSC_VER
+		// Linux: ORTCHAR_T is char, so the session takes the UTF-8 path as it is.
+		oc::string widenPath(const oc::string& path)
+		{
+			return FileSystem::resolve(path);
+		}
+#else
 		oc::wstring widenPath(const oc::string& path)
 		{
 			const oc::string p = FileSystem::resolve(path);
@@ -56,6 +65,7 @@ namespace Procedural::Diffusion
 				MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), wide.data(), len);
 			return wide;
 		}
+#endif
 	}
 
 	struct OnnxModel::Impl
@@ -124,8 +134,13 @@ namespace Procedural::Diffusion
 				opts.SetExecutionMode(ORT_PARALLEL);
 				try
 				{
+#ifdef _MSC_VER
 					Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(opts, 0));
 					dml = true;
+#else
+					// Linux: no DirectML. Same path as a Windows machine without it: Gpu fails, Auto runs on the CPU.
+					throw Ort::Exception("DirectML is Windows-only", ORT_NOT_IMPLEMENTED);
+#endif
 				}
 				catch (const Ort::Exception& e)
 				{

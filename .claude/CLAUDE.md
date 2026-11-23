@@ -48,7 +48,9 @@ Guidance for Claude Code when working in this repository.
 
 # Project Description
 
-**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows / VS2026 only.
+**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows / VS2026; also Linux (NixOS, clang + libc++,
+see [`Docs/Context/Linux/CONTEXT.md`](../Docs/Context/Linux/CONTEXT.md) - **its "Rules" section says what keeps a code
+change building there**).
 
 The `App` executable is the testbed: an ImGui editor — scene hierarchy, properties, asset browser,
 DSL script editor, entity editor, animation editor, tweaks, profiler, memory panel — around a viewport.
@@ -447,6 +449,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Sound](../Docs/Context/Game/Sound.md) | **Game sound**: cues, the voice limits for crowds, the battle / horde beds, ambience, building loops, the synthesized sounds + `Sounds/Game/*.wav` overrides |
 | [DslCompiler](../Docs/Context/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
 | [ScriptEditorSim](../Docs/Context/ScriptEditorSim/CONTEXT.md) | **The Script Editor with simulated keys, no window or engine** — how Claude iterates on the editor's UX: key programs, traces, screenshots, the random-key test, the typing regression file |
+| [Linux](../Docs/Context/Linux/CONTEXT.md) | **The Linux (NixOS) build**: the flake, `Linux/Linux.cmake`, the rules a code change follows to keep building with clang (header-unit wrappers, `ImguiGmf.h` / `AssimpGmf.h`, `OC_FWD_ATTACH`), fibers, no global teardown, what is off |
 
 ---
 

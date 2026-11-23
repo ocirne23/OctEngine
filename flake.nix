@@ -47,6 +47,14 @@
           '';
         };
 
+        # The libraries the engine calls through a C++ API (std::string / std::vector in the signatures) must be built
+        # against libc++ like the engine; nixpkgs builds them against libstdc++, whose std:: names mangle differently.
+        withLibcxx = drv: (drv.override { stdenv = llvm.libcxxStdenv; }).overrideAttrs { doCheck = false; };
+        spirv-tools = withLibcxx pkgs.spirv-tools;
+        glslang = (pkgs.glslang.override { stdenv = llvm.libcxxStdenv; inherit spirv-tools; }).overrideAttrs { doCheck = false; };
+        shaderc = (pkgs.shaderc.override { stdenv = llvm.libcxxStdenv; inherit glslang spirv-tools; }).overrideAttrs { doCheck = false; };
+        assimp = (pkgs.assimp.override { stdenv = llvm.libcxxStdenv; pugixml = withLibcxx pkgs.pugixml; }).overrideAttrs { doCheck = false; };
+
         libs = with pkgs; [
           vulkan-headers
           vulkan-loader
@@ -61,6 +69,7 @@
           spirv-headers
           openxr-loader
           onnxruntime
+          openssl
           libx11
           wayland
           libxkbcommon
@@ -78,7 +87,9 @@
           buildInputs = libs ++ [ phonon ];
           # _FORTIFY_SOURCE turns glibc's printf family into internal-linkage inlines, which libc++'s std.cppm cannot
           # export (`import std;` fails to build).
-          hardeningDisable = [ "fortify" "fortify3" ];
+          # format: -Werror=format-security trips over the engine's printf(text) logging; stackprotector: the engine
+          # builds with /GS- on Windows (no stack cookies), -fno-stack-protector here.
+          hardeningDisable = [ "fortify" "fortify3" "format" "stackprotector" ];
 
           OC_EASTL_SRC = "${eastl-src}";
           OC_IMGUI_SRC = "${imgui-src}";
@@ -95,7 +106,7 @@
           # Searched BEFORE Dependencies/Include: these libraries link from nixpkgs, so their headers must come from
           # nixpkgs too (the vendored copies match the Windows .libs, not these).
           OC_NIX_INCLUDES = pkgs.lib.concatMapStringsSep ";" (p: "${pkgs.lib.getDev p}/include")
-            (with pkgs; [ glslang shaderc spirv-tools assimp onnxruntime sdl3 openxr-loader zstd zlib ]);
+            ([ glslang spirv-tools assimp shaderc ] ++ (with pkgs; [ onnxruntime sdl3 openxr-loader zstd zlib openssl ]));
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (libs ++ [ phonon ]);
           VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 

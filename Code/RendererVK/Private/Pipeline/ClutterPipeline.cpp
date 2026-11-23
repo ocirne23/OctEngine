@@ -35,7 +35,7 @@ namespace
 
 void ClutterPipeline::buildLayouts(ComputePipelineLayout& cull, ComputePipelineLayout& prefix, ComputePipelineLayout& scatter)
 {
-    constexpr vk::ShaderStageFlags CS = vk::ShaderStageFlagBits::eCompute;
+    static constexpr vk::ShaderStageFlags CS = vk::ShaderStageFlagBits::eCompute; // static: clang requires a capture for a local
     const auto add = [](ComputePipelineLayout& layout, uint32 binding, vk::DescriptorType type) {
         layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = type, .descriptorCount = 1, .stageFlags = CS });
     };

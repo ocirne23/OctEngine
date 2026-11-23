@@ -9,7 +9,9 @@ import Entity;
 import Threading; // JobCounter for the panel prepare jobs
 import UI.Gizmo;
 
+#ifdef _MSC_VER // clang: UI.fwd's global-module `class UI` would clash with the definition below
 import UI.fwd;
+#endif
 export import :MainMenu; // MainMenuAction crosses to main(), which performs the mode start
 export import :ChatPanel; // ChatView crosses to main() (Game's ChatSystem is the model)
 import :AssetBrowser;

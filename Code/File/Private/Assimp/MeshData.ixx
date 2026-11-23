@@ -6,7 +6,7 @@ import Core.AABB;
 import Animation;
 import :IMeshData;
 
-export struct aiMesh;
+export OC_FWD_ATTACH struct aiMesh;
 
 export class MeshData final : public IMeshData
 {

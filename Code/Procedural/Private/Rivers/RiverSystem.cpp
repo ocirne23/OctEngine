@@ -3,6 +3,7 @@ module Procedural;
 import Core;
 import Core.glm;
 import Core.Camera;
+import Core.Sphere;
 import Core.Transform;
 import RendererVK;
 import Threading;

@@ -65,6 +65,10 @@ export struct ScriptCompileReport
     oc::string errors;          // cl's whole output on a failure
 };
 
+#ifndef _MSC_VER // clang: a friend may not name another module's class, so Entity's ScriptEventManager is global-module attached
+export OC_FWD_ATTACH class ScriptEventManager;
+#endif
+
 export class ScriptHost final
 {
 public:

@@ -11,7 +11,9 @@ file(GLOB EDITOR_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../UI/Private/ScriptEdito
 add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES} ${EDITOR_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/../../App/UnattendedRun.ixx")
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Tools)
-set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+if(MSVC)
+	set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Core Entity Script File imgui$<$<CONFIG:Debug>:d>)
 

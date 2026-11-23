@@ -4,8 +4,8 @@ import Core;
 import Core.glm;
 import :IMaterialData;
 
-export struct aiMaterial;
-export enum aiTextureType : int;
+export OC_FWD_ATTACH struct aiMaterial;
+export OC_FWD_ATTACH enum aiTextureType : int;
 
 export class MaterialData final : public IMaterialData
 {

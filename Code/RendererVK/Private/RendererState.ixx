@@ -90,8 +90,11 @@ import :RendererTypes;
 
 import Core.fwd;
 
-export class Renderer;
-export class RenderBatch;      // Renderer.ixx
+export OC_FWD_ATTACH class Renderer;
+export OC_FWD_ATTACH class RenderBatch; // Renderer.ixx
+#ifndef _MSC_VER // clang: the friend line below would otherwise introduce a module-attached ObjectContainerState
+export OC_FWD_ATTACH class ObjectContainerState;
+#endif
 export class MeshStreamer;     // declared before their friend lines
 export class RenderMaterial;
 export class RenderTexture;
@@ -104,7 +107,7 @@ export enum class EVr;         // Renderer.ixx
 
 // Everything of the Renderer but its public API (Renderer.ixx): the state and the private helpers. A helper reaches
 // the API through self().
-export class RendererState : public RendererTypes
+export OC_FWD_ATTACH class RendererState : public RendererTypes
 {
 protected:
     struct PerFrameData;

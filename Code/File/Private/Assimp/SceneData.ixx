@@ -1,3 +1,7 @@
+module;
+
+#include "AssimpGmf.h"
+
 export module File:SceneData;
 
 import Core;

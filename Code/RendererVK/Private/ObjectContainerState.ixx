@@ -10,11 +10,15 @@ import File.fwd;
 
 import :Layout;
 
-export class RenderNode;                  // declared before the friend line below, which would otherwise introduce the name (RendererVK.fwd has an extern "C++" one)
+export OC_FWD_ATTACH class RenderNode;    // declared before the friend line below, which would otherwise introduce the name (RendererVK.fwd has an extern "C++" one)
 export struct ContainerMaterialOverrides; // ObjectContainer.ixx
 
 // Everything of ObjectContainer but its public API (ObjectContainer.ixx): the load steps and the bookkeeping.
-export class ObjectContainerState
+#ifndef _MSC_VER // clang: the friend line below would otherwise introduce a module-attached RendererState
+export OC_FWD_ATTACH class RendererState;
+#endif
+
+export OC_FWD_ATTACH class ObjectContainerState
 {
 protected:
 

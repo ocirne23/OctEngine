@@ -2,8 +2,8 @@ export module RendererVK:RenderTreeSetState;
 
 import Core;
 
-export class Renderer;      // declared before their friend lines
-export class RendererState;
+export OC_FWD_ATTACH class Renderer; // declared before their friend lines
+export OC_FWD_ATTACH class RendererState;
 
 // Everything of RenderTreeSet but its public API (RenderTreeSet.ixx).
 export class RenderTreeSetState

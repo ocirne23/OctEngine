@@ -3,6 +3,7 @@ module Game;
 import Core;
 import Core.glm;
 import Core.Log;
+import Core.Time;
 import Settings;
 import Settings.Tweaks;
 import Core.Transform;

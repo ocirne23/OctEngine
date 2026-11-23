@@ -1,3 +1,9 @@
+module;
+
+#ifndef _MSC_VER
+#include <stdlib.h> // putenv (POSIX, not in std.compat)
+#endif
+
 export module Core;
 
 export import Core.Profiler;
@@ -111,4 +117,6 @@ export inline int fopen_s(FILE** file, const char* path, const char* mode)
     *file = fopen(path, mode);
     return *file ? 0 : 2;
 }
+// putenv keeps the pointer, so the argument must outlive the process: every caller passes a string literal.
+export inline int _putenv(const char* assignment) { return putenv(const_cast<char*>(assignment)); }
 #endif

@@ -1,7 +1,46 @@
+module;
+
+#ifndef _MSC_VER
+#include <csignal>
+#include <cstdio>
+#include <cstring>
+#include <execinfo.h>
+#include <unistd.h>
+#endif
+
 export module App.UnattendedRun;
 
 import Core;
 import Core.Windows;
+
+#ifndef _MSC_VER
+// Linux: the same job with signals. A fatal signal prints the faulting thread's stack (glibc backtrace: function names
+// from the dynamic symbol table, no file:line - run `addr2line -e App` on the addresses for those) and exits.
+namespace
+{
+    void unattendedCrashHandler(int signalNumber)
+    {
+        static volatile sig_atomic_t s_reporting = 0;
+        if (s_reporting)
+            pause(); // later faulting threads park until the first report ends the process
+        s_reporting = 1;
+        char header[96];
+        const int length = snprintf(header, sizeof(header), "\nFATAL SIGNAL %d (%s)\n", signalNumber, strsignal(signalNumber));
+        fflush(stdout);
+        write(STDERR_FILENO, header, size_t(length));
+        void* frames[64];
+        const int count = backtrace(frames, 64);
+        backtrace_symbols_fd(frames, count, STDERR_FILENO);
+        _exit(128 + signalNumber);
+    }
+}
+
+export void installUnattendedFailureHandling()
+{
+    for (int signalNumber : { SIGSEGV, SIGABRT, SIGILL, SIGFPE, SIGBUS })
+        signal(signalNumber, unattendedCrashHandler);
+}
+#else
 
 // FAILURE HANDLING FOR UNATTENDED RUNS (--quit-after / --profile-after: Tools/profile.ps1 and Claude's
 // runs, nobody at the screen). Two problems it solves:
@@ -88,3 +127,4 @@ export void installUnattendedFailureHandling()
     SetErrorMode(SetErrorMode(0) | 0x0001u /*SEM_FAILCRITICALERRORS*/ | 0x0002u /*SEM_NOGPFAULTERRORBOX*/);
     SetUnhandledExceptionFilter(unattendedCrashFilter);               // a crash prints its symbolized stack
 }
+#endif

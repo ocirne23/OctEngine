@@ -17,7 +17,7 @@ import :ClutterPipeline;
 import :TreeVoxelFarPipeline;
 
 class CommandBuffer;
-class ObjectContainer;
+OC_FWD_ATTACH class ObjectContainer;
 
 export class StaticMeshGraphicsPipeline final
 {

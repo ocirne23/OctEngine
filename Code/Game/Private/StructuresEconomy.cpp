@@ -3,6 +3,7 @@ module Game;
 import Core;
 import Core.glm;
 import Core.Log;
+import Core.Transform;
 import Entity;
 import Force;
 import Particle; // the Builder's huts' stone streams (ParticleSystem::emitStream)

@@ -1,4 +1,8 @@
-﻿module RendererVK;
+﻿module;
+
+#include "ImguiGmf.h"
+
+module RendererVK;
 
 import RendererVK.fwd;
 
@@ -29,6 +33,8 @@ import :glslang;
 import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
+
+OC_FWD_ATTACH_BEGIN
 
 // Renderer: THE SCENE THE OUTSIDE OWNS - everything it hands the renderer and takes back, in two halves.
 //
@@ -600,6 +606,8 @@ RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, R
     return node;
 }
 
+OC_FWD_ATTACH_END
+
 void RenderMesh::destroy()
 {
     if (m_meshIdx != UINT16_MAX)
@@ -667,6 +675,8 @@ void RenderTexture::destroy()
     Globals::rendererVK.releaseTexture(m_index);
     m_index = UINT16_MAX;
 }
+
+OC_FWD_ATTACH_BEGIN
 
 void RendererState::destroyMesh(RenderMesh& mesh)
 {
@@ -1069,6 +1079,8 @@ void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
 }
 
+OC_FWD_ATTACH_END
+
 RenderParticleEmitter RenderParticleEmitter::create(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
     RenderParticleEmitter emitter;
@@ -1094,10 +1106,12 @@ void RenderParticleEmitter::emit(uint32 count)
     Globals::rendererVK.m_particles.emit(m_slot, count);
 }
 
+OC_FWD_ATTACH_BEGIN
 void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents)
 {
     m_particles.requestRainVolume(center, halfExtents);
 }
+OC_FWD_ATTACH_END
 
 RenderForceEmitter RenderForceEmitter::create(const RendererVKLayout::ForceEmitterGpu& desc)
 {
@@ -1148,6 +1162,8 @@ RendererVKLayout::ForceQueryResult RenderForceQuery::readback() const
 {
     return Globals::rendererVK.getForceQueryReadback(m_slot);
 }
+
+OC_FWD_ATTACH_BEGIN
 
 glm::vec4 RendererState::getForceEmitterReadback(uint32 slot) const
 {
@@ -1486,3 +1502,5 @@ void RendererState::uploadClutterFrame(uint32 frameIdx)
     }
     m_clutterPipeline.flushFrame(frameIdx, floorDirty);
 }
+
+OC_FWD_ATTACH_END

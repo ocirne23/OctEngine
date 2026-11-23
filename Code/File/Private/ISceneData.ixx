@@ -58,7 +58,7 @@ export struct ImportedClip
 	ClipAsset clip;
 };
 
-export class ISceneData
+export OC_FWD_ATTACH class ISceneData
 {
 public:
 

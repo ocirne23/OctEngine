@@ -1,4 +1,8 @@
-﻿module RendererVK;
+﻿module;
+
+#include "ImguiGmf.h"
+
+module RendererVK;
 
 import RendererVK.fwd;
 
@@ -29,6 +33,8 @@ import :glslang;
 import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
+
+OC_FWD_ATTACH_BEGIN
 
 // Renderer: COMMAND BUFFER RECORDING. The cached secondaries (one record*() per pass), THE scene
 // stage table (buildSceneStages - see RendererState.ixx) and the two primaries that execute them, desktop
@@ -2175,3 +2181,5 @@ void RendererState::setHaveToRecordCommandBuffers()
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.updated = false;
 }
+
+OC_FWD_ATTACH_END

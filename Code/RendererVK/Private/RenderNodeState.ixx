@@ -40,8 +40,11 @@ export namespace Globals
 }
 
 // Declared before the friend lines below, which would otherwise introduce the names (RendererVK.fwd has extern "C++" ones).
-export class ObjectContainer;
-export class Renderer;
+export OC_FWD_ATTACH class ObjectContainer;
+export OC_FWD_ATTACH class Renderer;
+#ifndef _MSC_VER // clang: same for RendererState, global-module attached like Renderer
+export OC_FWD_ATTACH class RendererState;
+#endif
 
 // Everything of RenderNode but its public API (RenderNode.ixx).
 export class RenderNodeState

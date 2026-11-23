@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 module Input;
 
 import Core;
@@ -8,6 +12,8 @@ import Core.imgui;
 import UI;
 
 import :Input;
+
+OC_FWD_ATTACH_BEGIN
 
 bool Input::initialize()
 {
@@ -124,3 +130,5 @@ void Input::update(double deltaSec)
     events.clear();
     m_window->unlockEvents();
 }
+
+OC_FWD_ATTACH_END

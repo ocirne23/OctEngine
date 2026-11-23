@@ -10,7 +10,7 @@ import :RenderNodeState; // the state and the transform slots
 // RAII handle to a spawned renderer instance (movable, like PhysicsBody). Destroying the handle recycles its renderer resources: the transform slot goes on a
 // free list, and a skinned node's whole allocation bundle is parked for reuse by the next spawnSkinnedNode of the same container. The state is in
 // RenderNodeState.ixx; the multi-line bodies are below the class.
-export class RenderNode final : public RenderNodeState
+export OC_FWD_ATTACH class RenderNode final : public RenderNodeState
 {
 public:
 
@@ -61,6 +61,7 @@ static_assert(sizeof(RenderNode) <= 56);
 
 // ---- Inline bodies ----
 
+OC_FWD_ATTACH_BEGIN
 inline RenderNode& RenderNode::operator=(RenderNode&& other) noexcept
 {
     if (this != &other)
@@ -91,3 +92,4 @@ inline void RenderNode::setMaterialOverride(uint16 materialIdx)
     for (RendererVKLayout::InMeshInstance& instance : m_meshInstances)
         instance.materialIdx = materialIdx;
 }
+OC_FWD_ATTACH_END

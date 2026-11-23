@@ -3,7 +3,10 @@ export module RendererVK:RenderMeshState;
 import Core;
 import Core.Sphere;
 
-export class Renderer; // declared before the friend line below, which would otherwise introduce the name (RendererVK.fwd has an extern "C++" one)
+export OC_FWD_ATTACH class Renderer; // declared before the friend line below, which would otherwise introduce the name (RendererVK.fwd has an extern "C++" one)
+#ifndef _MSC_VER // clang: same for RendererState, global-module attached like Renderer
+export OC_FWD_ATTACH class RendererState;
+#endif
 
 // Everything of RenderMesh but its public API (RenderMesh.ixx).
 export class RenderMeshState

@@ -6,6 +6,13 @@ import :VK;
 import :Layout;
 import :Buffer;
 
+#ifndef _MSC_VER // clang: the friend lines below would otherwise introduce module-attached names (RendererVK.fwd has extern "C++" ones)
+export OC_FWD_ATTACH class ObjectContainer;
+export OC_FWD_ATTACH class Renderer;
+export OC_FWD_ATTACH class ObjectContainerState;
+export OC_FWD_ATTACH class RendererState;
+#endif
+
 export class MeshDataManager final
 {
 public:

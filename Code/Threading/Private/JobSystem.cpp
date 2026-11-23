@@ -1,8 +1,9 @@
 module;
 
 #include <intrin.h>
+#ifdef _MSC_VER // clang on ELF honours the pragma too, and lld then looks for a Synchronization.lib
 #pragma comment(lib, "Synchronization.lib") // WaitOnAddress with a timeout (idle's forced sleep)
-#ifndef _MSC_VER
+#else
 #include "OcFiberCompat.h" // Linux: the Win32 fiber / thread calls below, and OcFiberSafeTls in place of /GT
 #endif
 

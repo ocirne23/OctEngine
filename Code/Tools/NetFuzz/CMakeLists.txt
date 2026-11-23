@@ -5,7 +5,9 @@ file(GLOB_RECURSE PROJECT_PRIVATE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.h" "${CMA
 add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Tools)
-set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+if(MSVC)
+	set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+endif()
 
 # Core + Network only: the point is a headless target that stands up the protocol stack in seconds.
 # Reaching the GAME-layer parsers (NetworkManager) does not need Entity linked here - the `game` mode

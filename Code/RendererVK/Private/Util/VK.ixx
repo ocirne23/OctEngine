@@ -1,11 +1,24 @@
 module;
 
+#ifdef _MSC_VER
 #include <vulkan/vulkan_core.h> // for vkCmdPushDescriptorSetKHR
+#else
+#include "LinuxGmfPrelude.h"
+#endif
 
 export module RendererVK:VK;
 
 export import vulkan_hpp;
 import Core;
+
+#ifndef _MSC_VER
+// clang: the C API is exported from here (MSVC reaches it through the GMF include above): Device / Instance name the
+// Vk* debug-utils types directly.
+export extern "C++"
+{
+#include <vulkan/vulkan_core.h>
+}
+#endif
 
 #undef VK_NULL_HANDLE
 export nullptr_t VK_NULL_HANDLE = nullptr;

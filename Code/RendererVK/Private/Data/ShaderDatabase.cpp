@@ -1,3 +1,9 @@
+module;
+
+#ifndef _MSC_VER
+#include <cstdio> // stdout: no macro crosses `import std`
+#endif
+
 module RendererVK;
 
 import Core;

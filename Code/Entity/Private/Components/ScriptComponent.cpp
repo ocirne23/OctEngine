@@ -3,7 +3,11 @@ module;
 // 1 (default): script entry points run under the SEH guards below -- a hardware fault in script code disables
 // the script instead of crashing the engine. 0: the invokers call the entry points raw (a script fault then
 // crashes like any other engine fault -- e.g. to get a clean crash dump at the faulting instruction).
+#ifdef _MSC_VER
 #define OC_SCRIPT_FAULT_CONTAINMENT 1
+#else
+#define OC_SCRIPT_FAULT_CONTAINMENT 0 // Linux: no SEH (__try / __except); a faulting script takes the process down
+#endif
 
 #if OC_SCRIPT_FAULT_CONTAINMENT
 #include <excpt.h>

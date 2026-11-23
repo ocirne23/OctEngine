@@ -589,6 +589,12 @@ export namespace oc
     template<typename... Args>
     string format(std::format_string<Args...> spec, Args&&... args)
     {
+#ifdef _MSC_VER
         return fromStd(std::format(spec, std::forward<Args>(args)...));
+#else
+        // libc++: std::format's overload set instantiates wformat_string<Args...> for a const char* argument, a hard
+        // error; vformat has no wide overload to consider. spec was checked at compile time already.
+        return fromStd(std::vformat(spec.get(), std::make_format_args(args...)));
+#endif
     }
 }

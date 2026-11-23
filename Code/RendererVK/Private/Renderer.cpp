@@ -1,4 +1,8 @@
-﻿module RendererVK;
+﻿module;
+
+#include "ImguiGmf.h"
+
+module RendererVK;
 
 import RendererVK.fwd;
 
@@ -30,6 +34,7 @@ import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
 
+OC_FWD_ATTACH_BEGIN
 
 Renderer& RendererState::self() { return static_cast<Renderer&>(*this); }
 
@@ -1427,4 +1432,6 @@ void RendererState::initImgui(Window& window)
     pipeline_create.MSAASamples = {};
     ImGui_ImplVulkan_CreateMainPipeline(&pipeline_create);
 }
+
+OC_FWD_ATTACH_END
 

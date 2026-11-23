@@ -1,13 +1,16 @@
 module;
 
 #include <unordered_map>
+#include "AssimpGmf.h"
 
 module File;
 
 // File IS the filesystem library: its readers stream binary ranges directly (Core no longer
 // exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+#ifdef _MSC_VER // Linux: Core's `import std.compat` carries both
 import <filesystem>;
 import <fstream>;
+#endif
 
 import Core;
 import Core.glm;
@@ -396,6 +399,8 @@ bool importAllClipAssets(const char* filePath, oc::vector<ImportedClip>& out, oc
     return true;
 }
 
+OC_FWD_ATTACH_BEGIN
+
 bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkeleton, AnimationSet& outSet, const char* skipName, const char* clipNameOverride, const char* trackName)
 {
     oc::vector<ImportedClip> imported;
@@ -416,6 +421,8 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
     }
     return true;
 }
+
+OC_FWD_ATTACH_END
 
 const IMeshData* SceneData::getMesh(const char* pMeshName) const
 {

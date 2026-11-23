@@ -30,13 +30,23 @@ if(NOT "$ENV{OC_CLANG_SCAN_DEPS}" STREQUAL "" AND NOT CMAKE_CXX_COMPILER_CLANG_S
 		"delete the build folder and configure again from inside `nix develop`")
 endif()
 
-# The nix compiler wrapper passes every buildInput's include folder as -isystem, so CMake counts them as implicit and
-# drops them from -I. They must stay explicit to come BEFORE Dependencies/Include (see apply_compile_settings).
-list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES ${OC_NIX_INCLUDES})
-list(REMOVE_ITEM CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES ${OC_NIX_INCLUDES})
+# Searched first: Linux/Include holds the stand-ins for MSVC-only headers (<intrin.h>, ...).
+set(OC_LINUX_INCLUDES "${ROOT_DIR}/Linux/Include")
 
-# Searched first: Linux/Include holds the stand-ins for MSVC-only headers (<intrin.h>, ...), then the nixpkgs headers.
-set(OC_LINUX_INCLUDES "${ROOT_DIR}/Linux/Include" ${OC_NIX_INCLUDES})
+# Dependencies/Include WITHOUT the folders of the libraries that link from nixpkgs. clang drops a -I folder that the nix
+# wrapper also passes as -isystem, so the nixpkgs headers can never come BEFORE Dependencies/Include, and its Windows
+# copies (glslang 16.3, SDL3, ...) would be compiled against the nixpkgs libraries (seen: a crash in GlslangToSpv).
+# apply_compile_settings puts this folder of symlinks in place of Dependencies/Include on every target.
+set(OC_NIXPKGS_HEADER_DIRS glslang shaderc spirv-tools assimp onnxruntime SDL3 openxr)
+set(OC_VENDORED_INCLUDE "${CMAKE_BINARY_DIR}/VendoredInclude")
+file(REMOVE_RECURSE "${OC_VENDORED_INCLUDE}")
+file(GLOB OC_VENDORED_ENTRIES RELATIVE "${ROOT_DIR}/Dependencies/Include" "${ROOT_DIR}/Dependencies/Include/*")
+foreach(entry ${OC_VENDORED_ENTRIES})
+	if(NOT entry IN_LIST OC_NIXPKGS_HEADER_DIRS)
+		file(MAKE_DIRECTORY "${OC_VENDORED_INCLUDE}")
+		file(CREATE_LINK "${ROOT_DIR}/Dependencies/Include/${entry}" "${OC_VENDORED_INCLUDE}/${entry}" SYMBOLIC)
+	endif()
+endforeach()
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,17 +91,19 @@ set(COMPILE_OPTIONS
 	"-Wno-deprecated-literal-operator" # /wd5311
 	"-Wno-macro-redefined"             # the command-line offsetof / assert meet the system headers' own
 )
-set(LINK_OPTIONS "-fuse-ld=lld" "-Wl,--gc-sections" "-pthread")
+# The default (nix-wrapped) linker: the wrapper writes the runpath of every nix library the binary links. A bare
+# -fuse-ld=lld bypasses it and App then cannot find libc++.so at start.
+set(LINK_OPTIONS "-Wl,--gc-sections" "-pthread")
 
 # ---- What Code/Core/Private/forceinclude.h gives every Windows TU ----
 # assert with no #include: (void)sizeof in non-Debug, exactly like forceinclude.h; a trap in Debug. A TU that includes
 # <cassert> itself gets glibc's assert from there on.
 #
-# OC_INIT_SEG expands to NOTHING: no init_seg on ELF. Construction order is the C++ module initializer order instead -
-# every engine global is defined in a module interface, and a module's initializer runs the initializers of the modules
-# it imports first, so each global is constructed after (and destructed before) every global it can reach through an
-# import. That matches InitSeg.h's order wherever one global's dtor uses another; see "Globals and teardown" in
-# .claude/CLAUDE.md.
+# OC_INIT_SEG expands to NOTHING: ELF has no init_seg, and clang ignores [[gnu::init_priority]] on a variable in a module
+# interface (it runs its initializer inside the module's initializer; tried, no .init_array.N section is emitted), which
+# is where every engine global is defined. Neither the link order nor the module import order reproduces InitSeg.h's
+# teardown (seen under gdb: ~EntityAllocator ran before ~World, and ~World crashed). So on Linux main() ends in _Exit and
+# the global destructors do not run at all - see the end of Code/App/main.cpp.
 #
 # __debugbreak and __int64 are MSVC keywords that need no header there; offsetof arrives through forceinclude.h's
 # <cstdlib> on MSVC.
@@ -101,11 +113,23 @@ list(APPEND COMPILE_OPTIONS
 	"-D__int64=long long"
 	"-D__stdcall="
 	"-D_alloca=__builtin_alloca"
+	"-D_fseeki64=fseeko"
+	# the C limit macros forceinclude.h's <cstdlib> carries into every Windows TU (no macro crosses `import std`)
+	"-DSIZE_MAX=__SIZE_MAX__"
+	"-DUSHRT_MAX=0xffff"
+	"-DINT_MAX=__INT_MAX__"
+	"-DINT_MIN=(-__INT_MAX__-1)"
+	"-DMAX_PATH=260"
+	"-DSEEK_SET=0"
+	"-DSEEK_CUR=1"
+	"-DSEEK_END=2"
+	"-DEOF=(-1)"
+	"-DNAN=__builtin_nanf(\"\")"
 	"-DOC_FWD_ATTACH=extern \"C++\""
 	"-DOC_FWD_ATTACH_BEGIN=extern \"C++\" {"
 	"-DOC_FWD_ATTACH_END=}"
 	"-Doffsetof(type,member)=__builtin_offsetof(type,member)"
-	"$<IF:$<CONFIG:Debug>,-Dassert=[](bool oc_ok){ if (!oc_ok) __builtin_debugtrap(); },-Dassert=(void)sizeof>")
+	"$<IF:$<CONFIG:Debug>,-Dassert(e)=((e) ? (void)0 : __builtin_debugtrap()),-Dassert=(void)sizeof>")
 
 # ---- import std (libc++'s own std.cppm / std.compat.cppm) ----
 add_library(oc_std STATIC)
@@ -125,13 +149,13 @@ endfunction()
 
 file(GLOB OC_EASTL_SOURCES "${OC_EASTL_SRC}/source/*.cpp")
 add_library(oc_eastl STATIC ${OC_EASTL_SOURCES})
-target_include_directories(oc_eastl PUBLIC "${ROOT_DIR}/Dependencies/Include")
+target_include_directories(oc_eastl PUBLIC "${OC_VENDORED_INCLUDE}")
 oc_dep_settings(oc_eastl)
 
 add_library(oc_imgui STATIC
 	"${OC_IMGUI_SRC}/imgui.cpp" "${OC_IMGUI_SRC}/imgui_draw.cpp" "${OC_IMGUI_SRC}/imgui_tables.cpp" "${OC_IMGUI_SRC}/imgui_widgets.cpp"
 	"${OC_IMGUI_SRC}/backends/imgui_impl_null.cpp" "${OC_IMGUI_SRC}/backends/imgui_impl_sdl3.cpp" "${OC_IMGUI_SRC}/backends/imgui_impl_vulkan.cpp")
-target_include_directories(oc_imgui PRIVATE ${OC_NIX_INCLUDES} "${ROOT_DIR}/Dependencies/Include/imgui" "${ROOT_DIR}/Dependencies/Include")
+target_include_directories(oc_imgui PRIVATE "${ROOT_DIR}/Dependencies/Include/imgui" "${OC_VENDORED_INCLUDE}")
 target_link_libraries(oc_imgui PUBLIC "-lSDL3" "-lvulkan")
 oc_dep_settings(oc_imgui)
 
@@ -178,6 +202,7 @@ oc_alias(shaderc "-lshaderc_shared")
 oc_alias(MachineIndependent) # merged into libglslang on Linux
 oc_alias(OSDependent)
 oc_alias(GenericCodeGen)
-foreach(winlib ntdll Winmm Setupapi Cfgmgr32 Version Imm32 Ws2_32 Bcrypt wintrust crypt32)
+oc_alias(Bcrypt "-lcrypto") # Network's Crypto.cpp: OpenSSL in place of CNG
+foreach(winlib ntdll Winmm Setupapi Cfgmgr32 Version Imm32 Ws2_32 wintrust crypt32)
 	oc_alias(${winlib})
 endforeach()

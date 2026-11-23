@@ -10,6 +10,7 @@ import :ScriptComponent; // invokeScriptOnEvent (module-linkage, declared next t
 import :ScriptEventManagerState;
 import :ScriptEventManager;
 
+OC_FWD_ATTACH_BEGIN
 void ScriptEventManager::fireEvent(EventKey key)
 {
 	if (Globals::time.isPaused())
@@ -58,6 +59,7 @@ void ScriptEventManager::fireEvent(EventKey key)
 	}
 	m_dispatching.fetch_sub(1, oc::memory_order_acq_rel);
 }
+OC_FWD_ATTACH_END
 
 void ScriptEventManagerState::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)
 {

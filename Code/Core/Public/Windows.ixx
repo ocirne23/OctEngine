@@ -5,6 +5,9 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -54,6 +57,25 @@ export inline BOOL QueryPerformanceCounter(LARGE_INTEGER* counter)
 }
 
 export inline DWORD GetCurrentThreadId() { return DWORD(syscall(SYS_gettid)); }
+
+// Runtime-loaded libraries: dlopen. The optional vendor DLLs (Aftermath) are asked for by their Windows file names, which
+// dlopen does not find, so those features stay off exactly as on a Windows machine without the DLL.
+export using HMODULE = void*;
+export inline HMODULE LoadLibraryA(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
+export inline void* GetProcAddress(HMODULE module, const char* name) { return dlsym(module, name); }
+export inline BOOL FreeLibrary(HMODULE module) { return dlclose(module) == 0 ? TRUE : FALSE; }
+export inline DWORD GetEnvironmentVariableA(const char* name, char* buffer, DWORD size)
+{
+    const char* value = getenv(name);
+    if (!value)
+        return 0;
+    const size_t length = strlen(value);
+    if (length >= size)
+        return DWORD(length + 1);
+    memcpy(buffer, value, length + 1);
+    return DWORD(length);
+}
+export inline void OutputDebugStringA(const char* text) { fputs(text, stderr); }
 
 // The Windows scheduler tick; Linux nanosleep already has sub-millisecond resolution.
 export inline unsigned timeBeginPeriod(unsigned) { return 0; }

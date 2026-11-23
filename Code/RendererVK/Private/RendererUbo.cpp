@@ -1,3 +1,7 @@
+module;
+
+#include "ImguiGmf.h"
+
 module RendererVK;
 
 import RendererVK.fwd;
@@ -30,6 +34,8 @@ import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
 import :UboBlock;
+
+OC_FWD_ATTACH_BEGIN
 
 // The values both a lockable entry and the live build (or two entries) read: one definition, so they cannot drift.
 namespace
@@ -2480,3 +2486,5 @@ void RendererState::registerUboValues(UboBlock& list)
             }, UboPresent);
     }
 }
+
+OC_FWD_ATTACH_END

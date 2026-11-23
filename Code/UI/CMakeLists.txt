@@ -7,6 +7,11 @@ add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FIL
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/Public")
+if(NOT MSVC) # imgui-node-editor's `#include "imgui.h"`: MSVC finds it next to an already-open imgui include
+	target_include_directories(${PROJECT_NAME} PRIVATE "${ROOT_DIR}/Dependencies/Include/imgui")
+	# a plain TU: std::terminate reaches it through MSVC's headers, not libc++'s
+	set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/Private/lib/imgui-node-editor/crude_json.cpp" PROPERTIES COMPILE_OPTIONS "-include;exception")
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC Core RendererVK Entity Script Settings imgui$<$<CONFIG:Debug>:d>)
 

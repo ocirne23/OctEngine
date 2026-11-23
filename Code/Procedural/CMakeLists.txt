@@ -40,5 +40,6 @@ file(GLOB_RECURSE DIFFUSION_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/Private/Diffusi
 if(MSVC)
 	set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "/fp:precise;/wd5050")
 else()
-	set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-model=precise;-ffp-contract=on")
+	# -fno-math-errno: clang will not load a module interface built with a different math-errno setting
+	set_source_files_properties(${DIFFUSION_SOURCES} PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-model=precise;-ffp-contract=on;-fno-math-errno")
 endif()

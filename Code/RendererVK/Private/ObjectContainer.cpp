@@ -19,6 +19,8 @@ import :MeshStreamer;
 import :RenderNode;
 import :TextureManager;
 
+OC_FWD_ATTACH_BEGIN
+
 constexpr char NODE_PATH_SEPARATOR = '/';
 constexpr char NODE_CHILD_SEPARATOR = ':';
 
@@ -1094,3 +1096,5 @@ RenderNode ObjectContainer::spawnNodeForPath(const oc::string& nodePath, const T
         return spawnNodeForIdx(NodeSpawnIdx(it->second), transform);
     }
 }
+
+OC_FWD_ATTACH_END

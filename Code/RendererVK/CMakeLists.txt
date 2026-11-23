@@ -7,7 +7,11 @@ set(EXTRA_MODULE_FILES "${ROOT_DIR}/Dependencies/Include/vulkan/vulkan.cppm")
 
 add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FILES})
 
-target_sources(${PROJECT_NAME} PRIVATE FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/Include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
+if(MSVC)
+	target_sources(${PROJECT_NAME} PRIVATE FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/Include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
+else() # Ninja: the public :VK partition imports vulkan_hpp, so its BMI must be visible to importers too
+	target_sources(${PROJECT_NAME} PUBLIC FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/Include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
+endif()
 target_sources(${PROJECT_NAME} PRIVATE FILE_SET headers BASE_DIRS "${ROOT_DIR}/Assets/Shaders" TYPE HEADERS FILES ${PROJECT_SHADER_FILES})
 
 source_group(TREE "${ROOT_DIR}/Assets/Shaders" PREFIX "Private/Shaders" FILES ${PROJECT_SHADER_FILES})
