@@ -5,7 +5,9 @@ file(GLOB_RECURSE PROJECT_PRIVATE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.h" "${CMA
 add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Apps)
-set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+if(MSVC)
+	set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+endif()
 # F5 on App runs on the loose files, also when a .dat lies next to the exe (FileSystem::initialize).
 set_target_properties(${PROJECT_NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
 
@@ -14,8 +16,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Core Settings Animation RendererVK
 # Cooked build: AppScripts' whole job is the scripts' static-init registrations (ocRegisterScriptEntry). Nothing
 # references its symbols, so a normal static-lib link dead-strips the entire object and NO script registers.
 # /WHOLEARCHIVE forces it in so the initializers run. (No-op when AppScripts is the INTERFACE stub, hence the guard.)
-if(SCRIPTS_STATIC)
+if(SCRIPTS_STATIC AND MSVC)
 	target_link_options(${PROJECT_NAME} PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:AppScripts>")
+elseif(SCRIPTS_STATIC)
+	target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--whole-archive,$<TARGET_FILE:AppScripts>,--no-whole-archive")
 endif()
 
 apply_compile_settings(${PROJECT_NAME})
@@ -27,6 +31,7 @@ apply_compile_settings(${PROJECT_NAME})
 # Streamline + DLSS are OPTIONAL the same way (RendererVK:Streamline): the interposer is LoadLibrary'd from the
 # exe's folder and loads its plugins (sl.common, sl.dlss) and the DLSS model (nvngx_dlss) from there too.
 # sl.common always loads NvLowLatencyVk (Reflex) and logs an error without it.
+if(MSVC)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/GFSDK_Aftermath_Lib.x64.dll"
@@ -38,6 +43,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/nvngx_dlss.dll"
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/NvLowLatencyVk.dll"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
+endif()
 
 # Launch App with networking args from Visual Studio: set run-server / run-client as the Startup
 # Project and F5 (the run-cooked pattern - VS runs the debugger command below, and building the

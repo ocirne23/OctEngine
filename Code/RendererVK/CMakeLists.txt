@@ -7,20 +7,26 @@ set(EXTRA_MODULE_FILES "${ROOT_DIR}/Dependencies/Include/vulkan/vulkan.cppm")
 
 add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FILES})
 
-target_sources(${PROJECT_NAME} PRIVATE FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
+target_sources(${PROJECT_NAME} PRIVATE FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/Include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
 target_sources(${PROJECT_NAME} PRIVATE FILE_SET headers BASE_DIRS "${ROOT_DIR}/Assets/Shaders" TYPE HEADERS FILES ${PROJECT_SHADER_FILES})
 
 source_group(TREE "${ROOT_DIR}/Assets/Shaders" PREFIX "Private/Shaders" FILES ${PROJECT_SHADER_FILES})
 source_group("Private/Util" FILES ${EXTRA_MODULE_FILES})
 
 # registerUboValues: one lambda per UBO value (~600) passes the COFF 65k-section limit in Debug (/ZI /JMC).
-set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/Private/RendererUbo.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+if(MSVC)
+	set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/Private/RendererUbo.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/Public")
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE VULKAN_HPP_NO_SPACESHIP_OPERATOR VULKAN_HPP_NO_STRUCT_CONSTRUCTORS VULKAN_HPP_NO_EXCEPTIONS)
-target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=__noop")
+if(MSVC)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=__noop")
+else()
+	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT(x)=((void)0)")
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings Animation File Threading vulkan-1
 	glslang$<$<CONFIG:Debug>:d> 

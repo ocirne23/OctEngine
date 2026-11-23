@@ -51,6 +51,18 @@ function(apply_compile_settings target)
 	target_compile_options(${target} PRIVATE ${COMPILE_OPTIONS})
 	target_link_options(${target} PRIVATE ${LINK_OPTIONS})
 
+	if(NOT MSVC)
+		# Ninja needs every module interface in a CXX_MODULES file set (the VS generator finds them by itself), and
+		# the nixpkgs headers of the libraries that link from nixpkgs must win over the vendored Windows copies.
+		get_target_property(sources ${target} SOURCES)
+		list(FILTER sources INCLUDE REGEX "\\.ixx$")
+		if(sources)
+			target_sources(${target} PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${ROOT_DIR}" FILES ${sources})
+		endif()
+		target_include_directories(${target} BEFORE PRIVATE ${OC_NIX_INCLUDES})
+		target_link_libraries(${target} PUBLIC oc_std)
+	endif()
+
     group_sources_by_folder(${target})
 
 endfunction()

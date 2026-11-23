@@ -27,6 +27,7 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "_Build")
 #                          object, or the initializer running twice). A local static that job code can
 #                          reach must be constant-initialized, or hoisted to namespace scope where
 #                          InitSeg.h orders it and no per-access guard exists at all.
+if(MSVC)
 list(APPEND COMPILE_OPTIONS "/std:c++latest" "/Zc:__cplusplus" "/fp:fast" "/arch:AVX2" "/GT" "/MP" "$<$<NOT:$<CONFIG:DEBUG>>:/GL>" "/Oi" "/Ot" "/W4" "$<$<NOT:$<CONFIG:DEBUG>>:/Ob2>" "$<$<CONFIG:DEBUG>:/JMC>" "$<$<CONFIG:Debug>:/ZI>" "/Gw" "/GS-" "/Zc:tlsGuards-" "/Zc:threadSafeInit-")
 list(APPEND LINK_OPTIONS "$<$<NOT:$<CONFIG:DEBUG>>:/LTCG>" "$<$<NOT:$<CONFIG:DEBUG>>:/INCREMENTAL:NO>" "$<$<CONFIG:Debug>:/INCREMENTAL>")
 
@@ -37,6 +38,9 @@ add_definitions(/FI"${ROOT_DIR}/Code/Core/Private/forceinclude.h"
 	/wd4324 # structure was padded due to alignment specifier - deliberate cache-line alignment in Threading, re-fires in every importer
 	/wd5311 # deprecated literal-operator-id form in EASTL's string.h (third-party), re-fires in every importer of Core
 )
+else()
+	include(Dependencies/Linux.cmake) # clang + libc++ + Ninja; the same flags, translated
+endif()
 
 # Cooked/shipping build: compile the visual scripts straight INTO the engine (the App-Scripts target) so their
 # ctx->* calls are whole-program-optimized and inlined against the engine thunks (non-Debug already builds /GL +
