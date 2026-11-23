@@ -76,6 +76,8 @@ void main()
 
 	// The material's albedo slot = the grid's opacity atlas (its header names the index).
 	const VoxelGrid grid = voxelGrid(material.diffuseNormalTexIdx & 0xFFFFu);
+	if (!voxelGridValid(grid))
+		discard; // the atlas is not in its slot yet (voxelGrid)
 	const float maxLod = grid.levels - 1.0;
 
 	// THE LEVEL: a voxel about a pixel at the entry's distance ("Trees/Voxel LOD bias"), dithered between the two nearest

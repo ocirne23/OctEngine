@@ -2355,6 +2355,10 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
         list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
         list.add("foliage_voxelLodBias", f.voxelLodBias);
+        // The bindless array's LIVE descriptor count: the voxel grid's index texture id, read out of its opacity atlas
+        // (tree_voxel.inc.glsl voxelGrid), is trusted only below it - a slot not holding the atlas yet (a fallback) reads
+        // as id 65535, and a fetch through it read past the descriptors (an MMU fault).
+        list.add("foliage_bindlessCount", [this] { return m_textures.getDescriptorCount(); }, UboLive);
         list.add("foliage_voxelSharp", [&] { return f.voxelSharp ? 1.0f : 0.0f; }, f.voxelSharp);
         list.add("foliage_voxelDensity", [&] { return 1.0f - glm::clamp(f.voxelThinning, 0.0f, 0.95f); }, f.voxelThinning);
         list.add("foliage_voxelSelfShadow", [&] { return glm::max(f.voxelSelfShadow, 0.0f); }, f.voxelSelfShadow);
