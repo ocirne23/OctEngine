@@ -121,6 +121,10 @@ calls `reloadShaders()`.
     (`underwaterSunTransmittance`): the terrain ground only. Every other material under the water takes the
     Beer-Lambert absorption alone (`underwaterSunAbsorption`, no ocean-map taps). The pattern is the surface's fold
     field projected down the sun's direction with no occlusion, which is right on the open seabed and wrong on a mesh.
+  * `LIT_SNOW` (compiles a path IN; needs `SUN_SHADOW_FIRST`) - the snow's sun BRDF (`snow_brdf.inc.glsl`), its facing
+    exception and the bright cavities, on the pixels `snowLitSetup` gives a snow share: the terrain ground, the rocks, the
+    caps, the lit, tree and voxel FS (see The look in [Snow.md](Snow.md)). Without a call its three globals keep their
+    constants (the blended lit variant). `SNOW_NO_GLINTS` (snow.inc.glsl) compiles the glints out (the voxel crowns).
   * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
     the light loop, the diffuse takes no (1 - metalness). The two tree shaders.
   * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided

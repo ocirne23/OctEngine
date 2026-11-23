@@ -181,6 +181,8 @@ void RendererState::initPipelines()
     m_oceanSimPipeline.initialize();
 
     m_terrainWetnessPipeline.initialize();
+    m_snowDeformPipeline.initialize();
+    m_snowCapPipeline.initialize();
     m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch, grassRingLayout().lodBlades);
     m_clutterPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     m_treeVoxelFar.initialize();
@@ -326,6 +328,8 @@ void RendererState::initSharedBuffers()
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
 	m_terrain.createNoiseTexture(); // before the first record: the grass cull binds it directly
+	m_snowSitePipeline.createImages(); // likewise (and the wetness); open sky until the first trace
+	m_snowDeformPipeline.createImages(); // undisturbed until the first stamp
 	for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
 	{
 		m_terrainRayFrames[i].initialize(sizeof(RendererVKLayout::TerrainRayFrameGpu), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
@@ -333,6 +337,17 @@ void RendererState::initSharedBuffers()
 		m_mappedTerrainRayFrames[i] = (RendererVKLayout::TerrainRayFrameGpu*)m_terrainRayFrames[i].mapMemory().data();
 		m_mappedTerrainRayFrames[i]->tableDim = 0; // every march misses
 		m_terrainRayFrames[i].flushMappedMemory(sizeof(RendererVKLayout::TerrainRayFrameGpu));
+
+		// The snowpack table + the states (uploadSnowTable in present), read by device address: starts empty (no snow, fresh
+		// surfaces).
+		constexpr uint32 snowBytes = RendererVKLayout::SNOW_TABLE_BYTES;
+		m_snowTables[i].initialize(snowBytes, vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eHostVisible, false, "SnowTable", BufferHostAccess::eSequentialWrite);
+		m_mappedSnowTables[i] = (float*)m_snowTables[i].mapMemory().data();
+		memset(m_mappedSnowTables[i], 0, snowBytes);
+		const oc::span<const SnowPack::CellState> snowStates = m_snowPack.states();
+		memcpy((uint8*)m_mappedSnowTables[i] + RendererVKLayout::SNOW_STATE_OFFSET, snowStates.data(), snowStates.size_bytes());
+		m_snowTables[i].flushMappedMemory(snowBytes);
 	}
 
     // The inland water map per frame slot (the fog binds it): host-visible, written in present when it changes.
@@ -451,6 +466,9 @@ void Renderer::reloadShaders()
     m_shadowMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
     m_staticMeshGraphicsPipeline.reserveOpaquePreprocess(m_shadowMapGraphicsPipeline.getPreprocessRequirement());
     m_rainOcclusionPipeline.reloadShaders();
+    m_snowSitePipeline.reloadShaders(); // a no-op until its first activation (ensureBuilt)
+    m_snowDeformPipeline.reloadShaders();
+    m_snowCapPipeline.reloadShaders();
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -720,6 +738,7 @@ void Renderer::kickBeginFrameJob()
 {
     ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
     advanceSunCycle(); // main: it writes the sky tweaks (the time, the sun direction) the job's UBO build reads
+    advanceWeather();  // main: the snowpack (present uploads it) and the weather at the camera (the particles read it)
     applyUboLocks(); // main, quiescent: a lock change rebuilds the shaders before this frame records
     if (Globals::openXR.isEnabled())
     {
@@ -1007,6 +1026,7 @@ void Renderer::present()
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadTerrainRayFrame(frameIdx); // this frame's terrain ray table (likewise)
+    uploadSnowTable(frameIdx);    // the snowpack as advanceWeather left it
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
     updateTreeVoxelFar(frameIdx); // the far voxel trees' chunk list (this slot's record table, the near set's chunks)
     uploadRiverWaterMap(frameIdx); // the inland water map, when it changed
@@ -1152,6 +1172,12 @@ void Renderer::present()
         const FileSystem::AllowMainThreadIO allowIo; // the first activation compiles the pipeline (rare, like F5)
         m_rainOcclusionPipeline.setActive(rainOcclusion);
         setHaveToRecordCommandBuffers();
+    }
+    // The snow site map's pipeline is built at its first activation (its images exist from the start).
+    if (m_snowSiteTick.active && !m_snowSitePipeline.isBuilt())
+    {
+        const FileSystem::AllowMainThreadIO allowIo; // compiles the pipeline (once, like F5)
+        m_snowSitePipeline.ensureBuilt(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     }
 
     joinGridBuilds(frameIdx, frameData); // before the staging update: a growth waits the GPU and flushes staging

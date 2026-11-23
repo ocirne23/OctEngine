@@ -649,8 +649,10 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   * **The masks** (`RT_MASK_*` / `RT_CULL_*`, Layout.ixx, shader defines; a ray hits where its cull mask and the
     instance's mask share a bit): the scene `0xFB`; a tree's SHADOW BILLBOARD `0x02` - every ray but RTAO's (opaque
     rays would hit the whole card rectangles); a tree's BARK mesh `0x04` - RTAO's rays ONLY (its second TLAS slot,
-    above). RTAO traces with `RT_CULL_AO` (`0x05`), every other ray with `RT_CULL_SCENE` (`0xFB`). **A new ray query
-    takes one of the two, never a literal.**
+    above); a MOVER (`PASS_FLAG_MOVER` on its node: `RenderNode::setMover`) `0xF1` - every ray but the snow site map's.
+    RTAO traces with `RT_CULL_AO` (`0x05`), the snow site map with `RT_CULL_SNOW` (`0x0A`: the scene and the cards, not
+    the bark or the movers - see [Snow.md](Snow.md)), every other ray with `RT_CULL_SCENE` (`0xFB`). **A new ray query
+    takes one of the three, never a literal.**
   * **The bark** (the trunk, the branches) is real geometry for RTAO within its range: the contact occlusion on the
     ground at the trunk, in the forks, on the bark itself. The BLAS does not sway: a thin branch in strong wind gets
     occlusion from where it stands at rest.

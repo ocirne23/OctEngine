@@ -15,6 +15,7 @@ import :GIProbePipeline;
 import :GrassPipeline;
 import :ClutterPipeline;
 import :TreeVoxelFarPipeline;
+import :SnowCapPipeline;
 
 class CommandBuffer;
 class ObjectContainer;
@@ -73,6 +74,8 @@ public:
 		const ClutterPipeline::Draw* clutter = nullptr;
 		// The far voxel trees (TreeVoxelFarPipeline's sorted records + one draw per voxel mesh); null = none (VR).
 		const TreeVoxelFarPipeline::Draw* treeVoxelFar = nullptr;
+		// The snow caps (SnowCapPipeline's draws: one per LOD); null = none (VR).
+		const SnowCapPipeline::Draw* snowCaps = nullptr;
 
 		// The voxel hit target (SceneColor; nearest): the voxel march pass writes it, the late phase's lighting reads it.
 		vk::ImageView voxelHitView;
@@ -158,12 +161,14 @@ private:
     // The ground clutter the same way: the rigid meshes (their vertices + the record, instance rate) or the flowers
     // (the record only: built in the VS). Desktop only.
     void buildClutterLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& clutter, bool flowers);
+    // The snow caps the same way: no vertex input (snow_cap.vs.glsl reads the prepare's words), static, both faces.
+    void buildSnowCapLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& caps);
     // THE VOXEL MARCH PASS's two pipelines (built against SceneColor's voxel march pass, not the opaque one), from the main
     // layout's bindings: the near tier (the main vertex input, instanced_indirect.vs.glsl TREE_VOXEL) and the far voxel
     // trees (+ the record, instance rate; tree_voxel_far.vs.glsl; desktop only), both with Trees/tree_voxel_march.fs.glsl.
     void buildTreeVoxelMarchLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& march, bool far);
     void buildTreeVoxelMarch(const GraphicsPipelineLayout& main, bool reload);
-    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers
+    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers + snow caps
 
     GraphicsPipeline m_graphicsPipeline;
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
@@ -181,6 +186,10 @@ private:
     bool m_clutterBuilt = false;
     bool m_flowerBuilt = false;
     bool m_texturedFlowerBuilt = false;
+    // The snow caps (SnowCapPipeline): one indexed indirect draw per LOD, before the opaque set (the tops under them fail
+    // early depth), outside the execution set.
+    GraphicsPipeline m_snowCapPipeline;
+    bool m_snowCapBuilt = false;
     // The voxel march pass's pipelines: the near tier (the main cull's voxel list) and the far voxel trees
     // (TreeVoxelFarPipeline: one indexed indirect draw per voxel mesh). They write FragDepth and the hit target.
     GraphicsPipeline m_treeVoxelMarchPipeline;

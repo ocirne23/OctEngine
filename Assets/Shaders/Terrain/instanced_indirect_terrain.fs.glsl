@@ -38,12 +38,14 @@ layout (location = 1) out vec4 out_motion;
 // The ground's sun shadow at the top of main, from the geometric normal (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
 #define LIT_EXTRA_LIGHT // the far grass's blade light, added inside computeLitColor before its light loop
+#define LIT_SNOW        // instanced_indirect_lit.inc.glsl: the snow's sun BRDF (snow_brdf.inc.glsl), set by snowLitSetup
 #define LIT_CAUSTICS    // instanced_indirect_lit.inc.glsl: the underwater caustic pattern (the ground is its only receiver)
 #ifdef TERRAIN_TESS
 #define PL_LIGHT_TRACE_TWO_SITES // punctual_lights.inc.glsl: the tessellated ground keeps 64 registers with two trace sites (72 with one)
 #endif
 
 #define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: the ground under the trees' canopy
+#define SNOW_DEFORM_READ // snow.inc.glsl (through the splat): the tracks' gradient in the tessellated normal
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
 #include "grass.inc.glsl" // the canopy shading of the ground under the grass (grassGroundCanopy)
@@ -118,30 +120,44 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 // The step AND the mip are the TES's own footprint, not the pixel's: at a pixel step close up, mip 0 magnified the
 // height map's texel grid and BC4 steps into a pixelated contour pattern. Finer detail is the normal maps'.
 // strengthOut = how much of the relief is displaced here (0..1), for the normal map's fade-down.
-vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
+// THE SNOW'S TRACKS (snowDeformGradient: the TES's deformation, straight up) tilt it too, where the relief is off as well:
+// their 3 taps come AFTER the relief's, so their gradient is not live across the heavy part. trackOut = the track's shading
+// (x = the sun's visibility past its walls, y = the hole's depth in m, z = the sun's path through the wall's top in m):
+// taken HERE, before the splat, so the march's temporaries are not live across the splat's peak.
+vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut, out vec3 trackOut)
 {
 	strengthOut = 0.0;
 	// The CENTRE view, as the TES (both VR eyes see the same displaced surface).
 	const float dist = distance(in_meshPos, u_views_viewPos[VIEW_CENTER].xyz);
-	if (dist >= u_terrainTess_fadeEnd || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
-		return N;
-
-	const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
-	const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
-	const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
-	if (depth <= 1e-4)
-		return N;
-	strengthOut = strength;
-
 	// The TES's footprint (terrain_tess.tes.glsl).
 	const float e = max(max(dist, u_terrainTess_freezeDistance) * u_terrainTess_spacingPerMetre, 1e-3);
-	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
-	const float invE = 1.0 / e;
-	const float hx = (h3.y - h3.x) * invE;
-	const float hz = (h3.z - h3.x) * invE;
-	// On the local base plane a step of 1 m in world X / Z is Tx / Tz (N.y >= ~0.35 wherever depth > 0).
-	const vec3 Tx = vec3(1.0, -N.x / N.y, 0.0) + N * (depth * hx);
-	const vec3 Tz = vec3(0.0, -N.z / N.y, 1.0) + N * (depth * hz);
+	vec2 relief = vec2(0.0); // the relief's slope along world X / Z, x its depth
+	if (dist < u_terrainTess_fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
+	{
+		const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
+		const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
+		const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
+		if (depth > 1e-4)
+		{
+			const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
+			relief = (depth / e) * (h3.yz - h3.x);
+			strengthOut = strength;
+		}
+	}
+	float drawn;
+	const vec2 track = snowDeformGradient(in_meshPos.xz, e, float(L.snowDepth), drawn); // (0, 0) without tracks
+	trackOut = vec3(1.0, max(-drawn, 0.0), 0.0);
+	if (u_snow_trackShadow > 0.5 && u_sunLit > 0.5 && g_sunShadowFirst > 0.0 && float(L.snowDepth) > 0.02 && (drawn < -0.005 || dot(track, track) > 1e-4))
+	{
+		float wallPath;
+		trackOut.x = snowTrackSunShadow(in_meshPos.xz, drawn, float(L.snowDepth), wallPath);
+		trackOut.z = wallPath;
+	}
+	if (strengthOut == 0.0) // no relief (and N.y may be small): a vertical offset on the base plane, no division
+		return normalize(N - N.y * vec3(track.x, 0.0, track.y));
+	// On the local base plane a step of 1 m in world X / Z is Tx / Tz (N.y >= ~0.35 wherever the relief displaces).
+	const vec3 Tx = vec3(1.0, track.x - N.x / N.y, 0.0) + N * relief.x;
+	const vec3 Tz = vec3(0.0, track.y - N.z / N.y, 1.0) + N * relief.y;
 	return normalize(cross(Tz, Tx));
 }
 #endif
@@ -167,7 +183,11 @@ void main()
 	// costly part). reliefStrength fades the normal maps down below (they carry the same relief again).
 	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
 	float reliefStrength;
-	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
+	vec3 trackShade;
+	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength, trackShade);
+	// The relief's strength and the track's shading cross the splat PACKED in one register (4 x unorm8: 1/255 strength, 4 mm
+	// of hole, the wall path as p / (p + 0.5): no saturation), as the grass canopy below.
+	const uint tessPacked = packUnorm4x8(vec4(reliefStrength, trackShade.x, min(trackShade.y, 1.0), trackShade.z / (trackShade.z + 0.5)));
 	// THE GRASS CANOPY over this ground: its sun and ambient, plus the far tier's weight and stripe scale, from the same
 	// coverages as the grass placement. Formed here so only it stays live across the splat, not the layers' picks - and
 	// PACKED (4 x unorm8, all four in [0, 1]) into ONE register: four halves live across the splat took this FS from 64
@@ -185,12 +205,28 @@ void main()
 	return;
 #endif
 
+	float16_t snowShare;
 #ifdef TERRAIN_TESS
-	TerrainSample surf = terrainSplatLayers(in_pos, geoN, tessLayers);
+	TerrainSample surf = terrainSplatLayers(in_pos, geoN, tessLayers, snowShare);
 	const f16vec4 grassCanopy = f16vec4(unpackUnorm4x8(grassCanopyPacked));
 #else
-	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
+	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers, snowShare);
 #endif
+
+	// THE SNOW'S STATE (the pack's cell at this point: snowStateAt - the temperature and the site catch terrainLayers read):
+	// its albedo and its facets' roughness replace the splat's fresh-snow placeholders by the snow's share (exact for the
+	// splat's linear mix). Read AFTER the splat: only the share, the glint density and the meltwater cross the far grass and
+	// the wet look, nothing crosses the splat.
+	float snowRho = 0.0;
+	float16_t snowLiquid = float16_t(0.0);
+	if (snowShare > float16_t(TERRAIN_BLEND_EPS))
+	{
+		const SnowState st = snowStateAt(fields.temperature, snowSiteCatch(TERRAIN_LIT_POS));
+		surf.albedo += snowShare * (f16vec3(snowAlbedo(st)) - f16vec3(u_snow_freshAlbedo));
+		surf.rough += snowShare * (float16_t(snowAlpha(st)) - float16_t(u_snow_grainRough));
+		snowRho = snowGlintDensity(st);
+		snowLiquid = float16_t(st.liquid);
+	}
 
 	// THE FAR GRASS TIER (grassGroundCanopy's z): where the blades have faded out, the ground takes the grass layer's look -
 	// its colour, its roughness, and its normal (grassFarNormal: upright blades seen side-on, the tufts' lean; the soil's
@@ -208,13 +244,18 @@ void main()
 		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness * (1.0 - 0.7 * glint)), grassCanopy.z);
 		surf.normal = normalize(mix(surf.normal, f16vec3(farN), grassCanopy.z));
 		farBladeSun = float16_t(float(grassCanopy.z) * u_grass_farBladeLight * grassFarBladeSun(in_pos, stripe));
+		snowShare *= one - grassCanopy.z; // the far blades' look over the snow takes its share
 	}
 
 	// THE GROUND'S WET LOOK: one darkening and one roughness drop, on the wetness field alone (no instantaneous "under
-	// the live surface" override: ground under a wave soaks up visibly, a cliff a wave splashes only gets damp).
+	// the live surface" override: ground under a wave soaks up visibly, a cliff a wave splashes only gets damp). The
+	// wetness lies UNDER the snow (the snow's own meltwater is its state's: greyer, glossier, the sky reflection below).
 	float16_t wet, aboveLive;
 	terrainWetness(coverN, fields, 0.0, wet, aboveLive);
-	float16_t skyReflW = float16_t(0.0); // the wet ground's sky reflection weight (after the lighting, below)
+	wet *= one - snowShare;
+	// The sky reflection's weight (after the lighting, below): WET SNOW mirrors the sky ("Weather/Snow/Wet snow reflection" x
+	// its meltwater), with or without the wetness map; the wet ground's gloss joins it below.
+	float16_t skyReflW = snowShare * snowLiquid * float16_t(u_snow_wetReflect);
 	if (terrainWetPresent())
 	{
 		// The STANDING water's highlights are the film's, so nothing here doubles them. Under the live ocean the
@@ -283,18 +324,35 @@ void main()
 		// The sky reflection's weight: the gloss above the live ocean, minus where the film stands (it mirrors the sky
 		// there). The GI's sky visibility (no sky under an overhang) is folded in HERE: skyReflW is live across the
 		// lit core anyway, and the lookup runs before its peak, not after it with the colour live.
-		skyReflW = glossW * aboveLive * (one - underFilm);
-		if (skyReflW > float16_t(0.0))
-			skyReflW *= float16_t(giSkyVisibility(TERRAIN_LIT_POS, geoN));
+		skyReflW = max(skyReflW, glossW * aboveLive * (one - underFilm));
 	}
+	if (skyReflW > float16_t(0.0))
+		skyReflW *= float16_t(giSkyVisibility(TERRAIN_LIT_POS, geoN));
 
 #ifdef TERRAIN_TESS
 	// Where the relief is displaced, the normal maps carry the same relief a second time (their tilt re-lit faces the
 	// displacement turned from the sun): half is kept at full displacement. And a relief face turned from the sun gets
 	// none, whatever the normal map says (g_sunVisMaterial: the ground's sun only).
-	surf.normal = normalize(mix(surf.normal, f16vec3(geoN), float16_t(0.5 * reliefStrength)));
-	const float reliefSunGate = mix(1.0, smoothstep(0.0, 0.1, dot(geoN, u_sunDirection.xyz)), reliefStrength);
+	const vec4 tessUnpacked = unpackUnorm4x8(tessPacked); // x = the relief's strength, yzw = the track's shading
+	const float relief = tessUnpacked.x;
+	surf.normal = normalize(mix(surf.normal, f16vec3(geoN), float16_t(0.5 * relief)));
+	// The snow's gate opens earlier (to -0.2): its diffusion lights a displaced flank that faces just away from the sun.
+	const float reliefSunGate = mix(1.0, smoothstep(-0.2 * float(snowShare), 0.1, dot(geoN, u_sunDirection.xyz)), relief);
 	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
+
+	// THE TRACK (trackShade): its cavity bounces ("Cavity bounces": each wall bounce takes the snow's colour again, red
+	// first - blue in a deep track), the pressed snow's smoother facets and fewer glints, and the floor's sun shadow behind its
+	// walls ("Track sun shadow": the floor then takes the sky's blue light alone). After the splat: POM sets
+	// g_sunVisMaterial.
+	if (snowShare > float16_t(TERRAIN_BLEND_EPS) && tessUnpacked.z > 0.0)
+	{
+		const float n = u_snow_cavityBounces * tessUnpacked.z;
+		surf.albedo = mix(surf.albedo, surf.albedo * f16vec3(exp2(n * log2(max(vec3(surf.albedo), vec3(1e-3))))), snowShare);
+		const float pressed = clamp(tessUnpacked.z * 20.0, 0.0, 1.0); // full from 5 cm
+		snowRho *= 1.0 - 0.7 * pressed;
+		surf.rough *= one - float16_t(0.3 * pressed) * snowShare;
+	}
+	g_sunVisMaterial *= mix(one, float16_t(tessUnpacked.y), snowShare);
 #endif
 
 	// The faction look: before the blade light and the lit core, which both take the albedo.
@@ -314,7 +372,23 @@ void main()
 	if (farBladeSun > float16_t(0.0))
 		g_litExtraLight = f16vec3(min(vec3(surf.albedo) * (float(farBladeSun) * g_sunShadowFirst * float(surf.ao))
 			* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
+#ifdef TERRAIN_TESS
+	// THE WALL GLOW ("Wall glow"): the sun that crosses a track's thin wall reaches the shaded floor, reddened by the path
+	// (exp(-sigma_tr x path) per channel: blue light), x the sun's cosine on the floor's base. After the far grass, which
+	// ASSIGNS g_litExtraLight.
+	if (u_snow_wallGlow > 0.0 && snowShare > float16_t(0.0) && tessUnpacked.y < 1.0)
+	{
+		const float wallPath = 0.5 * tessUnpacked.w / max(1.0 - tessUnpacked.w, 1.0 / 255.0);
+		g_litExtraLight += f16vec3(min(vec3(surf.albedo) * exp(-u_snow_sigmaTr * wallPath)
+			* (u_snow_wallGlow * (1.0 - tessUnpacked.y) * g_sunShadowFirst * float(snowShare) * max(dot(coverN, u_sunDirection.xyz), 0.0) * INV_PI)
+			* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
+	}
+#endif
 	const vec3 V = normalize(u_viewPos - in_pos);
+	// THE SNOW BRDF's setup (snow.inc.glsl): the share, the smooth mesh normal as the diffusion's target (coverN: in both
+	// variants, so the near band - the relief in the geometry - and the far one - in the normal map - blur toward the same
+	// base), the glints on the seen (lifted, displaced) surface. At the top level of main: the derivatives in uniform flow.
+	snowLitSetup(in_pos.xz, surf.normal, f16vec3(coverN), V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)));
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 
 	// THE WET SKY REFLECTION (the lit core has no environment specular, so wet ground read as merely darker): the

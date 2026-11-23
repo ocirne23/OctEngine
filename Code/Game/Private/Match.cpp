@@ -223,6 +223,8 @@ GameMatch::~GameMatch()
         Tweak::notifyChanged(colors[CoopAiTeam]);
     }
     restoreBeacon();
+    if (m_coop)
+        setCoopWeather(false); // the co-op weather ends with the match (a no-op with "Co-op weather" off)
     Globals::settings.game.unitParams.fieldPush = true; // the light rules' runtime params back to neutral
     Globals::settings.game.unitParams.sunBurnTeam = -1;
     Globals::settings.game.unitParams.shadowTeam = -1;
@@ -268,6 +270,7 @@ void GameMatch::spawnWorld()
         return;
     m_isServer = Globals::networkManager.role() == ENetRole::Server;
     m_isClient = Globals::networkManager.role() == ENetRole::Client;
+    m_weatherNight = -1; // the co-op weather is set at the first update (setCoopWeather)
     if (m_coop)
     {
         // CO-OP: the sandbox world - one shared Base wherever tickBaseSite finds ground near the anchor. Waves come at
@@ -830,6 +833,17 @@ void GameMatch::update(float deltaSec)
             writer.write<float>(beam.to.x);   writer.write<float>(beam.to.y);   writer.write<float>(beam.to.z);
             writer.write<float>(beam.arc); // an arrow's arc (0 for the others)
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
+        }
+    }
+    // THE WEATHER's own dusk / dawn edge (authority): independent of the waves, so a peaceful match has it too, and
+    // m_weatherNight -1 (a new match, a load) sets the weather of the time it is now.
+    if (m_coop && Globals::networkManager.role() != ENetRole::Client)
+    {
+        const int night = Globals::settings.sky.sunHeight() < 0.0f ? 1 : 0;
+        if (night != m_weatherNight)
+        {
+            m_weatherNight = night;
+            setCoopWeather(night != 0);
         }
     }
     if (m_coop && m_settings.coopEnemies && m_siteFound)

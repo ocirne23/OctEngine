@@ -23,13 +23,24 @@ namespace
     struct ImpactLight { glm::vec3 pos{ 0.0f }; double born = -1.0; bool fire = false; };
     ImpactLight g_impacts[c_maxImpacts];
     int g_impactNext = 0;
-    std::mutex g_impactMutex; // (constant-initialized: safe at namespace scope)
+    // The impacts' CRATERS in the snow (Renderer::addSnowCrater): queued by destroy (which may run outside the frame's
+    // submission window), handed to the renderer by drawImpactLights. Past c_maxCraters between two hand-overs, the later drop.
+    constexpr int c_maxCraters = 64;
+    struct Crater { glm::vec3 pos{ 0.0f }; float radius = 0.0f; double born = 0.0; };
+    constexpr double c_craterSeconds = 0.5; // older at the hand-over: a teardown's or the last match's (dropped)
+    Crater g_craters[c_maxCraters];
+    int g_craterCount = 0;
+    std::mutex g_impactMutex; // (constant-initialized: safe at namespace scope) - both rings
 }
 
 void GameProjectileComponent::drawImpactLights()
 {
     const double now = Globals::time.getElapsedSec();
     const std::lock_guard lock(g_impactMutex);
+    for (int i = 0; i < g_craterCount; ++i)
+        if (now - g_craters[i].born < c_craterSeconds)
+            Globals::rendererVK.addSnowCrater(g_craters[i].pos, g_craters[i].radius, glm::min(0.1f + 0.25f * g_craters[i].radius, 1.0f));
+    g_craterCount = 0;
     for (const ImpactLight& impact : g_impacts)
     {
         const float age = (float)(now - impact.born);
@@ -79,6 +90,11 @@ void GameProjectileComponent::destroy(Entity& entity, const SpawnInfo&)
         return; // it ran out in the air: no impact
     GameUnitComponent::reportSound(splashRadius > 0.0f ? GameUnitComponent::ESoundCue::SplashImpact : GameUnitComponent::ESoundCue::ShotImpact,
         entity.pos, glm::max(splashRadius, 1.0f));
+    {
+        const std::lock_guard lock(g_impactMutex); // its crater in the snow (drawImpactLights hands it over)
+        if (g_craterCount < c_maxCraters)
+            g_craters[g_craterCount++] = { entity.pos, glm::max(0.5f * splashRadius, 0.3f), Globals::time.getElapsedSec() };
+    }
     if (impactPuff || fireImpact) // the burst: a few puffs of shards (embers) over the impact and one flash (capped by the particle system)
     {
         const int puffs = fireImpact ? 2 : 3;

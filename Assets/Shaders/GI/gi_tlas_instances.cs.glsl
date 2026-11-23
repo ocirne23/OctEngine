@@ -106,6 +106,7 @@ void main()
     vec3 pos;
     float scale;
     bool inRtSet;
+    bool mover = false; // PASS_FLAG_MOVER: every ray but the snow site map's sees it (RT_MASK_MOVER)
     if (isTree)
     {
         inst = InMeshInstance(0u, 0u, treeRec.meshMaterial, treeRec.pipelineAlpha);
@@ -124,7 +125,9 @@ void main()
         scale             = rnPS.w * ioPS.w;
         // GI or shadow relevance keeps the instance hittable: probes / RTAO trace the GI set, the RT sun shadow needs
         // the shadow casters.
-        inRtSet = (in_nodeStates[inst.renderNodeIdx].x & (PASS_GI | PASS_SHADOW)) != 0u;
+        const uint nodeMask = in_nodeStates[inst.renderNodeIdx].x;
+        inRtSet = (nodeMask & (PASS_GI | PASS_SHADOW)) != 0u;
+        mover = (nodeMask & PASS_FLAG_MOVER) != 0u;
     }
     const uint meshIdx = inst.meshIdxMaterialIdx & 0x0000FFFFu;
 
@@ -180,11 +183,12 @@ void main()
 
     // The MASK (Layout.ixx RT_MASK_* / RT_CULL_*): a tree's shadow billboard is hidden from RTAO's rays (opaque: they
     // would hit the whole card rectangles) and seen by every other ray; its bark slot is the reverse - RTAO's rays only.
+    // A mover is hidden from the snow site map's rays only.
     const bool foliage = materialIdx < uint(in_materialInfos.length())
                       && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u;
     // Custom = the stream index (below RT_CUSTOM_TREE: the TLAS holds far fewer), or a tree's RT_CUSTOM_TREE | material.
     const uint custom = isTree ? RT_CUSTOM_TREE | materialIdx : id & (RT_CUSTOM_TREE - 1u);
-    o.instanceCustomIndexAndMask = custom | ((treeBark ? RT_MASK_TREE_BARK : foliage ? RT_MASK_TREE_CARD : RT_MASK_SCENE) << 24);
+    o.instanceCustomIndexAndMask = custom | ((treeBark ? RT_MASK_TREE_BARK : foliage ? RT_MASK_TREE_CARD : mover ? RT_MASK_MOVER : RT_MASK_SCENE) << 24);
 
     out_instances[slot] = o;
 }

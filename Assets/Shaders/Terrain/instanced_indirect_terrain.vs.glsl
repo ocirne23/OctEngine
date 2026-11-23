@@ -4,6 +4,7 @@
 #extension GL_EXT_shader_16bit_storage : enable
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_EXT_nonuniform_qualifier : enable // the bindless array (the snow site map)
 
 // Terrain variant of instanced_indirect.vs.glsl: world position + geometric normal only (the FS builds its own
 // tangent bases), plus the baked terrain fields per vertex as one interpolant (see main).
@@ -12,6 +13,9 @@
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
 #include "mesh_vertex.inc.glsl"
+layout (binding = 27) uniform sampler2D u_textures[]; // the forward set's bindless array (TEXTURES_BINDING): the snow site map
+#define SNOW_DEFORM_READ
+#include "snow.inc.glsl" // snowGroundLift: the snow's depth raises the ground; snowDeformAt: the tracks in it
 
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -43,6 +47,10 @@ layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = temperature C, z = humidity, w = water level
 layout (location = 4) out float out_river;        // the river influence (TerrainFields::river)
+#ifdef TERRAIN_TESS
+layout (location = 5) out vec2 out_snowLift;      // the snow's lift (below; x = all of it, y = the tracks' share): the TES
+                                                  // puts its mesh point back under it and adds the tracks' detail
+#endif
 
 #ifdef TERRAIN_OVERLAY_PASS
 // The film: out_pos is LIFTED to its water level, this is the lift along the normal (m). The film FS rebuilds the mesh
@@ -183,6 +191,29 @@ void main()
         temperature = terrainTemperatureAt(climate, out_pos.y);
     }
     out_terrainFields = vec4(altitude, temperature, humidity, waterLevel);
+
+    // THE SNOW'S DEPTH (snow.inc.glsl snowGroundLift: the pack at this vertex's temperature and site catch, on a slope that
+    // holds it, out of the water): straight up, for the ground, the film and the tessellation's control points alike (the
+    // same expression in every variant: the film's GREATER_OR_EQUAL still meets the ground). The shadow pass, the ray march
+    // and the collider keep the flat mesh. THE SLOPE RULE FADES OUT before the first LOD edge (the stitching's full-res
+    // band, in base chunks from its draw camera): a node's vertex normal is taken over its own step, so two LODs disagree
+    // on a shared edge vertex's slope - with the same depth on both sides the edge stays closed (a far cliff lifting by the
+    // depth does not show; the cover keeps its own slope rule).
+    float liftNormalY = out_normal.y;
+    if (u_terrain_stitch.x > 0.0)
+    {
+        const vec2 rel = abs(out_pos.xz / u_terrain_stitch.x - u_terrain_stitch.yz);
+        liftNormalY = mix(liftNormalY, 1.0, smoothstep(0.5 * u_terrain_stitchBands.x, u_terrain_stitchBands.x, max(rel.x, rel.y)));
+    }
+    // THE TRACKS (snowDeformAt: the deformation maps) at this vertex, in the lift: a press down to the ground at most, a berm
+    // half the depth at most, faded out with the distance (snowDeformFade). The tessellation adds what lies between the
+    // vertices (the TES's residual).
+    const float snowLift = snowGroundLift(out_pos, temperature, liftNormalY, waterLevel, out_river);
+    const float snowTrack = snowDeformApply(snowDeformAt(out_pos.xz), snowLift) * snowDeformFade(out_pos.xz);
+    out_pos.y += snowLift + snowTrack;
+#ifdef TERRAIN_TESS
+    out_snowLift = vec2(snowLift + snowTrack, snowTrack);
+#endif
 
 #ifdef TERRAIN_OVERLAY_PASS
     // THE FILM (never tessellated): inside the tessellation range (the TES's distance fade and slope gate), lifted

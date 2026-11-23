@@ -20,7 +20,7 @@ and its place stay: neither says live or lockable.
 
 * **ONE function, by subject:** `Renderer::registerUboValues` (the end of `RendererUbo.cpp`) has a section per subject
   (the frame, Sky, Clouds, Shadows, Ray tracing, Fog, Ocean, Terrain, Terrain textures / tessellation / water, Rivers, Grass,
-  Clutter, Trees, Rocks, LOD, Force, Particles, Weather, Post, present), and each section holds its subject's live and
+  Clutter, Trees, Rocks, LOD, Force, Particles, Weather, Snow, Post, present), and each section holds its subject's live and
   lockable values side by side, all named `<subject>_<field>` (`fog_density` lockable, `fog_waveBand` live).
 * **LIVE** = everything that also reads the camera, the clock, the sun, the wind, a readback or a value the outside
   pushes per frame: the frame section (the views `u_views_mvp[3]` ... `u_views_viewPos[3]`, one array per view matrix,

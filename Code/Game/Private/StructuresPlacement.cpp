@@ -7,6 +7,7 @@ import Core.Transform;
 import Entity;
 import Force;
 import Physics; // the sandbox world's ground: terrain rays, tree / rock overlap, the water surface
+import RendererVK; // the snow site map's invalidation
 import Spatial;
 import :Structures;
 import :Sound;
@@ -255,7 +256,7 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
 // ---------------------------------------------------------------- spawn/destroy
 
 int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos,
-    const glm::quat& rot, uint8 team, bool built, float yield, bool insert)
+    const glm::quat& rot, uint8 team, bool built, float yield, bool insert, bool onShip)
 {
     EntityPtr entity = Globals::world.spawnAssetFile(structurePrefabs[(int)type],
         Transform(pos, 1.0f, rot), true);
@@ -281,6 +282,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     Ref ref;
     ref.owner = entity; // owning: the roster's raw pointers can never dangle
     ref.entity = entity.get();
+    ref.onShip = onShip; // before the snow site's invalidation below (the ship's are movers: none)
     ref.state = state;
     ref.type = type;
     ref.yield = isHarvestType(type) && std::isfinite(yield) ? glm::clamp(yield, 0.0f, 1.0f) : 1.0f;
@@ -310,6 +312,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
             other.harvestDirty |= other.type == type;
     if (insert)
         insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
+    invalidateSnowSite(m_frame.back(), /*hide*/ false); // its roof shelters and carries snow once the site map sees it
     m_linksDirty = true;
     m_carrierPassTimer = 0.0f; // the walkers' ~1 s pass at once: a new blueprint gets its stone without the wait
     if (!built) // a blueprint goes down (a load or a join replay spawns built structures: silent)
@@ -319,10 +322,21 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
 
 // Deregister + full bookkeeping, WITHOUT touching the world's root list - shared by the game's own
 // removal (destroyStructureAt) and by onWorldRootRemoved for out-of-band deletions.
+void StructureSystem::invalidateSnowSite(const Ref& s, bool hide) const
+{
+    if (s.onShip || !s.entity)
+        return;
+    const glm::ivec2 ext = footprintExtent(s.type, s.entity->rot);
+    const glm::vec2 half = glm::vec2(ext) * (0.5f * GridCellSize) + 1.0f; // + a metre of eaves and props
+    const glm::vec2 centre(s.entity->pos.x, s.entity->pos.z);
+    Globals::rendererVK.invalidateSnowSite(centre - half, centre + half, hide);
+}
+
 void StructureSystem::removeStructureBookkeeping(size_t index)
 {
     const Ref s = m_frame[index]; // owning copy: the entity stays alive through the bookkeeping
     const uint32 id = s.state->structureId;
+    invalidateSnowSite(s, /*hide*/ true);
     GameSound::post(EGameSound::StructureCollapse, s.entity->pos, isCableOrCrossing(s.type) || s.state->blueprint ? 0.3f : 1.0f);
     if (s.rubbleVisual) // its rubble pile goes with it
         Globals::world.removeRootEntity(s.rubbleVisual.get());

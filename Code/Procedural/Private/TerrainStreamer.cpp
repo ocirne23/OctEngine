@@ -21,6 +21,7 @@ import :GeneratorV3;
 import :RiverNetwork;
 import :RiverUnits;
 import :RiverTerrain;
+import :SnowRelief;
 
 namespace
 {
@@ -131,6 +132,9 @@ namespace
 		// Scales the baked HEIGHT about 0.5 (the mesh): the relief of the parallax, the height blend and the tessellated
 		// displacement for this set only. < 1 for a disp source too strong next to the others. Part of the cache name.
 		float heightScale = 1.0f;
+		// A generated set with no ARM map (the snow's relief): the roughness alpha is a constant (the shaders take the snow
+		// state's) and the AO 1.
+		bool noArm = false;
 	};
 	const TerrainTexSource TERRAIN_TEX_SOURCES[] =
 	{
@@ -167,7 +171,11 @@ namespace
 
 		// --- Overlays, in composite order. Both are climate-independent; their boxes are never read.
 		{ .kind = ESourceKind::Beach, .stem = "coast_sand_01" },
-		{ .kind = ESourceKind::Snow,  .stem = "snow_02" },
+		// The snow's relief is GENERATED (SnowRelief: lumps, wind ripples, sastrugi, grain); its colour and gloss are the snow
+		// state's (snow.inc.glsl), so it has no ARM map and a flat albedo.
+		{ .kind = ESourceKind::Snow, .stem = Procedural::SnowRelief::STEM, .diffSrc = Procedural::SnowRelief::DIFF_PATH,
+		  .norSrc = Procedural::SnowRelief::NOR_PATH, .dispSrc = Procedural::SnowRelief::DISP_PATH,
+		  .heightScale = Procedural::SnowRelief::HEIGHT_SCALE, .noArm = true },
 	};
 
 	static_assert(oc::size(TERRAIN_TEX_SOURCES) <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS,
@@ -231,6 +239,11 @@ namespace
 		//   hao   = HEIGHT (the disp's R; 0.5 = flat without a disp source) + AO (the ARM's R), BC5
 		// Metalness is dropped: terrain is never metallic, the splat uses 0.
 		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diffr, 1 = nor, 2 = hao
+		// The generated sources first (a no-op once written).
+		if (!Procedural::SnowRelief::ensureSources(stopRequested))
+			Log::warning("Terrain: the snow relief's sources could not be written");
+		if (stopRequested.load(oc::memory_order_relaxed))
+			return;
 		oc::vector<BakeTask> tasks;
 		for (const TerrainTexSource& src : TERRAIN_TEX_SOURCES)
 		{
@@ -267,7 +280,7 @@ namespace
 					const oc::string diff = terrainTexSrcPath(src, "diff");
 					// The roughness alpha keeps >= 3/255 (GGX alpha 0.0118) in every mip: the splat shader has no floor of its own.
 					const TextureConvert::PackChannel channels[4] = { { diff.c_str(), 0 }, { diff.c_str(), 1 }, { diff.c_str(), 2 },
-						{ arm.c_str(), 1, 0, 1.0f, TERRAIN_ROUGHNESS_FLOOR } };
+						src.noArm ? TextureConvert::PackChannel{ nullptr, 0, 153 } : TextureConvert::PackChannel{ arm.c_str(), 1, 0, 1.0f, TERRAIN_ROUGHNESS_FLOOR } };
 					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::ColorAlpha, terrainTexCachePath(src, "diffr").c_str());
 					if (ok) // the unfloored bake of the old name is dead
 						FileSystem::remove(oc::format("{}{}_diffr.dds", TERRAIN_TEX_CACHE_DIR, src.stem));
@@ -279,7 +292,8 @@ namespace
 					// The disp source is optional: without it the height channel is flat (0.5 = the mesh).
 					const oc::string disp = terrainTexSrcPath(src, "disp");
 					const bool hasDisp = FileSystem::exists(disp);
-					const TextureConvert::PackChannel channels[4] = { { hasDisp ? disp.c_str() : nullptr, 0, 128, src.heightScale }, { arm.c_str(), 0 }, {}, {} };
+					const TextureConvert::PackChannel channels[4] = { { hasDisp ? disp.c_str() : nullptr, 0, 128, src.heightScale },
+						src.noArm ? TextureConvert::PackChannel{ nullptr, 0, 255 } : TextureConvert::PackChannel{ arm.c_str(), 0 }, {}, {} };
 					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::TwoChannel, terrainTexCachePath(src, "hao").c_str());
 					break;
 				}
@@ -1152,6 +1166,7 @@ namespace Procedural
 		updateFogHeightMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
 		renderer.setTerrainParams(0.0f, m_settings.seaLevel);   // no mesh up: disables the ocean land cull
 		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
+		renderer.setCameraTemperature(std::numeric_limits<float>::quiet_NaN());
 		renderer.setTerrainStitch(0.0f, glm::vec2(0.0f), 0.0f, 1.0f, 0, 1, 1.0f); // no chunks: no edge stitching
 
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
@@ -1484,6 +1499,8 @@ namespace Procedural
 		{
 			const FileSystem::AllowMainThreadIO cameraGroundIo;
 			renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
+			// ... and its climate's temperature: whether the weather falls as snow or as rain at the camera.
+			renderer.setCameraTemperature(maps ? maps->sampleTemperature(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
 		}
 
 		// --- THE RING (the quadtree's wanted leaves around the camera; see Ring). Rebuilt when it moves: ~100-200 nodes,

@@ -5,8 +5,10 @@
 # THE MAGIC: light crystals (gemsGlow's Diamond, unlit + Emissive: the bloom takes them) half in the hull - out of the
 # second tier's sides, out of the stem, and a large one under the keel.
 # Global: the game moves it, and it must be visited wherever it is. RootOnly: one cull entry for all the pieces.
+# Mover: no shelter for the snow (the site map refreshes too slowly to follow it).
 Prefab gameAirship
 	Global true
+	Mover true
 	CullMode RootOnly
 	Component Render
 		ObjectContainer airship

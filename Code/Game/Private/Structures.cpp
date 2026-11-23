@@ -502,6 +502,19 @@ void StructureSystem::clear()
     m_frame.clear();
     m_byId.clear();
     joinTransport(); // the job holds component pointers: joined before any entity dies
+    // The snow site map: ONE rectangle over every footprint (no cap stays over a removed roof; the texels trace again).
+    glm::vec2 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+    for (const Ref& s : roster)
+    {
+        if (s.onShip || !s.entity)
+            continue; // the ship's structures are movers: not in the map
+        const glm::vec2 half = glm::vec2(footprintExtent(s.type, s.entity->rot)) * (0.5f * GridCellSize) + 1.0f;
+        const glm::vec2 centre(s.entity->pos.x, s.entity->pos.z);
+        lo = glm::min(lo, centre - half);
+        hi = glm::max(hi, centre + half);
+    }
+    if (lo.x <= hi.x)
+        Globals::rendererVK.invalidateSnowSite(lo, hi, /*hide*/ true);
     for (const Ref& s : roster)
     {
         Globals::world.removeRootEntity(s.entity);

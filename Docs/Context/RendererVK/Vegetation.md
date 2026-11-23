@@ -697,6 +697,11 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     column's height: spikes over every steep floor step). The lighting taps read the hardware filter at a height above
     the sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly (each tap's NEAREST column's
     floor made the shading jump at every column edge).
+* **The snow** (`farTreeSnow`, snow.inc.glsl; Snow.md): once per ray at the first hit the crown's snow cover - the
+  climate's permanent snow or the pack at the hit's temperature, open sky (catch 1; the site map is never read, so its
+  samplers are aliased to `u_colour`) - packed as a half with the terrain's sun visibility in ONE register (`firstHit`,
+  `packHalf2x16`: no register for it). Each lit step's albedo goes toward the fresh snow's by the cover x "Weather/Snow/Leaf
+  snow" (a rock column the full cover), after the faction tint: the voxel crowns' outside rule, every face up.
 * **The faction look** (the game's faction map, The faction map in [Terrain.md](Terrain.md)): the march tints each
   lit step's albedo by the map at the step's world x / z (binding 20, written with the set every frame), so the far
   trees agree with the tinted mesh tiers. Not baked into the colour map: the layer changes without a re-bake.

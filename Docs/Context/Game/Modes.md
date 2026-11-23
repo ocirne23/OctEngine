@@ -322,6 +322,19 @@ rolls (budget math plus glm RNG, main-thread — `linearRand` is not thread-safe
 `NpcSystem::spawnLooseUnits`, one `World::spawnBatch` fan-out per frame, with team/order fixup serial
 after the join.
 
+### The weather
+
+**`setCoopWeather`** (authority; "Game/Weather"), at every dusk and dawn of its OWN edge detector in `GameMatch::update`
+(`m_weatherNight`: independent of the waves, so a match with "Spawn enemies" off has weather too; -1 at the match start
+and after a load = the weather of the time it is then, so a loaded night rolls anew): a night brings a storm at
+"Storm chance" - a precipitation between "Storm min" and "Storm max" - and an air offset between "Night temperature
+min / max (C)" (-6 .. 0); the dawn sets both to 0, and so does the match's end. They go into the Synced "Weather" rows
+(`Globals::settings.weather.precipitation` / `temperatureOffset`), so every peer builds the same snowpack; only the
+authority rolls, so `glm::linearRand` is fine here. Whether it falls as rain or snow is the climate's: the renderer
+splits it by the air temperature (see [`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)), so a warm map gets
+rainy nights and a cold one snowy nights. "Co-op weather" off leaves the "Weather" rows as they are set. The weather is
+not in the save.
+
 ### The spawn blob
 
 Bodies land in a disc around `m_waveOrigin` (the spawn point), **sized ONCE per wave in `queueWave`

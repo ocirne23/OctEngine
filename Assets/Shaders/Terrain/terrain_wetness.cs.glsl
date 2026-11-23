@@ -29,6 +29,13 @@ layout (binding = 1, r16f) uniform image2DArray u_wet;
 #include "terrain_height.inc.glsl"
 #define UNDERWATER_OCEAN_BINDING 3
 #include "underwater_light.inc.glsl"
+// The snow site map (snow.inc.glsl): the weather's rain is sheltered like its snow - none under a roof, less under a crown.
+layout (binding = 5) uniform sampler2D u_snowSiteTop;
+layout (binding = 6) uniform sampler2D u_snowSitePass;
+#define SNOW_SITE_TOP_SAMPLER u_snowSiteTop
+#define SNOW_SITE_PASS_SAMPLER u_snowSitePass
+#define SNOW_SITE_ORIGIN u_snow_siteReadOrigin // before this frame's trace
+#include "snow.inc.glsl"
 
 // The inland water map (RiverSystem's bake, setRiverWaterMap): the river / lake surface Y per texel, RIVER_WATER_NONE
 // elsewhere. The terrain-data map's water channel is the sea's only.
@@ -99,6 +106,7 @@ void main()
     float dryMul = 1.0;   // warm-ground multiplier on the decay exponent
     float target = 0.0;   // wetting target under water this frame
     float soak = 1.0;     // accumulation rate scale (slope drain: water runs off a face before it soaks in)
+    float rain = u_terrain_wetRain; // the uniform rain + the weather's, where it falls as rain (below)
     if (terrainHeightMapPresent())
     {
         const vec4 d = terrainDataAt(worldXZ);
@@ -116,12 +124,24 @@ void main()
             const float tempC = terrainTemperatureAt(terrainClimateAt(worldXZ), d.x);
             dryMul = 1.0 + max(tempC - 15.0, 0.0) * u_terrainWater_dryTempSensitivity;
             decay = pow(decay, dryMul);
+            // The weather's precipitation wets the ground only where it falls as RAIN at this air temperature (snow
+            // builds the snowpack instead; sleet does both).
+            const float siteCatch = u_terrain_wetWeatherRain > 0.0 || u_snow_meltWet > 0.0
+                ? snowSiteCatch(vec3(worldXZ.x, d.x, worldXZ.y), 1.5, 2.5) : 1.0; // the map's 8 m height: a looser roof test
+            if (u_terrain_wetWeatherRain > 0.0)
+                rain += u_terrain_wetWeatherRain * smoothstep(u_weather_snowBelow, u_weather_rainAbove, tempC + u_weather_airOffset) * siteCatch;
+            // THE SNOW'S MELTWATER ("Weather/Snow/Melt wetting" x the pack state's meltwater here): the ground under the pack
+            // and where it melted out stays wet (the state's meltwater decays over "Meltwater drain" after the melt-out).
+            if (u_snow_meltWet > 0.0)
+                rain += u_snow_meltWet * snowPackCell(tempC, siteCatch).y;
         }
+        else
+            rain += u_terrain_wetWeatherRain; // under water: the temperature does not matter
 
         // Slope drain on the ACCUMULATION side: the terrain FS's drain factor (wetness^(1 + slope * drain)) divides
         // the wet-in and rain rates, so a cliff takes that much longer to soak. The slope is the map's height
         // gradient (8 m texels: cliffs and steep banks, not ledges). Only paid where something is accumulating.
-        if (target > 0.0 || u_terrain_wetRain > 0.0)
+        if (target > 0.0 || rain > 0.0)
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field
             const float gx = (terrainHeightAt(worldXZ + vec2(h, 0.0)) - terrainHeightAt(worldXZ - vec2(h, 0.0))) * (0.5 / h);
@@ -130,6 +150,8 @@ void main()
             soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWater_slopeDrain);
         }
     }
+    else
+        rain += u_terrain_wetWeatherRain; // no climate to split it by: all rain
 
     // Rivers and lakes: under their water plus a one-texel bank band, up to "Terrain/Rivers/Surface/Wetness"; the
     // diffusion spreads the fringe up the banks. Independent of the terrain-data map.
@@ -148,6 +170,6 @@ void main()
     // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt = rain - wet / dryTime,
     // so rain settles the ground at rain x dryTime.
     wet = max(wet * decay, min(wet + u_terrain_wetIn * soak, target));
-    wet += u_terrain_wetRain * soak; // rain
+    wet += rain * soak;
     imageStore(u_wet, ivec3(slot, writeLayer), vec4(clamp(wet, 0.0, 1.0)));
 }

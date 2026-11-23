@@ -27,6 +27,8 @@ public:
         Buffer lightTable; // device-local + host-visible (ReBAR): the CPU reads its 3-uint header back
         oc::span<RendererVKLayout::LightInfo> mappedLightInfos;
         oc::span<RendererVKLayout::FogVolumes> mappedFogVolumes; // single element: count header + array
+        Buffer snowDeformers; // the snow stamps (SnowDeformPipeline): read by device address
+        oc::span<RendererVKLayout::SnowDeformer> mappedSnowDeformers;
     };
 
     // onGpuIdle runs before the light grid buffers are re-created; onInvalidate re-records.
@@ -39,9 +41,10 @@ public:
     uint32 addLight(uint32 frameIdx, const RendererVKLayout::LightInfo& light);
     uint32 addFogVolume(uint32 frameIdx, const RendererVKLayout::FogVolumeInfo& fogVolume);
     uint32 claimDecal();
+    uint32 addSnowDeformer(uint32 frameIdx, const RendererVKLayout::SnowDeformer& deformer);
 
     // ---- Per-frame bookkeeping ----
-    void beginFrame() { m_lightCount = 0; m_fogVolumeCount = 0; m_decalCount = 0; }
+    void beginFrame() { m_lightCount = 0; m_fogVolumeCount = 0; m_decalCount = 0; m_snowDeformerCount = 0; }
     void settleCounts(); // clamps the lock-free claims back to their maxima (idempotent)
     // Publishes the fog count header and flushes both mapped buffers for this frame's GPU reads.
     void flushFrame(uint32 frameIdx);
@@ -49,6 +52,7 @@ public:
     uint32 getLightCount() const { return m_lightCount; }
     uint32 getFogVolumeCount() const { return m_fogVolumeCount; }
     uint32 getDecalCount() const { return m_decalCount; }
+    uint32 getSnowDeformerCount() const { return m_snowDeformerCount; }
     // The lights the grid build reads. Mapped (write-combined) memory: only READ on the overflow
     // re-walk, which is a non-goal path.
     oc::span<const RendererVKLayout::LightInfo> getLights(uint32 frameIdx) const;
@@ -76,6 +80,7 @@ private:
     uint32 m_lightCount = 0;
     uint32 m_fogVolumeCount = 0;
     uint32 m_decalCount = 0;
+    uint32 m_snowDeformerCount = 0;
 
     LightGridComputePipeline::Demand m_gridDemand; // what the job measured
     bool m_gridNeedsGrow = false;

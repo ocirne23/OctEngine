@@ -222,7 +222,10 @@ height blend in "Terrain/Textures", the displacement in "Terrain/Tessellation"; 
 [`Docs/Context/RendererVK/Terrain.md`](../RendererVK/Terrain.md)) + AO (the ARM's R; BC5). A set's `heightScale`
 (`TerrainTexSource`, default 1) scales its baked height about 0.5 - the relief of that set alone (Moss002: 0.25); the
 scale is part of the file name (`<stem>_hao_h25.dds`), so a change re-bakes. The ARM's metalness is dropped (terrain is
-never metallic). A packed output is stale when EITHER of its sources is newer. Compressed to `Assets/Local/TerrainTex`
+never metallic). A packed output is stale when EITHER of its sources is newer. The SNOW set is generated, not a photo:
+`SnowRelief::ensureSources` writes its PNG sources into `Local/TerrainTex/Gen/` at the start of the bake (once; see The look
+in [`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)), and its entry has `noArm` (no ARM source: the diffr alpha
+a constant 153, the hao AO 255 - the shaders take the snow state's roughness). Compressed to `Assets/Local/TerrainTex`
 — a background job kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextures` when it is
 enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
 shader falls back to flat colours until that bake finishes.** Each entry's climate box registers with

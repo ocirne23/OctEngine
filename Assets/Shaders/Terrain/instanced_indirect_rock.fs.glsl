@@ -43,11 +43,13 @@ layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion;
 // The sun shadow at the top of main, from the geometric normal (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
+#define LIT_SNOW // instanced_indirect_lit.inc.glsl: the snow's sun BRDF on the snow layer (snowLitSetup)
 
 #include "instanced_indirect_lit.inc.glsl"
 #define TERRAIN_WET_BINDING 18
 #include "terrain_wetness.inc.glsl"
 // No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax.
+#define SNOW_DEFORM_READ // snow.inc.glsl (through the splat): the tracks' slope in the snow shell's normal
 #include "terrain_splat.inc.glsl"
 #include "cactus.inc.glsl"
 #define FACTION_MAP_BINDING 24
@@ -145,6 +147,9 @@ void main()
 	TerrainSample surf = cactus ? cactusSurface(geoN) : own ? woodSurface(geoN)
 		: TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
+	float16_t snowShare = float16_t(0.0); // the snow layer's share (a linear blend here: no relief) and its glint density
+	float snowRho = 0.0;
+	float snowDepth = 0.0; // m: the pack on this face (the shell's lift, before the tracks)
 	if (u_terrain_splatBase >= 0.0 && u_terrain_numRock >= 1.0)
 	{
 		const int baseMat = int(u_terrain_splatBase);
@@ -159,14 +164,19 @@ void main()
 		const f16vec2 macro = terrainMacroAt(in_pos.xz);
 
 		// The coverages first (cheap), so a buried layer never samples.
-		// SNOW: the terrain's rule (cold x holds x humid) with this face's own slope - an underside holds none.
+		// SNOW: the terrain's rule (max(cold x humid, the snowpack on dry ground) x holds) with this face's own slope - an
+		// underside holds none.
 		float16_t snowW = float16_t(0.0);
 		if (u_terrain_hasSnow > 0.5)
 		{
 			const float cold = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, in_rockFields.y);
 			const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, 1.0 - clamp(geoN.y, 0.0, 1.0));
 			const float humid = smoothstep(0.0, u_terrainTex_snowAridity, in_rockFields.z);
-			snowW = float16_t(cold * holds * humid);
+			// The catch is the shell's (snowRockCatch: the looser shelter test), so a swollen top is white where it swells.
+			// The slope rule thins the pack's DEPTH, as on the ground and in the shell (the shell swells by depth x holds).
+			const float dry = smoothstep(-0.1, 0.2, in_pos.y - in_rockFields.w);
+			snowDepth = snowPackLive() ? snowPackDepth(in_rockFields.y, snowRockCatch(in_pos)) * holds * dry : 0.0;
+			snowW = float16_t(max(cold * humid * holds, snowCoverFromDepth(snowDepth)));
 		}
 
 		// THE CONTACT BAND: 1 at the ground, 0 "Contact height" above it. The ground height is the terrain-data map's
@@ -217,17 +227,35 @@ void main()
 		if (!own)
 			terrainApplyMacro(surf, macro);
 
-		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough).
+		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough): the relief, and the pack's state at
+		// the shell's catch (read again here, not held across the layers above: snow pixels only).
 		if (snowW > blendEps)
 		{
 			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
-			const TerrainSample snow = sampleTerrainXZ(snowMat, in_pos.xz * u_terrainTex_uvScaleSnow, geoNh);
+			const SnowState st = snowStateAt(in_rockFields.y, snowRockCatch(in_pos));
+			TerrainSample snow = snowSurfaceSample(snowMat, in_pos.xz, geoNh);
+			snow.albedo = f16vec3(snowAlbedo(st));
+			snow.rough = float16_t(snowAlpha(st));
 			if (snowW >= opaque)
 				surf = snow;
 			else
 				terrainMixInto(surf, snow, snowW);
+			snowShare = snowW;
+			snowRho = snowGlintDensity(st);
 		}
 		surf.normal = normalize(surf.normal);
+		// THE TRACKS in the shell (the VS dents it, snowDeformAt): their slope tilts the snow's normal, as on the ground - the
+		// fine texel's analytic slope, near the camera only (the VS's fade).
+		if (snowShare > blendEps && snowDepth > 0.0 && u_snow_deformPresent > 0.5)
+		{
+			const float fade = snowDeformFade(in_pos.xz);
+			if (fade > 0.0)
+			{
+				float drawn;
+				const vec2 track = snowDeformGradient(in_pos.xz, SNOW_DEFORM_FINE_TEXEL, snowDepth, drawn) * (fade * float(snowShare));
+				surf.normal = f16vec3(normalize(vec3(surf.normal) - float(surf.normal.y) * vec3(track.x, 0.0, track.y)));
+			}
+		}
 	}
 
 	// The foot of the rock sits in the corner it makes with the ground ("Contact darkening"); the shape's own crevices:
@@ -239,7 +267,8 @@ void main()
 	if (terrainWetPresent())
 	{
 		const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));
-		const float16_t wet = pow(float16_t(terrainWetnessAt(in_pos.xz)), one + slope * float16_t(u_terrainWater_slopeDrain));
+		// The wetness lies under the snow.
+		const float16_t wet = pow(float16_t(terrainWetnessAt(in_pos.xz)), one + slope * float16_t(u_terrainWater_slopeDrain)) * (one - snowShare);
 		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), smoothstep(float16_t(0.0), float16_t(u_terrainWater_darkeningThreshold), wet));
 		surf.rough = mix(surf.rough, float16_t(u_terrainWater_wetRoughness), smoothstep(float16_t(0.0), float16_t(u_terrainWater_roughnessThreshold), wet));
 	}
@@ -247,5 +276,7 @@ void main()
 	// V HERE, not at the top: its registers are then not live across the shadow and the splat.
 	const vec3 V = normalize(u_viewPos - in_pos);
 	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, u_terrain_factionSolidScale);
+	// THE SNOW BRDF's setup (snow.inc.glsl), at the top level of main: the derivatives in uniform flow.
+	snowLitSetup(in_pos.xz, surf.normal, geoNh, V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)));
 	out_color = vec4(computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao), 1.0);
 }

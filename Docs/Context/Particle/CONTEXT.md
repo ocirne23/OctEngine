@@ -226,7 +226,10 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
 **Built-in ambient effects** (`ParticleSystem::m_builtins`): `Rain`, `Snow`, `Dust`
 (`Effects/dust.pfx`, motes + fluff) and `Underwater`, each a `Particles/<Name>` toggle that
 creates/destroys one camera-following instance, with `<Name> count / size / alpha / size variation` multiplier tweaks
-applied on top of the `.pfx` every frame. The values live in `Globals::settings.particleSystem`
+applied on top of the `.pfx` every frame. **Rain and snow also follow THE WEATHER**
+(`Renderer::getWeatherAtCamera`: the precipitation split into snow and rain by the air at the camera - see
+[`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)): the volume exists while its share is at least 1 % and its
+count is x that share (`BuiltinEffect::amount`); the toggle forces it on at the full count. The values live in `Globals::settings.particleSystem`
 (`ParticleSystemSettings`, registered by `Settings::registerParticleSystem` in `Settings.ParticleSystem`). Count scales the rate and the volume FILL COUNT, live in both
 directions: up by spawning the deficit over the next frames, down through `ParticleEmitterGpu::cullParams`
 - a one-frame fraction the sim uses to recycle a random subset of that emitter's live particles, because

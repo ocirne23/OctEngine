@@ -51,6 +51,7 @@ layout (binding = 1, std430) readonly buffer InDrawInstances { TreeDrawInstance 
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
 #define LIT_EXTRA_LIGHT      // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
+#define LIT_SNOW             // instanced_indirect_lit.inc.glsl: the snow's sun BRDF on the snow layer (snowApply sets it up)
 #define LIT_NO_UNDERWATER    // instanced_indirect_lit.inc.glsl: a tree's leaves and bark are never under the water
 #define LIT_DIELECTRIC       // instanced_indirect_lit.inc.glsl: a tree material is never metal (no metal-roughness texture)
 float16_t g_specularF0 = float16_t(0.04);
@@ -73,6 +74,8 @@ bool g_leafNoRtao = false;
 #include "tree_leaf_sun.inc.glsl" // the leaves' sun self-shadow through the tree's own voxel grid
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the tree takes the faction look of the land it stands on
+#define SNOW_OBJECTS
+#include "snow.inc.glsl" // the snow on the up-facing bark and leaves (snowApply)
 
 // THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES looked up from their sun side: a thin
 // leaf facing AWAY from the sun is still lit through, and its transmission needs its real shadow (the facing reject
@@ -138,9 +141,9 @@ void main()
 	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES. A tree material has NO
 	// metal-roughness texture (Procedural createTreeMaterial): the metalness is the constant 0, so the lit core's
 	// specular colour is the one F0 scalar.
-	const float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
+	float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
 
-	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz,
+	f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz,
 		leaf ? 1.0 : u_terrain_factionSolidScale); // bark: the weaker tint, as the near bark's (instanced_indirect.fs.glsl)
 
 	// THE NORMAL MAP: Z rebuilt from X / Y for BOTH layouts, no branch on the format - the bark's two-channel BC5 has no Z
@@ -163,6 +166,24 @@ void main()
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
 	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+
+	// THE SNOW (snowApply), before the leaf terms (the transmission takes the snowy colour): the bark sheltered by the site
+	// map like any object; the leaves are their own roof, x "Weather/Snow/Leaf snow" (a crown sheds part of it). The glints
+	// on the bark only, anchored at its position before the wind's sway.
+	// THE LEAVES take the voxel crowns' OUTER-SHELL rule (the tiers agree across their crossfade): on the crown's outside every
+	// leaf counts as up-facing - a vertical leaf card too, whatever its normal - and deeper than "Weather/Snow/Voxel crown
+	// snow depth" (the voxel tier's baked interior at the leaf, treeLeafCrownInterior) none holds snow. Read only where snow
+	// can lie.
+	float16_t metalness = float16_t(0.0);
+	float leafShell = 1.0;
+	float upN = float(N.y);
+	if (leaf && u_snow_objects > 0.5 && u_terrain_hasSnow > 0.5)
+	{
+		const float interior = treeLeafCrownInterior(in_treeGrid, typeIdx);
+		leafShell = 1.0 - smoothstep(u_snow_voxelCrownDepth, u_snow_voxelCrownDepth + 0.15, interior);
+		upN = max(upN, leafShell * clamp(1.0 + 0.15 * upN, 0.0, 1.0));
+	}
+	snowApplyUp(pos, upN, N, materialColor, roughness, metalness, !leaf, leaf ? u_snow_leafSnow * leafShell : 1.0, V, (pos - in_windSway).xz, !leaf);
 
 	// The LEAF terms (MATERIAL_FLAG_LEAF). Formed BEFORE computeLitColor: its light loop is the shader's register peak.
 	// The transmitted sun goes in as g_litExtraLight, added to computeLitColor's sum before that loop (LIT_EXTRA_LIGHT):

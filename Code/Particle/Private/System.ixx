@@ -172,15 +172,19 @@ private:
     // The BUILT-IN ambient effects, each one camera-following volume .pfx instance created/destroyed in
     // update() by its "Particles/<Name>" toggle, with the "<Name> count / size / alpha" multipliers
     // applied on top of the .pfx (the emitter table is re-uploaded per frame, so they are live).
+    // Rain and snow also follow THE WEATHER at the camera (Renderer::getWeatherAtCamera): the volume is there while
+    // it falls, its count x how hard; the toggle forces it on at full count.
     struct BuiltinEffect
     {
         const ParticleBuiltinSettings& settings; // Globals::settings.particleSystem
         const char* path;
+        int weather = -1; // the getWeatherAtCamera component it follows (0 snow, 1 rain), -1 none
         ParticleEffect effect;
+        float amount = 0.0f; // this frame's count share (update)
     };
     BuiltinEffect m_builtins[4] = {
-        { Globals::settings.particleSystem.rain, "Effects/rain.pfx" },
-        { Globals::settings.particleSystem.snow, "Effects/snow.pfx" },
+        { Globals::settings.particleSystem.rain, "Effects/rain.pfx", 1 },
+        { Globals::settings.particleSystem.snow, "Effects/snow.pfx", 0 },
         { Globals::settings.particleSystem.dust, "Effects/dust.pfx" },
         { Globals::settings.particleSystem.underwater, "Effects/underwater.pfx" },
     };

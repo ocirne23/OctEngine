@@ -410,6 +410,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the canopy map (sky occlusion under the trees), the wind, tree wind, the far-tree volume |
 | ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
 | ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water, the rain occlusion map |
+| ↳ [Snow](../Docs/Context/RendererVK/Snow.md) | **The weather** (precipitation, the air now, snow or rain, at the camera), **the snowpack** (the CPU table per temperature x catch, its GPU copy, where the snow shows), **the depth** (the terrain VS lift, burying the grass and clutter), **the tracks** (the deformation maps: feet, walkers and impacts press the snow, the refill), **the site map** (the RT shelter: roofs, crowns, movers; its class and the invalidation), **the objects' snow layer** (`snowApply`), **the rock shell**, **the caps** (the snow's volume on object tops) and **the look** (the snow's state per pack cell, the generated relief, the snow sun BRDF, the glints, the tracks' shading, the melt into wetness) |
 | ↳ [Shaders](../Docs/Context/RendererVK/Shaders.md) | GLSL in `Assets/Shaders/`: folders, includes, compile, hoisted work, pipeline statistics (register counts), **half floats (fp16)** |
 | [Entity](../Docs/Context/Entity/CONTEXT.md) | The ECS: the source layout (public API split + its MSVC rules), entity layout + flags, contiguous tree allocation, CullMode, the parallel update pass, parallel spawning/destruction, World, assets + tint, script glue. **Read it first; the topic files below hold the rest** |
 | ↳ [SimLod](../Docs/Context/Entity/SimLod.md) | **SIM LOD**: focus, the visit set, tiers, the delta, dormant / wake edges |
@@ -488,7 +489,9 @@ code exists but has no component id, so a prefab that authors it gets a warning 
 `Component Animator` is for skinned meshes only.
 
 Entity-level `Enabled false` authors the disabled state; `Global true` (**root only, never
-inherited**) makes the World visit it every frame regardless of the SIM LOD.
+inherited**) makes the World visit it every frame regardless of the SIM LOD. `Mover true` (inherited by the subtree) marks
+what the game moves without a body or a unit component (the walkers, the airship): no shelter for the snow (see Movers in
+[`Docs/Context/Entity/CONTEXT.md`](../Docs/Context/Entity/CONTEXT.md)).
 `CullMode PerEntity|RootOnly|None` sets the spatial registration: `PerEntity` (default) — every
 entity culls itself; `RootOnly` — this entity culls for its whole subtree (one entry over all child
 render bounds, e.g. a box-limb character); `None` — no entry, never culled, always visited. See
@@ -603,7 +606,7 @@ Generated output — **never hand-edit.** SPIR-V plus shader dumps, the SPIR-V c
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` / `Rocks/Textures/` / `Clutter/Textures/` (the
 generated tree, shadow-mask, voxel, dead-wood and flower textures as uploaded, `.tex`), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/`
 (the generated meshes - both "The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
-splats, the `Diffusion/<seed>/` tile cache, `Sounds/game.snd` (the game's synthesized sounds, see The sound cache in
+splats (and `TerrainTex/Gen/`: the generated snow relief's PNG sources), the `Diffusion/<seed>/` tile cache, `Sounds/game.snd` (the game's synthesized sounds, see The sound cache in
 [`Docs/Context/Game/Sound.md`](../Docs/Context/Game/Sound.md)), `gamesave.txt` and `profile.txt`. **No `imgui.ini` and no Streamline log
 are written** (the dock layout is rebuilt in code; SL logs through its callback), and a folder is made only when
 something is written into it.

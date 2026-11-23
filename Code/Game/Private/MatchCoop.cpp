@@ -176,6 +176,34 @@ void GameMatch::tickWaves(float deltaSec)
     rollNextWave();
 }
 
+// THE WEATHER (co-op, authority; "Game/Weather"): a night may bring a storm - its precipitation and a colder (or warmer)
+// air go into the Synced "Weather" rows, so every peer builds the same snowpack - and the dawn clears both. Whether it
+// falls as rain or snow is the climate's (the renderer splits it by the air temperature). Only the authority rolls, so
+// the plain RNG is fine here (the values travel, the rolls do not).
+void GameMatch::setCoopWeather(bool night)
+{
+    if (!m_settings.coopWeather)
+        return;
+    WeatherSettings& w = Globals::settings.weather;
+    if (night)
+    {
+        const bool storm = glm::linearRand(0.0f, 1.0f) < glm::clamp(m_settings.stormChance, 0.0f, 1.0f);
+        const float lo = glm::clamp(glm::min(m_settings.stormMin, m_settings.stormMax), 0.0f, 1.0f);
+        const float hi = glm::clamp(glm::max(m_settings.stormMin, m_settings.stormMax), 0.0f, 1.0f);
+        w.precipitation = storm ? glm::linearRand(lo, hi) : 0.0f;
+        w.temperatureOffset = glm::linearRand(glm::min(m_settings.nightColdMin, m_settings.nightColdMax),
+                                              glm::max(m_settings.nightColdMin, m_settings.nightColdMax));
+        Log::info(oc::format("Co-op: the night's weather: precipitation {:.2f}, air {:+.1f} C", w.precipitation, w.temperatureOffset));
+    }
+    else
+    {
+        w.precipitation = 0.0f;
+        w.temperatureOffset = 0.0f;
+    }
+    Tweak::notifyChanged(w.precipitation);
+    Tweak::notifyChanged(w.temperatureOffset);
+}
+
 int GameMatch::waveLevel() const
 {
     return glm::max(m_night ? m_nightIndex - 1 : m_nightIndex, 0); // by day: the coming night

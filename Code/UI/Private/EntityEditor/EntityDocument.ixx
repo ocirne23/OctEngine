@@ -14,6 +14,7 @@ export struct EntityDocNode
     Transform transform;
     bool enabled = true;
     bool global = false; // root only
+    bool mover = false;  // "Mover true": the game moves it (no snow shelter); kept through a save
     EEntityCullMode cullMode = EEntityCullMode::PerEntity;
 
     // Non-empty: a `Prefab <name>` reference. It saves as the reference plus the overrides above; its components and children stay in the document so that the

@@ -350,6 +350,8 @@ static oc::string buildLayoutPreamble()
     def("RT_MASK_TREE_BARK", RT_MASK_TREE_BARK, "u");
     def("RT_CULL_SCENE", RT_CULL_SCENE, "u");
     def("RT_CULL_AO", RT_CULL_AO, "u");
+    def("RT_MASK_MOVER", RT_MASK_MOVER, "u");
+    def("RT_CULL_SNOW", RT_CULL_SNOW, "u");
     def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
     def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
     def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");
@@ -357,7 +359,7 @@ static oc::string buildLayoutPreamble()
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement
     def("PIPELINE_IDX_TERRAIN_LIT", (uint32)EPipelineIndex::TerrainLit, "u"); // the cull emits the terrain overlay for these
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");
-    def("PIPELINE_IDX_LIT_ROCK", (uint32)EPipelineIndex::LitRock, "u"); // the culls: a tree-set record that is a ROCK (LOD chain, no wind)
+    def("PIPELINE_IDX_LIT_ROCK", (uint32)EPipelineIndex::LitRock, "u"); // the culls: a ROCK (a tree-set one: LOD chain, no wind; any: the snow shell's pad)
     def("PIPELINE_IDX_LIT_TREE_VOXEL", (uint32)EPipelineIndex::LitTreeVoxel, "u"); // the main cull: the trees' voxel tier, its own list
     def("PIPELINE_TRANSPARENT_MASK", PIPELINE_TRANSPARENT_MASK, "u"); // the cull's sequence routing (Layout.ixx)
     def("MOTION_BLUR_TILE", MOTION_BLUR_TILE);
@@ -372,6 +374,35 @@ static oc::string buildLayoutPreamble()
     def("OCEAN_FOAM_LEVELS", OCEAN_FOAM_LEVELS);
     def("MAX_TERRAIN_SPLAT_MATERIALS", MAX_TERRAIN_SPLAT_MATERIALS);
     def("TERRAIN_WET_RES", TERRAIN_WET_RES);
+    def("SNOW_TABLE_TEMP_BINS", SNOW_TABLE_TEMP_BINS, "u");
+    def("SNOW_TABLE_CATCH_BINS", SNOW_TABLE_CATCH_BINS, "u");
+    def("SNOW_TABLE_TEMP_MIN", SNOW_TABLE_TEMP_MIN); // float literals (to_string keeps the decimal point)
+    def("SNOW_TABLE_TEMP_INV_STEP", (float)(SNOW_TABLE_TEMP_BINS - 1) / (SNOW_TABLE_TEMP_MAX - SNOW_TABLE_TEMP_MIN));
+    def("SNOW_TABLE_CATCH_INV_STEP", (float)(SNOW_TABLE_CATCH_BINS - 1) / SNOW_TABLE_CATCH_MAX);
+    def("SNOW_SITE_RES", SNOW_SITE_RES);
+    def("SNOW_SITE_TEXEL", SNOW_SITE_TEXEL);
+    def("SNOW_SITE_SLICES", SNOW_SITE_SLICES, "u");
+    def("SNOW_SITE_NO_TOP", SNOW_SITE_NO_TOP); // the cleared top: nothing over the ground
+    def("SNOW_SITE_FOLIAGE_RANGE", SNOW_SITE_FOLIAGE_RANGE);
+    def("SNOW_SITE_CLASS_MASK", SNOW_SITE_CLASS_MASK, "u");
+    def("SNOW_SITE_CLASS_OBJECT", SNOW_SITE_CLASS_OBJECT, "u");
+    def("SNOW_SITE_CLASS_ROCK", SNOW_SITE_CLASS_ROCK, "u");
+    def("SNOW_SITE_STALE", SNOW_SITE_STALE, "u");
+    def("SNOW_SITE_RETRACE", SNOW_SITE_RETRACE, "u");
+    def("RT_CUSTOM_TREE_BIT", 0x800000u, "u"); // gi_tlas_instances.cs.glsl's RT_CUSTOM_TREE: a tree-set piece's custom index bit
+    def("SNOW_CAP_TILE", SNOW_CAP_TILE);
+    def("SNOW_CAP_TILES", SNOW_CAP_TILES);
+    def("SNOW_CAP_APRON", SNOW_CAP_APRON);
+    def("SNOW_CAP_OBJECT", SNOW_CAP_OBJECT, "u");
+    def("SNOW_CAP_RAISED", SNOW_CAP_RAISED, "u");
+    def("SNOW_CAP_KEEP0", SNOW_CAP_KEEP0, "u");
+    def("SNOW_DEFORM_RES", SNOW_DEFORM_RES);
+    def("SNOW_DEFORM_FINE_TEXEL", SNOW_DEFORM_FINE_TEXEL);
+    def("SNOW_DEFORM_COARSE_TEXEL", SNOW_DEFORM_COARSE_TEXEL);
+    def("SNOW_DEFORM_MIN", SNOW_DEFORM_MIN);
+    def("SNOW_DEFORM_RANGE", SNOW_DEFORM_RANGE);
+    def("SNOW_DEFORM_UNDISTURBED", SNOW_DEFORM_UNDISTURBED, "u");
+    def("SNOW_DEFORMER_CRATER", SNOW_DEFORMER_CRATER, "u");
     def("GRASS_MAX_PATCHES", GRASS_MAX_PATCHES, "u");
     def("GRASS_RING_HALF", GRASS_RING_HALF); // array sizes and float factors: no "u"
     def("GRASS_RING_CELLS", GRASS_RING_CELLS);
@@ -430,6 +461,7 @@ static oc::string buildLayoutPreamble()
     def("PASS_MAIN", PASS_MAIN, "u");
     def("PASS_SHADOW", PASS_SHADOW, "u");
     def("PASS_GI", PASS_GI, "u");
+    def("PASS_FLAG_MOVER", PASS_FLAG_MOVER, "u");
     def("MAX_MESH_LODS", MAX_MESH_LODS);
     def("MAX_PARTICLES", MAX_PARTICLES, "u");
     def("MAX_PARTICLE_EMITTERS", MAX_PARTICLE_EMITTERS, "u");

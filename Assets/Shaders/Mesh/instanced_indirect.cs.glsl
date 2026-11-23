@@ -153,9 +153,12 @@ void cullInstance(InMeshInstance instance, vec4 instancePosScale, vec4 quat, uin
     const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     // The ocean mesh is undisplaced: pad by the measured wave displacement. Frustum test only.
+    // A rock's snow SHELL (instanced_indirect_rock.vs.glsl) rises by up to the deepest pack: pad by it (the LOD pick keeps `radius`).
     float cullRadius = radius;
     if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_OCEAN)
         cullRadius += u_ocean_displacementExtent;
+    else if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK) // the tree-set rocks and the stream ones (previews)
+        cullRadius += u_snow_rockShellPad;
 
     if (frustumCheck(centerPos, cullRadius))
     {

@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Transform;
 import Entity;
 import Physics;
+import RendererVK; // the walkers' tracks in the snow
 import Spatial;
 import :Structures;
 
@@ -1455,6 +1456,9 @@ void StructureSystem::tickCarriers(float deltaSec)
         }
         if (w.entity)
         {
+            constexpr float c_footRadius = 0.3f; // its track in the snow (the feet: the path's points)
+            if (const float moved = glm::distance(w.entity->pos, pos); moved > 0.0f && moved < 6.0f) // not a jump (a new leg, a placement)
+                Globals::rendererVK.addSnowTrack(w.entity->pos, pos, c_footRadius);
             w.entity->pos = pos;
             if (dir.x * dir.x + dir.z * dir.z > 1e-6f) // an entity's forward is -Z
                 w.entity->rot = glm::angleAxis(std::atan2(-dir.x, -dir.z), glm::vec3(0.0f, 1.0f, 0.0f));

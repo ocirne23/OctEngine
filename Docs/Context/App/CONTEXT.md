@@ -417,6 +417,8 @@ All share ONE spawn template (a lone Light component); the values live on the co
 * **Single player or server** it spawns and possesses a local upright `Entities/Debug/playerCapsule.pre`
   (`LockRotation`): camera-relative WASD velocity steering, Space jump off a ground raycast, LShift
   sprint (×2).
+* **The possessed player presses the snow** (`stampPlayerSnow`, either case: the units' track rule on its shape's
+  bottom; see The deformation in [`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)).
 * The camera follows the shown body pose. Eye height (0.55 m) and the sprint factor are constants in
   `InputControls`. The third-person distance starts at 3.5 m, and **the mouse wheel zooms it** (1..20 m, 10 % a notch);
   while possessed the fly camera ignores the wheel (its fly speed stays as it was); move speed, acceleration and jump speed are the

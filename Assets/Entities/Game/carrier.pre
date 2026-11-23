@@ -6,8 +6,10 @@
 # carries one on foot. The children after it are the CART of a transport trip (see below), then the munitions crystal.
 # CullMode RootOnly: the root culls for the head and the load. With an entry of its own, a load that was hidden when
 # the walker left its house would keep that entry at the house, and the pass would not visit it when it is shown.
+# Mover: the game moves it, so it is no shelter for the snow.
 Prefab gameCarrier
 	Global true
+	Mover true
 	CullMode RootOnly
 	Component Render
 		ObjectContainer baseshapes

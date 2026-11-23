@@ -64,6 +64,10 @@ private:
     static constexpr float playerThirdMinDistance = 1.0f;
     static constexpr float playerThirdMaxDistance = 20.0f;
     static constexpr float playerSprintMult = 2.0f;   // LShift multiplier on Move speed
+    // The possessed player's track in the snow (stampPlayerSnow): its feet at the last stamp, and the time it has stood.
+    glm::vec3 playerSnowFeet = glm::vec3(0.0f);
+    bool playerHasSnowFeet = false;
+    float playerSnowIdle = 0.0f;
 
     oc::shared_ptr<EntitySpawnTemplate> lightTmpl; // built once, see lightTemplate()
 
@@ -191,6 +195,70 @@ public:
             default: break;
             }
         return d * getPhysicsShapeScale(entity);
+    }
+
+    // The radius of the shape's footprint, world units (a capsule's or a sphere's radius, a box's smaller half width).
+    static float shapeFootRadius(const Entity* entity)
+    {
+        const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(entity);
+        float r = 0.3f;
+        if (si)
+            switch (si->shape.type)
+            {
+            case EPhysicsShapeType::Box:     r = glm::min(si->shape.halfExtents.x, si->shape.halfExtents.z); break;
+            case EPhysicsShapeType::Sphere:
+            case EPhysicsShapeType::Capsule: r = si->shape.radius; break;
+            default: break;
+            }
+        return r * getPhysicsShapeScale(entity);
+    }
+
+    // THE POSSESSED PLAYER'S TRACK IN THE SNOW (Renderer::addSnowTrack), the units' rule (GameUnitComponent::tickSnow): the
+    // shape's bottom swept from the last stamp to here once it moved 5 cm, a fresh dent after a jump of over 6 m (a
+    // respawn, a correction), and a re-press once a second while it stands (falling snow would bury the dent). The
+    // renderer drops it where no snow lies, far away, or with the feet in the air (a jump). Visual only: on a client the
+    // locally-owned player, so the other peers' players press no snow here.
+    // main calls it AFTER joinBeginFrameJob: the begin-frame job resets the frame's stamp list (FrameSubmission::
+    // beginFrame), so a stamp added in update() - before the kick - was lost. After physics.update too: this frame's feet.
+    void stampPlayerSnow(float deltaSec)
+    {
+        if (gameMode || !playerControl)
+            return;
+        Entity* player = Globals::networkManager.role() == ENetRole::Client ? findLocalNetPlayer() : playerEntity.get();
+        PhysicsComponent* pc = player ? getComponent<PhysicsComponent>(player) : nullptr;
+        if (!pc || !pc->body.isValid())
+        {
+            playerHasSnowFeet = false;
+            return;
+        }
+        const glm::vec3 feet = pc->body.getPosition() - glm::vec3(0.0f, shapeBottomDistance(player), 0.0f);
+        const float radius = 0.8f * shapeFootRadius(player);
+        Renderer& renderer = Globals::rendererVK;
+        if (playerHasSnowFeet)
+        {
+            const glm::vec3 step = feet - playerSnowFeet;
+            const float stepSq = glm::dot(step, step);
+            constexpr float c_minStep = 0.05f; // m
+            if (stepSq < c_minStep * c_minStep)
+            {
+                constexpr float c_restampSeconds = 1.0f;
+                playerSnowIdle += deltaSec;
+                if (playerSnowIdle >= c_restampSeconds)
+                {
+                    playerSnowIdle -= c_restampSeconds * std::floor(playerSnowIdle / c_restampSeconds);
+                    renderer.addSnowTrack(playerSnowFeet, playerSnowFeet, radius);
+                }
+                return;
+            }
+            constexpr float c_maxStep = 6.0f; // m: farther is a jump, not a walk
+            if (stepSq > c_maxStep * c_maxStep)
+                renderer.addSnowTrack(feet, feet, radius);
+            else
+                renderer.addSnowTrack(playerSnowFeet, feet, radius);
+        }
+        playerSnowFeet = feet;
+        playerHasSnowFeet = true;
+        playerSnowIdle = 0.0f;
     }
 
     // The client's own player entity: the ONE locally-owned primary (proximity-transferred objects
@@ -342,6 +410,7 @@ public:
                 world.addRootEntity(playerEntity);
             playerLocomotion.reset(glm::atan(dir.x, dir.z));
             playerJumpWasDown = true; // swallow a Space held through the toggle
+            playerHasSnowFeet = false; // a new track
         }
         else if (playerEntity)
         {

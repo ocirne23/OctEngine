@@ -3,6 +3,7 @@
 # Models/emplacementParts.obj's `Arrow` (nose at -Z, an entity's forward), shown at 0.9x (0.8 m long).
 Prefab gameArrow
 	Global true
+	Mover true
 	CullMode None
 	Component Render
 		ObjectContainer emplacementParts

@@ -47,6 +47,9 @@ public:
     // push a whole list blindly - the ocean marks its sectors PASS_MAIN (or 0 when dry). Set on main; read by the pushing job.
     void setPassMask(uint32 passMask) { m_passMask = uint8(passMask); }
     uint32 getPassMask() const { return m_passMask; }
+    // A MOVER (units, players, shots, dynamic bodies): every ray sees it but the snow site map's (RT_MASK_MOVER) - a passing
+    // unit is no roof. Rides every push, whatever pass mask the pusher gives. Set once at spawn (Entity), before the first push.
+    void setMover(bool mover) { m_pushFlags = mover ? uint8(RendererVKLayout::PASS_FLAG_MOVER) : uint8(0); }
 
     // True only for nodes spawned via ObjectContainer::spawnSkinnedNode. Pass the node to Renderer::setSkinningPalette each frame with the AnimationPlayer's
     // bone palette (the palette handle lives in the node's skinned bundle).

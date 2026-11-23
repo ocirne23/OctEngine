@@ -223,6 +223,7 @@ private:
     bool isSheltered(Tick& t);
     void tickDeathCue(const Entity& entity);                  // every role, before the client gate
     void tickModel(Entity& entity, float deltaSec);           // every role too: works off the position delta
+    void tickSnow(const Entity& entity, float deltaSec);      // every role too: the feet's track in the snow (visual only)
     void applyHeightLimit(Tick& t);
     bool applyDamageAndHeal(Tick& t); // false = the unit died this tick
     void resolveWalkTarget(Tick& t); // route, then the locked order, then the Nav fields, then the local search
@@ -248,6 +249,9 @@ private:
     glm::vec2 m_modelForward{ 1.0f, 0.0f }; // of m_modelYaw: the aligned test needs no trig
     bool m_hasModelPos = false;
     bool m_modelResting = false; // standing, and the model reported its rest pose: tickModel returns at the top
+    bool m_hasSnowFeet = false;  // tickSnow: m_snowFeet holds the feet of the last stamp
+    glm::vec3 m_snowFeet{ 0.0f };
+    float m_snowIdle = 0.0f;     // tickSnow: s standing since the last re-stamp
     uint32 m_rng = 0;           // per-unit LCG, worker-safe
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints)
     // ABSOLUTE sim time, not a countdown: a throttled tick's delta is clipped by "Max catch-up",

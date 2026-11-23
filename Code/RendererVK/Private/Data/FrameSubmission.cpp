@@ -20,6 +20,11 @@ void FrameSubmission::initialize(oc::function<void()> onGpuIdle, oc::function<vo
             vk::MemoryPropertyFlagBits::eHostVisible, false, "FogVolumes", BufferHostAccess::eSequentialWrite);
         s.mappedFogVolumes = s.fogVolumes.mapMemory<RendererVKLayout::FogVolumes>();
         s.mappedFogVolumes.data()->count = 0;
+
+        s.snowDeformers.initialize(sizeof(RendererVKLayout::SnowDeformer) * RendererVKLayout::MAX_SNOW_DEFORMERS,
+            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "SnowDeformers", BufferHostAccess::eSequentialWrite);
+        s.mappedSnowDeformers = s.snowDeformers.mapMemory<RendererVKLayout::SnowDeformer>();
     }
     createLightGridBuffers();
 }
@@ -72,16 +77,28 @@ uint32 FrameSubmission::claimDecal()
     return idx < RendererVKLayout::MAX_DECALS ? idx : UINT32_MAX;
 }
 
+uint32 FrameSubmission::addSnowDeformer(uint32 frameIdx, const RendererVKLayout::SnowDeformer& deformer)
+{
+    const uint32 idx = oc::atomic_ref<uint32>(m_snowDeformerCount).fetch_add(1);
+    if (idx >= RendererVKLayout::MAX_SNOW_DEFORMERS)
+        return UINT32_MAX;
+    m_slots[frameIdx].mappedSnowDeformers[idx] = deformer;
+    return idx;
+}
+
 void FrameSubmission::settleCounts()
 {
     m_lightCount = oc::min(m_lightCount, uint32(RendererVKLayout::MAX_LIGHTS));
     m_fogVolumeCount = oc::min(m_fogVolumeCount, uint32(RendererVKLayout::MAX_FOG_VOLUMES));
     m_decalCount = oc::min(m_decalCount, uint32(RendererVKLayout::MAX_DECALS));
+    m_snowDeformerCount = oc::min(m_snowDeformerCount, uint32(RendererVKLayout::MAX_SNOW_DEFORMERS));
 }
 
 void FrameSubmission::flushFrame(uint32 frameIdx)
 {
     FrameSlot& s = m_slots[frameIdx];
+    if (m_snowDeformerCount > 0)
+        s.snowDeformers.flushMappedMemory(m_snowDeformerCount * sizeof(RendererVKLayout::SnowDeformer));
     s.lightInfos.flushMappedMemory(m_lightCount * sizeof(RendererVKLayout::LightInfo));
     s.mappedFogVolumes.data()->count = m_fogVolumeCount;
     s.fogVolumes.flushMappedMemory(RendererVKLayout::FOG_VOLUME_HEADER_SIZE + m_fogVolumeCount * sizeof(RendererVKLayout::FogVolumeInfo));

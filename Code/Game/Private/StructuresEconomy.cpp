@@ -786,6 +786,8 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
 {
     if (rubble && !s.state->rubble)
         GameSound::post(EGameSound::StructureCollapse, s.entity->pos, 1.0f, (float)footprintCellsOf(s.type));
+    if ((s.state->rubble != 0) != rubble)
+        invalidateSnowSite(s, /*hide*/ rubble); // the roof goes (its caps at once) or comes back
     s.state->rubble = rubble ? 1 : 0;
     s.rubbleUnsafe = rubble; // a fresh pile is unsafe until refreshRubbleSafety looks (its destroyer stands next to it)
     applyStructureTint(s);
@@ -808,6 +810,8 @@ void StructureSystem::setRubble(const Ref& s, bool rubble)
         s.rubbleVisual = Globals::world.spawnAssetFile(isCableType(s.type) ? "Entities/Game/rubbleRoad.pre"
             : cells <= 1 ? "Entities/Game/rubble1.pre" : "Entities/Game/rubble2.pre",
             Transform(ground, cells >= 3 ? 1.5f : 1.0f, s.entity->rot), true);
+        if (s.rubbleVisual && s.onShip)
+            markMoverTree(s.rubbleVisual.get()); // the ship carries it: no shelter for the snow
         if (s.rubbleVisual)
             Globals::world.addRootEntity(s.rubbleVisual);
     }

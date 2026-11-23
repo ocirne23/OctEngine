@@ -597,6 +597,7 @@ private:
     EPvpMap m_pvpMap = EPvpMap::Lane; // PvP arena (setPvpMap; clients follow GMp)
     glm::vec2 m_pvpInterior{ 65.0f, 20.0f }; // the arena's open half-extents (placement bounds)
     void tickWaves(float deltaSec);  // authority: the wave clock
+    void setCoopWeather(bool night); // authority, at dusk / dawn (update's m_weatherNight): the night's weather into the Synced "Weather" rows
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: the wave's spawns on a per-frame budget
     // THE RAIDERS (authority, ~1 s): an idle demon whose nearest building is past its target search gets a new march order
@@ -619,6 +620,7 @@ private:
     // THE LIGHT RULES: the waves come at night only - the first at dusk, then "Waves per night" spread over the night -
     // sized and gated by the NIGHT number; daylight burns the AI team and scales the solar yield.
     bool m_night = false;        // the sun is down (the wave clock's edge detector), saved
+    int m_weatherNight = -1;     // the co-op weather's own edge detector (1 night, 0 day, -1 = set it at the next update)
     bool m_timeOfDayEdited = false; // the "Time of day (h)" tweak was set by hand since the last tickWaves (a Tweak::onChange listener): no night is counted for it
     int m_nightIndex = 0;        // nights started so far, saved
     int m_nightWave = 0;         // waves launched this night (the night's build-up)

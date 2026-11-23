@@ -48,6 +48,15 @@ export struct GameMatchSettings
     // The fields do not push a demon, so the demons are slower: everywhere, and more inside a player field.
     float demonSpeed = 0.7f;          // x every demon's MoveSpeed
     float demonFieldSpeed = 0.5f;     // x that again inside a player field
+    // THE WEATHER (co-op): at each dusk the authority rolls the night's weather into the Synced "Weather" rows (the
+    // precipitation and the temperature offset), and clears it at dawn; rain or snow follows the climate. Off: the
+    // "Weather" rows stay as they are set.
+    bool coopWeather = true;
+    float stormChance = 0.5f;         // the chance that a night brings precipitation
+    float stormMin = 0.3f;            // its precipitation, at random between these
+    float stormMax = 1.0f;
+    float nightColdMin = -6.0f;       // C: the night's temperature offset, at random between these
+    float nightColdMax = 0.0f;
     // THE BEACON (the sandbox world): the Base's power holds a hole in the clouds (the clouds' vortex, centred on the
     // Base) and sends a beam up; at night the cloud coverage rises to the Shroud's.
     bool beaconEnabled = true;

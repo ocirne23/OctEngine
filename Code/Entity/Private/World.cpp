@@ -1472,6 +1472,7 @@ void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     tmpl.displayName = nameNode ? nameNode->asString() : node.asString();
     if (const AssetNode* n = node.find("Enabled")) tmpl.enabled = n->asBool();
     if (const AssetNode* n = node.find("Global")) tmpl.global = n->asBool();
+    if (const AssetNode* n = node.find("Mover")) tmpl.mover = n->asBool();
     if (const AssetNode* n = node.find("CullMode"))
     {
         const oc::string& mode = n->asString();

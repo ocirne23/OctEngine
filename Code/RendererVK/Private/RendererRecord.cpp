@@ -132,6 +132,9 @@ void RendererState::recordTerrainWetness(uint32 frameIdx)
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
         .riverWaterMap = &m_riverWaterMaps[frameIdx],
+        .snowSiteTopView = m_snowSitePipeline.topView(),
+        .snowSitePassView = m_snowSitePipeline.passView(),
+        .snowSiteSampler = m_snowSitePipeline.sampler(),
     };
     m_terrainWetnessPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -149,6 +152,9 @@ void RendererState::recordGrassCull(uint32 frameIdx)
         .vertexBuffer = &Globals::meshDataManager.getVertexBuffer(),
         .clutterFrame = &m_clutterPipeline.frameBuffer(frameIdx),
         .noiseView = Globals::textureManager.getViewForDescriptor(m_terrain.getNoiseTexture()),
+        .snowSiteTopView = m_snowSitePipeline.topView(),
+        .snowSitePassView = m_snowSitePipeline.passView(),
+        .snowSiteSampler = m_snowSitePipeline.sampler(),
     };
     m_grassPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -274,6 +280,129 @@ void RendererState::recordGrassNearShadow(uint32 frameIdx)
     cb.end();
 }
 
+// After the GI step (this frame's TLAS is built and visible to compute), both primaries, on the site map's tick only: the
+// snow site map (Snow.md). The scene's readers sample it after this; the pre-scene ones (the culls, the wetness) read the
+// window it held before (u_snow_siteReadOrigin).
+void RendererState::recordSnowSite(vk::CommandBuffer primary, uint32 frameIdx)
+{
+    // THE INVALIDATIONS due now (invalidateSnowSite), into the class before the trace; while the map is off they go (the
+    // next activation traces everything).
+    m_snowSiteDue.clear();
+    {
+        const double now = Globals::time.getElapsedSec();
+        const std::lock_guard<std::mutex> lock(m_snowSiteMutex);
+        for (size_t i = 0; i < m_snowSitePending.size();)
+        {
+            const SnowSiteInvalidation& r = m_snowSitePending[i];
+            if (m_snowSiteTick.active && r.due > now)
+            {
+                ++i;
+                continue;
+            }
+            // Clipped to the window the map holds (a slot outside it is another place; what scrolls in is traced fresh).
+            const glm::ivec2 winLo = m_snowSitePipeline.committedOrigin();
+            const glm::ivec2 winHi = winLo + glm::ivec2((int)RendererVKLayout::SNOW_SITE_RES) - 1;
+            const float texel = RendererVKLayout::SNOW_SITE_TEXEL;
+            const glm::ivec2 lo = glm::max(glm::ivec2(glm::floor(r.minXZ / texel)), winLo);
+            const glm::ivec2 hi = glm::min(glm::ivec2(glm::floor(r.maxXZ / texel)), winHi);
+            if (m_snowSiteTick.active && m_snowSitePipeline.hasTrace() && lo.x <= hi.x && lo.y <= hi.y)
+            {
+                SnowSitePipeline::Invalidation rect{ lo, hi - lo + 1, r.bits };
+                if (m_snowSiteDue.size() < RendererVKLayout::MAX_SNOW_SITE_INVALIDATIONS)
+                    m_snowSiteDue.push_back(rect);
+                else // the union with the last: never more dispatches than the cap
+                {
+                    SnowSitePipeline::Invalidation& last = m_snowSiteDue.back();
+                    const glm::ivec2 lastHi = last.min + last.size;
+                    last.min = glm::min(last.min, rect.min);
+                    last.size = glm::max(lastHi, rect.min + rect.size) - last.min;
+                    last.bits |= rect.bits;
+                }
+            }
+            m_snowSitePending[i] = m_snowSitePending.back();
+            m_snowSitePending.pop_back();
+        }
+    }
+    if (!m_snowSiteDue.empty())
+    {
+        m_gpuProfiler.beginScope(primary, "Snow site invalidate");
+        m_snowSitePipeline.recordInvalidate(primary, m_snowSiteDue);
+        m_gpuProfiler.endScope(primary);
+    }
+
+    if (!m_snowSiteTick.tracing || !m_snowSitePipeline.isBuilt())
+        return;
+    const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx);
+    if (!tlas)
+        return;
+    const SnowSitePipeline::RecordParams params{
+        .tlas = tlas,
+        .terrainRay = m_terrainRayFrames[frameIdx].getDeviceAddress(),
+        .vertices = Globals::meshDataManager.getVertexBuffer().getBuffer(),
+        .indices = Globals::meshDataManager.getIndexBuffer().getBuffer(),
+        .meshInfos = m_meshInfos.getBuffer().getBuffer(),
+        .instances = m_instances.slot(frameIdx).meshInstances.getBuffer(),
+        .materials = m_materials.getBuffer().getBuffer(),
+        .ubo = m_perFrameData[frameIdx].ubo.getBuffer(),
+    };
+    m_gpuProfiler.beginScope(primary, "Snow site");
+    m_snowSitePipeline.record(primary, frameIdx, m_snowSiteTick, params); // commits the traced window (a skipped tick retries)
+    m_gpuProfiler.endScope(primary);
+}
+
+bool RendererState::snowCapsLive() const
+{
+    const WeatherSettings& w = Globals::settings.weather;
+    return m_sceneViewCount == 1 && w.caps && w.snowDepth && snowActive() && m_snowSiteTick.active && m_snowSitePipeline.hasTrace();
+}
+
+// Desktop, right after the site trace (Snow.md "The caps"): the prepare over the window the site map HOLDS (its last
+// recorded trace), or empty draws.
+void RendererState::recordSnowCaps(vk::CommandBuffer primary, uint32 frameIdx)
+{
+    if (!snowCapsLive())
+    {
+        m_snowCapPipeline.recordClear(primary, frameIdx);
+        return;
+    }
+    const SnowCapPipeline::RecordParams params{
+        .ubo = m_perFrameData[frameIdx].ubo.getBuffer(),
+        .terrainView = m_terrain.getHeightMap().getView(),
+        .terrainSampler = m_terrain.getHeightMap().getSampler(),
+        .siteTopView = m_snowSitePipeline.topView(),
+        .sitePassView = m_snowSitePipeline.passView(),
+        .siteClassView = m_snowSitePipeline.classView(),
+        .siteSampler = m_snowSitePipeline.sampler(),
+        .deformCoarseView = m_snowDeformPipeline.coarseSampledView(),
+        .siteOrigin = m_snowSitePipeline.committedOrigin(),
+    };
+    m_gpuProfiler.beginScope(primary, "Snow caps");
+    m_snowCapPipeline.record(primary, frameIdx, params);
+    m_gpuProfiler.endScope(primary);
+}
+
+// Inline in the primary before the culls and the scene (Snow.md "The deformation"): the stamps the frame claimed
+// (addSnowTrack / addSnowCrater, settled by the submission flush) and, on a window step, the maintenance. The site map is
+// the one before this frame's trace (it runs after the GI step).
+void RendererState::recordSnowDeform(vk::CommandBuffer primary, uint32 frameIdx)
+{
+    if (!m_snowDeformTick.active)
+        return;
+    const SnowDeformPipeline::RecordParams params{
+        .ubo = m_perFrameData[frameIdx].ubo.getBuffer(),
+        .terrainView = m_terrain.getHeightMap().getView(),
+        .terrainSampler = m_terrain.getHeightMap().getSampler(),
+        .siteTopView = m_snowSitePipeline.topView(),
+        .sitePassView = m_snowSitePipeline.passView(),
+        .siteSampler = m_snowSitePipeline.sampler(),
+        .deformers = m_submission.slot(frameIdx).snowDeformers.getDeviceAddress(),
+        .deformerCount = m_submission.getSnowDeformerCount(),
+    };
+    m_gpuProfiler.beginScope(primary, "Snow tracks");
+    m_snowDeformPipeline.record(primary, frameIdx, m_snowDeformTick, params); // commits the windows
+    m_gpuProfiler.endScope(primary);
+}
+
 // After the GI step (this frame's TLAS is built and visible to compute), both primaries: the weather volume's rain
 // occlusion trace - only while the UBO this frame was built with asks for it (buildUboRainOcclusion), so the trace
 // and the sim's shelter test always agree - then the particle sim, which reads THIS frame's map.
@@ -372,6 +501,7 @@ void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, ui
     grassDraw.simpleFirst = grassRingLayout().firstSimpleLevel * RendererVKLayout::GRASS_RING_CELLS * RendererVKLayout::GRASS_RING_CELLS;
     const ClutterPipeline::Draw clutterDraw = m_clutterPipeline.getDraw(frameIdx);
     const TreeVoxelFarPipeline::Draw treeVoxelFarDraw = m_treeVoxelFar.getDraw(frameIdx);
+    const SnowCapPipeline::Draw snowCapDraw = m_snowCapPipeline.getDraw(frameIdx);
     StaticMeshGraphicsPipeline::RecordParams drawParams
     {
         .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
@@ -408,6 +538,7 @@ void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, ui
         .grass = m_sceneViewCount == 1 ? &grassDraw : nullptr, // desktop only (the count is 0 while grass is off)
         .clutter = m_sceneViewCount == 1 ? &clutterDraw : nullptr, // the same (its draws are empty while it is off)
         .treeVoxelFar = m_sceneViewCount == 1 ? &treeVoxelFarDraw : nullptr, // the same
+        .snowCaps = m_sceneViewCount == 1 ? &snowCapDraw : nullptr,          // the same (no draws while the caps are off)
         .voxelHitView = frameData.sceneColor.getVoxelHitView(),
         .voxelHitSampler = frameData.sceneColor.getDepthSampler(), // nearest: an integer target
     };
@@ -1645,6 +1776,8 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
     // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
     if (Globals::settings.terrain.wetEnabled && m_terrain.isWetnessTicking())
         executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
+    // The snow's tracks: this frame's stamps (and the windows' maintenance on a step), before every reader.
+    recordSnowDeform(primary, frameIdx);
     // Grass patch cull (desktop): the draws "Static meshes" executes. Off, the count is cleared instead, so the
     // recorded draw draws nothing.
     if (m_sceneViewCount == 1)
@@ -1710,6 +1843,7 @@ void RendererState::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffe
     executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
     executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
+    recordSnowSite(vkCommandBuffer, frameIdx);           // traces this frame's TLAS (on its tick)
     recordRainAndParticleSim(vkCommandBuffer, frameIdx); // traces this frame's TLAS
     if (m_fogParams.enabled)
         executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
@@ -1840,6 +1974,8 @@ void RendererState::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCo
     executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
     executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
+    recordSnowSite(vkCommandBuffer, frameIdx);           // traces this frame's TLAS (on its tick)
+    recordSnowCaps(vkCommandBuffer, frameIdx);           // reads the map it holds now
     recordRainAndParticleSim(vkCommandBuffer, frameIdx); // traces this frame's TLAS
     // Fog scatter/integrate compute (the integrated grid was cleared to "no fog" at init when disabled).
     if (m_fogParams.enabled)

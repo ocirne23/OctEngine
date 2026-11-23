@@ -64,7 +64,8 @@ export struct GameProjectileComponent
 
     // THE IMPACT LIGHT of an ImpactPuff / FireImpact shot: it is gone at its impact, so `destroy` records the place (a small
     // ring under a mutex: destroy may run off the main thread) and the game draws them every frame with this - a bright
-    // point light that fades out. Main thread, where a light record survives the frame (GameMatch::update).
+    // point light that fades out. Main thread, where a light record survives the frame (GameMatch::update). Every impact's
+    // CRATER in the snow goes to the renderer here too (the same window rule).
     static void drawImpactLights();
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);

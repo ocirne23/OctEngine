@@ -78,11 +78,11 @@ int StructureSystem::spawnShipStructure(uint32 id, EStructureType type, const gl
 {
     const glm::vec3 pos = shipToWorld(local + glm::vec3(0.0f, spawnHeightOf(type), 0.0f));
     const glm::quat rot = m_shipRot * glm::angleAxis((float)(turn & 7) * glm::quarter_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
-    const int index = spawnStructure(id, type, pos, rot, team, built, yield, /*insert*/ m_shipJoined);
+    const int index = spawnStructure(id, type, pos, rot, team, built, yield, /*insert*/ m_shipJoined, /*onShip*/ true);
     if (index < 0)
         return -1;
     Ref& ref = m_frame[index];
-    ref.onShip = true;
+    markMoverTree(ref.entity); // it flies with the ship: no shelter for the snow
     ref.shipLocal = local;
     ref.shipTurn = (int8)(turn & 7);
     ref.authoredInvulnerable = ref.state->invulnerable != 0;

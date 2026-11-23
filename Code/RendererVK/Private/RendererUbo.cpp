@@ -101,8 +101,14 @@ namespace
     bool cloudUpperOn(const CloudParams& c) { return c.upperEnabled; } // density and coverage are >= 0.01 (the tweak mins)
     float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainReachBottom(c), cloudUpperBottom(c)) : cloudMainReachBottom(c); }
     float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainReachTop(c), cloudUpperTop(c)) : cloudMainReachTop(c); }
-    // The coverage in use: "Coverage" + its day variation, or the game's override (CloudParams::coverageNow).
-    float cloudCoverage(const CloudParams& c) { return c.coverageNow(Globals::settings.sky); }
+    // The coverage in use: "Coverage" + its day variation, or the game's override (CloudParams::coverageNow), at least
+    // "Weather/Storm cloud cover" x the precipitation (rain and snow come from a closed sky).
+    float cloudCoverage(const CloudParams& c)
+    {
+        const WeatherSettings& w = Globals::settings.weather;
+        const float storm = glm::clamp(w.precipitation, 0.0f, 1.0f) * glm::clamp(w.stormCloudCover, 0.0f, 1.0f);
+        return glm::max(c.coverageNow(Globals::settings.sky), storm);
+    }
     // The vortex's radii (m, the tweak mins): the reach always holds the eye, the eyewall and room for the bands.
     float cloudVortexEye(const CloudParams& c) { return glm::max(c.vortexEyeRadiusKm, 0.05f) * 1000.0f; }
     // The eye as the shader cuts it: x the LIVE "Eye size scale" (the hole grows), 10 m at least. The outer radius keeps the unscaled eye.
@@ -482,6 +488,69 @@ void RendererState::advanceSunCycle()
         }
         s.sunDirection = s.cycleSunDirection();
     }
+}
+
+// THE WEATHER ("Weather"; Snow.md), after the sun: the air on the climate now (the offset + the day-night swing, warmest
+// with the sun overhead), the snowpack stepped over the SIM delta x "Time scale" (the pause holds it, like the sun), and
+// what falls at the camera. The pack keeps integrating while "Snow/Enabled" is off, so turning it on shows the snow of
+// the weather so far.
+void RendererState::advanceWeather()
+{
+    WeatherSettings& w = Globals::settings.weather;
+    if (w.clearSnow)
+    {
+        m_snowPack.clear(w.freshGrain);
+        m_snowfallTotal = 0.0;
+        m_snowClearRequested = true; // the tracks go with the snow (the next deformation tick)
+        w.clearSnow = false;
+        Tweak::notifyChanged(w.clearSnow);
+    }
+    const float sunHeight = m_skyParams.sunHeight();
+    m_weatherAirOffset = w.temperatureOffset + w.dayNightSwing * glm::clamp(2.0f * sunHeight, -1.0f, 1.0f);
+    const float precipitation = glm::clamp(w.precipitation, 0.0f, 1.0f);
+    const float rainAbove = glm::max(w.rainAbove, w.snowBelow + 0.1f);
+
+    SnowPack::Step step;
+    step.gameHours = glm::min(Globals::time.getSimDeltaSec(), 0.25) * (double)glm::max(w.timeScale, 0.0f) / 3600.0;
+    step.precipitation = precipitation;
+    step.airOffset = m_weatherAirOffset;
+    step.snowBelow = w.snowBelow;
+    step.rainAbove = rainAbove;
+    step.snowfallRate = glm::max(w.snowfallRate, 0.0f);
+    step.meltRate = glm::max(w.meltRate, 0.0f);
+    step.sunMelt = glm::max(w.sunMelt, 0.0f);
+    step.sunHeight = sunHeight;
+    step.settlingPerHour = -std::log(1.0f - glm::clamp(w.settling, 0.0f, 0.99f)) / 24.0f; // the share per day as a rate
+    step.maxDepth = glm::max(w.maxDepth, 0.1f);
+    step.freshGrainMm = glm::max(w.freshGrain, 0.03f);
+    step.grainGrowth = glm::max(w.grainGrowth, 0.0f);
+    step.wetGrainGrowth = glm::max(w.wetGrainGrowth, 0.0f);
+    step.surfaceLayer = glm::max(w.surfaceLayer, 0.002f);
+    step.meltHold = glm::max(w.meltHold, 0.0005f);
+    step.drainHours = glm::max(w.meltDrain, 0.1f);
+    step.refreezeHours = glm::max(w.refreeze, 0.1f);
+    step.grimePerDay = glm::max(w.grimePerDay, 0.0f);
+    step.meltGrime = glm::max(w.meltGrime, 0.0f);
+    m_snowPack.advance(step);
+
+    // At the camera: the ground's climate there (no terrain: a mild 10 C) + the same air offset.
+    const float cameraClimate = std::isnan(m_cameraTemperature) ? 10.0f : m_cameraTemperature;
+    const float snowShare = SnowPack::snowFraction(cameraClimate + m_weatherAirOffset, w.snowBelow, rainAbove);
+    m_weatherAtCamera = glm::vec2(precipitation * snowShare, precipitation * (1.0f - snowShare));
+    // The tracks' refill clock: the snow that fell at the camera's climate (open ground, catch 1), in m.
+    m_snowfallTotal += (double)(step.snowfallRate * m_weatherAtCamera.x) * step.gameHours;
+}
+
+bool RendererState::snowActive() const
+{
+    return Globals::settings.weather.snowEnabled && m_snowPack.deepest() > 0.0f;
+}
+
+// While snow lies or anything falls (the rain's wetness is sheltered by it too).
+bool RendererState::snowSiteWanted() const
+{
+    const WeatherSettings& w = Globals::settings.weather;
+    return w.shelter && m_rtParams.enabled && (snowActive() || w.precipitation > 0.0f);
 }
 
 void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
@@ -1081,6 +1150,17 @@ void RendererState::buildUboTerrain()
     // framerate. Between ticks the pass is skipped and the reader keeps the last tick's layer + origin.
     // SIM delta (frozen by the global pause, like the particles), capped so a hitch cannot dry the map.
     m_wetTick = m_terrain.advanceWetness(oc::min((float)Globals::time.getSimDeltaSec(), 0.25f), self().sceneFocusOrCamera());
+    // The snow site map's window and tick (Snow.md): on the WALL clock - the shelters are the world's, not the sim's.
+    m_snowSiteTick = m_snowSitePipeline.advance(snowSiteWanted(), (float)Globals::time.getDeltaSec(), self().sceneFocusOrCamera());
+    // The snow's tracks (Snow.md "The deformation"): while the snow lies with its depth and "Tracks" on. The stamps go in
+    // from here to present (addSnowTrack / addSnowCrater read m_snowDeformLive).
+    {
+        const WeatherSettings& w = Globals::settings.weather;
+        m_snowDeformTick = m_snowDeformPipeline.advance(snowActive() && w.snowDepth && w.tracks, m_snowClearRequested, self().sceneFocusOrCamera(),
+            m_snowfallTotal);
+        m_snowClearRequested = false;
+        m_snowDeformLive = m_snowDeformTick.active;
+    }
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can
     // always display roughly a screen's worth of texels.
@@ -1839,6 +1919,15 @@ void RendererState::registerUboValues(UboBlock& list)
         // framerate independent), the ping / pong layer written, the clipmap window's origin and the previous tick's.
         list.add("terrain_wetDecay", [this, &t] { return t.wetDryTime > 0.0f ? std::exp(-m_wetTick.dt / t.wetDryTime) : 0.0f; }, UboLive);
         list.add("terrain_wetRain", [this, &t] { return glm::max(t.wetRain, 0.0f) * m_wetTick.dt; }, UboLive);
+        // The weather's rain this tick ("Weather/Rain wetting" x the precipitation); the pass takes the share that falls as
+        // rain at each texel's air temperature (u_weather_*).
+        list.add("terrain_wetWeatherRain", [this] {
+            const WeatherSettings& w = Globals::settings.weather;
+            return glm::max(w.rainWetting, 0.0f) * glm::clamp(w.precipitation, 0.0f, 1.0f) * m_wetTick.dt; }, UboLive);
+        // The snow's meltwater this tick ("Weather/Snow/Melt wetting"): x each texel's pack state (snowPackCell's liquid).
+        list.add("snow_meltWet", [this] {
+            const WeatherSettings& w = Globals::settings.weather;
+            return w.snowEnabled ? glm::max(w.meltWetting, 0.0f) * m_wetTick.dt : 0.0f; }, UboLive);
         list.add("terrain_wetIn", [this, &t] { return m_wetTick.dt / glm::max(t.wetInTime, 0.05f); }, UboLive); // the tweak min
         list.add("terrain_wetSpread", [this, &t] { return 1.0f - std::exp(-glm::max(t.wetDiffusionRate, 0.0f) * m_wetTick.dt); }, UboLive);
         list.add("terrain_wetLayer", [this] { return (float)m_wetTick.writeLayer; }, UboLive);
@@ -2387,8 +2476,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("particles_windSheetDrift", [&] { return glm::max(p.windSheetDrift, 0.0f); }, p.windSheetDrift);
     }
     {
-        // ---- Weather (all live): THE wind ("Sky/Wind": the particles, the vegetation, the fog), the weather volumes'
-        // camera values and the rain occlusion map (m_rainOcclusion)
+        // ---- Weather: THE wind ("Sky/Wind": the particles, the vegetation, the fog), the weather volumes' camera values,
+        // the rain occlusion map (m_rainOcclusion) and the air now (all live), and the snow / rain band (lockable)
         const WindParams& wind = m_windParams;
         list.add("weather_rainOcclusionViewProj", [this] { return m_rainOcclusion.viewProj; }, UboLive); // a plain top-down ortho (standard Z)
         list.add("weather_windVelocity", [&wind] { const glm::vec2 d = wind.direction() * glm::max(wind.speed, 0.0f); return glm::vec3(d.x, 0.0f, d.y); }, UboLive);
@@ -2402,6 +2491,131 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("weather_cameraWaterValid", [this] { return m_oceanSimPipeline.hasCameraWaterSurface(); }, UboLive);
         list.add("weather_rainOcclusionPresent", [this] { return m_rainOcclusion.present; }, UboLive);
         list.add("weather_rainOcclusionInvRange", [this] { return m_rainOcclusion.invRange; }, UboLive); // 1 / its depth range (1/m)
+        // THE AIR NOW (advanceWeather): C on the climate's temperature (the offset + the day-night swing), and the band in
+        // which the precipitation turns from snow to rain (C of air, ordered).
+        const WeatherSettings& w = Globals::settings.weather;
+        list.add("weather_airOffset", [this] { return m_weatherAirOffset; }, UboLive);
+        list.add("weather_snowBelow", w.snowBelow);
+        list.add("weather_rainAbove", [&w] { return glm::max(w.rainAbove, w.snowBelow + 0.1f); }, w.rainAbove, w.snowBelow);
+    }
+    {
+        // ---- Snow ("Weather/Snow"; snow.inc.glsl): the snowpack table this slot reads (advanceWeather -> uploadSnowTable),
+        // whether it holds any snow (live), the switch (lockable: locked off, the snow code compiles out) and the depth
+        // from which the ground is fully white.
+        const WeatherSettings& w = Globals::settings.weather;
+        list.add("snow_table", [this]
+        {
+            const uint64 address = m_snowTables[m_swapChain.getCurrentFrameIndex()].getDeviceAddress();
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboLive);
+        list.add("snow_active", [this] { return snowActive(); }, UboLive);
+        list.add("snow_enabled", [&w] { return w.snowEnabled; }, w.snowEnabled);
+        list.add("snow_invCoverDepth", [&w] { return 1.0f / glm::max(w.fullCoverDepth, 0.001f); }, w.fullCoverDepth);
+        // THE SITE MAP (m_snowSiteTick): live this frame, its two bindless slots, and its window's lattice origin - after this
+        // frame's trace (the scene's readers) and before it (the pre-scene readers: the culls, the wetness).
+        list.add("snow_sitePresent", [this] { return m_snowSiteTick.active; }, UboLive);
+        list.add("snow_siteTopTex", [this] { return (uint32)m_snowSitePipeline.topTexture(); }, UboLive);
+        list.add("snow_sitePassTex", [this] { return (uint32)m_snowSitePipeline.passTexture(); }, UboLive);
+        list.add("snow_siteOrigin", [this] { return glm::vec2(m_snowSiteTick.origin); }, UboLive);
+        list.add("snow_siteReadOrigin", [this] { return glm::vec2(m_snowSiteTick.readOrigin); }, UboLive);
+        // THE OBJECT LAYER (snowApply): its switch (locked off, it compiles out) and the leaves' share.
+        list.add("snow_objects", [&w] { return w.objectSnow; }, w.objectSnow);
+        // THE DEPTH (snowGroundLift): its switch (locked off, the terrain VS's lift compiles out) and the depth that buries
+        // the grass and the clutter.
+        list.add("snow_depth", [&w] { return w.snowDepth; }, w.snowDepth);
+        list.add("snow_invBuryDepth", [&w] { return 1.0f / glm::max(w.buryDepth, 0.01f); }, w.buryDepth);
+        list.add("snow_leafSnow", [&w] { return glm::clamp(w.leafSnow, 0.0f, 1.0f); }, w.leafSnow);
+        // How far into a voxel crown (its baked interior, 0 surface .. 1 core) the leaves hold snow.
+        list.add("snow_voxelCrownDepth", [&w] { return glm::clamp(w.voxelCrownSnowDepth, 0.0f, 1.0f); }, w.voxelCrownSnowDepth);
+        // THE TRACKS (m_snowDeformTick; snowDeformAt): live this frame, the two maps' bindless slots and their windows' lattice
+        // origins (after this frame's step: the stamps run before every reader), the refill clock (the snowfall in mm, mod
+        // 65536: the stamps' lo16) and the range in which the tessellation refines over them.
+        list.add("snow_deformPresent", [this] { return m_snowDeformTick.active; }, UboLive);
+        list.add("snow_deformFineTex", [this] { return (uint32)m_snowDeformPipeline.fineTexture(); }, UboLive);
+        list.add("snow_deformCoarseTex", [this] { return (uint32)m_snowDeformPipeline.coarseTexture(); }, UboLive);
+        list.add("snow_deformFineOrigin", [this] { return glm::vec2(m_snowDeformTick.fineOrigin); }, UboLive);
+        list.add("snow_deformCoarseOrigin", [this] { return glm::vec2(m_snowDeformTick.coarseOrigin); }, UboLive);
+        list.add("snow_fallNow", [this] { return (float)std::fmod(m_snowfallTotal * 1000.0, 65536.0); }, UboLive);
+        list.add("snow_trackDetailRange", [&w] { return w.tracks ? glm::max(w.trackDetailRange, 0.0f) : 0.0f; }, w.trackDetailRange, w.tracks);
+        // A deep track's wall slope (rise per metre; snow_deform.cs.glsl): no vertical step for the vertex grid to alias.
+        list.add("snow_trackWallSlope", [&w] { return glm::clamp(w.trackWallSlope, 0.5f, 10.0f); }, w.trackWallSlope);
+        // THE ROCK SHELL (snowRockShell): its switch (locked off, it compiles out), its range, and the cull's pad (the deepest
+        // pack while it can swell: live).
+        list.add("snow_rockShell", [&w] { return w.rockShell; }, w.rockShell);
+        list.add("snow_rockShellRange", [&w] { return glm::max(w.rockShellRange, 1.0f); }, w.rockShellRange);
+        list.add("snow_rockShellPad", [this, &w] { return w.rockShell && w.snowDepth && snowActive() ? m_snowPack.deepest() : 0.0f; }, UboLive);
+        // THE CAPS (SnowCapPipeline): the prepare's words and this slot's draw records (by device address, live), and the
+        // shape (lockable).
+        list.add("snow_capWords", [this]
+        {
+            const uint64 address = m_snowCapPipeline.wordsAddress();
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboLive);
+        list.add("snow_capDraws", [this]
+        {
+            const uint64 address = m_snowCapPipeline.drawsAddress(m_swapChain.getCurrentFrameIndex());
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboLive);
+        list.add("snow_capLods", [this]
+        {
+            const uint64 address = m_snowCapPipeline.lodsAddress(m_swapChain.getCurrentFrameIndex());
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboLive);
+        list.add("snow_capRange", [&w] { return glm::clamp(w.capRange, 10.0f, 105.0f); }, w.capRange);
+        list.add("snow_capDetail", [&w] { return glm::max(w.capDetail, 20.0f); }, w.capDetail);
+        list.add("snow_capFromDepth", [&w] { return glm::max(w.capFromDepth, 0.001f); }, w.capFromDepth);
+        list.add("snow_capRounding", [&w] { return glm::clamp(w.capRounding, 0.05f, 1.75f); }, w.capRounding);
+        list.add("snow_capSink", [&w] { return glm::max(w.capSink, 0.0f); }, w.capSink);
+        list.add("snow_capMaxStep", [&w] { return glm::max(w.capMaxStep, 0.05f); }, w.capMaxStep);
+        // THE LOOK (snow_brdf.inc.glsl, snowLitSetup): this slot's state table (after the depths, live), the fresh snow's
+        // grain and albedo (the splat's placeholder, the climate's permanent snow), the facets' roughness, the sun BRDF's
+        // diffusion per channel (blue farthest) and forward scattering, the bright cavities, the glints (the facet cone and
+        // its slope bin, the sun's cone, the gain and the cap) and the tracks' shading. All lockable: locked off, the switch
+        // compiles its code out.
+        const SkyParams& sky = Globals::settings.sky;
+        list.add("snow_stateTable", [this]
+        {
+            const uint64 address = m_snowTables[m_swapChain.getCurrentFrameIndex()].getDeviceAddress() + RendererVKLayout::SNOW_STATE_OFFSET;
+            return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
+        }, UboLive);
+        list.add("snow_freshGrainM", [&w] { return glm::max(w.freshGrain, 0.03f) * 1e-3f; }, w.freshGrain);
+        list.add("snow_freshAlbedo", [&w] { return SnowPack::surfaceAlbedo(glm::max(w.freshGrain, 0.03f), 0.0f, 0.0f); }, w.freshGrain);
+        // The fresh pack's transport coefficient (1/m, the wall glow): 3 phi sqrt(B (1 - g) gamma / d) - packing 0.15,
+        // absorption enhancement 1.6, asymmetry 0.89.
+        list.add("snow_sigmaTr", [&w]
+        {
+            const float d = glm::max(w.freshGrain, 0.03f) * 1e-3f;
+            return 0.45f * glm::sqrt(1.6f * 0.11f * glm::vec3(0.31f, 0.046f, 0.016f) / d);
+        }, w.freshGrain);
+        list.add("snow_grainRough", [&w] { return glm::clamp(w.grainRough, 0.02f, 1.0f); }, w.grainRough);
+        list.add("snow_wetRough", [&w] { return glm::clamp(w.wetRough, 0.02f, 1.0f); }, w.wetRough);
+        list.add("snow_diffusion", [&w] { return glm::clamp(glm::max(w.softTerminator, 0.0f) * 0.3f * glm::vec3(0.18f, 0.38f, 1.0f), 0.0f, 1.0f); }, w.softTerminator);
+        list.add("snow_forward", [&w] { return glm::max(w.forwardScatter, 0.0f); }, w.forwardScatter);
+        list.add("snow_brightCavities", [&w] { return w.brightCavities; }, w.brightCavities);
+        list.add("snow_glintOn", [&w] { return w.sparkle; }, w.sparkle);
+        list.add("snow_glintShare", [&w] { return glm::clamp(w.sparkleDensity, 0.0f, 1.0f); }, w.sparkleDensity);
+        list.add("snow_glintConeFacet", [&w]
+        {
+            const float t = std::tan(glm::radians(glm::clamp(w.sparkleSpread, 0.05f, 5.0f)));
+            return glm::pi<float>() * t * t;
+        }, w.sparkleSpread);
+        list.add("snow_glintInvBin", [&w] { return 1.0f / std::tan(glm::radians(glm::clamp(w.sparkleSpread, 0.05f, 5.0f))); }, w.sparkleSpread);
+        list.add("snow_glintConeSun", [&sky] { return glm::pi<float>() * (1.0f - glm::clamp(sky.sunAngularCos, 0.5f, 1.0f)) * 0.5f; }, sky.sunAngularCos); // the sun's solid angle / 4
+        list.add("snow_glintGain", [&w] { return glm::max(w.sparkleStrength, 1.0f); }, w.sparkleStrength);
+        list.add("snow_glintCap", [&w] { return glm::clamp(w.sparkleMax, 1.0f, 2000.0f) / glm::pi<float>(); }, w.sparkleMax); // the reflected BRDF x NoL: x white
+        list.add("snow_cavityBounces", [&w] { return glm::max(w.cavityBounces, 0.0f) * 10.0f; }, w.cavityBounces); // per m of depth
+        list.add("snow_trackShadow", [&w] { return w.trackShadow; }, w.trackShadow);
+        list.add("snow_wallGlow", [&w] { return glm::max(w.wallGlow, 0.0f); }, w.wallGlow);
+        list.add("snow_wetReflect", [&w] { return glm::clamp(w.wetSnowReflect, 0.0f, 1.0f); }, w.wetSnowReflect);
+        // The track shadow's march toward the sun (snowTrackSunShadow): xy = the sun's xz direction, z = its rise per metre
+        // along it, w = the path length per metre of height.
+        list.add("snow_sunStep", [&sky]
+        {
+            const glm::vec3 L = skySunDirection(sky);
+            const float h = glm::length(glm::vec2(L.x, L.z));
+            const glm::vec2 dir = h > 1e-4f ? glm::vec2(L.x, L.z) / h : glm::vec2(1.0f, 0.0f);
+            return glm::vec4(dir, glm::min(L.y / glm::max(h, 1e-3f), 50.0f), 1.0f / glm::max(L.y, 0.1f));
+        }, UboLive);
     }
     {
         // ---- Post ("TAA" + "Post": TAA, the motion blur, DLSS's ocean mask, the exposure, the tonemapper, the bloom mix.

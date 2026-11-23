@@ -40,6 +40,9 @@ public:
         vk::ImageView oceanMapsView;          // FFT displacement maps (the live wave surface)
         vk::Sampler oceanMapsSampler;
         Buffer* riverWaterMap = nullptr;      // that frame slot's inland water map (RiverWaterMapGpu)
+        vk::ImageView snowSiteTopView;        // the snow site map (SnowSitePipeline): the weather's rain is sheltered by it
+        vk::ImageView snowSitePassView;
+        vk::Sampler snowSiteSampler;
     };
     // Records the per-frame decay + injection dispatch. Runs after the ocean sim (this frame's maps) and
     // before the scene forward pass (which samples the result).

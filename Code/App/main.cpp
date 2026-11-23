@@ -313,6 +313,7 @@ int main(int argc, char* argv[])
             Globals::navSystem.update((float)simDeltaSec);
             Globals::rendererVK.joinBeginFrameJob();
             Globals::spatialIndex.joinUpdateJob();
+            controls.stampPlayerSnow((float)simDeltaSec); // after the begin-frame job reset the frame's snow stamps
         }
         else
             Globals::spatialIndex.commitFrame();

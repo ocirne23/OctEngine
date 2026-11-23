@@ -122,6 +122,39 @@ float treeLeafSunTransmit(vec3 leafG, vec4 sun, uvec2 voxel, float viewDist)
 	}
 	return transmit;
 }
+
+// THE CROWN'S INTERIOR at the leaf (0 = the crown's surface .. 1 = its core): the voxel tier's baked value - the surface
+// atlas's alpha (voxelSurface's `interior`) of the type's VOXEL material, on a level of about 16 voxels a side, at the
+// leaf's grid point. The snow on the mesh leaves takes the voxel crowns' outer-shell rule by it. 0 without a grid, without
+// a voxel tier, and in an EMPTY brick (a leaf outside the crown's stored voxels lies on its surface). Three fetches.
+float treeLeafCrownInterior(vec3 leafG, uint typeIdx)
+{
+	const uint voxelMaterial = in_treeTypes[typeIdx].voxel.meshMaterial;
+	if (in_treeTypes[typeIdx].gridCbrtVolume <= 0.0 || voxelMaterial == 0xFFFFFFFFu)
+		return 0.0;
+	const uvec2 voxel = treeLeafGridVoxel(typeIdx);
+	VoxelGrid grid;
+	grid.opacityTex = voxel.x & 0xFFFFu;
+	grid.indexTex = voxel.x >> 16;
+	grid.res = exp2(float(voxel.y & 0xFFu));
+	grid.levels = float((voxel.y >> 8) & 0xFFu);
+	grid.colsShift = (voxel.y >> 16) & 0xFFu;
+	grid.invSize = 1.0 / vec2(textureSize(u_textures[nonuniformEXT(grid.opacityTex)], 0));
+	const VoxelLevel level = voxelLevel(grid, clamp(log2(grid.res / 16.0), 0.0, grid.levels - 1.0));
+	const vec3 c = clamp(leafG, vec3(0.0), vec3(1.0)) * level.n;
+	const vec3 u = voxelCentreCoord(level, c);
+	const VoxelBrick brick = voxelBrickFetch(grid, level, floor(u * (1.0 / VOXEL_BRICK)));
+	if (voxelBrickEmpty(brick))
+		return 0.0;
+	// voxelSurface's place in the surface atlas (half the opacity atlas each way), the colour set's alpha only.
+	const uint surfaceTex = in_materialInfos[voxelMaterial >> 16].diffuseNormalTexIdx >> 16;
+	const vec3 q = (u - brick.coord * VOXEL_BRICK) * (2.0 * (VOXEL_SURFACE_TEXELS - 1.0) / VOXEL_BRICK);
+	const float s0 = floor(q.z * 0.5);
+	const vec2 uv = (voxelBrickOrigin(grid, brick) + 0.5 + vec2(s0 * (2.0 * VOXEL_SURFACE_TEXELS) + q.x, q.y)) * grid.invSize;
+	const vec2 nextSlice = vec2(2.0 * VOXEL_SURFACE_TEXELS * grid.invSize.x, 0.0);
+	return mix(textureLod(u_textures[nonuniformEXT(surfaceTex)], uv, 0.0).a, textureLod(u_textures[nonuniformEXT(surfaceTex)], uv + nextSlice, 0.0).a,
+		q.z * 0.5 - s0);
+}
 #endif
 
 #endif

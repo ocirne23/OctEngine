@@ -3,9 +3,10 @@
 # (StructureSystem::publishSearchlights). Global: the game writes its position. Spawned with its feet on the road.
 # SHAPE (a placeholder; uniform scales): a blue robe (the root), a head, a stepped hat, and the STAFF it holds in
 # FRONT of its body (-Z: an entity's forward is -Z) with a pale crystal ball on top.
-# CullMode RootOnly: the root culls for all its pieces.
+# CullMode RootOnly: the root culls for all its pieces. Mover: the game moves it, so it is no shelter for the snow.
 Prefab gameMage
 	Global true
+	Mover true
 	CullMode RootOnly
 	Component Render
 		ObjectContainer baseshapes

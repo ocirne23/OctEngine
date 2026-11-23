@@ -146,6 +146,7 @@ void GameMatch::loadGame(oc::string_view path)
             m_night = n->asBool();
         if (const AssetNode* n = root.find("TimeOfDay"))
             Globals::settings.sky.timeOfDay = glm::clamp(n->asFloat(), 0.0f, 23.99f);
+        m_weatherNight = -1; // the weather is not saved: the next update sets the loaded time's (a night rolls anew)
         if (const AssetNode* n = root.find("NightWave"))
             m_nightWave = glm::max(n->asInt(), 0);
         if (const AssetNode* n = root.find("WaveScale"))

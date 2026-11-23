@@ -127,6 +127,10 @@ export struct EntityArchetype
 
 export EntityArchetype makeEntityArchetype(uint16 typeBits);
 
+// Every render node of the subtree becomes a MOVER (RenderNode::setMover: no shelter for the snow site map), from its next
+// push on: what the game starts to move after the spawn (a structure on the flying ship). Main thread, outside the pass.
+export void markMoverTree(Entity* root);
+
 // What Entity::create spawns from: the archetype plus one SpawnInfo recipe per component (World builds them from the .pre; the Entity Editor and the
 // testbed assemble their own).
 export struct EntitySpawnTemplate
@@ -140,6 +144,7 @@ export struct EntitySpawnTemplate
     bool enabled = true;              // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
     bool global = false;              // root spawns with EEntityFlag_Global ("Global true" in the .pre)
     EEntityCullMode cullMode = EEntityCullMode::PerEntity; // "CullMode" in the .pre
+    bool mover = false;               // "Mover true" in the .pre: the game moves it, so its subtree's render nodes are MOVERS (RenderNode::setMover)
     // RootOnly lazy cache: the render bounds of the whole spawned subtree in this entity's LOCAL space (the same for every instance). State 0 = uncomputed,
     // 1 = no render node, 2 = valid; stored LAST, same benign-race scheme as treeAllocSize (every writer stores the same values).
     mutable Sphere treeCullBounds{ glm::vec3(0.0f), 0.0f };

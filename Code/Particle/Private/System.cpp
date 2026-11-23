@@ -407,7 +407,8 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
 {
     ProfileScope profileScope("Particles", EProfileCategory::Particle);
 
-    // Testbed weather toggles: one camera-following volume effect each.
+    // The built-in volumes: one camera-following effect each, on by its toggle (full count) or, for rain and snow, while
+    // the weather lets it fall at the camera (x how hard). Below 1 % the volume goes.
     const auto syncWeather = [this](bool wanted, ParticleEffect& effect, const char* path)
     {
         if (wanted && !effect.isValid())
@@ -415,8 +416,13 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         else if (!wanted && effect.isValid())
             effect.destroy();
     };
+    const glm::vec2 weather = renderer.getWeatherAtCamera();
     for (BuiltinEffect& b : m_builtins)
-        syncWeather(b.settings.enabled, b.effect, b.path);
+    {
+        const float fromWeather = b.weather >= 0 ? weather[b.weather] : 0.0f;
+        b.amount = b.settings.enabled ? 1.0f : fromWeather;
+        syncWeather(b.amount >= 0.01f, b.effect, b.path);
+    }
     // Ocean spray: the renderer's producer pass spawns into this instance's emitter slot (GPU spawn path).
     syncWeather(Globals::settings.particleSystem.oceanSpray, m_oceanSprayEffect, "Effects/ocean_spray.pfx");
     {
@@ -456,7 +462,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         {
             if (b.effect.m_id == inst.id)
             {
-                countScale = b.settings.countScale;
+                countScale = b.settings.countScale * b.amount;
                 sizeScale = b.settings.sizeScale;
                 alphaScale = b.settings.alphaScale;
                 sizeVarScale = b.settings.sizeVarScale;

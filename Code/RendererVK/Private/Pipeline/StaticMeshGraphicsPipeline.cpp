@@ -603,7 +603,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = TEXTURES_BINDING,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
-        .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
+        .stageFlags = vk::ShaderStageFlagBits::eFragment | TESS_STAGES // the TCS: the snow deformation maps (the track detail)
             | vk::ShaderStageFlagBits::eVertex // the grass and flower VS: grass.inc.glsl's value noise (the terrain noise texture)
     });
 
@@ -723,6 +723,24 @@ void StaticMeshGraphicsPipeline::buildClutterLayout(const GraphicsPipelineLayout
     clutter.fragmentShader = source(flowers ? "Shaders/Clutter/clutter_flower.fs.glsl" : "Shaders/Clutter/clutter.fs.glsl", main.fragmentShader.defines);
 }
 
+void StaticMeshGraphicsPipeline::buildSnowCapLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& caps)
+{
+    caps.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    caps.descriptorBindingFlags = main.descriptorBindingFlags;
+    caps.pushConstantRanges = main.pushConstantRanges;
+    caps.indirectBindable = false;
+    caps.motionTarget = true;  // the opaque family
+    caps.writeMotion = false;  // static: the camera reprojects
+    caps.cullMode = vk::CullModeFlagBits::eNone; // the quads' winding is not relied on (their undersides lie inside the tops)
+    caps.polygonMode = main.polygonMode;
+    const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
+        return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
+    };
+    caps.vertexShader = source("Shaders/Terrain/snow_cap.vs.glsl", {});
+    // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
+    caps.fragmentShader = source("Shaders/Terrain/snow_cap.fs.glsl", main.fragmentShader.defines);
+}
+
 void StaticMeshGraphicsPipeline::buildTreeVoxelMarchLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& march, bool far)
 {
     march.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
@@ -792,7 +810,9 @@ void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout
         else if (!pipeline.reloadShaders(m_renderPass, layout))
             printf("StaticMeshGraphicsPipeline: %s shader reload failed, keeping previous pipeline\n", name);
     };
-    GraphicsPipelineLayout grassLayout, grassSimpleLayout, clutterLayout, flowerLayout, texturedFlowerLayout;
+    GraphicsPipelineLayout grassLayout, grassSimpleLayout, clutterLayout, flowerLayout, texturedFlowerLayout, snowCapLayout;
+    buildSnowCapLayout(main, snowCapLayout);
+    build(m_snowCapPipeline, m_snowCapBuilt, snowCapLayout, "snow caps");
     buildGrassLayout(main, grassLayout);
     // The far rings' pipeline: the same layout and vertex shader, the fragment shader's simple shading.
     buildGrassLayout(main, grassSimpleLayout);
@@ -1297,6 +1317,16 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     }
 
     // ---- THE OPAQUE PHASE ----
+    // THE SNOW CAPS FIRST (the first draws after the clear): the object tops under them then fail early depth (the lit
+    // variants have no discard). One indexed draw per LOD over SnowCapPipeline's lists; the execute rebinds after.
+    if (params.snowCaps && m_snowCapBuilt)
+    {
+        drawGroup("Snow caps");
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_snowCapPipeline.getPipeline());
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_snowCapPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        vkCommandBuffer.bindIndexBuffer(params.snowCaps->indices->getBuffer(), 0, vk::IndexType::eUint16);
+        vkCommandBuffer.drawIndexedIndirect(params.snowCaps->commands->getBuffer(), 0, RendererVKLayout::SNOW_CAP_LODS, 5 * sizeof(uint32));
+    }
     // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).
     // The opaque set in ONE execute: lit, masked, unlit, the tree meshes (LitTree), the rocks and the untessellated ground.
     drawGroup("Opaque set");

@@ -36,6 +36,9 @@ import :AccelerationStructure;
 import :GIProbePipeline;
 import :RTAOPipeline;
 import :RainOcclusionPipeline;
+import :SnowSitePipeline;
+import :SnowDeformPipeline;
+import :SnowCapPipeline;
 import :OceanSimulationPipeline;
 import :TerrainWetnessPipeline;
 import :VolumetricFogPipeline;
@@ -82,6 +85,7 @@ import :InstanceStream;
 import :FrameSubmission;
 import :VrEyeTargets;
 import :TerrainResources;
+import :SnowPack;
 import :ForceFieldState;
 import :BindlessTextures;
 import :ParticleState;
@@ -145,6 +149,10 @@ protected:
     void recordShadowCull(uint32 frameIdx);
     void recordShadowDraw(uint32 frameIdx);
     void recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx); // after the GI step, both primaries
+    void recordSnowSite(vk::CommandBuffer primary, uint32 frameIdx);           // likewise, before it: the snow site map on its tick
+    void recordSnowDeform(vk::CommandBuffer primary, uint32 frameIdx);         // before the culls: the snow's tracks (this frame's stamps)
+    void recordSnowCaps(vk::CommandBuffer primary, uint32 frameIdx);           // after the site trace (desktop): the caps' prepare, or no draws
+    bool snowCapsLive() const;                                                  // the caps draw this frame (desktop, the site map held, snow lies)
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordStaticMeshLate(uint32 frameIdx);
@@ -497,6 +505,9 @@ protected:
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
     RainOcclusionPipeline m_rainOcclusionPipeline;
+    SnowSitePipeline m_snowSitePipeline; // the snow site map (Snow.md): its tick is m_snowSiteTick
+    SnowDeformPipeline m_snowDeformPipeline; // the snow's tracks (Snow.md "The deformation"): its tick is m_snowDeformTick
+    SnowCapPipeline m_snowCapPipeline;       // the snow caps (Snow.md "The caps"): prepared after the site trace, drawn first in the opaque pass
     CompositePipeline m_compositePipeline;
     EyeAdaptationPipeline m_eyeAdaptationPipeline;
     RayTracingScene m_rt;
@@ -659,6 +670,40 @@ protected:
     float m_terrainRayChunkSize = 0.0f;
     uint32 m_terrainRayLod0Res = 1;
     void uploadTerrainRayFrame(uint32 frameIdx);
+    // THE WEATHER AND THE SNOWPACK ("Weather"; Snow.md): advanceWeather (main, kickBeginFrameJob) steps the pack in game
+    // time and works out the weather at the camera; present copies the pack's depths into this slot's table
+    // (uploadSnowTable), read by device address (u_snow_table, snow.inc.glsl).
+    SnowPack m_snowPack;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_snowTables;
+    oc::array<float*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedSnowTables{};
+    float m_cameraTemperature = std::numeric_limits<float>::quiet_NaN(); // setCameraTemperature: the climate's C at the ground under the camera (NaN: unknown)
+    float m_weatherAirOffset = 0.0f;   // C on the climate now: the offset + the day-night swing
+    glm::vec2 m_weatherAtCamera{ 0.0f }; // the snow and the rain falling at the camera (0..1 each)
+    void advanceWeather();
+    void uploadSnowTable(uint32 frameIdx);
+    bool snowActive() const;           // the pack holds snow and "Weather/Snow/Enabled"
+    bool snowSiteWanted() const;       // + "Weather/Snow/Shelter" and RT: the site map ticks
+    SnowSitePipeline::Tick m_snowSiteTick{}; // this frame's site window (buildUboTerrain): the UBO and the record read it
+    // THE TRACKS: this frame's deformation windows (buildUboTerrain), the snow that has fallen since the start in m (water
+    // equivalent x the snow share: the stamps' lo16 refill clock, advanceWeather), and whether addSnowTrack / addSnowCrater
+    // take stamps (the maps are live: main thread, set with the tick).
+    SnowDeformPipeline::Tick m_snowDeformTick{};
+    double m_snowfallTotal = 0.0;
+    bool m_snowDeformLive = false;
+    bool m_snowClearRequested = false; // "Clear snow" was pressed: the next tick empties the maps
+    // THE SITE MAP's INVALIDATIONS (Renderer::invalidateSnowSite, any thread): world rectangles due at a wall-clock time
+    // (each request is queued again as a retrace at +0.5 s and +2 s: a new structure is pushed and gets its BLAS a little
+    // later). recordSnowSite takes the due ones.
+    struct SnowSiteInvalidation
+    {
+        glm::vec2 minXZ{ 0.0f };
+        glm::vec2 maxXZ{ 0.0f };
+        uint32 bits = 0;
+        double due = 0.0;
+    };
+    std::mutex m_snowSiteMutex;
+    oc::vector<SnowSiteInvalidation> m_snowSitePending;
+    oc::vector<SnowSitePipeline::Invalidation> m_snowSiteDue; // recordSnowSite's scratch (main)
     bool m_groundTableValid = false; // this frame's ground table holds chunks (uploadGrassFrame): the clutter's ground
     // GROUND CLUTTER: the cull + buffers (the objects draw in m_staticMeshGraphicsPipeline). The patch grid and the
     // floor map go into the slot's clutter frame in present (uploadClutterFrame).

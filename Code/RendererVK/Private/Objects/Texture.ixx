@@ -55,6 +55,19 @@ public:
         m_numMipLevels = numMips;
     }
 
+    // An image the RENDERER made and writes on the GPU (one mip: the snow site map), owned from here on like any other
+    // (destroy frees it). TextureManager::adoptImage.
+    void adoptImage(vk::Image image, VmaAllocation memory, vk::ImageView view, vk::Format format, uint32 width, uint32 height)
+    {
+        m_image = image;
+        m_imageMemory = memory;
+        m_imageView = view;
+        m_format = format;
+        m_width = width;
+        m_height = height;
+        m_numMipLevels = 1;
+    }
+
 private:
 
     // Dims of the live image's mip 0. For streamed textures this is the resident top mip, not the

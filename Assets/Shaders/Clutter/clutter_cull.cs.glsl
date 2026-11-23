@@ -20,7 +20,8 @@
 #define TERRAIN_HEIGHT_BINDING 1
 #include "terrain_height.inc.glsl"
 #include "mesh_vertex.inc.glsl"
-layout (binding = 11) uniform sampler2D u_textures[]; // the splat height maps (clutterRelief)
+layout (binding = 11) uniform sampler2D u_textures[]; // the splat height maps (clutterRelief), the snow site map
+#define SNOW_SITE_ORIGIN u_snow_siteReadOrigin // the site map's window before this frame's trace (snow.inc.glsl)
 #define TERRAIN_SPLAT_RELIEF      // terrainReliefAt, as the TES
 #define TERRAIN_SPLAT_HEIGHT_ONLY // the coverages + the height: no material taps
 #include "terrain_splat.inc.glsl"
@@ -58,7 +59,7 @@ shared float s_height[CLUTTER_GRID_SAMPLES];
 shared float s_water[CLUTTER_GRID_SAMPLES];
 shared float s_temperature[CLUTTER_GRID_SAMPLES];
 shared float s_humidity[CLUTTER_GRID_SAMPLES];
-shared vec4 s_cover[CLUTTER_GRID_SAMPLES]; // x grass, y crag (bedrock), z beach, w snow
+shared vec4 s_cover[CLUTTER_GRID_SAMPLES]; // x grass, y crag (bedrock), z beach, w snow (TerrainLayers::snowBury)
 shared vec3 s_river[CLUTTER_GRID_SAMPLES]; // x influence, y flow (slow 0 .. fast 1), z under the water
 
 bool clutterGroundAt(vec2 xz, out GrassGround g)
@@ -110,7 +111,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
 
     const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz),
         TerrainFields(td.w, temperature, climate.w, td.y, river.x));
-    s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowW));
+    s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowBury)); // w: buried by the snow's depth
 }
 
 // The relief's view terms: uniform only, so main takes them once, outside the type loop.

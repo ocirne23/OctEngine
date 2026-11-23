@@ -25,6 +25,7 @@ layout (location = 0) in vec3 in_pos[];
 layout (location = 1) in vec3 in_normal[];
 layout (location = 2) in vec4 in_terrainFields[];
 layout (location = 4) in float in_river[];
+layout (location = 5) in vec2 in_snowLift[]; // the VS's lift: x = all of it, y = the tracks' share
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
@@ -42,6 +43,7 @@ layout (binding = 27) uniform sampler2D u_textures[]; // the splat height maps
 
 #define TERRAIN_SPLAT_RELIEF
 #define TERRAIN_SPLAT_HEIGHT_ONLY
+#define SNOW_DEFORM_READ // snow.inc.glsl's snowDeformAt (through the splat): the tracks between the control points
 #include "terrain_splat.inc.glsl"
 
 bool terrainTessBefore(vec3 a, vec3 b)
@@ -59,6 +61,7 @@ void main()
 	vec3 Ni;
 	vec4 fieldsV;
 	float riverV;
+	vec2 liftV; // the snow's lift (the VS's: x = all, y = the tracks' share): the control points stand on the snow
 
 	// CRACK-FREE edges: the two patches sharing an edge list its corners in opposite order, and the 3-term sum rounds
 	// differently from each side (sparkles along the mesh edges). A vertex on an edge (one weight exactly 0)
@@ -71,6 +74,7 @@ void main()
 		Ni = in_normal[corner];
 		fieldsV = in_terrainFields[corner];
 		riverV = in_river[corner];
+		liftV = in_snowLift[corner];
 	}
 	else if (zero >= 0)
 	{
@@ -84,6 +88,7 @@ void main()
 		Ni = in_normal[i] + (in_normal[j] - in_normal[i]) * wj;
 		fieldsV = in_terrainFields[i] + (in_terrainFields[j] - in_terrainFields[i]) * wj;
 		riverV = in_river[i] + (in_river[j] - in_river[i]) * wj;
+		liftV = in_snowLift[i] + (in_snowLift[j] - in_snowLift[i]) * wj;
 	}
 	else
 	{
@@ -91,16 +96,30 @@ void main()
 		Ni = in_normal[0] * bary.x + in_normal[1] * bary.y + in_normal[2] * bary.z;
 		fieldsV = in_terrainFields[0] * bary.x + in_terrainFields[1] * bary.y + in_terrainFields[2] * bary.z;
 		riverV = in_river[0] * bary.x + in_river[1] * bary.y + in_river[2] * bary.z;
+		liftV = in_snowLift[0] * bary.x + in_snowLift[1] * bary.y + in_snowLift[2] * bary.z;
 	}
 	const vec3 N = normalize(Ni);
-	out_meshPos = pos;
+	// THE MESH POINT is the one UNDER the snow: the FS lights from it (it sits on its own caster in the flat shadow map, so a
+	// ridge's shadow on the snow stays where it falls, not shortened by the lift) and its layers read the catch and the
+	// water gate at the height the VS lifted from.
+	const vec3 groundPos = vec3(pos.x, pos.y - liftV.x, pos.z);
+	out_meshPos = groundPos;
+	// THE TRACKS BETWEEN THE CONTROL POINTS: the deformation at this vertex minus the one interpolated from the corners (the
+	// VS put the corners' into the lift). 0 at a corner (it IS the control point), the same from both patches on an edge (the
+	// fixed corner order above), so nothing cracks against a patch or a plain chunk.
+	// Faded as the VS's (snowDeformFade: of xz only).
+	if (corner < 0 && u_snow_deformPresent > 0.5)
+	{
+		const float undeformed = liftV.x - liftV.y;
+		pos.y += snowDeformApply(snowDeformAt(pos.xz), undeformed) * snowDeformFade(pos.xz) - liftV.y;
+	}
 
 	// The CENTRE view for every displacement decision: both VR eyes displace the same surface (terrain_tess.tcs.glsl).
 	const float dist = distance(pos, u_views_viewPos[VIEW_CENTER].xyz);
 	if (dist < u_terrainTess_fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
 	{
 		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w, riverV);
-		const TerrainLayers L = terrainLayers(pos, N, f);
+		const TerrainLayers L = terrainLayers(groundPos, N, f);
 		// Falloff across the fade band: 1 - t^p ("Height falloff exponent"; the TCS eases its factor the same way).
 		const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 		const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff

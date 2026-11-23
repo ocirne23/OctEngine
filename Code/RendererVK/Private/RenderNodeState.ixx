@@ -59,6 +59,7 @@ protected:
         m_lodStateBase = other.m_lodStateBase;
         m_transformUploadState = other.m_transformUploadState;
         m_passMask = other.m_passMask;
+        m_pushFlags = other.m_pushFlags;
         m_bounds = other.m_bounds;
         m_meshInstances = oc::move(other.m_meshInstances);
         other.m_transformIdx = UINT32_MAX;
@@ -82,6 +83,8 @@ protected:
     mutable uint8 m_transformUploadState = ALL_FRAMES_DIRTY;
     uint8 m_passMask = uint8(RendererVKLayout::PASS_ALL); // in the padding before m_bounds
     static_assert(RendererVKLayout::PASS_ALL <= 0xFF);
+    uint8 m_pushFlags = 0; // PASS_FLAG_* ORed into every push of this node, whatever mask the pusher passes (setMover)
+    static_assert(RendererVKLayout::PASS_FLAG_MOVER <= 0xFF);
     Sphere m_bounds;
     oc::vector<RendererVKLayout::InMeshInstance> m_meshInstances;
 };

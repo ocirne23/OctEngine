@@ -2,9 +2,10 @@
 # body, no unit sim, and nothing can hurt it). Global: the game writes its position. Spawned with its feet on the road.
 # SHAPE (a placeholder; uniform scales): a dark red tunic (the root), a head, a helmet, and the BOW it holds in FRONT
 # of its body (-Z: an entity's forward is -Z).
-# CullMode RootOnly: the root culls for all its pieces.
+# CullMode RootOnly: the root culls for all its pieces. Mover: the game moves it, so it is no shelter for the snow.
 Prefab gameGuard
 	Global true
+	Mover true
 	CullMode RootOnly
 	Component Render
 		ObjectContainer baseshapes

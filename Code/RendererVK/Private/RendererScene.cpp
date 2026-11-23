@@ -82,6 +82,7 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
     const uint32 numInstances = (uint32)node.m_meshInstances.size();
     if (numInstances == 0 || passMask == 0)
         return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
+    passMask |= node.m_pushFlags; // after the test: a flag alone never pushes
     if (!canPushNode(node, numInstances))
         return;
     const uint32 startIdx = m_instances.claimInstances(numInstances);
@@ -116,6 +117,7 @@ void RendererState::batchPush(RenderBatch& batch, const RenderNode& node, uint32
     const uint32 numInstances = (uint32)node.m_meshInstances.size();
     if (numInstances == 0 || passMask == 0)
         return; // see renderNode
+    passMask |= node.m_pushFlags;
     if (numInstances > RenderBatch::MAX_INSTANCES)
     {
         self().renderNode(node, passMask);
@@ -802,6 +804,7 @@ void RendererState::initBindlessTextures()
             m_decalPipeline.resizeTextureDescriptors(count);
             m_clutterPipeline.resizeTextureDescriptors(count);
             m_entityPreviewPipeline.resizeTextureDescriptors(count);
+            m_snowSitePipeline.resizeTextureDescriptors(count); // a no-op until its first activation
             for (PerFrameData& perFrame : m_perFrameData)
             {
                 for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
@@ -822,6 +825,7 @@ void RendererState::initBindlessTextures()
             m_decalPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_clutterPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_entityPreviewPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
+            m_snowSitePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
         });
 }
 
@@ -1067,6 +1071,79 @@ void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
 {
     if (const uint32 idx = m_submission.claimDecal(); idx != UINT32_MAX)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
+}
+
+namespace
+{
+    // The fine window reaches >= 28 m from the focus, the coarse one >= 112 m (its corners ~180 m): a stamp farther than
+    // this from the focus the windows were placed around this frame (Tick::centre) lands in neither.
+    constexpr float SNOW_DEFORM_REACH = 150.0f;
+    uint32 snowBermBits()
+    {
+        return (uint32)glm::round(glm::clamp(Globals::settings.weather.bermShare, 0.0f, 1.0f) * 65535.0f);
+    }
+}
+
+void Renderer::addSnowTrack(const glm::vec3& fromFeet, const glm::vec3& toFeet, float radius)
+{
+    if (!m_snowDeformLive || !(radius > 0.01f))
+        return;
+    const glm::vec3 mid = 0.5f * (fromFeet + toFeet);
+    const float reach = SNOW_DEFORM_REACH + radius + 0.5f * glm::distance(fromFeet, toFeet);
+    if (!(glm::distance(glm::vec2(mid.x, mid.z), m_snowDeformTick.centre) < reach))
+        return; // also drops NaN feet
+    RendererVKLayout::SnowDeformer d;
+    d.a = fromFeet;
+    d.b = toFeet;
+    d.radius = glm::min(radius, 4.0f);
+    d.packed = snowBermBits();
+    (void)m_submission.addSnowDeformer(m_swapChain.getCurrentFrameIndex(), d);
+}
+
+void Renderer::invalidateSnowSite(const glm::vec2& minXZ, const glm::vec2& maxXZ, bool hide)
+{
+    if (!(minXZ.x <= maxXZ.x && minXZ.y <= maxXZ.y))
+        return; // also drops NaN
+    const double now = Globals::time.getElapsedSec();
+    using namespace RendererVKLayout;
+    const SnowSiteInvalidation add[3] = {
+        { minXZ, maxXZ, SNOW_SITE_RETRACE | (hide ? SNOW_SITE_STALE : 0u), now },
+        { minXZ, maxXZ, SNOW_SITE_RETRACE, now + 0.5 },
+        { minXZ, maxXZ, SNOW_SITE_RETRACE, now + 2.0 },
+    };
+    constexpr size_t c_maxPending = 256;
+    const std::lock_guard<std::mutex> lock(m_snowSiteMutex);
+    for (const SnowSiteInvalidation& e : add)
+    {
+        if (m_snowSitePending.size() < c_maxPending)
+        {
+            m_snowSitePending.push_back(e);
+            continue;
+        }
+        // Full (a save loads, a wave levels a base): grown into the entry due nearest, never later than asked - nothing is lost.
+        SnowSiteInvalidation* best = &m_snowSitePending[0];
+        for (SnowSiteInvalidation& p : m_snowSitePending)
+            if (glm::abs(p.due - e.due) < glm::abs(best->due - e.due))
+                best = &p;
+        best->minXZ = glm::min(best->minXZ, e.minXZ);
+        best->maxXZ = glm::max(best->maxXZ, e.maxXZ);
+        best->bits |= e.bits;
+        best->due = glm::min(best->due, e.due);
+    }
+}
+
+void Renderer::addSnowCrater(const glm::vec3& centre, float radius, float depth)
+{
+    if (!m_snowDeformLive || !(radius > 0.01f) || !(depth > 0.0f))
+        return;
+    if (!(glm::distance(glm::vec2(centre.x, centre.z), m_snowDeformTick.centre) < SNOW_DEFORM_REACH + radius))
+        return;
+    RendererVKLayout::SnowDeformer d;
+    d.a = centre;
+    d.radius = glm::min(radius, 4.0f); // one workgroup walks the footprint in the fine map: ~42k texels at 4 m
+    d.b = glm::vec3(glm::min(depth, 2.0f), 0.0f, 0.0f);
+    d.packed = RendererVKLayout::SNOW_DEFORMER_CRATER | snowBermBits();
+    (void)m_submission.addSnowDeformer(m_swapChain.getCurrentFrameIndex(), d);
 }
 
 RenderParticleEmitter RenderParticleEmitter::create(const RendererVKLayout::ParticleEmitterGpu& desc)
@@ -1338,6 +1415,17 @@ void RendererState::uploadTerrainRayFrame(uint32 frameIdx)
     }
     m_terrainRayFrames[frameIdx].flushMappedMemory(sizeof(TerrainRayFrameGpu));
     m_terrainRayNodes.clear();
+}
+
+// This slot's snowpack table (its fence was waited; snow.inc.glsl): the pack's depths and states as advanceWeather left
+// them. 20 KB.
+void RendererState::uploadSnowTable(uint32 frameIdx)
+{
+    const oc::span<const float> depths = m_snowPack.depths();
+    const oc::span<const SnowPack::CellState> states = m_snowPack.states();
+    memcpy(m_mappedSnowTables[frameIdx], depths.data(), depths.size_bytes());
+    memcpy((uint8*)m_mappedSnowTables[frameIdx] + RendererVKLayout::SNOW_STATE_OFFSET, states.data(), states.size_bytes());
+    m_snowTables[frameIdx].flushMappedMemory(RendererVKLayout::SNOW_TABLE_BYTES);
 }
 
 // ---- Ground clutter (ClutterPipeline; Procedural ClutterSystem) ----

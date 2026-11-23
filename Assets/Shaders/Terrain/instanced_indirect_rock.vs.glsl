@@ -11,9 +11,14 @@
 // TANGENT holds the wood coordinates (RockMesh) - both passed on, across in metres - with the instance's material. A
 // CACTUS (`Surface Cactus`) the same, its v = 3 + the rib count / 100.
 
+#extension GL_EXT_nonuniform_qualifier : enable // the bindless array (the snow site map)
+
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
+layout (binding = 27) uniform sampler2D u_textures[]; // the forward set's bindless array: the snow site map, the track maps
+#define SNOW_DEFORM_READ // snow.inc.glsl: the tracks press the shell
+#include "snow.inc.glsl" // snowRockShell: the snow on the rock's top
 
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -72,6 +77,20 @@ void main()
         const vec4 climate = terrainClimateAt(out_pos.xz);
         humidity = climate.w;
         temperature = terrainTemperatureAt(climate, out_pos.y);
+        // THE SNOW SHELL (snowRockShell): the vertex rises straight up by the snow on it - after the fields, which stay the
+        // bare rock's (the temperature at its own height, the ground under it for the contact band). Dead wood's bare wood
+        // (v = 1 + the bark cover, under 2) is a cut face: only its nearly flat parts lift.
+        const float cut = in_normalV.w > 0.5 && in_normalV.w < 2.5 ? 1.0 - clamp(in_normalV.w - 1.0, 0.0, 1.0) : 0.0;
+        float lift = snowRockShell(out_pos, out_normal.y, temperature, waterLevel, cut);
+        // THE TRACKS on the rock (snowDeformAt): a foot on the rock's top pressed the map there (the stamp's ground is the site
+        // map's top), so the shell takes the same clamped offset as the ground - near the camera only (snowDeformFade).
+        if (lift > 0.0)
+        {
+            const float fade = snowDeformFade(out_pos.xz);
+            if (fade > 0.0)
+                lift += snowDeformApply(snowDeformAt(out_pos.xz), lift) * fade;
+        }
+        out_pos.y += lift;
     }
     out_rockFields = vec4(groundHeight, temperature, humidity, waterLevel);
 

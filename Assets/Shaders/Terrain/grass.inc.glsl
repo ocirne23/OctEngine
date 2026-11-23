@@ -215,8 +215,9 @@ float grassNearShadow(vec3 pos, vec3 N, out float weight)
 #endif
 
 #ifdef TERRAIN_SPLAT_INC_GLSL
-// THE TERRAIN TEXTURES' grass: what the beach, rock and snow layers leave of the GROUND x the grass amount of its
-// climate-picked textures (u_terrain_splatGrass, TerrainSplatMaterial::grass).
+// THE TERRAIN TEXTURES' grass: what the beach and rock layers leave of the GROUND, and the snow BURIES (by its depth:
+// TerrainLayers::snowBury, not its cover - grass pokes through thin snow) x the grass amount of its climate-picked
+// textures (u_terrain_splatGrass, TerrainSplatMaterial::grass).
 float grassTextureAmount(uint slot)
 {
     return u_terrain_splatGrass[slot >> 2u][slot & 3u];
@@ -224,7 +225,7 @@ float grassTextureAmount(uint slot)
 
 float grassTerrainCover(TerrainLayers L)
 {
-    const float ground = (1.0 - float(L.beachW)) * (1.0 - float(L.rockW)) * (1.0 - float(L.snowW));
+    const float ground = (1.0 - float(L.beachW)) * (1.0 - float(L.rockW)) * (1.0 - float(L.snowBury));
     if (ground <= 0.0)
         return 0.0;
     const float n1 = float(L.g.n1), n2 = float(L.g.n2);
@@ -245,7 +246,8 @@ vec4 grassRayAlbedo(TerrainLayers L, vec3 pos, vec3 N, vec3 dir, float temperatu
     if (cover <= 0.0)
         return vec4(0.0);
     const float coverSize = grassCoverSize(cover);
-    const float tau = u_grass_farExtinction * cover * grassWidthSize(coverSize) * grassCanopyHeight(coverSize) / max(abs(dot(N, dir)), 0.05);
+    const float height = max(grassCanopyHeight(coverSize) - float(L.snowDepth), 0.0); // the part over the snow
+    const float tau = u_grass_farExtinction * cover * grassWidthSize(coverSize) * height / max(abs(dot(N, dir)), 0.05);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, temperature);
     return vec4(mix(u_grass_tipAlbedo * u_grass_meanTint, u_grass_dryAlbedo, grassDryness(pos.xz)) * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * u_grass_farBrightness),
         1.0 - exp(-tau));
@@ -286,7 +288,7 @@ vec4 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 
     const float coverSize = grassCoverSize(cover);
     const float widthSize = grassWidthSize(coverSize);
-    const float height = grassCanopyHeight(coverSize);
+    const float height = max(grassCanopyHeight(coverSize) - float(L.snowDepth), 0.0); // the canopy over the snow (the blades stand in it)
     const float rangeFade = grassRangeFade(dist);
     const float kept = (dist > u_grass_thinStart ? pow(u_grass_thinStart / dist, u_grass_thinExponent) : 1.0) * rangeFade;
     const float bladeCover = kept > 0.0 ? min(pow(kept, 1.0 - u_grass_widthCompensation), kept * u_grass_maxWidthScale) : 0.0;
@@ -306,7 +308,7 @@ vec4 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
     const float stripeScale = smoothstep(0.05, 0.6, cover);
     if (!inRange)
         return vec4(mix(1.0, farSun, far), 1.0, far, stripeScale);
-    const float presence = cover * rangeFade; // the blades standing HERE (the ambient)
+    const float presence = cover * rangeFade * (1.0 - float(L.snowW)); // the blades' roots HERE (the ambient): none on a snow surface
     // Outside the near cascade "Far root occlusion" is on the ground's sun too, as on the blades' roots (grass.fs.glsl).
     return vec4(mix(mix(max(1.0 - u_grass_farRootSun * presence, 0.0), nearSun, nearWeight), farSun, far),
         mix(max(1.0 - grassRootOcclusion(nearWeight) * presence, 0.0), 1.0, far), far, stripeScale);

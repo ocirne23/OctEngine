@@ -803,9 +803,12 @@ private:
     // The one placement path: spawns the prefab, stamps the component, registers into the frame.
     // Returns the frame index or -1. rot = authored orientation (a crossing's facing).
     int spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos, const glm::quat& rot,
-        uint8 team, bool built, float yield = 1.0f, bool insert = true); // insert: into the cell hash (a ship structure aloft: no)
+        uint8 team, bool built, float yield = 1.0f, bool insert = true, bool onShip = false); // insert: into the cell hash (a ship structure aloft: no)
     void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
     void removeStructureBookkeeping(size_t index); // unlink, erase + reindex, fire GRm
+    // Its footprint's tops changed (spawned, destroyed, to rubble and back): the snow site map traces them again; hide = the
+    // snow caps there go at once (Renderer::invalidateSnowSite). Not on the ship (its structures are movers: not in the map).
+    void invalidateSnowSite(const Ref& s, bool hide) const;
     void applyStructureTint(const Ref& s);
     void applyDemolishRequest(uint32 id, uint8 team);
     void stampTuning(const Ref& s); // capacities + machine variant (per tick - tweaks stay live)

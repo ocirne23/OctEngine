@@ -529,6 +529,7 @@ void main()
 	const float groundBelow = in_pos.y - (TERRAIN_LIT_POS.y + (float(reliefH) - 0.5) * reliefDepth);
 	float16_t wet, aboveLive;
 	terrainWetness(coverN, fields, groundBelow, wet, aboveLive);
+	wet *= float16_t(1.0) - filmLayers.snowW; // the wetness lies under the snow (as on the ground): no pools on the pack
 
 	// THE FILM'S COVERAGE: how much water stands over this pixel (metres), faded over the last "Edge fade (m)" of it,
 	// so the film dies exactly where its surface meets the terrain; per pixel and shaped by the texture relief (the

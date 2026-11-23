@@ -3,7 +3,8 @@
 //   1. GROUND - climate-picked soil/vegetation, world-XZ projection
 //   2. BEACH  - the band just above the local waterline, and river beds (not climate-selected)
 //   3. ROCK   - bedrock where too steep / too prominent to hold soil; climate-picked, biplanar
-//   4. SNOW   - over ALL of the above (as a ground type the rock layer would paint over it: gray peaks)
+//   4. SNOW   - over ALL of the above (as a ground type the rock layer would paint over it: gray peaks): the climate's
+//               permanent snow, or the weather's SNOWPACK (snow.inc.glsl) where it is deeper
 //
 // Shared by the terrain FS and the ocean shader (the seabed at a refraction-ray hit, so the sand seen through the
 // water IS the terrain next to it). The includer declares u_textures[] + GL_EXT_nonuniform_qualifier and the UBO; the
@@ -28,6 +29,9 @@
 
 #ifndef TERRAIN_SPLAT_INC_GLSL
 #define TERRAIN_SPLAT_INC_GLSL
+
+#define SNOW_HALF // snow.inc.glsl: the includer has the half types (snowNormalOn)
+#include "snow.inc.glsl"
 
 #ifndef TERRAIN_SPLAT_TEX
 #define TERRAIN_SPLAT_TEX(tex, uv) texture(tex, uv)
@@ -141,6 +145,29 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 	const f16vec2 nxy = normalSample.xy * float16_t(2.0) - float16_t(1.0);
 	const f16vec3 tn = f16vec3(nxy, sqrt(max(float16_t(1.0) - dot(nxy, nxy), float16_t(0.0))));
 	s.normal = normalize(f16vec3(tn.x, float16_t(0.0), tn.y) + tn.z * geoN);
+#endif
+	return s;
+}
+
+// THE SNOW's sample (the snow slot: the generated relief - its nor texture and its height; no albedo or roughness texture).
+// The albedo and the roughness are the FRESH snow's placeholders: the terrain FS replaces them by the pack's state after the
+// splat (snowState*: exact for the splat's linear mix), the rock FS before its mix. The AO is 1 (the light scattering in the
+// snow fills its micro-cavities). matIdx is the same on every pixel: no nonuniformEXT.
+TerrainSample snowSurfaceSample(uint matIdx, vec2 xz, f16vec3 geoN)
+{
+	TerrainSample s;
+	s.albedo = f16vec3(u_snow_freshAlbedo);
+	s.rough = float16_t(u_snow_grainRough);
+	s.metal = float16_t(0.0);
+	s.ao = float16_t(1.0);
+#ifdef TERRAIN_SPLAT_ALBEDO_ONLY
+	s.height = float16_t(0.5); // the seabed, a river bed: no fetch
+	s.normal = geoN;
+#else
+	const vec2 uv = xz * u_terrainTex_uvScaleSnow;
+	const f16vec2 nxy = f16vec2(TERRAIN_SPLAT_TEX(u_textures[terrainSplatTex(matIdx).x >> 16], uv).xy) * float16_t(2.0) - float16_t(1.0);
+	s.height = terrainHeightAoTap(matIdx, uv).x;
+	s.normal = snowNormalOn(geoN, nxy);
 #endif
 	return s;
 }
@@ -263,8 +290,8 @@ float terrainFbm(vec2 p)
 	return (v / norm) * 2.0 - 1.0;
 }
 
-// Lay `s` over `acc` with coverage `w` (height-blended under TERRAIN_SPLAT_RELIEF).
-void terrainMixInto(inout TerrainSample acc, TerrainSample s, float16_t w)
+// Lay `s` over `acc` with coverage `w` (height-blended under TERRAIN_SPLAT_RELIEF). Returns the weight it used.
+float16_t terrainMixInto(inout TerrainSample acc, TerrainSample s, float16_t w)
 {
 #ifdef TERRAIN_SPLAT_RELIEF
 	w = terrainHeightWeight(w, s.height - acc.height);
@@ -275,6 +302,7 @@ void terrainMixInto(inout TerrainSample acc, TerrainSample s, float16_t w)
 	acc.rough  = mix(acc.rough, s.rough, w);
 	acc.metal  = mix(acc.metal, s.metal, w);
 	acc.ao     = mix(acc.ao, s.ao, w);
+	return w;
 }
 
 // Match of `climate` against an entry's climate BOX: 1 inside, Gaussian-decaying outside. A box (not a point) lets an
@@ -342,6 +370,8 @@ struct TerrainLayers
 	int baseMat, numGround, numRock;
 	uint snowMatIdx;
 	float16_t snowW, beachW, rockW;
+	float16_t snowBury; // how much the snow buries what grows here (the grass, the clutter): its depth, not its cover
+	float16_t snowDepth; // m: the pack's depth here (the grass's canopy above it)
 	ClimatePick g, r; // g read only while the ground shows, r only while the rock does
 };
 
@@ -362,20 +392,38 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	const int numRock = L.numRock;
 	const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
 
-	// Snow over everything, but it slides off steep faces and needs humidity to fall at all (no white polar deserts).
+	// Snow over everything, but it slides off steep faces. The climate's permanent snow needs humidity to fall at all (no
+	// white polar deserts); the weather's snowpack (snow.inc.glsl) is the snow that DID fall, at this temperature and the
+	// site map's catch (none under a roof, less under a crown) - on dry ground only: it melts into the sea and into a
+	// river channel (the beds under the water stay bare). The same depth is what the terrain VS lifts the ground by
+	// (snowGroundLift). BURY is what grows here sees: the permanent snow buries it, the pack only by its depth over "Bury
+	// depth" - a blade taller than the snow pokes through (and stands on the true ground: the depth test hides its foot).
 	// First: full snow cover returns before the beach / rock coverages are computed.
 	float16_t snowW = float16_t(0.0);
+	float16_t snowBury = float16_t(0.0);
+	float depth = 0.0;
 	if (u_terrain_hasSnow > 0.5)
 	{
 		const float cold  = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, f.temperature);
-		const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, slope);
+		const float holds = snowGroundHolds(geoN.y);
 		const float wet = smoothstep(0.0, u_terrainTex_snowAridity, f.humidity);
-		snowW = float16_t(cold * holds * wet);
+		depth = snowGroundDepth(f.temperature, worldPos); // + the site map's shelter (snow.inc.glsl)
+		if (depth > 0.0)
+			depth *= snowGroundDry(worldPos.y, f.waterLevel, f.river) * holds;
+		const float pack = snowCoverFromDepth(depth);
+		snowW = float16_t(max(cold * wet * holds, pack));
+		// Without the lift ("Weather/Snow/Depth" off) nothing sinks: the snow buries by its cover.
+		const float packBury = u_snow_depth > 0.5 ? pack * clamp(depth * u_snow_invBuryDepth, 0.0, 1.0) : pack;
+		snowBury = float16_t(max(cold * wet * holds, packBury));
 	}
 	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
 	L.snowW = snowW;
+	L.snowBury = snowBury;
+	L.snowDepth = float16_t(depth);
 
-	if (snowW >= float16_t(TERRAIN_LAYER_OPAQUE))
+	// Under full snow nothing below shows - but only when it also BURIES everything: thinner, the grass and the clutter still
+	// read the ground's coverages and climate pick (snowBury <= snowW).
+	if (snowBury >= float16_t(TERRAIN_LAYER_OPAQUE))
 		return L;
 
 	// The baked temperature already carries the altitude lapse, so elevation enters the selection as the cold it
@@ -691,9 +739,11 @@ void terrainApplyMacro(inout TerrainSample s, f16vec2 m)
 
 // The full splatted terrain surface from precomputed coverages - for a caller that needs them itself too (the
 // tessellated terrain's pixel normal); neutral mid-gray before a texture set is registered. geoN = the shading base
-// the normal maps reorient onto. Call in uniform flow (screen derivatives).
-TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
+// the normal maps reorient onto. Call in uniform flow (screen derivatives). snowShare = the snow's share of the result
+// (after its height blend): the snow BRDF's weight and where the pack's state replaces the placeholder (snowSurfaceSample).
+TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L, out float16_t snowShare)
 {
+	snowShare = float16_t(0.0);
 	const f16vec3 geoNh = f16vec3(geoN);
 #if defined(TERRAIN_SPLAT_RELIEF) && TERRAIN_POM
 	// The march's gradients (and the silhouette's curvature inputs), taken here in uniform flow.
@@ -741,7 +791,8 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 	if (snowW >= opaque)
 	{
-		return sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh); // already unit
+		snowShare = float16_t(1.0);
+		return snowSurfaceSample(L.snowMatIdx, texPos.xz, geoNh); // already unit
 	}
 	const vec2 uvGround = texPos.xz * u_terrainTex_uvScaleGround;
 
@@ -790,10 +841,15 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 
 	// 5. Snow (partial cover; full cover returned above).
 	if (snowW > blendEps)
-		terrainMixInto(surf, sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh), snowW);
+		snowShare = terrainMixInto(surf, snowSurfaceSample(L.snowMatIdx, texPos.xz, geoNh), snowW);
 
 	surf.normal = normalize(surf.normal);
 	return surf;
+}
+TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
+{
+	float16_t snowShare;
+	return terrainSplatLayers(worldPos, geoN, L, snowShare);
 }
 
 // The full splatted terrain surface. geoN = the shading base the normal maps reorient onto; coverN = the normal

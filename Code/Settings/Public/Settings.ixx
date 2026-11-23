@@ -17,6 +17,7 @@ export import Settings.Rocks;
 export import Settings.Ocean;
 export import Settings.Force;
 export import Settings.ParticleSystem;
+export import Settings.Weather;
 export import Settings.Hud;
 export import Settings.Input;
 export import Settings.App;
@@ -77,6 +78,7 @@ export struct EngineSettings
 
     ForceSystemSettings forceSystem;
     ParticleSystemSettings particleSystem;
+    WeatherSettings weather;
     HudSettings hud;
     FreeFlyCameraSettings freeFlyCamera;
     GizmoSettings gizmo;

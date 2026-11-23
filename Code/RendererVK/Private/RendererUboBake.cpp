@@ -88,6 +88,8 @@ void RendererState::registerPushFields()
     } });
     m_rainOcclusionPipeline.registerPushFields();
     m_pushBlocks.push_back(PushBlockOwner{ &m_rainOcclusionPipeline.pushBlock(), [this] { m_rainOcclusionPipeline.reloadShaders(); } });
+    m_snowSitePipeline.registerPushFields();
+    m_pushBlocks.push_back(PushBlockOwner{ &m_snowSitePipeline.pushBlock(), [this] { m_snowSitePipeline.reloadShaders(); } });
     m_giProbePipeline.registerDebugPushFields();
     m_pushBlocks.push_back(PushBlockOwner{ &m_giProbePipeline.debugPushBlock(), [this]
     {

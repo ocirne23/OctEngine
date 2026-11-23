@@ -3,9 +3,11 @@
 # Physics component: the tile is walked on (and is road); StructureSystem::buildRailBody makes a body of only the rail
 # pieces on the open sides (a prefab has one shape). The four arm children are the rail along each edge of the tile (+X, -X, +Z, -Z), enabled
 # by StructureSystem::applyRailSides on the sides that face off the deck (GameShip::railSides). The root's mesh is the
-# tile's sill plate: a structure needs a mesh of its own, the units find what to bite by it.
+# tile's sill plate: a structure needs a mesh of its own, the units find what to bite by it. Mover: it flies with the
+# ship, so it is no shelter for the snow.
 Prefab gameShipRail
 	Global true
+	Mover true
 	Component Render
 		ObjectContainer shipRail
 		Node RailSill

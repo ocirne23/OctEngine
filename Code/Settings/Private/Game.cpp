@@ -49,6 +49,12 @@ static void registerMatch(GameMatchSettings& s)
     Tweak::floatVar("Game/Coop", "Staff light radius (m)", &s.staffLightRadius, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Coop", "Demon speed (x)", &s.demonSpeed, 0.05f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Coop", "Demon speed in a field (x)", &s.demonFieldSpeed, 0.05f, 1.0f, 0.05f);
+    Tweak::boolean("Game/Weather", "Co-op weather", &s.coopWeather);
+    Tweak::floatVar("Game/Weather", "Storm chance", &s.stormChance, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Weather", "Storm min", &s.stormMin, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Weather", "Storm max", &s.stormMax, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Game/Weather", "Night temperature min (C)", &s.nightColdMin, -30.0f, 30.0f, 0.1f);
+    Tweak::floatVar("Game/Weather", "Night temperature max (C)", &s.nightColdMax, -30.0f, 30.0f, 0.1f);
     Tweak::floatVar("Game/Fog", "Spawn fog density (1/m)", &s.spawnFogDensity, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Game/Fog", "Spawn fog glow", &s.spawnFogGlow, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Fog", "Spawn fog time (s)", &s.spawnFogSeconds, 1.0f, 600.0f, 1.0f);

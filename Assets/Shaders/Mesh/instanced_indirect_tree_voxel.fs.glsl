@@ -72,12 +72,18 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define LIT_LIGHTS_DIFFUSE  // instanced_indirect_lit.inc.glsl: the local lights' diffuse only (a rough crown seen from afar)
 #define LEAF_SKY_WRAP
 #define LIT_EXTRA_LIGHT     // the leaves' transmitted sun, added inside computeLitColor
+#define LIT_SNOW            // the snow's sun BRDF on the crowns' snow (snowApplyUp sets it up), as on the mesh tier
 float g_canopyHeight = 0.0;
 #define LIT_CANOPY_HEIGHT g_canopyHeight // the hit's height up the tree's box: the canopy map's occlusion above it
 #include "instanced_indirect_lit.inc.glsl"
 #include "leaf_look.inc.glsl"
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: the far trees take the faction look of the land they stand on
+#define SNOW_OBJECTS
+#define SNOW_TEX(tex, uv, dx, dy) textureLod(tex, uv, 4.0) // no derivatives between the hits: a coarse mip (a crown seen from afar)
+#define SNOW_NO_DERIVATIVES
+#define SNOW_NO_GLINTS      // snow.inc.glsl: no glints on a crown seen from afar (and none on leaves anyway)
+#include "snow.inc.glsl" // the snow on the crowns' up-facing leaves (snowApply)
 
 #define VOXEL_BRICK_ORIGIN // tree_voxel.inc.glsl: a march's brick holds its atlas origin (the light loop sets this shader's registers, not the march)
 #include "tree_voxel.inc.glsl"
@@ -213,7 +219,22 @@ void main()
 	albedo *= exp2(-2.0 * u_foliage_voxelInteriorDarkening * interiorTap);
 	// The crown's colour patches on the LEAVES only: by the voxel's leaf share, so the trunk and the bare branches keep
 	// their bark colour.
-	const f16vec3 materialColor = terrainFactionAlbedo(f16vec3(mix(albedo, leafPatchTint(albedo, pos), leafShare)), pos.xz, 1.0);
+	f16vec3 materialColor = terrainFactionAlbedo(f16vec3(mix(albedo, leafPatchTint(albedo, pos), leafShare)), pos.xz, 1.0);
+	// THE SNOW (snowApplyUp) on the crown's OUTSIDE (no shelter: a crown is its own roof). A voxel's mean leaf normal faces
+	// up only at the very top, so by it alone only the tips whitened. On the mesh tier a crown's leaves face every way, and
+	// the up-facing ones hold snow on the crown's bottom too: so on the crown's surface (the baked interior 0) every face
+	// counts as up-facing, the faces straight down included (1 + 0.15 N.y >= 0.85: under the slope rule's start). Deeper
+	// than "Weather/Snow/Voxel crown snow depth" (of the baked interior, 0 surface .. 1 core) the leaves hold none, so the
+	// crown's inside shows through its gaps.
+	float16_t roughness = float16_t(0.65);
+	float16_t metalness = float16_t(0.0);
+	// The LEAVES only (x the voxel's leaf share): a bark voxel - the trunk, a bare branch - keeps its own N.y and the full
+	// scale, as on the mesh tier.
+	const float shell = 1.0 - smoothstep(u_snow_voxelCrownDepth, u_snow_voxelCrownDepth + 0.15, interiorTap);
+	const float outside = shell * leafShare;
+	const float upN = max(float(N.y), outside * clamp(1.0 + 0.15 * float(N.y), 0.0, 1.0));
+	// The snow BRDF as on the mesh tier (no glints: SNOW_NO_GLINTS), so the tiers' crossfade keeps the snow's brightness.
+	snowApplyUp(pos, upN, N, materialColor, roughness, metalness, false, mix(1.0, u_snow_leafSnow * shell, leafShare), V, pos.xz, false);
 
 	// LEAVES seen edge-on: N bent toward the viewer until N.V reaches "Foliage min N.V" (the foliage FS's). After it N
 	// faces the viewer (N.V >= 0: the min is >= 0), so the transmission below needs no "seen side" flip.
@@ -265,7 +286,7 @@ void main()
 	}
 	g_sunShadowFirst *= exp2(sunLog);
 
-	const vec3 color = computeLitColor(pos, V, N, materialColor, float16_t(0.65), float16_t(0.0), float16_t(1.0));
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, float16_t(0.0), float16_t(1.0));
 	out_color = vec4(color, 1.0);
 
 	// THE MOTION VECTOR at the hit, formed AFTER the lighting from `pos` (which the light loop keeps live anyway) and the

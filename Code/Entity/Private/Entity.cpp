@@ -77,6 +77,44 @@ static bool hasRootOnlyAncestor(const Entity* parent)
     return false;
 }
 
+// A MOVER (RenderNode::setMover: no shelter for the snow site map): an entity that moves by itself - a unit, a shot, a
+// skinned or bone model, a body that is not static - or one under a "Mover true" ancestor (what the game moves).
+static bool spawnsAsMover(const Entity* entity)
+{
+    constexpr uint16 moving = (1u << EComponentID_Animator) | (1u << EComponentID_GameUnit) | (1u << EComponentID_GameProjectile)
+        | (1u << EComponentID_HumanoidAnimator);
+    for (const Entity* e = entity; e; e = e->getParent())
+    {
+        const EntitySpawnTemplate* tmpl = e->getSpawnTemplate();
+        if ((e->getTypeBits() & moving) != 0 || (tmpl && tmpl->mover))
+            return true;
+        if (const PhysicsComponent::SpawnInfo* physics = getSpawnInfo<PhysicsComponent>(e); physics && physics->bodyType != EPhysicsBodyType::Static)
+            return true;
+    }
+    return false;
+}
+
+// RenderNode::setMover on one entity's nodes: its RenderComponent's and its HumanoidAnimator's bones.
+static void markMoverNodes(Entity* entity)
+{
+    if (RenderComponent* render = getComponent<RenderComponent>(entity); render && render->node.isValid())
+        render->node.setMover(true);
+    if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(entity))
+        for (HumanoidAnimatorComponent::Bone& bone : humanoid->bones)
+            if (bone.node.isValid())
+                bone.node.setMover(true);
+}
+
+void markMoverTree(Entity* root)
+{
+    if (!root)
+        return;
+    markMoverNodes(root);
+    if (const SceneComponent* sc = getComponent<SceneComponent>(root))
+        for (const EntityPtr& child : sc->children)
+            markMoverTree(child.get());
+}
+
 static void gatherTreeCullBounds(Entity* entity, const Transform& toRoot, Sphere& bounds, bool& any)
 {
     if (const RenderComponent* render = getComponent<RenderComponent>(entity); render && render->node.isValid())
@@ -356,6 +394,8 @@ EntityPtr EntityState::create(const EntitySpawnTemplate& tmpl, const Transform& 
             entity->createComponent(EComponentID(i), offset, tmpl.spawnInfos[idx++].get(), transform, treeCursor);
             offset += EntityComponentDetail::inlineSizes[i];
         }
+    if (spawnsAsMover(entity)) // before the first push: the flag rides every push of the node
+        markMoverNodes(entity);
 
     // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
     // the render node when there is one (skinned inflated by the culling config), else a point at

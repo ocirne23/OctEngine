@@ -326,12 +326,15 @@ export namespace RendererVKLayout
 
     // Per-render-node pass visibility bits (in_nodeStates.x, written at renderNode() push time):
     // the main indirect cull, shadow cull, and TLAS-instance writer each early-out on their bit, so
-    // one pushed instance list feeds three independently culled passes. Bit order must match the
-    // Spatial library's SpatialPass_* mask (Entity static_asserts it).
+    // one pushed instance list feeds three independently culled passes. Entity translates the Spatial
+    // library's SpatialPass_* bits into these (spatialRenderPassMask).
     constexpr uint32 PASS_MAIN   = 1u << 0;
     constexpr uint32 PASS_SHADOW = 1u << 1;
     constexpr uint32 PASS_GI     = 1u << 2;
     constexpr uint32 PASS_ALL    = PASS_MAIN | PASS_SHADOW | PASS_GI;
+    // Not a pass: the node is a MOVER (RenderNode::setMover - units, players, shots, bodies). Its TLAS instance takes
+    // RT_MASK_MOVER, so the snow site map's rays do not see it (a passing unit is no roof). ORed in at the push.
+    constexpr uint32 PASS_FLAG_MOVER = 1u << 3;
 
     // Diffuse GI irradiance probes. A single persistent, world-space cascaded clipmap volume: numCascades
     // nested toroidal probe grids, each dimX x dimY x dimZ probes at a fixed power-of-two spacing
@@ -575,6 +578,7 @@ export namespace RendererVKLayout
         constexpr oc::string_view c_lod[] = { "LOD" };
         constexpr oc::string_view c_force[] = { "Force" };
         constexpr oc::string_view c_particles[] = { "Particles" };
+        constexpr oc::string_view c_weather[] = { "Weather" };
         constexpr oc::string_view c_post[] = { "TAA", "Post" };
     }
     inline constexpr UboLockSection c_uboLockSections[] = {
@@ -595,6 +599,7 @@ export namespace RendererVKLayout
         { "LOD", UboLockSections::c_lod },
         { "Force", UboLockSections::c_force },
         { "Particles", UboLockSections::c_particles },
+        { "Weather", UboLockSections::c_weather },
         { "Post", UboLockSections::c_post },
     };
     constexpr uint32 NUM_UBO_LOCK_SECTIONS = (uint32)(sizeof(c_uboLockSections) / sizeof(c_uboLockSections[0]));
@@ -787,8 +792,72 @@ export namespace RendererVKLayout
     constexpr uint32 RT_MASK_SCENE = 0xFB;     // every ray
     constexpr uint32 RT_MASK_TREE_CARD = 0x02; // a tree's shadow billboard: every ray but RTAO's (its opaque rays would hit the whole card rectangles)
     constexpr uint32 RT_MASK_TREE_BARK = 0x04; // a tree's bark mesh, beside its billboard: RTAO's rays only
+    constexpr uint32 RT_MASK_MOVER = 0xF1;     // a mover (PASS_FLAG_MOVER): every ray but the snow site map's
     constexpr uint32 RT_CULL_SCENE = 0xFB;     // every ray but RTAO's: the scene and the trees' cards
     constexpr uint32 RT_CULL_AO = 0x05;        // RTAO's rays: the scene and the trees' bark
+    constexpr uint32 RT_CULL_SNOW = 0x0A;      // the snow site map's rays: the scene and the trees' cards, not the bark or the movers
+
+    // ---- THE SNOW SITE MAP (SnowSitePipeline, snow_site.cs.glsl, snow.inc.glsl): straight down from the sky per texel, the
+    // top SOLID surface's world Y (R32F) and the share of the snow the foliage above it lets through (R8), in a world-snapped
+    // TOROIDAL window around the scene focus (slot = lattice & (RES - 1)), sampled bindless ----
+    constexpr uint32 SNOW_SITE_RES = 1024;         // texels per axis (a power of two)
+    constexpr float SNOW_SITE_TEXEL = 0.25f;       // m: 256 m of window
+    constexpr uint32 SNOW_SITE_SLICES = 64;        // the round-robin refresh: rows whose lattice row % SLICES = the tick's slice
+    constexpr float SNOW_SITE_NO_TOP = -1.0e30f;   // the cleared top: nothing over the ground
+    constexpr float SNOW_SITE_FOLIAGE_RANGE = 64.0f; // m: the pass image's G = the highest foliage over the solid top / this
+    // The CLASS image (R8UI, the same slots; compute only, always GENERAL): what the top is, and the invalidation's bits.
+    constexpr uint32 SNOW_SITE_CLASS_MASK = 3u;    // the class: 0 = the terrain or nothing, ...
+    constexpr uint32 SNOW_SITE_CLASS_OBJECT = 1u;  // ... an object (a roof, a prop: the caps' tops), ...
+    constexpr uint32 SNOW_SITE_CLASS_ROCK = 2u;    // ... a rock, dead wood or a cactus (the rock shell's: no cap)
+    constexpr uint32 SNOW_SITE_STALE = 4u;         // the top may be gone (invalidateSnowSite: a destroyed structure): no cap
+    constexpr uint32 SNOW_SITE_RETRACE = 8u;       // trace on the next tick that sees it (not only on its row's slice)
+    constexpr uint32 MAX_SNOW_SITE_INVALIDATIONS = 32; // a frame's rectangles (the rest merge into the last)
+
+    // ---- THE SNOW CAPS (SnowCapPipeline, snow_cap_prepare.cs.glsl, snow_cap.vs/.fs.glsl): the snow's volume on the object tops,
+    // a heightfield over the site map's texels. The PREPARE (per frame) writes one word per site texel - the cap's height
+    // over the top and the quad bits - and the visible tiles' draws; the VS reads only those words and the tops ----
+    constexpr uint32 SNOW_CAP_TILE = 32;           // site texels per tile side (8 m), one draw instance at LOD 0
+    constexpr uint32 SNOW_CAP_TILES = SNOW_SITE_RES / SNOW_CAP_TILE; // tile slots per axis (slot = tile & (TILES - 1))
+    constexpr uint32 SNOW_CAP_APRON = 8;           // texels around a tile the prepare reads (the edge distance's reach: 7)
+    constexpr uint32 SNOW_CAP_LODS = 3;            // quads of 1, 2, 4 texels
+    // A texel's word: bits 0..15 = the cap's height over the top (fp16, m), then the bits below.
+    constexpr uint32 SNOW_CAP_OBJECT = 1u << 16;   // an object top that holds a cap (not stale, not a rock)
+    constexpr uint32 SNOW_CAP_RAISED = 1u << 17;   // the cap stands over the top here (not sunk)
+    constexpr uint32 SNOW_CAP_KEEP0 = 1u << 18;    // the quad with this texel as its min corner is drawn at LOD 0 (+1, +2: LOD 1, 2)
+    // One drawn tile (16 B): its tile coords and its LOD (the draw list's segment).
+    struct alignas(16) SnowCapDraw
+    {
+        glm::ivec2 tile{ 0 };
+        uint32 lod = 0;
+        uint32 pad = 0;
+    };
+    static_assert(sizeof(SnowCapDraw) == 16);
+
+    // ---- THE SNOW DEFORMATION (SnowDeformPipeline, snow_deform.cs.glsl, snow.inc.glsl): two R32UI TOROIDAL windows around the
+    // focus - FINE (footprints) and COARSE (trails, craters) - per texel hi16 = the offset from the undisturbed snow surface
+    // over [SNOW_DEFORM_MIN, SNOW_DEFORM_MIN + SNOW_DEFORM_RANGE] m, lo16 = the snowfall at stamp time (mm, mod 65536: the
+    // refill). Read through an RG16_UNORM view (G = the offset, R = the stamp): gathered, decoded per texel, then filtered ----
+    constexpr uint32 SNOW_DEFORM_RES = 1024;              // texels per axis (a power of two)
+    constexpr float SNOW_DEFORM_FINE_TEXEL = 0.0625f;     // m: 64 m of window
+    constexpr float SNOW_DEFORM_COARSE_TEXEL = 0.25f;     // m: 256 m of window
+    constexpr int SNOW_DEFORM_FINE_STEP = 64;             // texels: the fine window moves 4 m at a time ...
+    constexpr int SNOW_DEFORM_COARSE_STEP = 64;           // ... the coarse one 16 m (only a step clears the scrolled-in texels)
+    constexpr float SNOW_DEFORM_MIN = -2.0f;              // m: the offset's range
+    constexpr float SNOW_DEFORM_RANGE = 3.0f;
+    constexpr uint32 SNOW_DEFORM_UNDISTURBED = 43690u << 16; // offset 0 (2/3 of the range), stamp 0
+    constexpr uint32 MAX_SNOW_DEFORMERS = 4096;           // a frame's stamps (Renderer::addSnowDeformer; the tail drops)
+    // One stamp (32 B, std430; snow_deform.cs.glsl): a CAPSULE = a sphere of `radius` swept from a to b, its bottom at the
+    // feet (a / b are FEET points); a CRATER = a bowl `depth` deep and `radius` wide around a (a surface point). packed:
+    // bit 31 = crater, bits 0..15 = the berm's share of the pressed depth (unorm16).
+    struct alignas(16) SnowDeformer
+    {
+        glm::vec3 a{ 0.0f };
+        float radius = 0.0f;
+        glm::vec3 b{ 0.0f };   // the capsule's end; a crater: x = its depth (m)
+        uint32 packed = 0;
+    };
+    static_assert(sizeof(SnowDeformer) == 32);
+    constexpr uint32 SNOW_DEFORMER_CRATER = 1u << 31;
 
     struct alignas(16) MaterialInfo
     {
@@ -814,7 +883,22 @@ export namespace RendererVKLayout
                                                 // the camera; setFogTerrainHeightMap expects CASCADES*RES*RES floats)
     constexpr uint32 FOG_TERRAIN_CASCADES = 2;  // layer 0 = near/fine, layer 1 = far/coarse (same res, larger range)
     constexpr uint32 TERRAIN_WET_RES = 1024;    // terrain wetness clipmap texels per axis (power of two: toroidal
-                                                // slot = lattice & (RES-1)); 512 m of coverage at the 0.5 m texel
+                                                // slot = lattice & (RES-1)); 2048 m of coverage at the 2 m texel
+
+    // THE SNOWPACK TABLE (SnowPack; snow.inc.glsl): the snow depth on the ground (m) per CLIMATE temperature at the shaded
+    // height (C: SNOW_TABLE_TEMP_BINS over [SNOW_TABLE_TEMP_MIN, SNOW_TABLE_TEMP_MAX]) and per CATCH (SNOW_TABLE_CATCH_BINS
+    // over [0, SNOW_TABLE_CATCH_MAX]; 1 = open flat ground). One float per cell, catch-major: [c * TEMP_BINS + t]. A
+    // host-visible buffer per frame slot, read by device address (u_snow_table). Catch 1 must fall ON a bin.
+    constexpr uint32 SNOW_TABLE_TEMP_BINS = 64;
+    constexpr uint32 SNOW_TABLE_CATCH_BINS = 16;
+    constexpr float SNOW_TABLE_TEMP_MIN = -40.0f;
+    constexpr float SNOW_TABLE_TEMP_MAX = 40.0f;
+    constexpr float SNOW_TABLE_CATCH_MAX = 2.5f;
+    constexpr uint32 SNOW_TABLE_CELLS = SNOW_TABLE_TEMP_BINS * SNOW_TABLE_CATCH_BINS;
+    // THE STATE (SnowPack::CellState; snow.inc.glsl snowPackCell): one vec4 per cell after the depths, in the same order -
+    // grain diameter (mm), meltwater (0..1), grime (0..1), 0 - read by device address (u_snow_stateTable).
+    constexpr uint32 SNOW_STATE_OFFSET = SNOW_TABLE_CELLS * sizeof(float); // bytes (16-B aligned)
+    constexpr uint32 SNOW_TABLE_BYTES = SNOW_STATE_OFFSET + SNOW_TABLE_CELLS * 16u;
 
     // PROCEDURAL GRASS (GrassPipeline; grass.inc.glsl). The blades are ranked per BASE CELL of a world grid ("Patch size");
     // they are drawn in RING CELLS around the camera: GRASS_RING_LEVELS nested blocks of GRASS_RING_CELLS^2 cells, level k's

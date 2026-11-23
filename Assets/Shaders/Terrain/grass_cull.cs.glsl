@@ -28,6 +28,12 @@
 layout (binding = 9) uniform sampler2D u_terrainNoise; // the terrain noise texture (the crag wander): no bindless array here
 #define TERRAIN_NOISE_SAMPLER u_terrainNoise
 #define GRASS_NOISE_SAMPLER u_terrainNoise // grass.inc.glsl's value noise (its A)
+// The snow site map (snow.inc.glsl): bound directly, and read in the window it held before this frame's trace.
+layout (binding = 10) uniform sampler2D u_snowSiteTop;
+layout (binding = 11) uniform sampler2D u_snowSitePass;
+#define SNOW_SITE_TOP_SAMPLER u_snowSiteTop
+#define SNOW_SITE_PASS_SAMPLER u_snowSitePass
+#define SNOW_SITE_ORIGIN u_snow_siteReadOrigin
 #define TERRAIN_SPLAT_HEIGHT_ONLY // the coverages only: no material texture taps
 #include "terrain_splat.inc.glsl"
 

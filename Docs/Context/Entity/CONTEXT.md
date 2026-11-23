@@ -81,6 +81,15 @@ read through `spawnTemplate` (which outlives the entity: World's caches, retired
 
 Per-component `enabled` bools are independent of all of these.
 
+**MOVERS** (not a flag: `EntitySpawnTemplate::mover` + a render node bit). `EntityState::create` marks every render
+node of a MOVER (`RenderNode::setMover`: the RenderComponent's node and the HumanoidAnimator's bone nodes) right after its
+components spawn, before the first push: an entity with an Animator, a GameUnit, a GameProjectile or a HumanoidAnimator,
+a Physics body that is not Static, or one under an ancestor that is one or that authors `Mover true` (what the game
+moves without a body: the walkers, the airship and its rails, the arrows). `markMoverTree(root)` marks a subtree later,
+from its next push on: the game calls it for a structure it puts on the flying ship (`spawnShipStructure`, its rubble).
+The snow site map's rays do not see a mover
+(a passing unit is no roof; see [`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)); every other ray does.
+
 ### Components
 
 `typeBits` masks 14 types in this fixed order:

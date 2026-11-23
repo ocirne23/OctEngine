@@ -10,6 +10,7 @@ import :EntityDocument;
 static void readTemplateComponents(const EntitySpawnTemplate& tmpl, EntityDocNode& node, uint64& nextId)
 {
     node.global = tmpl.global;
+    node.mover = tmpl.mover;
     node.cullMode = tmpl.cullMode;
     node.enabled = tmpl.enabled;
 
@@ -69,6 +70,8 @@ static void writeOverrides(const EntityDocNode& node, AssetNode& out, const oc::
         out.set("Enabled", false); // enabled is the default, so only the disabled state is authored
     if (node.global)
         out.set("Global", true);
+    if (node.mover)
+        out.set("Mover", true);
     if (node.cullMode == EEntityCullMode::RootOnly)
         out.set("CullMode", "RootOnly");
     else if (node.cullMode == EEntityCullMode::None)

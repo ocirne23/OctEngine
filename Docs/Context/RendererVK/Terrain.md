@@ -25,7 +25,8 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   but **that is slot order, not draw order: the shader composites ground → beach → rock → snow**, so
   rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
   beach paints over the waterline whatever the climate, and snow paints over everything else, ground
-  AND rock. The contract is on `TerrainSplatMaterial` / `TerrainSplatCounts` (TerrainResources.ixx).
+  AND rock: the climate's permanent snow or the weather's snowpack, whichever is whiter ("Where the snow shows" in
+  [Snow.md](Snow.md)). The contract is on `TerrainSplatMaterial` / `TerrainSplatCounts` (TerrainResources.ixx).
 * **THE FACTION MAP** (`Renderer::setFactionMap` / `clearFactionMap`; `TerrainResources::getFactionMap`): the game's
   faction layer as ONE R8 texture, `FACTION_MAP_RES` (4096) square (16 MB an image: the pair + a staging buffer per
   frame slot), over a world-FIXED square - 0 = fully the enemy's,
@@ -690,8 +691,9 @@ the sand, so the two can never disagree.
   coord was outside the last window starts dry). The pass decays `exp(−dt/dryTime)` (sharpened on warm ground from the
   map's own climate, "Dry temp sensitivity"), then **sets ground under the LIVE ocean surface to 1** — the same
   calm-depth + swash residual predicate the lit core uses for underwater sunlight, so the wet tongue is where the water
-  was drawn, and permanently submerged seabed stays 1 until a drawdown exposes it — plus a uniform rain term and the
-  inland water target. GENERAL for life, two layers ping/ponged (the diffusion tent reads neighbours; "Terrain/Water/
+  was drawn, and permanently submerged seabed stays 1 until a drawdown exposes it — plus the rain (a uniform term,
+  "Rain (1/s)", and the WEATHER's where it falls as rain at the texel's air temperature: "Weather/Rain wetting", see
+  [Snow.md](Snow.md)) and the inland water target. GENERAL for life, two layers ping/ponged (the diffusion tent reads neighbours; "Terrain/Water/
   Diffusion on" is the baked `WET_DIFFUSION` define). The TERRAIN fragment shader (binding 18, UPDATE_AFTER_BIND)
   manual-bilinears it (never across the wrap seam) and derives everything above from it. **Disabled = the pass is
   skipped and the presence flag is 0**; re-enabling parks the previous origin out of range so nothing stale shows.

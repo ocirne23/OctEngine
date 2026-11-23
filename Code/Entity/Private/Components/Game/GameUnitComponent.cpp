@@ -166,6 +166,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     m_seedDue = (float)Globals::time.getSimElapsedSec() + params.seedRequestInterval * unitRand01(m_rng);
     m_stuckCheckTimer = 0.75f * unitRand01(m_rng);
     m_attackTimer = attackInterval * unitRand01(m_rng);
+    m_snowIdle = unitRand01(m_rng); // the standing re-stamp's phase (tickSnow)
     if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
     {
         float r = 0.5f, top = 1.0f;
@@ -256,10 +257,45 @@ void GameUnitComponent::tickModel(Entity& entity, float deltaSec)
     m_modelForward = glm::vec2(ch * ch - sh * sh, -2.0f * sh * ch); // the model's +X in world XZ: (cos yaw, -sin yaw)
 }
 
+// THE TRACK IN THE SNOW (Renderer::addSnowTrack): the collider's bottom swept from the last stamp to here, once it has
+// moved a few cm (a standing unit stamps nothing). A jump of metres (a teleport, a respawn, a correction) starts a new track
+// instead of a trench across the gap. The renderer drops it where no snow lies, far away, or with the feet in the air.
+// A unit that STANDS presses its feet again once a second (falling snow would bury its dent otherwise; an unchanged dent
+// costs the stamp nothing), on a per-unit phase so a crowd does not stamp in one frame.
+void GameUnitComponent::tickSnow(const Entity& entity, float deltaSec)
+{
+    const glm::vec3 feet(entity.pos.x, entity.pos.y - m_bodyTop, entity.pos.z);
+    if (m_hasSnowFeet)
+    {
+        const glm::vec3 step = feet - m_snowFeet;
+        const float stepSq = glm::dot(step, step);
+        constexpr float c_minStep = 0.05f; // m
+        if (stepSq < c_minStep * c_minStep)
+        {
+            constexpr float c_restampSeconds = 1.0f;
+            m_snowIdle += deltaSec;
+            if (m_snowIdle >= c_restampSeconds)
+            {
+                m_snowIdle -= c_restampSeconds * std::floor(m_snowIdle / c_restampSeconds);
+                Globals::rendererVK.addSnowTrack(m_snowFeet, m_snowFeet, 0.8f * bodyRadius);
+            }
+            return;
+        }
+        constexpr float c_maxStep = 6.0f;  // m: farther is a jump, not a walk
+        if (stepSq > c_maxStep * c_maxStep)
+            Globals::rendererVK.addSnowTrack(feet, feet, 0.8f * bodyRadius);
+        else
+            Globals::rendererVK.addSnowTrack(m_snowFeet, feet, 0.8f * bodyRadius);
+    }
+    m_snowFeet = feet;
+    m_hasSnowFeet = true;
+}
+
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
     tickDeathCue(entity);
     tickModel(entity, deltaSec);
+    tickSnow(entity, deltaSec);
     if (Globals::networkManager.role() == ENetRole::Client)
         return;
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);

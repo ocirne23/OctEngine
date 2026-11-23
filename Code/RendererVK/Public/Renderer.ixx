@@ -59,6 +59,16 @@ public:
     void addBeamCard(const RendererVKLayout::LightInfo& beam);
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);
     void addDecal(const RendererVKLayout::DecalInfo& decal);
+    // THE SNOW'S TRACKS (Snow.md "The deformation"): a foot (a ball of `radius` whose BOTTOM moved from `fromFeet` to
+    // `toFeet` this frame) or an impact's CRATER (a bowl of `radius`, at most `depth` deep). Presses the snow where it lies
+    // and the feet reach it; dropped while the tracks are off, far from the camera, or past the frame's 4096. Any thread,
+    // AFTER beginFrame (its job resets the frame's list: a call before joinBeginFrameJob is lost).
+    void addSnowTrack(const glm::vec3& fromFeet, const glm::vec3& toFeet, float radius);
+    void addSnowCrater(const glm::vec3& centre, float radius, float depth);
+    // THE SITE MAP's tops over a world rectangle changed (Snow.md "The invalidation"): a structure was built, moved or
+    // destroyed. hide: the tops may be gone - the snow caps there go at once. The texels are traced again on the next ticks
+    // that see them. Any thread.
+    void invalidateSnowSite(const glm::vec2& minXZ, const glm::vec2& maxXZ, bool hide);
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color); // per-worker staging, merged in present
 
     // ----  The world focus point every distance-based falloff measures from ----
@@ -210,6 +220,14 @@ public:
     void setTerrainRayNodes(float chunkSize, uint32 lod0Res, oc::span<const TerrainRayNode> nodes);
     // The terrain height right under the camera (world Y; NaN = unknown), per frame: the near grass cascade's placement and the far-tree volume's cell layout.
     void setCameraGround(float groundY) { m_cameraGround = groundY; }
+    // The climate's temperature at the ground under the camera (C; NaN = unknown), per frame: whether the weather falls as
+    // snow or rain where the camera is (getWeatherAtCamera).
+    void setCameraTemperature(float temperatureC) { m_cameraTemperature = temperatureC; }
+
+    // ---- Weather ("Weather"; Docs/Context/RendererVK/Snow.md) ----
+    // What falls at the camera now, 0..1 each: x = snow, y = rain (the precipitation split by the air temperature there).
+    // The particle system's weather volumes follow it. Main thread; updated at the begin-frame kick.
+    glm::vec2 getWeatherAtCamera() const { return m_weatherAtCamera; }
 
     float groundRange() const { return glm::max(grassRange(), clutterRange()); } // m the ground chunks must cover: the grass's and the clutter's
 

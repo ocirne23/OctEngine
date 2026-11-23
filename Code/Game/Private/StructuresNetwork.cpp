@@ -548,6 +548,7 @@ void StructureSystem::updateWalkway(const Ref& s)
     const bool samePose = want != -1 || (glm::abs(lift - s.walkLift) < 1e-3f && glm::all(glm::lessThan(glm::abs(slope - s.walkSlope), glm::vec2(1e-4f))));
     if (want == s.walkDir && samePose)
         return;
+    invalidateSnowSite(s, /*hide*/ true); // the deck / stairs top changes: its caps go now, the cell traces again
     if (s.walkPiece)
         Globals::world.removeRootEntity(s.walkPiece.get());
     if (s.walkLegs)

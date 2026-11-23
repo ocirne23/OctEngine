@@ -55,6 +55,25 @@ layout (binding = 15) uniform sampler2D u_colourNew;
 layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
 #endif
 
+// THE SNOW (snow.inc.glsl: the pack's cover at the crown's temperature, open sky - catch 1). The site map is never read
+// here (a far tree is past its window), so its samplers name any 2D one: snowSiteCatch is dead code.
+#define SNOW_SITE_TOP_SAMPLER u_colour
+#define SNOW_SITE_PASS_SAMPLER u_colour
+#include "snow.inc.glsl"
+
+// The snow on a far crown (0..1) at its first hit: the climate's permanent snow or the pack - the objects' rule
+// (snowObjectCover) with no shelter and every face up (the voxel crowns' outside: their leaves face every way).
+float farTreeSnow(vec3 p)
+{
+    if (u_snow_objects < 0.5 || u_terrain_hasSnow < 0.5 || !terrainHeightMapPresent())
+        return 0.0;
+    const vec4 climate = terrainClimateAt(p.xz);
+    const float tempC = terrainTemperatureAt(climate, p.y);
+    const float cold = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, tempC);
+    const float permanent = cold * smoothstep(0.0, u_terrainTex_snowAridity, climate.w);
+    return max(permanent, snowPackCover(tempC, 1.0));
+}
+
 // The push block: TreeVolumePipeline's MarchPush (pc_vol_*: the SHOWN bake's lockable values). The shading tweaks
 // ("Trees/Far ...") ride the frame UBO: u_foliage_far*.
 #include "push.generated.glsl"
@@ -397,7 +416,9 @@ void marchAt(ivec2 px)
 #ifdef TREE_TEMPORAL_OUT
     float tFront = tEnd; // the first tree
 #endif
-    float terrainVis = -1.0; // the terrain's sun visibility, once per ray at the first hit
+    // Once per ray at the first hit, PACKED in one register (half x 2): the terrain's sun visibility and the snow on the
+    // crowns (farTreeSnow). ~0u = not taken yet.
+    uint firstHit = ~0u;
 
     // tvCellSize(r) = r x cellPerR (both cell sides grow linearly with r).
     const float cellPerR = max(tvLogSpan(TV_PUSH_VOL) / float(pc_vol_radialRes), TV_TWO_PI / float(pc_vol_angularRes));
@@ -492,8 +513,11 @@ void marchAt(ivec2 px)
                 // The terrain shadow marches the height MAP, not the tree floor: start at the sample's height above its floor,
                 // put on the MAP's ground there. From `p` itself a crown in a valley started under the map's surface (its
                 // coarse texels interpolate above a concave floor) and lost all sun: black patches along valleys.
-                if (terrainVis < 0.0)
-                    terrainVis = terrainSunVisibility(vec3(p.x, terrainHeightAt(p.xz) + max(h, 0.0), p.z), L, 20.0, 8, 0.02, 1.0);
+                if (firstHit == ~0u)
+                    firstHit = packHalf2x16(vec2(terrainSunVisibility(vec3(p.x, terrainHeightAt(p.xz) + max(h, 0.0), p.z), L, 20.0, 8, 0.02, 1.0),
+                        farTreeSnow(p)));
+                const vec2 hitData = unpackHalf2x16(firstHit);
+                const float terrainVis = hitData.x;
                 // The cloud shadow per lit step (a ray crosses kilometres of canopy).
                 const float cloudT = cloudSunTransmittanceBilinear(p);
                 const mat2 J = polarJ(rel, r);
@@ -508,9 +532,11 @@ void marchAt(ivec2 px)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709).
                 // The faction look, at the step's own place (the colour map is baked: the layer changes between bakes), the
                 // weaker share on a rock column.
-                const vec3 albedo = terrainFactionTint(
+                // The SNOW over it: the fresh snow's albedo x the crown's cover x "Weather/Snow/Leaf snow" (a rock column the
+                // full cover), as on the voxel crowns' outside.
+                const vec3 albedo = mix(terrainFactionTint(
                     max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0),
-                    p.xz, mix(1.0, u_terrain_factionSolidScale, rock));
+                    p.xz, mix(1.0, u_terrain_factionSolidScale, rock)), u_snow_freshAlbedo, hitData.y * mix(u_snow_leafSnow, 1.0, rock));
 
                 // The volume's NORMAL = -grad(density), by forward differences over half a cell (horizontal) / one slice
                 // (up), from the taps' floor, x "Far normal strength"; a rock takes the full N.L.

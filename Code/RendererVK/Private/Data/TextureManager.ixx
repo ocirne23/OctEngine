@@ -23,6 +23,12 @@ public:
     // The same with any format, e.g. BC blocks compressed at runtime (each level `format`'s bytes for its size).
     // redAsAlpha: a one- or two-channel format read as a mask - its red in all four, a second channel still in green (Texture::initialize).
     uint16 uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName, bool redAsAlpha = false);
+    // A GPU-written image (one mip) into a bindless slot: the manager OWNS it from here on (its slot frees it). Every
+    // bindless writer names a slot in SHADER_READ_ONLY_OPTIMAL, so the writer must leave it there between its writes.
+    uint16 adoptImage(vk::Image image, VmaAllocation memory, vk::ImageView view, vk::Format format, uint32 width, uint32 height)
+    {
+        return uploadImpl([&](Texture& texture) { texture.adoptImage(image, memory, view, format, width, height); return true; });
+    }
     // Takes a texture out of its slot (ObjectContainer teardown) and recycles the slot for a later upload; unregisters
     // from the TextureStreamer and queues a fallback rewrite of the slot's bindless descriptor entries. Returns the
     // image: a frame in flight may still sample it, so the caller destroys it once those frames are done

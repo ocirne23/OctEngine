@@ -33,9 +33,12 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
+#define LIT_SNOW // the snow's sun BRDF on the object layer (snowApply sets it up)
 #include "instanced_indirect_lit.inc.glsl"
 #define FACTION_MAP_BINDING 24
 #include "terrain_faction.inc.glsl" // the game's faction layer: only a material that asks for it (MATERIAL_FLAG_FACTION_TINT: tree bark)
+#define SNOW_OBJECTS
+#include "snow.inc.glsl" // the snow on the up-facing surfaces (snowApply)
 
 // THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live (lit FS 72/16 ->
 // 64/48 regs / spill B). The geometric normal also carries the shadow's normal offset (a normal map must not bend the
@@ -106,6 +109,10 @@ void main()
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
 	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+#ifndef NO_MOTION_OUTPUT // no snow on glass (the blended variant)
+	// No glints on what moves: its world-anchored glints would crawl over it.
+	snowApply(pos, N, materialColor, roughness, metalness, true, 1.0, V, pos.xz, dot(in_prevWorldDelta, in_prevWorldDelta) < 1e-8);
+#endif
 
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));

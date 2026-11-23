@@ -42,6 +42,7 @@ void Settings::registerAll()
 
     registerHud(s.hud);
     registerParticleSystem(s.particleSystem);
+    registerWeather(s.weather);
     registerForce(s.force, s.forceSystem);
     registerFreeFlyCamera(s.freeFlyCamera);
     registerAppControls(s.appControls);

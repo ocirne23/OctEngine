@@ -24,6 +24,9 @@ void GrassPipeline::buildLayout(ComputePipelineLayout& layout)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = CS });
     // The terrain noise texture (the splat's crag wander): one image, not the bindless array.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 9, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = CS });
+    // The snow site map's two images (snow.inc.glsl): fixed handles, made once.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = CS });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = CS });
     // Binding 1 (the terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags[1] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
@@ -250,7 +253,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         return DescriptorSetUpdateInfo{ .binding = binding, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() } } };
     };
-    oc::array<DescriptorSetUpdateInfo, 10> updates{
+    oc::array<DescriptorSetUpdateInfo, 12> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -264,6 +267,11 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         storage(8, *params.clutterFrame),
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_noiseSampler.getSampler(), .imageView = params.noiseView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        // The site's repeat sampler wraps the site map like its toroidal slots.
+        DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.snowSiteSampler, .imageView = params.snowSiteTopView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.snowSiteSampler, .imageView = params.snowSitePassView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
     };
     vk::DescriptorSet set = m_sets[frameIdx].getDescriptorSet();
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());

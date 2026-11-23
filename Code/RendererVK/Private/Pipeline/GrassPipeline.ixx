@@ -52,6 +52,9 @@ public:
         Buffer* vertexBuffer = nullptr; // the vertex mega-buffer (the terrain chunks' vertices)
         Buffer* clutterFrame = nullptr; // that frame slot's ClutterFrameGpu (the forest floor map: "Canopy thinning")
         vk::ImageView noiseView;        // the terrain noise texture (TerrainResources): the splat's crag wander, the grass value noise
+        vk::ImageView snowSiteTopView;  // the snow site map (SnowSitePipeline): the splat's snow shelter
+        vk::ImageView snowSitePassView;
+        vk::Sampler snowSiteSampler;    // the site's own (linear, repeat: the toroidal wrap)
     };
     // The cull: the draw counts (every slot), dispatch, and the barrier to the draw (indirect + vertex attribute reads).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
