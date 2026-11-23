@@ -19,6 +19,12 @@ import :Diffusion.Onnx;
 
 namespace Procedural::Diffusion
 {
+#ifdef _MSC_VER
+	constexpr const char* c_gpuProvider = "DirectML";
+#else
+	constexpr const char* c_gpuProvider = "CUDA";
+#endif
+
 	namespace
 	{
 		// The ORT environment is a process-wide singleton and is never destroyed (matching the reference,
@@ -138,22 +144,27 @@ namespace Procedural::Diffusion
 					Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(opts, 0));
 					dml = true;
 #else
-					// Linux: no DirectML. Same path as a Windows machine without it: Gpu fails, Auto runs on the CPU.
-					throw Ort::Exception("DirectML is Windows-only", ORT_NOT_IMPLEMENTED);
+					// Linux: the CUDA provider stands in for DirectML (`dml` means "the GPU provider" from here on). It logs
+					// through ORT's default logger while it is appended, which the Env registers: create that first.
+					(void)ortEnv();
+					OrtCUDAProviderOptions cuda{};
+					cuda.device_id = 0;
+					opts.AppendExecutionProvider_CUDA(cuda);
+					dml = true;
 #endif
 				}
 				catch (const Ort::Exception& e)
 				{
 					if (device == EInferenceDevice::Gpu)
 					{
-						Log::error(oc::format("[Diffusion] DirectML requested but unavailable: {}", e.what()));
+						Log::error(oc::format("[Diffusion] {} requested but unavailable: {}", c_gpuProvider, e.what()));
 						return false;
 					}
-					Log::warning(oc::format("[Diffusion] DirectML unavailable ({}), falling back to CPU. "
-					                         "Inference will be very slow.", e.what()));
+					Log::warning(oc::format("[Diffusion] {} unavailable ({}), falling back to CPU. "
+					                         "Inference will be very slow.", c_gpuProvider, e.what()));
 				}
 			}
-			setResolvedProviderOnce(dml ? "DirectML" : "CPU");
+			setResolvedProviderOnce(dml ? c_gpuProvider : "CPU");
 
 			const auto t0 = Clock::now();
 			m_impl->session.emplace(ortEnv(), widenPath(modelPath).c_str(), opts);

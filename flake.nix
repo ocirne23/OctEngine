@@ -47,6 +47,34 @@
           '';
         };
 
+        # ONNX Runtime 1.24.4 with the CUDA execution provider, Microsoft's prebuilt Linux binaries (the NuGet package; the
+        # GitHub release page is gone). 1.24 is the version of Dependencies/Include/onnxruntime (ORT_API_VERSION 24), so
+        # the vendored headers match it. The diffusion terrain runs on the CUDA provider where Windows uses DirectML.
+        # TensorRT's provider is left out (it needs TensorRT).
+        cuda = pkgs.cudaPackages_12;
+        onnxruntime-gpu = pkgs.stdenv.mkDerivation {
+          pname = "onnxruntime-gpu-bin";
+          version = "1.24.4";
+          src = pkgs.fetchurl {
+            url = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.linux/1.24.4/microsoft.ml.onnxruntime.gpu.linux.1.24.4.nupkg";
+            hash = "sha256-BlQIR7T4PMX9klYiYxImWUUs9ieD6aFHe2AAstlHtUI=";
+          };
+          nativeBuildInputs = [ pkgs.unzip pkgs.autoPatchelfHook pkgs.addDriverRunpath ];
+          buildInputs = [ pkgs.stdenv.cc.cc.lib cuda.cuda_cudart cuda.libcublas cuda.libcurand cuda.libcufft cuda.cudnn ];
+          unpackPhase = "unzip -q $src 'runtimes/linux-x64/native/*'";
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = ''
+            mkdir -p $out/lib
+            cp runtimes/linux-x64/native/libonnxruntime.so \
+               runtimes/linux-x64/native/libonnxruntime_providers_shared.so \
+               runtimes/linux-x64/native/libonnxruntime_providers_cuda.so $out/lib/
+            ln -s libonnxruntime.so $out/lib/libonnxruntime.so.1
+          '';
+          # libcuda.so.1 is the NVIDIA driver's (/run/opengl-driver/lib on NixOS)
+          postFixup = "addDriverRunpath $out/lib/libonnxruntime_providers_cuda.so";
+        };
+
         # The libraries the engine calls through a C++ API (std::string / std::vector in the signatures) must be built
         # against libc++ like the engine; nixpkgs builds them against libstdc++, whose std:: names mangle differently.
         withLibcxx = drv: (drv.override { stdenv = llvm.libcxxStdenv; }).overrideAttrs { doCheck = false; };
@@ -68,7 +96,7 @@
           spirv-tools
           spirv-headers
           openxr-loader
-          onnxruntime
+          onnxruntime-gpu
           openssl
           libx11
           wayland
@@ -96,18 +124,17 @@
           OC_BOX3D_SRC = "${box3d-src}";
           OC_MESHOPTIMIZER_SRC = "${meshoptimizer-src}";
           OC_PHONON_LIB = "${phonon}/lib";
-          OC_ONNXRUNTIME = "${pkgs.onnxruntime}";
-          OC_ONNXRUNTIME_DEV = "${pkgs.onnxruntime.dev}";
+          OC_ONNXRUNTIME_LIB = "${onnxruntime-gpu}/lib";
           # The wrapped scanner: the unwrapped one does not see the libc++ / glibc include paths the clang wrapper adds.
           OC_CLANG_SCAN_DEPS = "${llvm.clang-tools.override { clang = llvm.libcxxClang; }}/bin/clang-scan-deps";
           # std.cppm / std.compat.cppm: built as an ordinary module target (CMake's own `import std` is still behind a
           # per-version experimental gate).
           OC_LIBCXX_MODULES = "${llvm.libcxx}/share/libc++/v1";
-          # Searched BEFORE Dependencies/Include: these libraries link from nixpkgs, so their headers must come from
-          # nixpkgs too (the vendored copies match the Windows .libs, not these).
+          # The include folders of the libraries that link from nixpkgs (their vendored copies match the Windows .libs).
           OC_NIX_INCLUDES = pkgs.lib.concatMapStringsSep ";" (p: "${pkgs.lib.getDev p}/include")
-            ([ glslang spirv-tools assimp shaderc ] ++ (with pkgs; [ onnxruntime sdl3 openxr-loader zstd zlib openssl ]));
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (libs ++ [ phonon ]);
+            ([ glslang spirv-tools assimp shaderc ] ++ (with pkgs; [ sdl3 openxr-loader zstd zlib openssl ]));
+          # /run/opengl-driver/lib: the NVIDIA driver's libcuda for the CUDA provider (NixOS).
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (libs ++ [ phonon ]) + ":/run/opengl-driver/lib";
           VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 
           shellHook = ''

@@ -16,7 +16,7 @@ endif()
 
 enable_language(C) # box3d is C
 
-foreach(var OC_EASTL_SRC OC_IMGUI_SRC OC_BOX3D_SRC OC_MESHOPTIMIZER_SRC OC_PHONON_LIB OC_LIBCXX_MODULES OC_NIX_INCLUDES)
+foreach(var OC_EASTL_SRC OC_IMGUI_SRC OC_BOX3D_SRC OC_MESHOPTIMIZER_SRC OC_PHONON_LIB OC_ONNXRUNTIME_LIB OC_LIBCXX_MODULES OC_NIX_INCLUDES)
 	if("$ENV{${var}}" STREQUAL "")
 		message(FATAL_ERROR "${var} is not set: configure from inside `nix develop`")
 	endif()
@@ -37,7 +37,7 @@ set(OC_LINUX_INCLUDES "${ROOT_DIR}/Linux/Include")
 # wrapper also passes as -isystem, so the nixpkgs headers can never come BEFORE Dependencies/Include, and its Windows
 # copies (glslang 16.3, SDL3, ...) would be compiled against the nixpkgs libraries (seen: a crash in GlslangToSpv).
 # apply_compile_settings puts this folder of symlinks in place of Dependencies/Include on every target.
-set(OC_NIXPKGS_HEADER_DIRS glslang shaderc spirv-tools assimp onnxruntime SDL3 openxr)
+set(OC_NIXPKGS_HEADER_DIRS glslang shaderc spirv-tools assimp SDL3 openxr) # onnxruntime stays: the binary is 1.24 too
 set(OC_VENDORED_INCLUDE "${CMAKE_BINARY_DIR}/VendoredInclude")
 file(REMOVE_RECURSE "${OC_VENDORED_INCLUDE}")
 file(GLOB OC_VENDORED_ENTRIES RELATIVE "${ROOT_DIR}/Dependencies/Include" "${ROOT_DIR}/Dependencies/Include/*")
@@ -192,7 +192,7 @@ oc_alias(zlibstatic "-lz")
 oc_alias(zstd "-lzstd")
 oc_alias(openxr_loader "-lopenxr_loader")
 oc_alias(phonon "${OC_PHONON_LIB}/libphonon.so")
-oc_alias(onnxruntime "-lonnxruntime")
+oc_alias(onnxruntime "${OC_ONNXRUNTIME_LIB}/libonnxruntime.so") # the GPU (CUDA) binary package, see flake.nix
 oc_alias(glslang "-lglslang")
 oc_alias(SPIRV "-lSPIRV")
 oc_alias(glslang-default-resource-limits "-lglslang-default-resource-limits")
