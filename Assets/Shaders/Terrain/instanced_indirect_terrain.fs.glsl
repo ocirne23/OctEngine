@@ -238,7 +238,10 @@ void main()
 	if (grassCanopy.z > float16_t(0.0))
 	{
 		float stripe, fine, glint;
-		surf.albedo = mix(surf.albedo, f16vec3(grassFarAlbedo(in_pos, geoN, fields.temperature, grassCanopy.w, stripe, fine)), grassCanopy.z);
+		// THE SNOW on the far grass as on the blades (grass.fs.glsl): the ground's white (the splat's snow share) x "Grass snow".
+		const vec3 farAlbedo = mix(grassFarAlbedo(in_pos, geoN, fields.temperature, grassCanopy.w, stripe, fine), u_snow_freshAlbedo,
+			float(snowShare) * u_snow_grassSnow);
+		surf.albedo = mix(surf.albedo, f16vec3(farAlbedo), grassCanopy.z);
 		const vec3 farN = grassFarNormal(in_pos, geoN, stripe, fine, glint);
 		// "Ripple glint"'s blades are sharper than the layer: 0.3 x its roughness.
 		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness * (1.0 - 0.7 * glint)), grassCanopy.z);

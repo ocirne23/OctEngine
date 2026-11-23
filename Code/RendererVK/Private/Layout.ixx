@@ -934,8 +934,10 @@ export namespace RendererVKLayout
                                // (the next ring is one LOD coarser: the blades morph to it) << 21
         uint32 density;        // the 4 corner densities, unorm8 (x0z0, x1z0, x0z1, x1z1)
         uint32 cellTemperature; // packHalf2x16(the chunk grid's cell (m), the cell's mean temperature (C): the cold tint)
+        uint32 snow;           // the 4 corners' ground white (TerrainLayers::snowW), unorm8 as density: the blades' snow (grass.fs.glsl)
+        uint32 pad;            // std430: the struct's vec2 alignment
     };
-    static_assert(sizeof(GrassPatchGpu) == 32);
+    static_assert(sizeof(GrassPatchGpu) == 40);
 
     // The per-frame table (host-visible; grass_cull.cs.glsl, std430): the terrain chunks around the camera (the ground
     // clutter's cull reads them too) and the grass ring levels.
@@ -1064,7 +1066,8 @@ export namespace RendererVKLayout
     struct ClutterInstanceGpu
     {
         glm::vec4 posScale;   // the ground contact point (world), the scale (already x the grow factor)
-        glm::uvec4 data;      // xy the rotation quaternion (4 halves; a flower: x its texture + 1, 0 = none), z type | variant << 8 | lod << 16 | kind << 24, w its hash
+        glm::uvec4 data;      // xy the rotation quaternion (4 halves; a flower: x its texture + 1, 0 = none), z type | variant << 8 | lod << 16 |
+                              // its SNOW (6 bits: the ground's white x "Clutter snow") << 18 | kind << 24, w its hash
         glm::uvec4 look;      // x albedo0 (rgba8: rgb, roughness), y albedo1 (rgba8: rgb, spots), z packHalf2x16(stem height, head size)
                               // - a rigid object: packHalf2x16(its height (m), 0) -, w head | petals << 8 | petal width (unorm8) << 16 | open angle (unorm8 of pi / 2) << 24
     };

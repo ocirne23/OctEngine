@@ -126,8 +126,6 @@ void main()
 	const MaterialInfo material = in_materialInfos[voxelTreeTypeMaterial(tree) >> 16];
 	// The material's albedo slot = the grid's opacity atlas (its header names the index), its normal slot = the surface atlas.
 	const VoxelGrid grid = voxelGrid(material.diffuseNormalTexIdx & 0xFFFFu);
-	if (!voxelGridValid(grid))
-		discard; // the atlas is not in its slot yet (voxelGrid)
 	const uint surfaceTex = material.diffuseNormalTexIdx >> 16;
 	const float maxLod = grid.levels - 1.0;
 	const VoxelLevel level = voxelLevel(grid, lod);

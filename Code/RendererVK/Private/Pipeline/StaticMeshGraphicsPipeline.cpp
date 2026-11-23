@@ -676,6 +676,9 @@ void StaticMeshGraphicsPipeline::buildGrassLayout(const GraphicsPipelineLayout& 
         .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::GrassPatchGpu, origin) });
     grass.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
         .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(RendererVKLayout::GrassPatchGpu, firstVertex) });
+    // The corners' ground white (the blades' snow): the main pass only - the near casters' VS has no colour.
+    grass.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
+        .location = 2, .binding = 0, .format = vk::Format::eR32Uint, .offset = offsetof(RendererVKLayout::GrassPatchGpu, snow) });
 
     const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
         return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };

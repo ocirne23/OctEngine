@@ -39,9 +39,11 @@ public:
     // (BindlessTextures::processPendingFrees). Empty when the slot was already free.
     [[nodiscard]] Texture free(uint16 idx);
     // View for descriptor-array slot idx: freed (not yet recycled) slots substitute the fallback diffuse
-    // so the bindless arrays never reference a destroyed image.
+    // so the bindless arrays never reference a destroyed image. Under the upload lock: a job's upload may be
+    // writing a recycled slot (the main thread's descriptor writes read it).
     vk::ImageView getViewForDescriptor(uint16 idx) const
     {
+        const std::lock_guard lock(m_uploadMutex);
         const vk::ImageView view = m_textures[idx].getImageView();
         return view ? view : m_textures[RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX].getImageView();
     }
@@ -49,7 +51,7 @@ public:
     // Mutable access for the TextureStreamer's residency swaps (adoptStreamedImage).
     Texture& getTextureMutable(uint16 idx) { assert(idx < m_textures.size()); return m_textures[idx]; }
     const oc::vector<Texture>& getTextures() const { return m_textures; }
-	size_t getNumTextures() const { return m_textures.size(); }
+	size_t getNumTextures() const { const std::lock_guard lock(m_uploadMutex); return m_textures.size(); }
 
     // Live texture-array descriptor capacity; grown by upload() (doubling, clamped to getDescriptorCap()).
     // Descriptor sets are allocated with this as their variable descriptor count, so the Renderer watches
@@ -67,8 +69,10 @@ private:
 
     // Parallel entity spawning: solid-color tints (RenderMaterial::getOrCreateSolidColor) and effect
     // textures (ParticleSystem::createEffect) can upload from concurrent spawn jobs - the slot
-    // table serializes here (locked in uploadImpl and free).
-    std::mutex m_uploadMutex;
+    // table serializes here (locked in uploadImpl and free, and in the main thread's view reads).
+    mutable std::mutex m_uploadMutex;
+    // RESERVED to getDescriptorCap() at the first upload and never past it: an upload on a job never reallocates the
+    // array under a main-thread reader (getTexture / getTextureMutable hand out references into it).
     oc::vector<Texture> m_textures;
     oc::vector<uint16> m_freeSlots; // freed by ObjectContainer teardown, recycled by upload()
     uint32 m_maxTextures = RendererVKLayout::INITIAL_TEXTURES;

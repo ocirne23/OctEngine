@@ -34,7 +34,7 @@ struct ClutterMesh // RendererVKLayout::ClutterMeshGpu
 struct ClutterInstance // RendererVKLayout::ClutterInstanceGpu
 {
     vec4 posScale;
-    uvec4 data; // xy quaternion (halves), z type | variant << 8 | lod << 16 | kind << 24, w hash
+    uvec4 data; // xy quaternion (halves), z type | variant << 8 | lod << 16 | snow (6 bits) << 18 | kind << 24, w hash
     // x albedo0 (sqrt rgb, roughness), y albedo1 (sqrt rgb, spots), z half2(stem height, head size) - a rigid object:
     // half2(its height m, 0), w head | petals << 8 | petal width << 16 | open << 24
     uvec4 look;

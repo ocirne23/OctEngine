@@ -21,7 +21,8 @@ layout (location = 5) in vec3 in_relPos;       // the position relative to the c
 layout (location = 1) in vec3 in_normal;
 layout (location = 2) in vec4 in_fields;       // x ao, y height above the base (m); zw: a pebble's temperature C + humidity, a mushroom's local x + y
 layout (location = 3) in vec4 in_uv;           // the mesh's pattern coordinates (a branch's in metres); a mushroom's z = its local z
-layout (location = 4) flat in uvec3 in_look;   // x albedo0, y albedo1, z = kind | part << 8 | the object's height (m, a half) << 16
+layout (location = 4) flat in uvec3 in_look;   // x albedo0, y albedo1, z = kind | part << 4 | snow (6 bits) << 8 | the object's
+                                               // height (m, a half) << 16
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
@@ -100,8 +101,8 @@ void main()
     float roughness, spots;
     const vec3 albedo0 = clutterUnpackAlbedo(in_look.x, roughness);
     const vec3 albedo1 = clutterUnpackAlbedo(in_look.y, spots);
-    const uint kind = in_look.z & 0xFFu;
-    const uint part = (in_look.z >> 8) & 0xFFu;
+    const uint kind = in_look.z & 0xFu;
+    const uint part = (in_look.z >> 4) & 0xFu;
     vec3 albedo = albedo0;
     f16vec3 N = f16vec3(geoN);
     float ao = in_fields.x; // the generator writes AO in [0.4, 1]
@@ -178,6 +179,9 @@ void main()
         }
     }
 
+    // THE SNOW on its top (the cull's value: the ground's white x "Clutter snow"): by how much the surface faces up, on the
+    // geometric normal (a cap on a pebble, a log's upper side, a mushroom's top).
+    albedo = mix(albedo, u_snow_freshAlbedo, float((in_look.z >> 8) & 63u) * (1.0 / 63.0) * smoothstep(0.2, 0.7, geoN.y));
     // THE FOOT: darker over the contact height, but at most a third of the object (else a stick a few cm high is all in
     // the band).
     const float band = max(min(u_clutter_contactHeight, 0.35 * unpackHalf2x16(in_look.z >> 16).x), 1e-3);

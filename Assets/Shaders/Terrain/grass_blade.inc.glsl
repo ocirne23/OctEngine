@@ -177,7 +177,7 @@ vec2 grassBladeCurveNormal(float t)
 // One BLADE of tuft `t`: rank `blade` (its place in the patch's ranked list) = member `member` of the tuft. False = not
 // drawn (thinned out, or - the near casters - out of the cascade's reach). Fills g_blade, and WRITES THE FLAT OUTPUT
 // (the includer's `flat out uvec4 out_flat`, declared before this file; grass.fs.glsl unpacks it): x = half2(the albedo
-// factor, dryness), y = the ground normal blend (float bits), z = the facet normal's x / z (snorm16;
+// factor, dryness), y = half2(the ground normal blend, the blade's snow), z = the facet normal's x / z (snorm16;
 // its y > 0 rebuilt: grassUnpackGroundNormal), w = the look bits (the type | seed stalk << 2 | the seed stalks' cover of
 // this blade (unorm8) << 8) | the width axis << 16.
 // The random values: two per hash (16-bit halves) - bladeHash: its place in the spiral; +1: height, facing; +2: lean
@@ -227,8 +227,11 @@ bool grassBuildBlade(GrassPatchIn p, GrassTuft t, uint blade, uint member)
     const float variation = 1.0 + u_grass_colorVariation * (phaseVariation.y * 2.0 - 1.0);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, p.temperature);
     out_flat.x = packHalf2x16(vec2(variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), grassDryness(t.xz)));
-    // The ground normal blend; the facet normal.
-    out_flat.y = floatBitsToUint(clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend);
+    // The ground normal blend, and THE SNOW on the blade: the ground's white at its root (the cull's corners, bilinear as the
+    // cover) x "Grass snow" - the blades poking through thin snow carry some of it (grass.fs.glsl). The facet normal.
+    const vec4 snowCorners = unpackUnorm4x8(in_patchSnow);
+    const float snow = mix(mix(snowCorners.x, snowCorners.y, uv.x), mix(snowCorners.z, snowCorners.w, uv.x), uv.y) * u_snow_grassSnow;
+    out_flat.y = packHalf2x16(vec2(clamp(t.dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend, snow));
     out_flat.z = packSnorm2x16(t.groundN.xz);
 #endif
 

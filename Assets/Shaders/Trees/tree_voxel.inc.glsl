@@ -73,10 +73,8 @@ struct VoxelLevel
 	float indexY;
 };
 
-// The opacity atlas names its index texture in its header. NOT TRUSTED past the bindless array's live descriptor count
-// (u_foliage_bindlessCount): while the slot does not hold the atlas yet (a fallback - white reads as id 65535 - or a slot
-// written a frame later) the fetch through it read past the descriptors (an MMU fault on another PC's first frames). Such a
-// grid has NO LEVELS (voxelGridValid): the callers discard. NON-UNIFORM: one warp holds pixels of several trees.
+// The opacity atlas names its index texture in its header: the CPU guarantees the atlas's bindless slot holds it before
+// any draw reads it (TextureStreamer's descriptor writes are never lost). NON-UNIFORM: one warp holds pixels of several trees.
 VoxelGrid voxelGrid(uint opacityTex)
 {
 	VoxelGrid grid;
@@ -84,22 +82,13 @@ VoxelGrid voxelGrid(uint opacityTex)
 	const float lo = texelFetch(u_textures[nonuniformEXT(opacityTex)], ivec2(1, 1), 0).r;
 	const float hi = texelFetch(u_textures[nonuniformEXT(opacityTex)], ivec2(5, 1), 0).r;
 	grid.indexTex = uint(lo * 255.0 + 0.5) | (uint(hi * 255.0 + 0.5) << 8);
-	grid.invSize = 1.0 / vec2(textureSize(u_textures[nonuniformEXT(opacityTex)], 0));
-	if (grid.indexTex >= u_foliage_bindlessCount)
-	{
-		grid.indexTex = opacityTex; // never fetched: the caller discards
-		grid.res = 1.0;
-		grid.levels = 0.0;
-		grid.colsShift = 0u;
-		return grid;
-	}
 	const vec3 header = floor(texelFetch(u_textures[nonuniformEXT(grid.indexTex)], ivec2(0), 0).rgb * 255.0 + 0.5);
 	grid.res = exp2(header.r);
 	grid.levels = header.g;
 	grid.colsShift = uint(header.b);
+	grid.invSize = 1.0 / vec2(textureSize(u_textures[nonuniformEXT(opacityTex)], 0));
 	return grid;
 }
-bool voxelGridValid(VoxelGrid grid) { return grid.levels >= 1.0; }
 
 float voxelLevelBricks(float n)
 {

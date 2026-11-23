@@ -321,7 +321,11 @@ effect immediately.**
   frames later. A capacity growth's drain destroys them at once.
 * **Bindless descriptor writes** for streamed textures happen first, before anything records against
   them — safe because `present()` waited this slot's fence (`waitFrameSlot`) and the arrays are
-  UPDATE_AFTER_BIND.
+  UPDATE_AFTER_BIND. **The queue is any-thread** (`TextureStreamer::queueDescriptorWrite`, under its own mutex: the
+  uploads run on jobs) and the drain TAKES a slot's list in one swap (`takePendingDescriptorWrites`) - a read, then a
+  clear, lost every write a job queued between the two, and the slot kept a fallback or nothing (an MMU fault in the voxel
+  trees' first frames on another PC). `TextureManager::m_textures` is reserved to the descriptor cap at the first upload
+  (never reallocated under a reader); `getViewForDescriptor` / `getNumTextures` take its upload lock.
 * The baked terrain-data cascades, the RTAO view and the TLAS are all UPDATE_AFTER_BIND too, rewritten
   only when this slot re-records or the underlying handle changed.
 

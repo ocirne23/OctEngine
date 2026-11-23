@@ -66,6 +66,8 @@ struct GrassPatch // RendererVKLayout::GrassPatchGpu
     uint resLod;
     uint density;
     uint cellTemperature; // packHalf2x16(the chunk's cell size (m), the patch's mean temperature (C))
+    uint snow;            // the corners' ground white (TerrainLayers::snowW), unorm8 x 4 as density: the blades' snow
+    uint pad;
 };
 layout (binding = 4, std430) writeonly buffer OutPatches { GrassPatch out_patches[]; };
 
@@ -96,9 +98,12 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
 // How much grass grows at a ground point [0, 1]: where the terrain draws its ground textures, by their grass amount.
 // Fed like the terrain VS feeds the splat. No texture set registered yet (the startup bake): no grass.
 // `temperature`: C at the point's height (the blades' cold tint), 12.5 without a map (the terrain VS's fallback).
-float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temperature)
+// `snow`: how white the ground is there (TerrainLayers::snowW: the pack, the permanent snow, shelter, slope): the blades
+// take that white x "Grass snow" (grass.fs.glsl). From the layers this computes anyway: no cost of its own.
+float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temperature, out float snow)
 {
     temperature = 12.5;
+    snow = 0.0;
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
         return 0.0;
 
@@ -106,8 +111,10 @@ float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temp
     const vec4 climate = terrainClimateAt(xz);
     temperature = terrainTemperatureAt(climate, h);
     const TerrainFields fields = TerrainFields(td.w, temperature, climate.w, td.y, river);
+    const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields);
+    snow = float(L.snowW);
     // Under a closed canopy a forest floor holds little grass: x (1 - "Canopy thinning" x the crown cover).
-    return grassTerrainCover(terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields)) // grass.inc.glsl
+    return grassTerrainCover(L) // grass.inc.glsl
         * (1.0 - u_grass_canopyThinning * clutterFloorAt(xz).x);
 }
 
@@ -145,7 +152,7 @@ void grassCell(uint slot, inout uvec4 draw, inout uvec4 casterDraw)
 
     // The 4 corners: height (the bounds) and density.
     float hMin = 1e30, hMax = -1e30;
-    vec4 density;
+    vec4 density, snow;
     float temperatureSum = 0.0;
     for (uint i = 0u; i < 4u; ++i)
     {
@@ -155,7 +162,7 @@ void grassCell(uint slot, inout uvec4 draw, inout uvec4 casterDraw)
         hMin = min(hMin, h);
         hMax = max(hMax, h);
         float temperature;
-        density[i] = grassDensityAt(corner, h, grassGroundSmoothNormal(g, corner), grassGroundRiver(g, corner), temperature);
+        density[i] = grassDensityAt(corner, h, grassGroundSmoothNormal(g, corner), grassGroundRiver(g, corner), temperature, snow[i]);
         temperatureSum += temperature;
     }
     const float maxDensity = max(max(density.x, density.y), max(density.z, density.w));
@@ -203,7 +210,7 @@ void grassCell(uint slot, inout uvec4 draw, inout uvec4 casterDraw)
     const uint blades = ranks << (2u * level);
 
     out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16) | (level << 18) | (mesh.w << 21),
-        packUnorm4x8(density), packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
+        packUnorm4x8(density), packHalf2x16(vec2(g.step, 0.25 * temperatureSum)), packUnorm4x8(snow), 0u);
 
     // The same blades in both lists (the caster is the blade the main pass shades), the casters ONE LOD COARSER
     // (grassCasterLod; the record holds the main LOD).

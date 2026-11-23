@@ -93,9 +93,11 @@ public:
     // image swap). The CURRENT view is fetched at apply time, so entries survive descriptor set
     // re-allocation (texture capacity growth), shader reloads, and re-swaps of the same texture.
     // The Renderer drains one frame slot per recordCommandBuffers (its fence has been waited there).
+    // ANY THREAD (TextureManager's uploads run on jobs): under m_pendingWritesMutex. The drain TAKES the slot's list in one
+    // swap - a read, then a clear, lost every write queued between the two (a slot never written: its descriptor
+    // undefined, an MMU fault in the voxel trees' first frames on another PC).
     void queueDescriptorWrite(uint16 texIdx);
-    oc::span<const uint16> getPendingDescriptorWrites(uint32 frameIdx) const { return m_pendingDescriptorWrites[frameIdx]; }
-    void clearPendingDescriptorWrites(uint32 frameIdx) { m_pendingDescriptorWrites[frameIdx].clear(); }
+    void takePendingDescriptorWrites(uint32 frameIdx, oc::vector<uint16>& out);
     bool debugRewriteAllSlots() const;
 
     struct StreamerStats
@@ -202,6 +204,7 @@ private:
     uint32 m_opCounter = 0;
     uint32 m_numOpsInFlight = 0;
 
+    std::mutex m_pendingWritesMutex;
     oc::vector<uint16> m_pendingDescriptorWrites[RendererVKLayout::NUM_FRAMES_IN_FLIGHT];
 
     uint64 m_residentBytes = 0;        // streamable textures only (VMA allocation sizes)

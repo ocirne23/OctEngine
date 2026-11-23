@@ -68,5 +68,6 @@ private:
     uint32 m_descriptorCount = RendererVKLayout::INITIAL_TEXTURES;
     uint32 m_generation = 0; // last seen TextureManager::getGeneration()
     oc::vector<uint16> m_pendingFrees;
+    oc::vector<uint16> m_writes; // applyPendingWrites: the slot's taken list (kept: no allocation per frame)
     oc::vector<RetiredTexture> m_retired; // destroyed by ~RendererState's members after its device drain at the latest
 };

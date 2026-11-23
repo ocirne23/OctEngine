@@ -61,6 +61,7 @@ shared float s_temperature[CLUTTER_GRID_SAMPLES];
 shared float s_humidity[CLUTTER_GRID_SAMPLES];
 shared vec4 s_cover[CLUTTER_GRID_SAMPLES]; // x grass, y crag (bedrock), z beach, w snow (TerrainLayers::snowBury)
 shared vec3 s_river[CLUTTER_GRID_SAMPLES]; // x influence, y flow (slow 0 .. fast 1), z under the water
+shared float s_snow[CLUTTER_GRID_SAMPLES]; // how white the ground is (TerrainLayers::snowW): the objects' snow
 
 bool clutterGroundAt(vec2 xz, out GrassGround g)
 {
@@ -95,6 +96,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_temperature[i] = 12.5;
     s_humidity[i] = 0.5;
     s_cover[i] = vec4(0.0);
+    s_snow[i] = 0.0;
     const vec3 river = grassGroundRiverData(g, xz);
     s_river[i] = vec3(river.x, smoothstep(RIVER_FLOW_SLOW, RIVER_FLOW_FAST, river.y), river.z);
     if (!terrainHeightMapPresent())
@@ -112,6 +114,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz),
         TerrainFields(td.w, temperature, climate.w, td.y, river.x));
     s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowBury)); // w: buried by the snow's depth
+    s_snow[i] = float(L.snowW); // from the layers computed anyway: the objects' snow costs no walk of its own
 }
 
 // The relief's view terms: uniform only, so main takes them once, outside the type loop.
@@ -424,11 +427,14 @@ void main()
         const vec3 albedo1 = type.albedo1.rgb;
         const uint petalWidth = uint(type.flower.z * 255.0 + 0.5);
         const uint open = uint((type.flower.w * INV_PI + 0.5) * 255.0 + 0.5); // -pi/2 .. pi/2
+        // THE SNOW on it: the ground's white here (the grid, bilinear) x "Clutter snow", 6 bits (one value per object).
+        const float snow = dot(vec4(s_snow[i00], s_snow[i10], s_snow[i01], s_snow[i11]), w) * u_snow_clutterSnow;
+        const uint snowBits = uint(clamp(snow, 0.0, 1.0) * 63.0 + 0.5);
         ClutterInstance inst;
         inst.posScale = vec4(base, scale);
         // A flower has no orientation (its VS turns it by the hash): x = its texture + 1 (0 = none; a fern's frond).
         inst.data = uvec4(kind == CLUTTER_KIND_FLOWER ? uint(type.terms5.y) : packHalf2x16(q.xy), packHalf2x16(q.zw),
-                          t | (variant << 8) | (lod << 16) | (kind << 24), h);
+                          t | (variant << 8) | (lod << 16) | (snowBits << 18) | (kind << 24), h);
         inst.look = uvec4(packUnorm4x8(vec4(sqrt(albedo0), type.albedo0.w)),
                           packUnorm4x8(vec4(sqrt(albedo1), type.bound.y)),
                           packHalf2x16(kind == CLUTTER_KIND_FLOWER ? type.flower.xy : vec2(height, 0.0)),

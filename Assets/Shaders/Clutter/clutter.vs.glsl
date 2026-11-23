@@ -39,7 +39,8 @@ layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_fields;
 // The mesh's pattern coordinates (a branch's in metres). A pebble has none; a mushroom reads xy alone (its z = local z).
 layout (location = 3) out vec4 out_uv;
-// x albedo0, y albedo1, z = kind | part << 8 | the object's height (m, a half: the contact band's scale) << 16.
+// x albedo0, y albedo1, z = kind | part << 4 | its snow (6 bits) << 8 | the object's height (m, a half: the contact band's
+// scale) << 16.
 layout (location = 4) flat out uvec3 out_look;
 #endif
 
@@ -80,8 +81,10 @@ void main()
     }
     out_fields = vec4(in_posAo.w, in_posAo.y * scale, kindFields);
     out_uv = uv;
-    // The part: fp32, written as exact 0 / 1 / 2. The height: the low half of the record's look.z, as it is.
-    out_look = uvec3(in_instLook.x, in_instLook.y, kind | (uint(in_normalPart.w) << 8) | ((in_instLook.z & 0xFFFFu) << 16));
+    // The part: fp32, written as exact 0 / 1 / 2. The snow: the record's 6 bits. The height: the low half of the record's
+    // look.z, as it is.
+    out_look = uvec3(in_instLook.x, in_instLook.y, kind | (uint(in_normalPart.w) << 4) | (((in_instData.z >> 18) & 63u) << 8)
+        | ((in_instLook.z & 0xFFFFu) << 16));
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

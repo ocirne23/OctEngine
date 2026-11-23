@@ -19,7 +19,7 @@ layout (location = 1) in vec3 in_normal;
 layout (location = 2) in vec4 in_flower; // x part (0 stem, 1 petal, 2 centre), y along it, z across a textured frond
 layout (location = 3) in vec3 in_prevWorldDelta;
 layout (location = 4) flat in uvec2 in_look; // x albedo0 (petals), y albedo1 (centre)
-layout (location = 5) flat in uint in_texture; // u_textures index + 1 (0 = none)
+layout (location = 5) flat in uint in_textureSnow; // u_textures index + 1 (0 = none) | the snow (6 bits) << 24
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion;
@@ -36,6 +36,7 @@ layout (location = 1) out vec4 out_motion;
 
 void main()
 {
+    const uint in_texture = in_textureSnow & 0xFFFFFFu;
 #ifdef CLUTTER_TEXTURED
     // Before any lighting work: most of a frond's / petal's / ear's strip is cut away. Only the textured part (1) samples
     // (the stem and the centre stay solid); the derivatives are taken outside that branch.
@@ -90,6 +91,8 @@ void main()
     else
         albedo = clutterUnpackAlbedo(in_look.y, unused);
     albedo = terrainFactionTint(albedo, in_pos.xz, 1.0); // before the transmission and the lit core, which both take it
+    // THE SNOW on it (the cull's value: the ground's white x "Clutter snow"), more on its up-facing side, as the grass blades.
+    albedo = mix(albedo, u_snow_freshAlbedo, float(in_textureSnow >> 24) * (1.0 / 63.0) * (0.5 + 0.5 * clamp(N.y, 0.0, 1.0)));
 
     const float back = max(-dot(N, L), 0.0);
     const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * u_clutter_flowerTransmission * INV_PI, MEDIUMP_FLT_MAX));

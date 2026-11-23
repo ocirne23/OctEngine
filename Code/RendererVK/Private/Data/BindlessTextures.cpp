@@ -20,19 +20,20 @@ void BindlessTextures::applyPendingWrites(uint32 frameIdx)
         for (uint16 i = 0; i < (uint16)Globals::textureManager.getNumTextures(); ++i)
             Globals::textureStreamer.queueDescriptorWrite(i);
 
-    const oc::span<const uint16> writes = Globals::textureStreamer.getPendingDescriptorWrites(frameIdx);
-    if (writes.empty())
+    // TAKEN in one swap (TextureStreamer): a write a job queues meanwhile waits for this slot's next record.
+    Globals::textureStreamer.takePendingDescriptorWrites(frameIdx, m_writes);
+    if (m_writes.empty())
         return;
-    for (const uint16 texIdx : writes)
+    const size_t numTextures = Globals::textureManager.getNumTextures();
+    for (const uint16 texIdx : m_writes)
     {
         // Slots beyond the live descriptor count appear when a texture upload outgrew the arrays this
         // frame; the pending capacity growth re-allocates + fully refills every set, so drop them.
-        if (texIdx >= m_descriptorCount || texIdx >= Globals::textureManager.getNumTextures())
+        if (texIdx >= m_descriptorCount || texIdx >= numTextures)
             continue;
         // Freed slots (destroyed container, not yet recycled) resolve to the fallback view.
         m_onSlotWrite(frameIdx, texIdx, Globals::textureManager.getViewForDescriptor(texIdx));
     }
-    Globals::textureStreamer.clearPendingDescriptorWrites(frameIdx);
 }
 
 void BindlessTextures::processPendingFrees(uint32 frameCounter, bool gpuIdle)

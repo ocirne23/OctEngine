@@ -92,7 +92,17 @@ places compute it:
   clutter (the cull's density, `s_cover.w`). The DEPTH, not the cover: a blade taller than thin snow pokes through ("Bury
   depth" 0.3 m buries it all); with "Depth" off nothing sinks and the bury is the cover. `snowDepth` (m) is kept too: the
   far tier's and the reflected grass's canopy is its height MINUS the depth, and its root occlusion is x (1 - cover) (the
-  snow covers the roots). **The early return** (the layers under full snow are not computed) waits for `snowBury`, not
+  snow covers the roots). **THE SNOW ON THE GRASS** (what pokes through thin snow): "Grass snow" (`u_snow_grassSnow`, 0.6) of
+  the ground's white `snowW` - the blades take it from the CULL, which runs `terrainLayers` at each cell corner anyway:
+  `GrassPatchGpu::snow` (4 x unorm8, 40 B record), bilinear at the blade's root in the VS (as the density), packed with the
+  ground normal blend in `out_flat.y` (half2), and in the FS one mix toward the fresh snow's albedo, more on the blade's
+  up-facing side. No snow read per pixel or per vertex. The far tier (the terrain FS: by the splat's snow share) and the
+  reflected grass (`grassRayAlbedo`: by `snowW`) take the same mix. **THE SNOW ON THE CLUTTER** the same way: "Clutter
+  snow" (`u_snow_clutterSnow`, 0.8) x `snowW` from the clutter cull's grid (`s_snow`, beside `s_cover`: the layers it
+  computes anyway), bilinear per object, 6 bits of `ClutterInstanceGpu::data.z` (bits 18-23; the flower VS's LOD mask is 2
+  bits). The objects (clutter.fs) take it on their tops (smoothstep 0.2 .. 0.7 of the geometric normal's y: a cap on a
+  pebble, a log's upper side); the flowers (clutter_flower.fs, the value riding `in_textureSnow`'s top byte) all over,
+  more up-facing, as the blades. **The early return** (the layers under full snow are not computed) waits for `snowBury`, not
   `snowW`: under white but thin snow the grass and the clutter still need the ground's coverages and climate pick.
 * The rock FS (`instanced_indirect_rock.fs.glsl`): its copy of the rule with each face's own slope and the vertex's
   temperature at its own height - rocks, dead wood and cacti.

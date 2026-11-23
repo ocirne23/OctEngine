@@ -30,6 +30,9 @@ layout (location = 0) in vec4 in_patchOrigins; // xy = the ring cell's min corne
 layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, y = its cells per side | LOD << 16 | the ring level
                                                // << 18 | morph << 21, z = the corner densities (unorm8 x 4), w = packHalf2x16(the
                                                // chunk's cell size (m), the cell's temperature (C))
+#ifndef GRASS_NEAR_SHADOW
+layout (location = 2) in uint in_patchSnow;    // the corners' ground white, unorm8 x 4 (the blades' snow: grassBuildBlade)
+#endif
 
 // THE INTERFACE: 6 interpolated components and one flat uvec4 - no position (the FS rebuilds it from its depth) and the
 // normal as ONE value (GrassVertex::normalY + the flat width axis).

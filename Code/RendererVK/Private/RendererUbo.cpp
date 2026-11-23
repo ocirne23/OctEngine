@@ -2355,10 +2355,6 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
         list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
         list.add("foliage_voxelLodBias", f.voxelLodBias);
-        // The bindless array's LIVE descriptor count: the voxel grid's index texture id, read out of its opacity atlas
-        // (tree_voxel.inc.glsl voxelGrid), is trusted only below it - a slot not holding the atlas yet (a fallback) reads
-        // as id 65535, and a fetch through it read past the descriptors (an MMU fault).
-        list.add("foliage_bindlessCount", [this] { return m_textures.getDescriptorCount(); }, UboLive);
         list.add("foliage_voxelSharp", [&] { return f.voxelSharp ? 1.0f : 0.0f; }, f.voxelSharp);
         list.add("foliage_voxelDensity", [&] { return 1.0f - glm::clamp(f.voxelThinning, 0.0f, 0.95f); }, f.voxelThinning);
         list.add("foliage_voxelSelfShadow", [&] { return glm::max(f.voxelSelfShadow, 0.0f); }, f.voxelSelfShadow);
@@ -2535,6 +2531,11 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("snow_depth", [&w] { return w.snowDepth; }, w.snowDepth);
         list.add("snow_invBuryDepth", [&w] { return 1.0f / glm::max(w.buryDepth, 0.01f); }, w.buryDepth);
         list.add("snow_leafSnow", [&w] { return glm::clamp(w.leafSnow, 0.0f, 1.0f); }, w.leafSnow);
+        // The grass's share of the ground's white (grass.fs.glsl: the blades, from the cull's corner values; the terrain
+        // FS: the far tier).
+        list.add("snow_grassSnow", [&w] { return glm::clamp(w.grassSnow, 0.0f, 1.0f); }, w.grassSnow);
+        // The ground clutter's (clutter_cull.cs.glsl folds it into each object's snow, ClutterInstanceGpu::data.z).
+        list.add("snow_clutterSnow", [&w] { return glm::clamp(w.clutterSnow, 0.0f, 1.0f); }, w.clutterSnow);
         // How far into a voxel crown (its baked interior, 0 surface .. 1 core) the leaves hold snow.
         list.add("snow_voxelCrownDepth", [&w] { return glm::clamp(w.voxelCrownSnowDepth, 0.0f, 1.0f); }, w.voxelCrownSnowDepth);
         // THE TRACKS (m_snowDeformTick; snowDeformAt): live this frame, the two maps' bindless slots and their windows' lattice

@@ -56,8 +56,6 @@ void main()
 	}
 	// The alpha index is the grid's opacity atlas: its header names the index texture.
 	const VoxelGrid grid = voxelGrid(in_alphaTexIdx);
-	if (!voxelGridValid(grid))
-		discard; // the atlas is not in its slot yet (voxelGrid)
 	// A voxel about a cascade texel (+ "Voxel LOD bias").
 	const float lod = clamp(floor(in_voxelStepLod.y + log2(grid.res)), 0.0, grid.levels - 1.0);
 	const VoxelLevel level = voxelLevel(grid, lod);

@@ -249,8 +249,9 @@ vec4 grassRayAlbedo(TerrainLayers L, vec3 pos, vec3 N, vec3 dir, float temperatu
     const float height = max(grassCanopyHeight(coverSize) - float(L.snowDepth), 0.0); // the part over the snow
     const float tau = u_grass_farExtinction * cover * grassWidthSize(coverSize) * height / max(abs(dot(N, dir)), 0.05);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, temperature);
-    return vec4(mix(u_grass_tipAlbedo * u_grass_meanTint, u_grass_dryAlbedo, grassDryness(pos.xz)) * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * u_grass_farBrightness),
-        1.0 - exp(-tau));
+    const vec3 green = mix(u_grass_tipAlbedo * u_grass_meanTint, u_grass_dryAlbedo, grassDryness(pos.xz)) * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * u_grass_farBrightness);
+    // The snow on it as on the blades (grass.fs.glsl): the ground's white x "Grass snow".
+    return vec4(mix(green, u_snow_freshAlbedo, float(L.snowW) * u_snow_grassSnow), 1.0 - exp(-tau));
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL // it reads the near grass cascade (the lit core's u_shadowMap)

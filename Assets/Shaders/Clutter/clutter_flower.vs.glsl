@@ -42,7 +42,7 @@ layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_flower;     // x part (0 stem, 1 petal, 2 centre), y along it (0 base .. 1 tip), z across a textured frond (0 .. 1)
 layout (location = 3) out vec3 out_prevWorldDelta;
 layout (location = 4) flat out uvec2 out_look; // x albedo0 (petals), y albedo1 (centre)
-layout (location = 5) flat out uint out_texture; // u_textures index + 1 (0 = none)
+layout (location = 5) flat out uint out_texture; // u_textures index + 1 (0 = none) | the snow (6 bits) << 24
 #endif
 
 float g_across = 0.0; // flowerVertex: the textured frond's u (0 .. 1 across)
@@ -532,7 +532,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
 
 void main()
 {
-    const uint lod = (in_instData.z >> 16) & 0xFFu;
+    const uint lod = (in_instData.z >> 16) & 3u; // bits 18-23: the snow
     const uint h = in_instData.w;
     const vec2 stemHead = unpackHalf2x16(in_instLook.z);
     const float scale = in_instPosScale.w;
@@ -593,7 +593,7 @@ void main()
     out_flower = vec4(part, along, g_across, 0.0);
     out_prevWorldDelta = prevPos - pos;
     out_look = in_instLook.xy;
-    out_texture = in_instData.x;
+    out_texture = in_instData.x | (((in_instData.z >> 18) & 63u) << 24); // the texture + 1 (< 2^16) | the snow (6 bits) << 24
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

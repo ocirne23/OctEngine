@@ -112,7 +112,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   terms (thinning, LODs, wind fade, pixel floor) take the TUFT's distance, the cover the blade's own place. The wind
   code is `grass_wind.inc.glsl` (`grassBezier` / `grassWind` / `grassWindPushAt` / `grassWindRipple` + `grassWindPushWith` / `grassTip` / `grassTipOffset`),
   shared with the clutter flowers. The random values come two per hash (`grassUnit2`: the 16-bit halves).
-  * **THE ORDER IN `grassBuildBlade` KEEPS THE VERTEX SHADER'S REGISTERS DOWN** (53, the near casters 44; with the
+  * **THE ORDER IN `grassBuildBlade` KEEPS THE VERTEX SHADER'S REGISTERS DOWN** (56 - 53 before the blades' snow, the
+    same allocation granule -, the near casters 44; with the
     wind and the dry patch sampled per tuft and every flat value packed at the end it took 64):
     * a blade that is not drawn returns before any of the work below;
     * each part of the flat output (`out_flat`, declared by the includer before the file) is WRITTEN when it is
@@ -221,7 +222,8 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   little where its region changes ring (it grows or shrinks, by the grow band).
   * THE SLOTS: a slot = level x 256 + the cell's place in the block's NEAR-FIRST order (`gf_cellOrder`: the cells by
     their distance from the block's centre, built once in `GrassPipeline::initialize`). EVERY slot writes its record
-    (`GrassPatchGpu`, 32 B: + the ring's LOD, the level and the morph flag in `resLod`) and its two draws
+    (`GrassPatchGpu`, 40 B: + the ring's LOD, the level and the morph flag in `resLod`; the corners' ground white `snow`,
+    the main pass's location 2 only - the blades' snow, The snow on the grass in [Snow.md](Snow.md)) and its two draws
     (`VkDrawIndexedIndirectCommand` as words; `firstInstance` = the slot - needs `drawIndirectFirstInstance`, enabled
     in Device.cpp), EMPTY where the cell is culled. No atomics, no counts (`GrassPipeline::record` fills the draw
     counts with the slots), and the lists are NEAR TO FAR in every view direction: the depth test rejects hidden
@@ -495,7 +497,8 @@ the clutter frame's header. Desktop only (as the grass).
   objects floated over the relief's hollows) -, sunk by `Sink` x its height, a sphere test against the frustum (or
   within the near grass cascade's caster reach - an object just off screen still casts), the LOD by its projected
   size ("LOD 1 size" / "LOD 2 size", radius / distance) - flowers by distance ("Flower LOD 1/2 distance (m)"). The
-  record (`ClutterInstanceGpu`, 48 B: position + scale, the quaternion in halves, type / variant / LOD / kind, a hash,
+  record (`ClutterInstanceGpu`, 48 B: position + scale, the quaternion in halves, type / variant / LOD / its snow (6 bits,
+  The snow on the clutter in [Snow.md](Snow.md)) / kind, a hash,
   and the LOOK: both colours as rgba8 of their square root, the flower's stem / head / petals / open angle) goes to a
   flat array with a BUCKET key.
 * **THE BUCKETS**: one per (mesh, LOD), the flowers' first. Three dispatches in the "Clutter cull" secondary: the CULL

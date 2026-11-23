@@ -82,6 +82,8 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 	oc::unique_ptr<StreamedTextureMeta> pMeta = texture.takeStreamingMeta();
 
 	const std::lock_guard lock(m_uploadMutex);
+	if (m_textures.capacity() == 0)
+		m_textures.reserve(getDescriptorCap()); // never reallocated from here on (see m_textures)
 	uint16 idx;
 	if (!m_freeSlots.empty()) // slot freed by a destroyed ObjectContainer
 	{
@@ -104,6 +106,11 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 			{
 				assert(false && "Texture capacity at device limit");
 			}
+		}
+		if (m_textures.size() >= m_textures.capacity())
+		{
+			assert(false && "Texture slots at the descriptor cap");
+			return UINT16_MAX; // a reallocation would move every slot under the main thread's readers
 		}
 		idx = (uint16)m_textures.size();
 		m_textures.emplace_back();

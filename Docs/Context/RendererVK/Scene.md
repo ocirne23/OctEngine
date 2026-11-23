@@ -424,11 +424,11 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
     boxes of neighbouring trees pass through each other, so a far tree's face is rarely behind a near tree's hit).
     The grid is SPARSE BRICKS over three one-level textures ([Trees.md](../Procedural/Trees.md) "SPARSE BRICKS"): the
     material's albedo slot = the opacity atlas, whose header names the index texture (`voxelGrid`: the resolution, the
-    levels and the atlas columns from the index's header texel); its normal slot = the surface atlas. **The named id is
-    checked against the bindless array's live descriptor count** (`u_foliage_bindlessCount`): while the slot does not hold
-    the atlas yet (a fallback reads as id 65535) the fetch through it read past the descriptors - an MMU fault on another
-    PC's first frames. Such a grid has no levels (`voxelGridValid`): the march, the lighting and the voxel shadow caster
-    discard. Its fetches are `nonuniformEXT` (one warp holds pixels of several trees). A step reads the
+    levels and the atlas columns from the index's header texel); its normal slot = the surface atlas. **The shader trusts
+    that header: the CPU keeps the atlas in its slot** (the bindless descriptor writes are never lost - "Bindless
+    descriptor writes" in [CONTEXT.md](CONTEXT.md)). A lost write left a fallback in the slot (white reads as id 65535), and the fetch through it read past the
+    descriptors: an MMU fault in the first frames on another PC. Its fetches are `nonuniformEXT` (one warp holds pixels
+    of several trees). A step reads the
     index (one `texelFetch`) only when it enters ANOTHER brick (`VoxelBrick`: the march keeps its last one) and, in a
     stored brick, one filtered opacity tap - the second slice only where its blend weight is above 0 (with "Voxel
     sharpness" most samples lie on one slice); the colour, normal and interior are read once, at the hit, from the

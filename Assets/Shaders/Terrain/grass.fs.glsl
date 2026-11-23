@@ -21,8 +21,8 @@
 layout (location = 0) in vec3 in_blade;          // x = along the blade (0 root .. 1 tip), y = across (-1 .. 1), z = the normal's y
                                                  // (without the edge tilt)
 layout (location = 1) in vec3 in_prevWorldDelta; // to last frame's point
-layout (location = 2) flat in uvec4 in_flat;     // x = half2(albedo factor, dryness), y = the ground normal blend (float
-                                                 // bits), z = the facet normal (grassUnpackGroundNormal), w = the
+layout (location = 2) flat in uvec4 in_flat;     // x = half2(albedo factor, dryness), y = half2(the ground normal blend,
+                                                 // the blade's snow), z = the facet normal (grassUnpackGroundNormal), w = the
                                                  // look bits (the grass type | seed stalk << 2 | the seed stalks' cover << 8) | the
                                                  // width axis (its x, 15 bits | its z's sign) << 16
 
@@ -150,11 +150,15 @@ void main()
     albedo *= 1.0 + u_grass_midrib * rib * (1.0 - 0.6 * t) * (stalk ? 0.0 : 1.0);
     albedo *= factorDryness.x; // the per-blade variation and the cold darkening (grass_blade.inc.glsl)
     albedo = terrainFactionTint(albedo, pos.xz, 1.0); // the same rule as the ground under it (terrain_faction.inc.glsl)
+    // THE SNOW on the blade (grass_blade.inc.glsl: the ground's white at its root x "Grass snow"), more on its up-facing
+    // side. After the faction tint: snow is white on any side's land.
+    const vec2 groundBlendSnow = unpackHalf2x16(in_flat.y);
+    albedo = mix(albedo, u_snow_freshAlbedo, groundBlendSnow.y * (0.5 + 0.5 * clamp(in_blade.z, 0.0, 1.0)));
     // THE ROOT OCCLUSION: "Look/Root occlusion" inside the near grass cascade, "Shadows/Far root occlusion" outside it
     // (grass.inc.glsl grassRootOcclusion), full at the root and none at the tip.
     const float ao = mix(max(1.0 - grassRootOcclusion(nearWeight) * (1.0 - smoothstep(0.0, 1.0, t)), 0.0), 1.0, seedShown);
 
-    const vec3 N = normalize(mix(grassFragmentNormal(), grassUnpackGroundNormal(in_flat.z), uintBitsToFloat(in_flat.y)));
+    const vec3 N = normalize(mix(grassFragmentNormal(), grassUnpackGroundNormal(in_flat.z), groundBlendSnow.x));
     // Lit from behind: the sun through the blade, tinted by it - the lit core's extra light (added right after its sun:
     // no value of it is live across the light loop, the register peak).
     const float back = max(-dot(N, L), 0.0);

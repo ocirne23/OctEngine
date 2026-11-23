@@ -34,6 +34,8 @@ void Settings::registerWeather(WeatherSettings& s)
     Tweak::floatVar("Weather/Snow", "Bury depth (m)", &s.buryDepth, 0.01f, 2.0f, 0.01f);
     Tweak::boolean("Weather/Snow", "Objects", &s.objectSnow);
     Tweak::floatVar("Weather/Snow", "Leaf snow", &s.leafSnow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Weather/Snow", "Grass snow", &s.grassSnow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Weather/Snow", "Clutter snow", &s.clutterSnow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Voxel crown snow depth", &s.voxelCrownSnowDepth, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Weather/Snow", "Tracks", &s.tracks);
     Tweak::floatVar("Weather/Snow", "Track detail range (m)", &s.trackDetailRange, 0.0f, 100.0f, 0.5f);

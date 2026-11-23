@@ -22,7 +22,7 @@ export struct WeatherSettings
     float meltRate = 0.0025f;        // m per game hour per C of air over 0 (degree-hour melt)
     float sunMelt = 0.004f;          // m per game hour with the sun overhead (less in cold air, none below -8 C)
     float settling = 0.15f;          // share of the depth the pack settles per game day
-    float maxDepth = 3.0f;           // m: the pack stops growing here
+    float maxDepth = 1.0f;           // m: the pack stops growing here
     float fullCoverDepth = 0.03f;    // m: the ground is fully white from this depth on (thinner snow shows it through)
     bool clearSnow = false;          // a button: the renderer empties the snowpack and resets this
     bool shelter = true;             // the site map: no snow under roofs and overhangs, less under trees (needs RT)
@@ -31,6 +31,8 @@ export struct WeatherSettings
     float buryDepth = 0.3f;          // m of snow that buries the grass and the clutter (taller blades poke through thinner)
     bool objectSnow = true;          // the snow layer on the objects (buildings, props, bark, leaves)
     float leafSnow = 0.6f;           // x the snow on the up-facing leaves (a crown sheds part of it)
+    float grassSnow = 0.6f;          // how white the grass gets where the ground is white (the blades poking through thin snow, the far grass)
+    float clutterSnow = 0.8f;        // how white the ground clutter gets there (the flowers all over, the objects on their tops)
     float voxelCrownSnowDepth = 0.05f; // how far into a voxel crown its leaves hold snow (0 = the surface only, 1 = to the core)
     bool tracks = true;              // the players, units, walkers and impacts press tracks and craters into the snow (needs Depth)
     float trackDetailRange = 20.0f;  // m: closer than this the tessellation refines over a track (footprints need ~6 cm vertices); the tracks' shape fades out to twice it

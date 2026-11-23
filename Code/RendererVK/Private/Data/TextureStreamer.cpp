@@ -519,8 +519,16 @@ void TextureStreamer::update()
     m_frameCounter++;
 }
 
+void TextureStreamer::takePendingDescriptorWrites(uint32 frameIdx, oc::vector<uint16>& out)
+{
+    out.clear();
+    const std::lock_guard lock(m_pendingWritesMutex);
+    out.swap(m_pendingDescriptorWrites[frameIdx]);
+}
+
 void TextureStreamer::queueDescriptorWrite(uint16 texIdx)
 {
+    const std::lock_guard lock(m_pendingWritesMutex);
     for (oc::vector<uint16>& pending : m_pendingDescriptorWrites)
     {
         if (oc::find(pending.begin(), pending.end(), texIdx) == pending.end())
