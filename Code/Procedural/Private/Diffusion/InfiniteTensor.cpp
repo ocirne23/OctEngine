@@ -97,9 +97,20 @@ namespace Procedural::Diffusion
 				depEnd[d] = b[d].stop;
 			}
 			args.push_back(m_deps[i]->getSlice(depStart, depEnd)); // hits cache: phase 2 materialised it
+			if (m_deps[i]->m_windowFailed)
+			{
+				// The slice misses a failed window: a result built from it would be cached as valid.
+				m_windowFailed = true;
+				return;
+			}
 		}
 
 		FloatTensor out = m_fn(wi, args);
+		if (out.ndim() == 0)
+		{
+			m_windowFailed = true;
+			return;
+		}
 		validateOutputShape(out);
 		m_store->cacheWindow(m_id, windowIndex, oc::move(out));
 	}
@@ -117,18 +128,21 @@ namespace Procedural::Diffusion
 			// Dep-major: args[depIdx][batchIdx]. The final batch may be smaller than m_batchSize, which is
 			// why the models need a dynamic batch dimension.
 			oc::vector<oc::vector<FloatTensor>> args(m_deps.size());
+			oc::vector<bool> inputFailed(batch.size(), false); // a dependency slice misses a failed window
 			for (size_t i = 0; i < m_deps.size(); i++)
 			{
 				args[i].reserve(batch.size());
-				for (const WindowKey& wi : batch)
+				for (size_t k = 0; k < batch.size(); k++)
 				{
-					m_depWindows[i].getBounds(oc::span<const int32>(wi.v, (size_t)m_ndim), b);
+					m_depWindows[i].getBounds(oc::span<const int32>(batch[k].v, (size_t)m_ndim), b);
 					for (int32 d = 0; d < m_ndim; d++)
 					{
 						depStart[d] = b[d].start;
 						depEnd[d] = b[d].stop;
 					}
 					args[i].push_back(m_deps[i]->getSlice(depStart, depEnd));
+					if (m_deps[i]->m_windowFailed)
+						inputFailed[k] = true;
 				}
 			}
 
@@ -136,6 +150,11 @@ namespace Procedural::Diffusion
 			assert(outs.size() == batch.size());
 			for (size_t k = 0; k < batch.size(); k++)
 			{
+				if (outs[k].ndim() == 0 || inputFailed[k])
+				{
+					m_windowFailed = true;
+					continue;
+				}
 				validateOutputShape(outs[k]);
 				m_store->cacheWindow(m_id, batch[k], oc::move(outs[k]));
 			}
@@ -155,6 +174,7 @@ namespace Procedural::Diffusion
 			assert(outShape[d] >= 0);
 		}
 
+		m_windowFailed = false;
 		ensureComputedRanges({ pixelRange });
 
 		FloatTensor output(outShape);
@@ -180,9 +200,11 @@ namespace Procedural::Diffusion
 			const FloatTensor* cached = m_store->getCachedWindow(m_id, toKey(wi)); // promotes
 			// The reference silently contributes nothing here. That would be invisible: a missing window
 			// drops out of BOTH the data and weight sums, and the /w normalisation hides it as an average
-			// over the surviving tiles. Phase 1 guarantees it's present, so assert rather than paper over it.
-			assert(cached != nullptr);
-			output.addFrom(*cached, dstRegion, srcRegion); // ACCUMULATE: this is the blend
+			// over the surviving tiles. Phase 1 guarantees it's present unless its inference failed just now,
+			// and then the pipeline reports the whole request as failed: assert rather than paper over it.
+			assert(cached != nullptr || m_windowFailed);
+			if (cached)
+				output.addFrom(*cached, dstRegion, srcRegion); // ACCUMULATE: this is the blend
 		});
 
 		m_store->evictIfNeeded(m_id, m_cacheLimitBytes);

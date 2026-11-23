@@ -47,8 +47,8 @@ export namespace Procedural::Diffusion
 		// Slice of the coarse stage, shape [7, ci1-ci0, cj1-cj0], in COARSE pixel units (1 = 256 native px).
 		// Channels 0..5 are weighted sums; channel 6 is the blend weight - divide to recover values.
 		// Channel meanings (after the /weight divide): 0 elev_sqrt, 1 p5, 2 temp, 3 temp_std,
-		// 4 precip, 5 precip_std.
-		FloatTensor getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1);
+		// 4 precip, 5 precip_std. False when an inference failed: `out` is then incomplete and must not be kept.
+		bool getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1, FloatTensor& out);
 
 		// Native pixels per coarse pixel (32 * latentCompression = 256 in the shipped config). One coarse
 		// pixel is 7.68 km at 30 m/px, which is why the coarse stage alone can answer wide-area queries

@@ -37,6 +37,14 @@ budget is under the working set. Each plane is quantized, delta-coded and zstd'd
 an explicit FMA, 16 values per step): the loader decodes through it, and the writer's in-place roundtrip decodes its own
 bytes through it, so RAM and disk hold bit-identical tiles (the crack-free chunk borders rest on that).
 
+**A failed inference never reaches a cache.** A stage function returns an EMPTY tensor for a window whose model run
+failed (out of memory, say); `InfiniteTensor` does not cache it, nor a window of the next stage whose input slice
+misses it (`getSlice` leaves the failed window out; the dependent window then counts as failed too), and the request
+that saw the failure reports it
+(`WorldPipeline::get` / `getCoarseSlice` return false), so neither the full tile nor the coarse tile is kept or saved.
+The next request computes the window again. Caching a failed window as zeros would let a LATER tile that reads it be
+saved as real terrain, with no failure reported.
+
 ### World origin
 
 `TerrainConfigV3::originX/Z` (the streamer's `Terrain/Origin X (m)` / `Origin Z (m)` tweaks): where

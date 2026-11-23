@@ -985,7 +985,8 @@ namespace Procedural
 					if (FieldTilePtr hit = m_coarseCache.get(key))
 						return hit;
 				}
-				slice = m_pipeline->getCoarseSlice(i0 - CBETA_PAD, j0 - CBETA_PAD, i1 + CBETA_PAD, j1 + CBETA_PAD);
+				if (!m_pipeline->getCoarseSlice(i0 - CBETA_PAD, j0 - CBETA_PAD, i1 + CBETA_PAD, j1 + CBETA_PAD, slice))
+					return nullptr; // an inference failed: neither cached nor saved, so the next request retries
 				seed = m_pipeline->seed();
 				fp16 = m_pipelinePrecision == EPrecision::Fp16;
 			}

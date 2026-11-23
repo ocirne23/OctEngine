@@ -360,10 +360,7 @@ namespace Procedural::Diffusion
 		auto failed = [&]() -> oc::vector<FloatTensor>
 		{
 			m_inferenceFailed = true;
-			oc::vector<FloatTensor> r;
-			for (int32 b = 0; b < batch; b++)
-				r.emplace_back(oc::array<int32, 3>{ 7, S, S });
-			return r;
+			return oc::vector<FloatTensor>((size_t)batch); // empty tensors: failed windows, never cached
 		};
 
 		for (int32 step = 0; step < COARSE_STEPS; step++)
@@ -437,12 +434,14 @@ namespace Procedural::Diffusion
 		return results;
 	}
 
-	FloatTensor WorldPipeline::getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1)
+	bool WorldPipeline::getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1, FloatTensor& out)
 	{
 		assert(m_valid);
 		const int32 start[3] = { 0, ci0, cj0 };
 		const int32 end[3] = { 7, ci1, cj1 };
-		return m_coarse->getSlice(start, end);
+		m_inferenceFailed = false;
+		out = m_coarse->getSlice(start, end);
+		return !m_inferenceFailed;
 	}
 
 	// =====================================================================================================
@@ -611,8 +610,7 @@ namespace Procedural::Diffusion
 		if (!m_baseModel.run(inputs, pred))
 		{
 			m_inferenceFailed = true;
-			for (int32 b = 0; b < batch; b++)
-				results.emplace_back(oc::array<int32, 3>{ 6, S, S });
+			results.resize((size_t)batch); // empty tensors: failed windows, never cached
 			return results;
 		}
 		assert(pred.size() == (size_t)batch * chans * plane);
@@ -708,7 +706,7 @@ namespace Procedural::Diffusion
 		if (!m_decoderModel.run(inputs, rawPred))
 		{
 			m_inferenceFailed = true;
-			return result;
+			return FloatTensor{}; // empty: a failed window, never cached
 		}
 		assert(rawPred.size() == plane);
 
