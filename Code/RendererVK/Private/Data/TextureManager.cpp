@@ -1,5 +1,6 @@
 module RendererVK;
 
+import Core.Log;
 import File.fwd;
 import :TextureManager; // ?
 import :TextureStreamer;
@@ -73,8 +74,10 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 	// state - it runs into a LOCAL texture outside the lock; the lock covers only the slot claim,
 	// the move into it, and the streamer bookkeeping (parallel entity spawning).
 	Texture texture;
+	// Every failure is LOGGED (the asserts are Debug-only): the caller gets UINT16_MAX, no slot.
 	if (!initialize(texture))
 	{
+		Log::error("TextureManager: a texture failed to initialize (load, format or allocation): no slot");
 		assert(false && "Failed to initialize texture");
 		return UINT16_MAX;
 	}
@@ -109,6 +112,7 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 		}
 		if (m_textures.size() >= m_textures.capacity())
 		{
+			Log::error(oc::format("TextureManager: all {} texture slots in use: no slot", m_textures.capacity()));
 			assert(false && "Texture slots at the descriptor cap");
 			return UINT16_MAX; // a reallocation would move every slot under the main thread's readers
 		}

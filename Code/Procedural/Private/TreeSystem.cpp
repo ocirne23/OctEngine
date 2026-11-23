@@ -311,6 +311,13 @@ namespace
 		indexMips.push_back(oc::span<uint8>(index.albedo[0].data(), index.albedo[0].size()));
 		outIndex = RenderTexture::create(index.width, index.height, indexMips, oc::format("{}/index", debugName).c_str(),
 			RenderMaterial::ETextureEncoding::Rgba8, false);
+		// A failed upload has no slot: its id (UINT16_MAX) in the header would send every voxel pixel of the variant to a
+		// descriptor past the arrays. The variant then has no voxel tier.
+		if (!outIndex.isValid())
+		{
+			Log::error(oc::format("Trees: '{}' - the voxel index texture failed to upload: no voxel tier", debugName));
+			return RenderMaterial{};
+		}
 		const uint8 lo = (uint8)(outIndex.index() & 255u), hi = (uint8)(outIndex.index() >> 8);
 		oc::vector<uint8>& opacity = atlases.albedo[0];
 		if (atlases.albedoEncoding == RenderMaterial::ETextureEncoding::BC4)
@@ -338,7 +345,14 @@ namespace
 		desc.normalEncoding = atlases.normalEncoding;
 		desc.extraFlags = extraFlags;
 		desc.debugName = debugName;
-		return RenderMaterial::createTextured(desc);
+		RenderMaterial material = RenderMaterial::createTextured(desc);
+		if (!material.isValid() || material.albedoTexture() == UINT16_MAX)
+		{
+			Log::error(oc::format("Trees: '{}' - the voxel atlases failed to upload: no voxel tier", debugName));
+			outIndex = RenderTexture{};
+			return RenderMaterial{};
+		}
+		return material;
 	}
 
 	// A tree species' UNDERGROWTH: x = its bushes per tree, y = how far out they go (m, at least the trunk's 1.5 m). The

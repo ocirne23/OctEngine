@@ -17,8 +17,9 @@ Nsight Graphics, with `Assets/Local` for the driver's `shader-*.nvdbg`. **The GL
 diagnostics (restart)"** (saved, off by default): the device is made with `VK_NV_device_diagnostics_config` (shader debug
 info + resource tracking - the dump then also says whether the faulting address was a freed resource); without it the
 driver writes no `.nvdbg` and every warp's "Shader mapping" is null. **One archive per crash**
-(`GpuCrashTracker::writeCrashArchive`): `Assets/Local/OctEngine-<pid>-<n>.zip` (Linux `.tar.gz`, the system's `tar`) with
-the dump, its `.json`, the log so far (`.log`), the `.nvdbg` files and `CrashShaders` - the one file to send. **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
+(`GpuCrashTracker::writeCrashArchive`): `Assets/Local/GpuCrash-OctEngine-<pid>-<n>.zip` (Linux `.tar.gz`, the system's `tar`) with
+the dump, its `.json`, the log so far (`.log`), the `.nvdbg` files and `CrashShaders` - the one file to send. Once the
+archive is written those loose files are removed (a failed `tar` keeps them). **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
 the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call). **Streamline / DLSS is optional the
 same way** (`Util/Streamline.ixx`, see "DLSS" in [PostProcess.md](PostProcess.md)).
 **Minimum spec RTX 2000.**

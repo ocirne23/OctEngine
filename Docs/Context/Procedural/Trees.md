@@ -557,7 +557,9 @@ leaves and bark apart). A bake logs "Trees: '<species>' voxels <v> at <res>: <st
   is a bare linear `RenderTexture` (`PieceMeshes::voxelIndex`). **The opacity atlas's header carries the index texture's
   bindless id** (its first two 4 x 4 blocks = the id's low and high byte, written at upload: a BC4 block of two equal
   endpoints decodes exactly): the shadow casters get ONE texture index (the cull's alpha index), and both passes find
-  the index through it (`voxelGrid`). It takes the band's fade-in in `applyFadeBands`; the box mesh
+  the index through it (`voxelGrid`). **A failed upload** of the index or the atlases (no slot, `UINT16_MAX`) logs an error
+  and leaves the variant with NO voxel tier: the header would name a descriptor past the arrays (the shader has no guard,
+  the CPU makes sure). It takes the band's fade-in in `applyFadeBands`; the box mesh
   (`treeVoxelBoxMesh`: the grid's box, 8 corners; its FIRST quad = the bottom face) has no BLAS. ONE box per variant
   for three draws - the tier that crossfades with the meshes, the far voxel trees and the voxel shadow caster - and
   each draws its first quad alone, as a rectangle around the box (RendererVK Scene.md, "THE VOXEL TIER": the fragment

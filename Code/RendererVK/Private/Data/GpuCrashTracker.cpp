@@ -380,14 +380,23 @@ void GpuCrashTracker::writeCrashArchive(const oc::string& baseFileName)
         entries += oc::format(" \"shader-{}.nvdbg\"", oc::fromStd(std::to_string(debugInfo.first)));
     const oc::string local = FileSystem::resolve(dumpFolder);
 #ifdef _MSC_VER
-    const oc::string archive = FileSystem::resolve(dumpFolder + baseFileName + ".zip");
+    const oc::string archive = FileSystem::resolve(dumpFolder + "GpuCrash-" + baseFileName + ".zip");
     const oc::string command = oc::format("tar -a -c -f \"{}\" -C \"{}\" {}", archive, local, entries); // -a: zip by the suffix
 #else
-    const oc::string archive = FileSystem::resolve(dumpFolder + baseFileName + ".tar.gz");
+    const oc::string archive = FileSystem::resolve(dumpFolder + "GpuCrash-" + baseFileName + ".tar.gz");
     const oc::string command = oc::format("tar -czf \"{}\" -C \"{}\" {}", archive, local, entries);
 #endif
     const int result = std::system(command.c_str());
     printf("GpuCrashTracker: crash archive %s (%s)\n", archive.c_str(), result == 0 ? "written" : "tar FAILED");
+    if (result != 0)
+        return; // tar failed: the loose files stay, the only copy
+    // In the archive: the loose files go.
+    FileSystem::remove(dumpFolder + baseFileName + ".nv-gpudmp", /*allowMainThread*/ true);
+    FileSystem::remove(dumpFolder + baseFileName + ".nv-gpudmp.json", /*allowMainThread*/ true);
+    FileSystem::remove(dumpFolder + logName, /*allowMainThread*/ true);
+    FileSystem::removeAll(dumpFolder + "CrashShaders", /*allowMainThread*/ true);
+    for (const auto& debugInfo : m_shaderDebugInfo)
+        FileSystem::remove(dumpFolder + "shader-" + oc::fromStd(std::to_string(debugInfo.first)) + ".nvdbg", /*allowMainThread*/ true);
 }
 
 // Helper for writing shader debug information to a file
