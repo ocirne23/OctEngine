@@ -7,7 +7,11 @@ Modern Vulkan renderer. Links Animation, File and Threading (+ vulkan, glslang P
 Aftermath is NOT linked: `Util/Aftermath.ixx` (`RendererVK:Aftermath`) `LoadLibrary`s
 `GFSDK_Aftermath_Lib.x64.dll` in `GpuCrashTracker::Initialize` and holds one function pointer per
 entry point. **`Renderer::initialize` calls it BEFORE the Vulkan device is created** (enabled after it, a device lost wrote
-no dump); a crash writes `Assets/Local/<app>-<pid>-<n>.nv-gpudmp` (open it in Nsight Graphics). **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
+no dump); a crash writes `Assets/Local/OctEngine-<pid>-<n>.nv-gpudmp` + its decoded `.json`. **The shaders in it are
+named:** every variant `Shader::GLSLtoSPV` compiles or loads from the SPIR-V cache registers its Aftermath hash with its
+cache file (`ShaderDatabase::registerVariant`; no SPIR-V kept in memory), so at a crash the decoder gets the SPIR-V back
+(with its debug source: source lines in the `.json`), the log prints `GpuCrashTracker: shader in the dump: <file>`, and
+`Assets/Local/CrashShaders/<file>.<hash>.spv` is written - the search path for the dump in Nsight Graphics. **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
 the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call). **Streamline / DLSS is optional the
 same way** (`Util/Streamline.ixx`, see "DLSS" in [PostProcess.md](PostProcess.md)).
 **Minimum spec RTX 2000.**

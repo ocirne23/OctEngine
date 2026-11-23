@@ -10,6 +10,7 @@ import Core;
 import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.Windows;
 import :Aftermath;
+import :Shader;
 
 //*********************************************************
 //
@@ -140,6 +141,31 @@ inline oc::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
 // ShaderDatabase implementation
 //*********************************************************
 
+namespace
+{
+    // The registered variants (ShaderDatabase::registerVariant): Aftermath hash -> where the SPIR-V is. Namespace scope
+    // (shaders compile on jobs: no function-local static), under its own mutex.
+    struct RegisteredVariant
+    {
+        oc::string cachePath;
+        oc::string debugFilePath;
+    };
+    std::mutex g_variantMutex;
+    oc::unordered_map<uint64, RegisteredVariant> g_variants;
+}
+
+void ShaderDatabase::registerVariant(oc::span<const unsigned int> spirv, const oc::string& cachePath, const oc::string& debugFilePath)
+{
+    if (!Aftermath::loaded() || spirv.empty())
+        return;
+    const GFSDK_Aftermath_SpirvCode code{ { spirv.data() }, uint32_t(spirv.size_bytes()) };
+    GFSDK_Aftermath_ShaderBinaryHash hash{};
+    if (!GFSDK_Aftermath_SUCCEED(Aftermath::GetShaderHashSpirv(GFSDK_Aftermath_Version_API, &code, &hash)))
+        return; // no name for this one in a crash dump: never worth stopping the app
+    std::lock_guard<std::mutex> lock(g_variantMutex);
+    g_variants[hash.hash] = RegisteredVariant{ cachePath, debugFilePath };
+}
+
 ShaderDatabase::ShaderDatabase()
     : m_shaderBinaries()
     , m_shaderBinariesWithDebugInfo()
@@ -251,13 +277,36 @@ bool ShaderDatabase::FindShaderBinary(const GFSDK_Aftermath_ShaderBinaryHash& sh
 {
     // Find shader binary data for the shader hash
     auto i_shader = m_shaderBinaries.find(shaderHash);
-    if (i_shader == m_shaderBinaries.end())
+    if (i_shader != m_shaderBinaries.end())
     {
-        // Nothing found.
-        return false;
+        shader = i_shader->second;
+        return true;
     }
 
-    shader = i_shader->second;
+    // A registered variant: read back from its cache file.
+    RegisteredVariant variant;
+    {
+        std::lock_guard<std::mutex> lock(g_variantMutex);
+        const auto found = g_variants.find(shaderHash.hash);
+        if (found == g_variants.end())
+            return false;
+        variant = found->second;
+    }
+    oc::vector<unsigned int> spirv;
+    if (!Shader::readCachedSpirv(variant.cachePath, spirv))
+    {
+        printf("GpuCrashTracker: shader in the dump: %s (hash %016llx) - its cache file is gone\n", variant.debugFilePath.c_str(),
+            (unsigned long long)shaderHash.hash);
+        return false;
+    }
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(spirv.data());
+    shader.assign(bytes, bytes + spirv.size() * sizeof(unsigned int));
+    // The crashing shader BY NAME, and its SPIR-V (with its debug source) where Nsight Graphics can find it.
+    const oc::string outPath = oc::format("Local/CrashShaders/{}.{:016x}.spv", variant.debugFilePath, shaderHash.hash);
+    printf("GpuCrashTracker: shader in the dump: %s (hash %016llx) -> %s\n", variant.debugFilePath.c_str(), (unsigned long long)shaderHash.hash,
+        outPath.c_str());
+    FileSystem::createDirectories(FileSystem::parentPath(outPath), /*allowMainThread*/ true);
+    FileSystem::writeFileBytes(outPath, oc::span<const uint8>(shader.data(), shader.size()), /*allowMainThread*/ true);
     return true;
 }
 

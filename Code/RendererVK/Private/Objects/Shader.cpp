@@ -6,6 +6,7 @@ import :VK;
 import :Device;
 import :glslang;
 import :Layout;
+import :ShaderDatabase;
 import Settings;
 
 Shader::Shader() {}
@@ -617,6 +618,35 @@ static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 s
     return reader.ok();
 }
 
+bool Shader::readCachedSpirv(const oc::string& cachePath, oc::vector<unsigned int>& spirv)
+{
+    oc::vector<uint8> bytes;
+    if (!FileSystem::readFileBytes(cachePath, bytes, /*allowMainThread*/ true))
+        return false;
+    SpvCacheReader reader(bytes);
+    if (reader.u32() != SPV_CACHE_MAGIC || reader.u32() != SPV_CACHE_VERSION)
+        return false;
+    (void)reader.str(); // the key
+    (void)reader.u64(); // the source hash
+    const uint32 numRefs = reader.u32();
+    for (uint32 i = 0; i < numRefs && reader.ok(); ++i)
+        (void)reader.str();
+    const uint32 numDeps = reader.u32();
+    for (uint32 i = 0; i < numDeps && reader.ok(); ++i)
+    {
+        (void)reader.str();
+        (void)reader.str();
+        (void)reader.str();
+        (void)reader.u64();
+    }
+    const uint32 numWords = reader.u32();
+    if (!reader.ok() || numWords == 0 || (uint64)numWords * sizeof(unsigned int) > bytes.size())
+        return false;
+    spirv.resize(numWords);
+    reader.raw(spirv.data(), numWords * sizeof(unsigned int));
+    return reader.ok();
+}
+
 static void writeSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, const oc::vector<ShaderIncludeDep>& deps,
     const oc::vector<oc::string>& uboRefs, const oc::vector<unsigned int>& spirv)
 {
@@ -700,6 +730,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
         if (readSpvCache(cachePath, cacheKey, sourceHash, checkIncluder, spirv, uboRefs))
         {
             fillStamp(stamp, cacheKeyHash, sourceHash, oc::move(uboRefs));
+            ShaderDatabase::registerVariant(spirv, cachePath, debugFilePath); // a GPU crash dump can name it
             return true;
         }
     }
@@ -786,6 +817,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     oc::sort(uboRefs.begin(), uboRefs.end());
     uboRefs.erase(oc::unique(uboRefs.begin(), uboRefs.end()), uboRefs.end());
     writeSpvCache(cachePath, cacheKey, sourceHash, includer.getDeps(), uboRefs, spirv);
+    ShaderDatabase::registerVariant(spirv, cachePath, debugFilePath); // a GPU crash dump can name it
     fillStamp(stamp, cacheKeyHash, sourceHash, oc::move(uboRefs));
 
     return true;

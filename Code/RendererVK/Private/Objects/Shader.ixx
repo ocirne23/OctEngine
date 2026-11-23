@@ -38,6 +38,9 @@ public:
     // reload that changes nothing on disk (s_uboOnlyReload).
     static bool isCurrent(const ShaderStamp& stamp, vk::ShaderStageFlagBits type, const oc::string& source, const oc::string& debugFilePath,
         const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration);
+    // The SPIR-V words of a SPIR-V cache entry (Local/ShaderCache/*.spvc), nothing checked: the GPU crash dump decoder's
+    // lookup (ShaderDatabase), main thread at crash time.
+    static bool readCachedSpirv(const oc::string& cachePath, oc::vector<unsigned int>& spirv);
     // FNV-1a 64 over bytes, chained from `hash` (the pipelines' fixed-state hashes).
     static uint64 hashBytes(uint64 hash, const void* data, size_t size);
     template<typename T> static uint64 hashValue(uint64 hash, const T& value) { return hashBytes(hash, &value, sizeof(T)); }
