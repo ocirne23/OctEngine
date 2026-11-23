@@ -48,8 +48,15 @@ namespace Procedural::Diffusion
 		// that neither bigger batches nor fp16 nor IO binding has anything left to reclaim. The only wins
 		// left are algorithmic - do less work (see the stride above), not dispatch it better.
 		// Both models take a dynamic batch dim, and a partial final batch is fine.
+#ifdef _MSC_VER
 		constexpr int32 LATENT_BATCH = 8;
 		constexpr int32 COARSE_BATCH = 8;
+#else
+		// CUDA on Linux shares the GPU with the renderer (~2.4 GB left on an 8 GB card): batch 8 ran out of memory. The
+		// noise is seeded per window, so the batch size does not change the tiles.
+		constexpr int32 LATENT_BATCH = 2;
+		constexpr int32 COARSE_BATCH = 2;
+#endif
 		constexpr int32 DECODER_TILE_SIZE = 256;
 		// Unlike the latent stride above, this one IS a real overlap/cost dial: every value tried (192, 224,
 		// 240, 256) reproduces the reference elevation to within ~0.1% (3017..5708 m -> 3024..5706 at 224),

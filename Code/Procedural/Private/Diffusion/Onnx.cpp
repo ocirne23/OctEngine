@@ -133,11 +133,17 @@ namespace Procedural::Diffusion
 			bool dml = false;
 			if (device != EInferenceDevice::Cpu)
 			{
+#ifdef _MSC_VER
 				// DirectML REQUIRES both of these. The Java addDirectML sets them for you; the C++ API does
 				// not, and session creation fails without them.
 				opts.DisableMemPattern();
 				//opts.SetExecutionMode(ORT_SEQUENTIAL);
 				opts.SetExecutionMode(ORT_PARALLEL);
+#else
+				// CUDA: sequential. The CUDA provider runs its kernels on one stream, so the parallel executor buys nothing
+				// and only runs nodes on ORT's own threads.
+				opts.SetExecutionMode(ORT_SEQUENTIAL);
+#endif
 				try
 				{
 #ifdef _MSC_VER
@@ -147,13 +153,17 @@ namespace Procedural::Diffusion
 					// Linux: the CUDA provider stands in for DirectML (`dml` means "the GPU provider" from here on). It logs
 					// through ORT's default logger while it is appended, which the Env registers: create that first.
 					(void)ortEnv();
-					OrtCUDAProviderOptions cuda{};
-					cuda.device_id = 0;
-					// The renderer shares this VRAM. The defaults grow the arena by powers of two and run cuDNN's
-					// exhaustive convolution search with its large workspaces: both ran out of memory on an 8 GB laptop GPU.
-					cuda.arena_extend_strategy = 1; // kSameAsRequested
-					cuda.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
-					opts.AppendExecutionProvider_CUDA(cuda);
+					// The renderer shares this VRAM. The defaults grow the arena by powers of two, run cuDNN's
+					// exhaustive convolution search and let it take the largest workspace: all of that ran out of
+					// memory on an 8 GB laptop GPU. The arena is also shrunk after every run (see run()).
+					Ort::CUDAProviderOptions cuda;
+					cuda.Update({ // the ORT C++ API takes std:: types
+						{ "device_id", "0" },
+						{ "arena_extend_strategy", "kSameAsRequested" },
+						{ "cudnn_conv_algo_search", "HEURISTIC" },
+						{ "cudnn_conv_use_max_workspace", "0" },
+					});
+					opts.AppendExecutionProvider_CUDA_V2(*cuda);
 					dml = true;
 #endif
 				}
@@ -217,8 +227,16 @@ namespace Procedural::Diffusion
 			}
 
 			const char* outName = m_impl->outputNames[0].c_str();
+#ifdef _MSC_VER
+			Ort::RunOptions runOptions{ nullptr };
+#else
+			// Each session's arena otherwise keeps its high-water mark: the base stage's peak would stay allocated
+			// while the decoder (and the renderer) need the memory.
+			Ort::RunOptions runOptions;
+			runOptions.AddConfigEntry("memory.enable_memory_arena_shrinkage", "gpu:0");
+#endif
 			std::vector<Ort::Value> results = m_impl->session->Run( // Ort::Value is move-only; keep the ONNX container
-				Ort::RunOptions{ nullptr }, names.data(), values.data(), values.size(), &outName, 1);
+				runOptions, names.data(), values.data(), values.size(), &outName, 1);
 
 			const Ort::Value& r = results[0];
 			const size_t count = r.GetTensorTypeAndShapeInfo().GetElementCount();
