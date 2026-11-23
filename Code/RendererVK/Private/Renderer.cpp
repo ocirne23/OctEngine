@@ -178,8 +178,7 @@ void RendererState::initPipelines()
 
     m_sceneViewCount = Globals::openXR.isEnabled() ? 2u : 1u;
 
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount);
+    initSceneColors(renderExt);
     const vk::RenderPass sceneRenderPass = m_perFrameData[0].sceneColor.getRenderPass();
     // The depth-writing stages' pipelines: the opaque family, with the motion target (SceneColor).
     const vk::RenderPass opaqueRenderPass = m_perFrameData[0].sceneColor.getOpaqueRenderPass();
@@ -599,6 +598,15 @@ glm::mat4 RendererState::computeCenterViewProj(const Camera& camera) const
     return computeCenterProjection(camera) * camera.viewMatrix;
 }
 
+// Slot 0 owns the colour, motion and voxel hit targets; every other slot borrows them (one copy) and has its own depth.
+// Slot 0 first: a re-initialize frees its old targets, which the others then stop naming.
+void RendererState::initSceneColors(const vk::Extent2D& renderExt)
+{
+    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
+        m_perFrameData[f].sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount,
+            f == 0 ? nullptr : &m_perFrameData[0].sceneColor);
+}
+
 void RendererState::updateRenderExtent()
 {
     m_dlssMode = (Streamline::DlssMode)m_dlssParams.mode; // see m_dlssMode: applied here, with the sizes
@@ -638,8 +646,7 @@ void RendererState::recreateRenderTargets()
     m_cloudPipeline.recreateImages(renderExt.width, renderExt.height);
     m_treeVolume.recreateImages(renderExt.width, renderExt.height);
     m_dlssPipeline.recreateImages(renderExt.width, renderExt.height);
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount);
+    initSceneColors(renderExt);
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height);
     m_dlssReset = true;
     // The cached scene command buffers embed the re-created scene-colour render pass and the image views.

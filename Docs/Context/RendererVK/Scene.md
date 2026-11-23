@@ -876,11 +876,19 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
   * the shadow cull writes the MAIN cull's out-instance buffer (`OutShadowMeshInstance` at its draw slot; its
     48 B fit the main 64 B stride, static_assert in Layout.ixx) and its OPAQUE list (binding 8). Only the compacted
     count is the shadow cull's own. No shadow capacity of its own to resize.
-  * **That out-instance buffer (`CullOutInstances`) is ONE copy for all frame slots**, and so are the far voxel trees'
-    appended + sorted records (both lists): the GPU writes and reads them inside one frame on one queue. A barrier at the
-    top of `recordPrimaryPreScene` (before the far shadow casters' and the shadow cull's writes) waits for the previous
-    frame's reads - the indirect fetch, the vertex, tessellation and fragment stages, the far scatter's compute. A new
+  * **ONE COPY for all frame slots** (the GPU writes and reads them inside one frame on one queue): that out-instance
+    buffer (`CullOutInstances`), the far voxel trees' appended + sorted records (both lists), SceneColor's colour, motion
+    and voxel hit targets (slot 0 owns them, the other slot borrows: `initSceneColors`; the DEPTH stays per slot - the
+    next frame reads it), the fog's integrated grid and aerial LUT (`VolumetricFogPipeline::ImageSet::copies`; the scatter
+    keeps two: its history). A barrier at the top of `recordPrimaryPreScene` (before the far shadow casters' and the
+    shadow cull's writes, the fog and the first scene stage) waits for the previous frame's reads - the indirect fetch,
+    the vertex, tessellation and fragment stages, compute (the far scatter, TAA, DLSS, eye adaptation), copy / blit (the
+    VR eye copy) - for compute, clear, copy and colour-output writes; the stage passes' clear from UNDEFINED chains on
+    through their colour-output dependency (the dependency arrays cannot carry it: render pass compatibility). A new
     reader in another stage must join that barrier.
+  * **The BLAS builds share ONE scratch region** (the largest build's, `AccelerationStructure::recordBuildBlas` and the
+    skinned rebuild): they run one after another with an AS-build barrier between each pair, which orders the scratch
+    too. A region per build summed the frame's builds (52 MB after the load's large batch, kept by the grow-only buffer).
   * the shadow execute uses the static mesh pass's OPAQUE DGC scratch (`getOpaquePreprocessBuffer`), sized for both:
     `ShadowMapGraphicsPipeline::getPreprocessRequirement` -> `StaticMeshGraphicsPipeline::reserveOpaquePreprocess`,
     called by the Renderer after every shadow-pipeline initialize / reload / mesh-capacity growth. The transparent

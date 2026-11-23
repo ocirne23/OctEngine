@@ -451,7 +451,7 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
     the spill cost lands on EVERY terrain pixel while the saving is only on filmed ones.
   * The film's lights before its mirror (N / V then live across the lights' own ray-query peak).
   * The AO upsample's tap arrays as index bits (the lit FS got worse).
-  * A compact half LightInfo (the compiler loads light fields at use); a D16 shadow map (geometry-bound, D32 is
-    compressed).
+  * A compact half LightInfo (the compiler loads light fields at use); a D16 shadow map FOR SPEED (geometry-bound, D32 is
+    compressed) - it is D16 now for its MEMORY (Lighting.md).
   * **Not worth it:** the GI probe buffer (the fp32 temporal HISTORY - fp16 would round small blend steps away),
     BakedWorldMap (heights), vertex attributes.

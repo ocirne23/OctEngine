@@ -55,24 +55,31 @@ void SceneColor::destroy()
     for (vk::Framebuffer& fb : m_opaqueFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     for (vk::Framebuffer& fb : m_voxelMarchFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     if (m_voxelMarchRenderPass) vkDevice.destroyRenderPass(m_voxelMarchRenderPass);
-    if (m_voxelHitView) vkDevice.destroyImageView(m_voxelHitView);
-    Globals::gpuAllocator.destroyImage(m_voxelHitImage, m_voxelHitMemory);
-    m_voxelMarchRenderPass = nullptr; m_voxelHitView = nullptr; m_voxelHitImage = nullptr; m_voxelHitMemory = nullptr;
+    m_voxelMarchRenderPass = nullptr;
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
     if (m_opaqueRenderPass) vkDevice.destroyRenderPass(m_opaqueRenderPass);
     for (vk::RenderPass& rp : m_stagePasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
-    for (vk::ImageView& v : m_colorLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     for (vk::ImageView& v : m_depthLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
-    for (vk::ImageView& v : m_motionLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
-    Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
     Globals::gpuAllocator.destroyImage(m_depthImage, m_depthMemory);
-    Globals::gpuAllocator.destroyImage(m_motionImage, m_motionMemory);
+    // The shared targets (colour, motion, voxel hit) only by their owner: a borrower just forgets them.
+    if (m_ownsTargets)
+    {
+        if (m_voxelHitView) vkDevice.destroyImageView(m_voxelHitView);
+        Globals::gpuAllocator.destroyImage(m_voxelHitImage, m_voxelHitMemory);
+        for (vk::ImageView& v : m_colorLayerViews) { if (v) vkDevice.destroyImageView(v); }
+        for (vk::ImageView& v : m_motionLayerViews) { if (v) vkDevice.destroyImageView(v); }
+        Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
+        Globals::gpuAllocator.destroyImage(m_motionImage, m_motionMemory);
+    }
+    m_voxelHitView = nullptr; m_voxelHitImage = nullptr; m_voxelHitMemory = nullptr;
+    m_colorLayerViews = {};
+    m_motionLayerViews = {};
     m_sampler = nullptr; m_depthSampler = nullptr; m_renderPass = nullptr; m_opaqueRenderPass = nullptr;
     m_colorImage = nullptr; m_depthImage = nullptr; m_motionImage = nullptr;
     m_colorMemory = nullptr; m_depthMemory = nullptr; m_motionMemory = nullptr;
 }
 
-bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount)
+bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const SceneColor* shareTargets)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     destroy();
@@ -80,25 +87,45 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     m_height = height;
     m_viewCount = viewCount;
     m_colorFormat = colorFormat;
+    m_ownsTargets = shareTargets == nullptr;
+    assert(!shareTargets || (shareTargets->m_width == width && shareTargets->m_height == height && shareTargets->m_viewCount == viewCount));
 
     // The colour/depth images hold one layer per eye; the forward pass renders into each layer in a
     // separate (non-multiview) pass. TRANSFER_SRC lets the VR path copy each layer into its eye swapchain.
-    if (!createImage(vkDevice, width, height, colorFormat, COLOR_USAGE,
-        viewCount, m_colorImage, m_colorMemory, "SceneColor.color")) return false;
     // THE scene depth: written by the first scene stages, sampled by everything after them and by the
-    // next frame (TRANSFER_DST = the one-time clear below).
+    // next frame (TRANSFER_DST = the one-time clear below). Always this instance's own: the next frame reads it.
     if (!createImage(vkDevice, width, height, SCENE_DEPTH_FORMAT, DEPTH_USAGE, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
-    // The motion target: written by the depth-writing stages, sampled by TAA and the AO temporal pass.
-    if (!createImage(vkDevice, width, height, SCENE_MOTION_FORMAT,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, viewCount, m_motionImage, m_motionMemory, "SceneColor.motion")) return false;
+    if (m_ownsTargets)
+    {
+        if (!createImage(vkDevice, width, height, colorFormat, COLOR_USAGE,
+            viewCount, m_colorImage, m_colorMemory, "SceneColor.color")) return false;
+        // The motion target: written by the depth-writing stages, sampled by TAA and the AO temporal pass.
+        if (!createImage(vkDevice, width, height, SCENE_MOTION_FORMAT,
+            vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, viewCount, m_motionImage, m_motionMemory, "SceneColor.motion")) return false;
+        // The voxel march's hit target (see SCENE_VOXEL_HIT_FORMAT).
+        if (!createImage(vkDevice, width, height, SCENE_VOXEL_HIT_FORMAT, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+            1, m_voxelHitImage, m_voxelHitMemory, "SceneColor.voxelHit")) return false;
+        if (!createView(vkDevice, m_voxelHitImage, SCENE_VOXEL_HIT_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, 0, 1, m_voxelHitView,
+            "SceneColor.voxelHit")) return false;
+    }
+    else
+    {
+        // Borrowed (see initialize in the .ixx): the owner's images AND views - a view serves any number of framebuffers.
+        m_colorImage = shareTargets->m_colorImage;
+        m_colorLayerViews = shareTargets->m_colorLayerViews;
+        m_motionImage = shareTargets->m_motionImage;
+        m_motionLayerViews = shareTargets->m_motionLayerViews;
+        m_voxelHitImage = shareTargets->m_voxelHitImage;
+        m_voxelHitView = shareTargets->m_voxelHitView;
+    }
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
-        if (!createView(vkDevice, m_colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_colorLayerViews[i],
+        if (m_ownsTargets && !createView(vkDevice, m_colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_colorLayerViews[i],
             oc::format("SceneColor.color[{}]", i).c_str())) return false;
         if (!createView(vkDevice, m_depthImage, SCENE_DEPTH_FORMAT, vk::ImageAspectFlagBits::eDepth, vk::ImageViewType::e2D, i, 1, m_depthLayerViews[i],
             oc::format("SceneColor.depth[{}]", i).c_str())) return false;
-        if (!createView(vkDevice, m_motionImage, SCENE_MOTION_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_motionLayerViews[i],
+        if (m_ownsTargets && !createView(vkDevice, m_motionImage, SCENE_MOTION_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_motionLayerViews[i],
             oc::format("SceneColor.motion[{}]", i).c_str())) return false;
     }
 
@@ -250,10 +277,6 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // voxel lighting's fetch, + the depth, loaded and written, DEPTH_STENCIL_ATTACHMENT before and after (it runs between
     // two opaque stage instances; the Renderer's inter-instance barrier covers the depth). ----
     {
-        if (!createImage(vkDevice, width, height, SCENE_VOXEL_HIT_FORMAT, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
-            1, m_voxelHitImage, m_voxelHitMemory, "SceneColor.voxelHit")) return false;
-        if (!createView(vkDevice, m_voxelHitImage, SCENE_VOXEL_HIT_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, 0, 1, m_voxelHitView,
-            "SceneColor.voxelHit")) return false;
         const oc::array<vk::AttachmentDescription2, 2> marchAttachments{
             vk::AttachmentDescription2{ // 0: the hit target
                 .format = SCENE_VOXEL_HIT_FORMAT,
@@ -479,7 +502,8 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         bars[2] = bars[0];
         bars[2].image = m_voxelHitImage; // one layer
         bars[2].subresourceRange.layerCount = 1;
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 3, .pImageMemoryBarriers = bars });
+        if (m_ownsTargets) // a borrower's targets are the owner's, already in their layout
+            cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 3, .pImageMemoryBarriers = bars });
         init.end();
         init.submitGraphics();
         (void)Globals::device.graphicsQueueWaitIdle();

@@ -92,18 +92,21 @@ public:
     void updateFactionDescriptor(uint32 frameIdx, vk::ImageView factionView, vk::Sampler factionSampler); // the game's faction map (scatter 15, apply 12)
 
 private:
+    // `copies` images: one per frame slot, or ONE for all (at() picks the slot's).
     struct ImageSet
     {
         oc::array<vk::Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> image;
         oc::array<VmaAllocation, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> memory{};
         oc::array<vk::ImageView, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> view;
+        uint32 copies = RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
+        vk::ImageView at(uint32 frameIdx) const { return view[frameIdx % copies]; }
     };
 
     void buildScatterLayout(ComputePipelineLayout& layout);
     void buildIntegrateLayout(ComputePipelineLayout& layout);
     void buildAerialLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
-    void createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName);
+    void createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName, uint32 copies);
     void destroyImageSet(ImageSet& set);
 
     ComputePipeline m_scatterPipeline;
@@ -119,7 +122,9 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_aerialSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_applySets;
 
-    ImageSet m_scatter;    // per-froxel in-scatter/extinction; previous frame's image is the temporal history
+    ImageSet m_scatter;    // per-froxel in-scatter/extinction; previous frame's image is the temporal history (one per slot)
+    // ONE copy each for all frame slots: written by this frame's compute and read only by this frame's apply. The next
+    // frame's writes wait for that fragment read: RendererState::recordPrimaryPreScene's barrier (fog runs after it).
     ImageSet m_integrated; // accumulated in-scatter + transmittance per slice
     ImageSet m_aerial;     // the atmosphere's in-scatter + mean transmittance per distance slice
     vk::Sampler m_sampler;

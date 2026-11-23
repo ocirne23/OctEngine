@@ -7,9 +7,12 @@ import :CommandBuffer;
 
 namespace
 {
-    // Every stage that may sample one of these maps (ocean shore: VS/FS; fog terrain: CS + VS/FS via the
-    // ocean fallback). Using the union for both keeps the barriers simple; extra stages are harmless.
+    // Every stage that may sample one of these maps: VS / FS (the ocean, the terrain, clutter, particles), CS (the fog, the
+    // grass and clutter culls, the snow, the tree volume) and the TESSELLATED TERRAIN's TCS / TES (the splat's height
+    // composite reads the climate: snow.inc.glsl). A one-image map's copy and its readers are in one frame, so a stage
+    // missing here reads a half-copied map. Using the union for both maps keeps the barriers simple.
     constexpr vk::PipelineStageFlags2 SAMPLE_STAGES = vk::PipelineStageFlagBits2::eVertexShader
+        | vk::PipelineStageFlagBits2::eTessellationControlShader | vk::PipelineStageFlagBits2::eTessellationEvaluationShader
         | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
 }
 
@@ -24,22 +27,24 @@ BakedWorldMap::~BakedWorldMap()
     }
 }
 
-void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 channels, const char* debugName)
+void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 channels, bool pair, const char* debugName)
 {
     assert(channels == 1 || channels == 2 || channels == 4); // no 3: RGB32F isn't a sampled-image format on most GPUs
     m_resolution = resolution;
     m_numLayers = numLayers;
     m_channels = channels;
     m_texelBytes = channels * (uint32)sizeof(float);
+    m_numImages = pair ? 2u : 1u;
     create(channels == 4 ? vk::Format::eR32G32B32A32Sfloat : channels == 2 ? vk::Format::eR32G32Sfloat : vk::Format::eR32Sfloat, debugName);
 }
 
-void BakedWorldMap::initializeBytes(uint32 resolution, uint32 numLayers, const char* debugName)
+void BakedWorldMap::initializeBytes(uint32 resolution, uint32 numLayers, bool pair, const char* debugName)
 {
     m_resolution = resolution;
     m_numLayers = numLayers;
     m_channels = 1;
     m_texelBytes = 1;
+    m_numImages = pair ? 2u : 1u;
     create(vk::Format::eR8Unorm, debugName);
 }
 
@@ -48,8 +53,9 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     const uint32 resolution = m_resolution, numLayers = m_numLayers;
     vk::Device vkDevice = Globals::device.getDevice();
     const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLayers };
+    m_fullCopiesLeft = m_numImages;
 
-    for (uint32 i = 0; i < 2; ++i)
+    for (uint32 i = 0; i < m_numImages; ++i)
     {
         vk::ImageCreateInfo info{
             .imageType = vk::ImageType::e2D,
@@ -93,7 +99,7 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     init.initialize(vk::CommandBufferLevel::ePrimary, "BakedWorldMap.init");
     vk::CommandBuffer cmd = init.begin(true);
     oc::array<vk::ImageMemoryBarrier2, 2> bars;
-    for (uint32 i = 0; i < 2; ++i)
+    for (uint32 i = 0; i < m_numImages; ++i)
         bars[i] = vk::ImageMemoryBarrier2{
             .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
             .dstStageMask = SAMPLE_STAGES,
@@ -103,10 +109,18 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
             .image = m_image[i],
             .subresourceRange = allLayers,
         };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = m_numImages, .pImageMemoryBarriers = bars.data() });
     init.end();
     init.submitGraphics();
     (void)Globals::device.graphicsQueueWaitIdle();
+}
+
+void BakedWorldMap::stage(uint32 frameIdx, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
+{
+    m_uploadSlot = (int)frameIdx;
+    m_pendingCenter = centerXZ;
+    m_pendingSizes = worldSizes;
+    m_pendingUserParam = userParam;
 }
 
 void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
@@ -114,10 +128,8 @@ void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& center
     assert(m_texelBytes == m_channels * sizeof(float) && texels.size() == (size_t)m_numLayers * m_resolution * m_resolution * m_channels);
     memcpy(m_stagingMapped[frameIdx].data(), texels.data(), texels.size_bytes());
     m_staging[frameIdx].flushMappedMemory(texels.size_bytes());
-    m_uploadSlot = (int)frameIdx;
-    m_pendingCenter = centerXZ;
-    m_pendingSizes = worldSizes;
-    m_pendingUserParam = userParam;
+    m_copyRect = glm::ivec4(0, 0, -1, -1); // the whole image
+    stage(frameIdx, centerXZ, worldSizes, userParam);
 }
 
 void BakedWorldMap::uploadBytes(oc::span<const uint8> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
@@ -125,10 +137,8 @@ void BakedWorldMap::uploadBytes(oc::span<const uint8> texels, const glm::vec2& c
     assert(m_texelBytes == 1 && texels.size() == (size_t)m_numLayers * m_resolution * m_resolution);
     memcpy(m_stagingMapped[frameIdx].data(), texels.data(), texels.size_bytes());
     m_staging[frameIdx].flushMappedMemory(texels.size_bytes());
-    m_uploadSlot = (int)frameIdx;
-    m_pendingCenter = centerXZ;
-    m_pendingSizes = worldSizes;
-    m_pendingUserParam = userParam;
+    m_copyRect = glm::ivec4(0, 0, -1, -1); // the whole image
+    stage(frameIdx, centerXZ, worldSizes, userParam);
 }
 
 void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam,
@@ -136,17 +146,29 @@ void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn
 {
     assert(m_texelBytes == 1 && m_numLayers == 1);
     const int last = (int)m_resolution - 1;
-    glm::ivec4 own(oc::clamp(rectIn.x, 0, last), oc::clamp(rectIn.y, 0, last), oc::clamp(rectIn.z, 0, last), oc::clamp(rectIn.w, 0, last));
+    const glm::ivec4 own(oc::clamp(rectIn.x, 0, last), oc::clamp(rectIn.y, 0, last), oc::clamp(rectIn.z, 0, last), oc::clamp(rectIn.w, 0, last));
+    const auto join = [](const glm::ivec4& a, const glm::ivec4& b)
+    {
+        return glm::ivec4(oc::min(a.x, b.x), oc::min(a.y, b.y), oc::max(a.z, b.z), oc::max(a.w, b.w));
+    };
     glm::ivec4 rect = own;
     if (m_fullCopiesLeft > 0)
     {
         --m_fullCopiesLeft;
         rect = glm::ivec4(0, 0, last, last);
     }
-    else if (m_lastRect.z >= m_lastRect.x)
-        rect = glm::ivec4(oc::min(own.x, m_lastRect.x), oc::min(own.y, m_lastRect.y), oc::max(own.z, m_lastRect.z), oc::max(own.w, m_lastRect.w));
+    else
+    {
+        // A PAIR: the image this lands in (the inactive one) missed the last call - join its rect.
+        if (m_numImages == 2 && m_lastRect.z >= m_lastRect.x)
+            rect = join(rect, m_lastRect);
+        // An upload not yet copied (two calls before one present): copy both.
+        if (m_uploadSlot >= 0)
+            rect = m_copyRect.z < m_copyRect.x ? glm::ivec4(0, 0, last, last) : join(rect, m_copyRect);
+    }
     m_lastRect = own;
-    // The staging buffer has the image's own layout (the copy's bufferRowLength = the resolution): only the rect's rows are written.
+    // The staging buffer has the image's own layout (the copy's bufferRowLength = the resolution): only the rect's rows
+    // are written - every row of a joined rect again, from the WHOLE image.
     const size_t width = (size_t)(rect.z - rect.x + 1);
     for (int y = rect.y; y <= rect.w; ++y)
     {
@@ -160,10 +182,7 @@ void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn
     }
     m_staging[frameIdx].flushMappedMemory(vk::WholeSize);
     m_copyRect = rect;
-    m_uploadSlot = (int)frameIdx;
-    m_pendingCenter = centerXZ;
-    m_pendingSizes = worldSizes;
-    m_pendingUserParam = userParam;
+    stage(frameIdx, centerXZ, worldSizes, userParam);
 }
 
 void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
@@ -171,12 +190,13 @@ void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
     if (m_uploadSlot < 0)
         return;
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    const vk::Image dst = m_image[m_active ^ 1u];
+    const vk::Image dst = m_image[m_numImages == 2 ? m_active ^ 1u : 0u];
     const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, m_numLayers };
     const bool partial = m_copyRect.z >= m_copyRect.x; // uploadBytesRect: the rest of the image is KEPT
 
-    // The inactive image was still sampled by older submissions the last time it was active - the
-    // discard transition must execution-depend on those reads (WRITE_AFTER_READ).
+    // The destination was sampled by older submissions (a pair's inactive image the last time it was active; a single
+    // image by the previous frame, perhaps still running) - the transition must execution-depend on those reads
+    // (WRITE_AFTER_READ). Fences order the CPU, not the GPU.
     vk::ImageMemoryBarrier2 toDst{
         .srcStageMask = SAMPLE_STAGES,
         .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
@@ -200,8 +220,8 @@ void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
         region.bufferRowLength = m_resolution;
         region.imageOffset = vk::Offset3D{ m_copyRect.x, m_copyRect.y, 0 };
         region.imageExtent = vk::Extent3D{ (uint32)(m_copyRect.z - m_copyRect.x + 1), (uint32)(m_copyRect.w - m_copyRect.y + 1), 1 };
-        m_copyRect = glm::ivec4(0, 0, -1, -1);
     }
+    m_copyRect = glm::ivec4(0, 0, -1, -1);
     const vk::CopyBufferToImageInfo2 copyInfo{
         .srcBuffer = m_staging[m_uploadSlot].getBuffer(),
         .dstImage = dst,
@@ -224,15 +244,18 @@ void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSampled });
 
     m_uploadSlot = -1;
-    m_flipPending = true; // activates at the next updateUBO, together with the new center/sizes
+    m_flipPending = true; // the region (and a pair's image) goes live at the next UBO build
 }
 
 void BakedWorldMap::flipIfPending()
 {
     if (!m_flipPending)
         return;
-    m_active ^= 1u;
-    ++m_generation;
+    if (m_numImages == 2)
+    {
+        m_active ^= 1u;
+        ++m_generation;
+    }
     m_center = m_pendingCenter;
     m_worldSizes = m_pendingSizes;
     m_userParam = m_pendingUserParam;

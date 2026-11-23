@@ -117,7 +117,7 @@ void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sun
 
         // How far up-sun a caster can be above this cascade and still be captured. Extends only the
         // near side of the depth slab (the far plane stays tight to the bounding sphere), so the only
-        // cost is depth precision over a longer range (fine for D32). It must exceed the tallest
+        // cost is depth precision over a longer range (D16: one step = the slab / 65536). It must exceed the tallest
         // caster's height above the cascade; too small and casters get clipped out of the depth map,
         // making their shadows pop/disappear as the cascade slab slides with camera motion.
         const float zPad = casterPad;

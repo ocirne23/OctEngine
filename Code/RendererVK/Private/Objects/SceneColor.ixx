@@ -7,7 +7,8 @@ import :Allocator;
 // Offscreen colour+depth target the lit scene renders into (instead of straight to the swapchain), so the
 // TAA resolve has an isolated image to accumulate. The colour attachment uses the swapchain surface format
 // (keeping the static-mesh / GI-debug pipelines render-pass-compatible with the swapchain pass) and ends the
-// pass in SHADER_READ_ONLY for the TAA compute pass to sample. One instance per frame-in-flight.
+// pass in SHADER_READ_ONLY for the TAA compute pass to sample. One instance per frame-in-flight, each with its own
+// depth; the colour, motion and voxel hit targets are the first instance's (initialize's shareTargets).
 //
 // THE DEPTH IS THE SCENE DEPTH EVERY SCREEN-SPACE CONSUMER READS (there is no depth prepass): RTAO, the
 // force march, decals, particles, fog apply, TAA, and - as "last frame's depth" out of the other slot -
@@ -52,7 +53,12 @@ public:
     // viewCount > 1 allocates the colour/depth as arraySize=viewCount with a single-layer framebuffer
     // per eye (getFramebuffer(eye)). The render pass stays non-multiview (viewMask 0) so the forward
     // pass's DGC execution set is allowed; the forward is rendered once per eye into its layer.
-    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount);
+    // shareTargets: an instance (initialized first, same size) whose COLOUR, MOTION and VOXEL HIT targets this one uses
+    // instead of its own - one copy for all frame slots. The GPU writes and reads them inside one frame, and the previous
+    // frame's readers (TAA, DLSS, eye adaptation, the composite, the VR copy) are ordered before this frame's first clear
+    // by RendererState::recordPrimaryPreScene's barrier (the stage passes' dependency arrays must stay as they are: render
+    // pass compatibility). The DEPTH stays per instance: the next frame reads it.
+    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const SceneColor* shareTargets = nullptr);
     void destroy();
 
     // The BASE passes: what the scene pipelines and the cached secondaries are built against. Never begun.
@@ -101,6 +107,7 @@ private:
     uint32 m_height = 0;
     uint32 m_viewCount = 1;
     vk::Format m_colorFormat = vk::Format::eUndefined;
+    bool m_ownsTargets = true; // false: colour / motion / voxel hit are another instance's (initialize's shareTargets)
 
     vk::Image m_colorImage;
     VmaAllocation m_colorMemory = nullptr;

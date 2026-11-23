@@ -284,10 +284,13 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
         };
         uint32 maxPrim = primCount;
         sizes[i] = dev.getAccelerationStructureBuildSizesKHR(vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfos[i], maxPrim);
-        // Give every build its own scratch region (aligned) so concurrent builds never alias scratch
-        // memory -- sharing one scratch region across builds is what was faulting the GPU.
-        scratchOffsets[i] = totalScratch;
-        totalScratch += (sizes[i].buildScratchSize + align - 1) & ~(align - 1);
+        // ONE scratch region for every build, as large as the largest: pass 2 runs the builds one after another with an
+        // AS-build barrier between each pair, which orders their scratch reads and writes too (the spec synchronizes
+        // scratch with the build stage and the AS read / write accesses). A region per build summed every build of the
+        // frame - 50+ MB after the load's large batch, kept by the grow-only buffer. Tried before the serialization:
+        // concurrent builds sharing one region faulted the GPU.
+        scratchOffsets[i] = 0;
+        totalScratch = oc::max(totalScratch, (sizes[i].buildScratchSize + align - 1) & ~(align - 1));
 
         ranges[i] = vk::AccelerationStructureBuildRangeInfoKHR{
             .primitiveCount = primCount,
@@ -301,8 +304,8 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
     {
         ensureScratch(m_blasScratch[frameIdx], m_blasScratchAlignedAddr[frameIdx], totalScratch);
 
-        // Pass 2: create and build each BLAS, serialized with a barrier between builds (each also uses a
-        // disjoint scratch region). Serializing removes any concurrent-build interaction as a variable.
+        // Pass 2: create and build each BLAS, serialized with a barrier between builds (which also orders their
+        // shared scratch region). Serializing removes any concurrent-build interaction as a variable.
         for (uint32 i = 0; i < count; i++)
         {
             Blas& blas = m_blasList[toBuild[i]];
@@ -553,8 +556,8 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
         };
         uint32 maxPrim = primCount;
         const vk::AccelerationStructureBuildSizesInfoKHR sizes = dev.getAccelerationStructureBuildSizesKHR(vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfos[i], maxPrim);
-        scratchOffsets[i] = totalScratch;
-        totalScratch += (sizes.buildScratchSize + align - 1) & ~(align - 1);
+        scratchOffsets[i] = 0; // one region, the largest build's: the builds are serialized (as the static ones)
+        totalScratch = oc::max(totalScratch, (sizes.buildScratchSize + align - 1) & ~(align - 1));
 
         // Allocate the BLAS buffer + handle once (geometry size is constant); reused/rebuilt in place after.
         Blas& blas = slot[i];
@@ -585,7 +588,7 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
 
     ensureScratch(m_skinnedBlasScratch[frameIdx], m_skinnedBlasScratchAlignedAddr[frameIdx], totalScratch);
 
-    // Pass 2: rebuild each BLAS in place, serialized with a barrier (each uses a disjoint scratch region).
+    // Pass 2: rebuild each BLAS in place, serialized with a barrier (which also orders their shared scratch region).
     for (uint32 i = 0; i < count; ++i)
     {
         if (ranges[i].primitiveCount == 0)

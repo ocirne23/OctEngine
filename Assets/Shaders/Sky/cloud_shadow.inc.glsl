@@ -1,5 +1,5 @@
 // Cloud shadows: the BEER SHADOW MAP lookup (CloudPipeline, written by cloud_shadow.cs.glsl). Requires ubo.inc.glsl.
-// The includer defines CLOUD_SHADOW_BINDING (a sampler2DArray, one layer per cascade, RGBA32F).
+// The includer defines CLOUD_SHADOW_BINDING (a sampler2DArray, one layer per cascade, RGBA16F; "no cloud" x = -60000).
 //
 // Two cascades around the camera, each a SNAPSHOT of the clouds (RendererState::buildUboClouds renders the next one a
 // tile per frame in the cascade's other layer). A map is a HORIZONTAL grid at the main layer's middle, fixed to the

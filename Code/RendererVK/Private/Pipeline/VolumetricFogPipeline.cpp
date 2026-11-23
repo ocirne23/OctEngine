@@ -121,10 +121,11 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
 
-void VolumetricFogPipeline::createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName)
+void VolumetricFogPipeline::createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName, uint32 copies)
 {
     vk::Device vkDevice = Globals::device.getDevice();
-    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+    set.copies = copies;
+    for (uint32 i = 0; i < copies; ++i)
     {
         vk::ImageCreateInfo info{
             .imageType = vk::ImageType::e3D,
@@ -156,7 +157,7 @@ void VolumetricFogPipeline::createImageSet(ImageSet& set, vk::Extent3D extent, c
 void VolumetricFogPipeline::destroyImageSet(ImageSet& set)
 {
     vk::Device vkDevice = Globals::device.getDevice();
-    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+    for (uint32 i = 0; i < set.copies; ++i)
     {
         if (set.view[i]) vkDevice.destroyImageView(set.view[i]);
         Globals::gpuAllocator.destroyImage(set.image[i], set.memory[i]);
@@ -186,9 +187,9 @@ void VolumetricFogPipeline::initialize()
     }
 
     const vk::Extent3D froxelExtent{ RendererVKLayout::VOL_FROXEL_X, RendererVKLayout::VOL_FROXEL_Y, RendererVKLayout::VOL_FROXEL_Z };
-    createImageSet(m_scatter, froxelExtent, "Fog.scatter");
-    createImageSet(m_integrated, froxelExtent, "Fog.integrated");
-    createImageSet(m_aerial, vk::Extent3D{ RendererVKLayout::AERIAL_LUT_X, RendererVKLayout::AERIAL_LUT_Y, RendererVKLayout::AERIAL_LUT_Z }, "Fog.aerial");
+    createImageSet(m_scatter, froxelExtent, "Fog.scatter", RendererVKLayout::NUM_FRAMES_IN_FLIGHT);
+    createImageSet(m_integrated, froxelExtent, "Fog.integrated", 1);
+    createImageSet(m_aerial, vk::Extent3D{ RendererVKLayout::AERIAL_LUT_X, RendererVKLayout::AERIAL_LUT_Y, RendererVKLayout::AERIAL_LUT_Z }, "Fog.aerial", 1);
 
     // One-time UNDEFINED -> GENERAL (images stay in GENERAL forever) + clear: the scatter history must read
     // zeros on the first frame, and the integrated grid and the aerial LUT must hold "no fog" (transmittance 1)
@@ -199,7 +200,7 @@ void VolumetricFogPipeline::initialize()
     const ImageSet* sets[] = { &m_scatter, &m_integrated, &m_aerial };
     oc::vector<vk::ImageMemoryBarrier2> bars;
     for (const ImageSet* s : sets)
-        for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+        for (uint32 i = 0; i < s->copies; ++i)
             bars.push_back(vk::ImageMemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
                 .dstStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -211,12 +212,12 @@ void VolumetricFogPipeline::initialize()
             });
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     const vk::ImageSubresourceRange fullRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
-    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-    {
+    for (uint32 i = 0; i < m_scatter.copies; ++i)
         cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
+    for (uint32 i = 0; i < m_integrated.copies; ++i)
         cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
+    for (uint32 i = 0; i < m_aerial.copies; ++i)
         cmd.clearColorImage(m_aerial.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
-    }
     vk::MemoryBarrier2 clearToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -338,7 +339,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_scatter.view[frameIdx]) } },
-            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_integrated.view[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_integrated.at(frameIdx)) } },
         };
         commandBuffer.cmdUpdateDescriptorSets(m_integratePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_integratePipeline.getPipeline());
@@ -351,7 +352,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
-            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_aerial.view[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_aerial.at(frameIdx)) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
         };
         commandBuffer.cmdUpdateDescriptorSets(m_aerialPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
@@ -383,8 +384,8 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
-        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_integrated.view[frameIdx]) } },
-        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_aerial.view[frameIdx]) } },
+        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_integrated.at(frameIdx)) } },
+        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_aerial.at(frameIdx)) } },
         // Binding 3 (terrain) is UPDATE_AFTER_BIND, written per frame by updateTerrainDescriptor.
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudColorView) } },

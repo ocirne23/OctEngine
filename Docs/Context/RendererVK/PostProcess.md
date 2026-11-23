@@ -7,7 +7,8 @@
 Per-pixel OBJECT motion, so the temporal passes follow moving meshes (skinned characters, moving nodes, wind)
 instead of only the camera.
 
-* **The motion target** (`SceneColor`, `SCENE_MOTION_FORMAT` = RGBA16F, one per frame slot and eye): colour
+* **The motion target** (`SceneColor`, `SCENE_MOTION_FORMAT` = RGBA16F, one per eye, SHARED by the frame slots as the
+  scene colour and the voxel hit target are - only the depth is per slot; see "One copy" in [Scene.md](Scene.md)): colour
   attachment 1 of the depth-writing stages only (see "Frame order" ([CONTEXT.md](CONTEXT.md#frame-order))). Value (`shared.inc.glsl`): xy = this
   frame's minus last frame's UNJITTERED full-frame uv, z = the surface's hardware depth LAST frame (<= 0:
   behind last frame's camera), w = 1. **Cleared to 0: w = 0 = no object motion**, and the readers then keep

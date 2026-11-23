@@ -190,7 +190,10 @@ Handed out, never duplicated:
 
 ### The terrain-data map
 
-Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainHeightMap`.
+Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainHeightMap` - a PAIR of images
+(RendererVK `BakedWorldMap`): the bake is copied into the inactive one and goes live, with its new centre, at the next
+frame's UBO (built in the begin-frame job, before the upload). Tried: ONE image - every re-centre showed one frame of the
+new texels under the old centre (a flicker of the biome borders).
 
 **Two cascades, RGBA32F, cascade-major** (`BakedTerrainData`; the layout matches
 `terrain_height.inc.glsl`). "Data map range (m)" (4096) near, "Data map far range (m)" (8192) far, same texel count

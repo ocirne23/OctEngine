@@ -49,14 +49,15 @@ export class TerrainResources final
 public:
     void initialize()
     {
-        // RGBA: terrain height, water level, fog thickness, spare.
-        m_heightMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, "FogTerrainHeight");
-        m_factionMap.initializeBytes(FACTION_MAP_RES, 1, "FactionMap");
+        // RGBA: terrain height, water level, packed climate, macro altitude. A PAIR: its region moves with the camera.
+        m_heightMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, true, "FogTerrainHeight");
+        // ONE image: world-fixed, its region never changes (BakedWorldMap).
+        m_factionMap.initializeBytes(FACTION_MAP_RES, 1, false, "FactionMap");
     }
 
     // ---- The game's FACTION map (Renderer::setFactionMap): R8, world-FIXED, 0 = the enemy's .. 128 neutral .. 255 the players' ----
     // Its "centre" is the grid's MIN corner (world x / z) and its size the extent (m); size 0 = no map.
-    static constexpr uint32 FACTION_MAP_RES = 4096; // 16 MB an image (the pair + a staging buffer per frame slot)
+    static constexpr uint32 FACTION_MAP_RES = 4096; // 16 MB: the image + a staging buffer per frame slot
     BakedWorldMap& getFactionMap() { return m_factionMap; }
     const BakedWorldMap& getFactionMap() const { return m_factionMap; }
     // THE TINT CURVE's table: byte -> byte, the side's strength (|byte - 128| / 127) raised to `power`, the sign kept

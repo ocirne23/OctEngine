@@ -32,8 +32,11 @@ namespace
         uint32 tileX;
         uint32 tileY;
     };
-    // x = the front's along-light coordinate, y = mean extinction, z = whole optical depth (cloud_shadow.inc.glsl).
-    constexpr vk::Format SHADOW_FORMAT = vk::Format::eR32G32B32A32Sfloat;
+    // x = the front's along-light coordinate, y = mean extinction, z = whole optical depth (cloud_shadow.inc.glsl). HALF
+    // floats: x is at most a few km where it matters (a low sun averages the map away), ~1 m steps at 2 km; "no cloud" is
+    // SHADOW_NONE (-60000), not -infinity (a bilinear fetch across an infinity can make a NaN).
+    constexpr vk::Format SHADOW_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+    constexpr float SHADOW_NONE = -60000.0f; // cloud_shadow.cs.glsl CLOUD_SHADOW_NONE
     struct CloudPC
     {
         uint32 viewIndex;
@@ -137,7 +140,7 @@ void CloudPipeline::createShadowMap()
         .subresourceRange = range,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toGeneral });
-    cmd.clearColorImage(m_shadow.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ -1e30f, 0.0f, 0.0f, 0.0f } }, { range });
+    cmd.clearColorImage(m_shadow.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ SHADOW_NONE, 0.0f, 0.0f, 0.0f } }, { range });
     vk::MemoryBarrier2 clearToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,

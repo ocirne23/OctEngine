@@ -574,8 +574,8 @@ void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, 
     buildUboClouds(camera);
     buildUboSky();
     buildUboSunShadow(camera);
-    // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that carries its world
-    // center/sizes - descriptors (refreshed per frame in recordCommandBuffers) and params stay coherent.
+    // A baked map copied last frame goes live here (BakedWorldMap): this UBO carries its world center/sizes, and a pair's
+    // descriptors (refreshed per frame in recordCommandBuffers) switch to the new image with them.
     m_terrain.getHeightMap().flipIfPending();
     m_terrain.getFactionMap().flipIfPending();
     // The world-space foam field: drift over the SIM delta (frozen with the pause, like the waves), levels around the

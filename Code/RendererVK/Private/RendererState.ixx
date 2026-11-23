@@ -232,6 +232,7 @@ protected:
     void updateRenderExtent();     // m_renderExtent + m_renderScale from the DLSS mode and the swapchain extent
     void updateRenderRect();       // m_renderRect from m_viewportRect; a change resets the DLSS history
     void recreateRenderTargets();  // GPU idle: every render-size image at m_renderExtent
+    void initSceneColors(const vk::Extent2D& renderExt); // the slots' SceneColors: slot 0 owns the shared targets
     void applyRenderResolution();  // "Post/DLSS" Mode / Mip bias: GPU idle + the three above + the texture LOD bias
     float dlssMipBias() const;
     vk::Extent2D renderExtent() const { return vk::Extent2D{ m_renderExtent.x, m_renderExtent.y }; }

@@ -5,7 +5,10 @@ import :Device;
 import :Allocator;
 import :CommandBuffer;
 
-constexpr vk::Format SHADOW_DEPTH_FORMAT = vk::Format::eD32Sfloat;
+// 16-bit UNORM: half the memory of D32 (the 4096^2 x 4 cascades: 128 MB, not 256). The cascades are orthographic, so the
+// depth is linear: one step = the slab depth / 65536 - with the 4000 m caster pad ~6 cm in every cascade, far under the
+// texel size past the first cascade. The rasterizer's constant bias (1.25 steps) covers the step.
+constexpr vk::Format SHADOW_DEPTH_FORMAT = vk::Format::eD16Unorm;
 
 ShadowMap::ShadowMap() {}
 ShadowMap::~ShadowMap()

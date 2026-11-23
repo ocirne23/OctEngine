@@ -17,7 +17,11 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 #define CLOUD_NOISE_BINDING 2
 #include "clouds.inc.glsl"
 
-layout (binding = 1, rgba32f) uniform writeonly image2DArray u_outShadow;
+layout (binding = 1, rgba16f) uniform writeonly image2DArray u_outShadow;
+
+// "No cloud" on the line: a front far below every receiver (OD 0). Finite in a half float - a bilinear fetch across an
+// infinity can make a NaN. The same as CloudPipeline's SHADOW_NONE (the clear).
+#define CLOUD_SHADOW_NONE -60000.0
 
 layout (push_constant) uniform CloudShadowPC
 {
@@ -32,7 +36,7 @@ void main()
 {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy + u_tile);
     const ivec3 dst = ivec3(px, int(u_layer));
-    const vec4 noCloud = vec4(-1e30, 0.0, 0.0, 0.0);
+    const vec4 noCloud = vec4(CLOUD_SHADOW_NONE, 0.0, 0.0, 0.0);
 
     const vec3 L = u_sun.xyz;
     const float texel = u_centre.w;
@@ -95,5 +99,6 @@ void main()
         imageStore(u_outShadow, dst, noCloud);
         return;
     }
-    imageStore(u_outShadow, dst, vec4(aFront, od / max(aFront - aBack, 1.0), od, 0.0));
+    // The front clamped into the half float's range (a very low sun's lines run tens of km).
+    imageStore(u_outShadow, dst, vec4(clamp(aFront, -60000.0, 60000.0), od / max(aFront - aBack, 1.0), od, 0.0));
 }

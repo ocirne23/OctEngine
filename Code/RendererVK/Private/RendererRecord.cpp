@@ -1711,16 +1711,19 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
     // static mesh pass's opaque DGC scratch, so both are free again before the main cull and the scene.
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays).
     const bool shadowCascades = !m_rtParams.effectiveSunShadow();
-    // The cull output (CullOutInstances) and the far voxel lists are ONE copy for all frame slots: the previous frame's
-    // reads of them (the draws' vertex, tessellation and fragment stages, the indirect fetch, the far scatter's compute)
-    // finish before this frame's culls write them. Execution only (write after read). The shadow cascades' pass waits for
-    // the same fragment + compute work a moment later anyway (ShadowMap's render pass).
+    // The cull output (CullOutInstances), the far voxel lists and the scene's colour / motion targets (SceneColor's shared
+    // ones) are ONE copy for all frame slots: the previous frame's reads of them (the draws' vertex, tessellation and
+    // fragment stages, the indirect fetch, the far scatter's compute, TAA / DLSS / eye adaptation / the composite, the VR
+    // copy) finish before this frame's culls write them and its first scene stage clears the targets. Execution only
+    // (write after read; the stage passes' clear from UNDEFINED chains on through their colour-output dependency). The
+    // shadow cascades' pass waits for the same fragment + compute work a moment later anyway (ShadowMap's render pass).
     const vk::MemoryBarrier2 sharedOutputsBarrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eVertexAttributeInput
             | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eTessellationControlShader
             | vk::PipelineStageFlagBits2::eTessellationEvaluationShader | vk::PipelineStageFlagBits2::eFragmentShader
-            | vk::PipelineStageFlagBits2::eComputeShader,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eCopy,
+            | vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eCopy | vk::PipelineStageFlagBits2::eBlit,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eCopy
+            | vk::PipelineStageFlagBits2::eColorAttachmentOutput,
     };
     primary.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &sharedOutputsBarrier });
     // The far voxel trees' and far shadow casters' inputs (only while their chunks are listed: the record pool exists).
@@ -2233,10 +2236,9 @@ void RendererState::recordCommandBuffers()
     Globals::jobSystem.wait(m_gpuCollectCounter);
     m_gpuProfiler.beginRecord(vkCommandBuffer, frameIdx);
     m_gpuProfiler.beginScope(vkCommandBuffer, "GPU Frame");
-    // Pending baked-map uploads (fog terrain cascades): copied here in the primary (re-recorded
-    // every frame) because the destination ping-pong images were sampled by older submissions - the
-    // transitions need an execution dependency on those reads, which the StagingManager's fresh-image
-    // upload path doesn't emit.
+    // Pending baked-map uploads (fog terrain cascades, faction map): copied here in the primary (re-recorded every frame),
+    // before every reader, because the destination was sampled by older submissions - the transition needs an execution
+    // dependency on those reads, which the StagingManager's fresh-image upload path doesn't emit.
     m_terrain.getHeightMap().recordUpload(commandBuffer);
     m_terrain.getFactionMap().recordUpload(commandBuffer);
     { // Sync for ubo copy

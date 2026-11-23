@@ -391,8 +391,9 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
 ### The cloud shadow map
 
 A Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl` reads. Two ortho cascades
-("Sky/Clouds/Shadows": "Near cascade (km)" 2, "Far cascade (km)" 40) in ONE 4-layer RGBA32F array
-(`SHADOW_RESOLUTION` 512, two layers per cascade: 16 MB), recorded straight into the primary after the pre-scene
+("Sky/Clouds/Shadows": "Near cascade (km)" 2, "Far cascade (km)" 40) in ONE 4-layer RGBA16F array
+(`SHADOW_RESOLUTION` 512, two layers per cascade: 8 MB; the front ~1 m steps at 2 km, clamped to +-60000, "no cloud" =
+-60000 - finite: a bilinear fetch across an infinity can make a NaN), recorded straight into the primary after the pre-scene
 stages (before GI, fog and the scene). **Cloud shadows are large and soft: the pass is built to cost little, not to
 be exact.**
 
