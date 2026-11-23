@@ -90,6 +90,10 @@ clang warns about an ANGLED include in a module purview.
   managers / XR -> GPU allocator -> device -> instance) imports downward. **A new global whose dtor uses another global
   needs such an import on Linux.** One order cannot be stated: the data managers outlive the renderer (the reverse
   would be an import cycle); their dtors use only the device.
+* **GPU profiler timeline**: the `QueryPerformanceCounter` shim reads `CLOCK_MONOTONIC`, so `GpuProfiler` calibrates
+  against `VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR`, not the QPC domain. The NVIDIA driver accepts a QPC request on Linux and
+  returns `VK_SUCCESS` with a host time of 0, which put every GPU scope one system uptime in the past. `CLOCK_MONOTONIC_RAW`
+  is a different clock (measured: 0.37 s apart), so the shim and the domain must change together.
 * **Swapchain on Wayland**: the surface reports no current extent, so the swapchain takes the window's pixel size; an
   unsupported present mode falls back to mailbox, then FIFO.
 * **Off on Linux**: DLSS / Streamline (Windows-only SDK; the not-loaded paths), Nsight Aftermath (asks for the Windows

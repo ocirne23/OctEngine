@@ -404,7 +404,8 @@ That is why the desktop forward pass records **one render-pass instance per stag
 
 One query pool per frame slot; a `collect` job kicked in `Renderer::beginFrame` after the slot's fence
 reads the results and pushes them into the named "GPU" track. Alignment uses
-`VK_KHR_calibrated_timestamps`, with fallback submit-tick anchoring.
+`VK_KHR_calibrated_timestamps` (host domain: QPC on Windows, `CLOCK_MONOTONIC` on Linux - the clock the
+`Core.Windows` QPC shim reads), with fallback submit-tick anchoring.
 
 ## Text report
 
