@@ -125,8 +125,8 @@ clang warns about an ANGLED include in a module purview.
   Windows appends DirectML; the CUDA provider needs the `Ort::Env` (its logger) to exist first.
   **VRAM is shared with the renderer, with no oversubscription** (WDDM pages video memory to system RAM on Windows; the
   Linux driver fails the allocation). Measured on the 8 GB RTX 3080 Laptop in the sandbox: the desktop 1.6 - 2.0 GB, the
-  renderer about 3.9 GB, so CUDA gets about 2 GB. Hence, on Linux only: the fp16 models by default (`Terrain/V3/FP16
-  inference`; their tiles go to `<seed>_fp16`, so tiles made from the fp32 models are not read), latent and coarse
+  renderer about 3.9 GB, so CUDA gets about 2 GB. The precision stays fp32 as on Windows, so tiles generated there are
+  read here; `Terrain/V3/FP16 inference` halves the models' VRAM (its tiles go to `<seed>_fp16`). On Linux only: latent and coarse
   batches of 2 (the noise is per window, so the batch size does not change the tiles), the sequential executor, the
   cuDNN heuristic search without the maximum workspace, an arena that grows by the request and shrinks after every
   run, and smaller starting mesh pools (`INITIAL_VERTEX_DATA` 512 MB, `INITIAL_INDEX_DATA` 100 MB in `Layout.ixx`; the

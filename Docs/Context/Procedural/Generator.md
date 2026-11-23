@@ -3,7 +3,7 @@
 > Part of the Procedural documentation ([`Docs/Context/Procedural/CONTEXT.md`](CONTEXT.md)) — read that first.
 
 `:GeneratorV3`, `Private/Diffusion/`. An ONNX Runtime + DirectML pipeline behind `ITerrainSampler`. On Linux it runs
-on CUDA with fp16, smaller batches and its own runtime lifetime: "Diffusion terrain on CUDA" and "Global teardown" in
+on CUDA with smaller batches and its own runtime lifetime: "Diffusion terrain on CUDA" and "Global teardown" in
 [`Docs/Context/Linux/CONTEXT.md`](../Linux/CONTEXT.md).
 
 **Why the class looks the way it does:** an `ITerrainSampler` looks like a pure function of (x, z),

@@ -225,11 +225,7 @@ export struct TerrainSettings
 	bool  v3LogTileStats = false;         // button (TerrainStreamer clears it): the RAM tile cache's hits / disk loads / generations
 	// Half-precision inference: buys VRAM and load time, NOT generation speed. Reloads the models and changes the
 	// terrain for a given seed.
-#ifdef _MSC_VER
 	bool  v3Fp16 = false;
-#else
-	bool  v3Fp16 = true;  // Linux (CUDA): the fp32 base model does not fit next to the renderer on an 8 GB GPU
-#endif
 
 	// --- "Terrain/Rivers": the drainage network (Docs/Context/Procedural/Rivers.md). MODEL-frame units: model metres, real m3/s.
 	bool  riverEnabled = true;       // the terrain sampler carves the rivers and reports their water (RiverTerrain)
