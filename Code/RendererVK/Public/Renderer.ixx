@@ -109,21 +109,24 @@ public:
 
     // ---- Single meshes, No ObjectContainer (see RenderMesh; their materials: RenderMaterial). MAIN THREAD ----
 
+    // `memTag` (every create below): who owns the data in the VRAM view - the vertex / index pools show one box per name ("Trees/Oak/Bark", "Terrain"; '/'
+    // nests). Interned per call (a mutex): fine per asset, not per frame.
+
     // Uploads + one MeshInfo (and its BLAS); invalid when empty. `raytraced` false: NO BLAS - any instance of it is inactive in the TLAS (no RT shadows / GI /
     // RTAO / reflections hit it); for meshes RT never needs to see.
-    RenderMesh createMesh(const RenderMeshData& data, bool raytraced = true);
+    RenderMesh createMesh(const RenderMeshData& data, oc::string_view memTag, bool raytraced = true);
 
     // The same with LOD LEVELS (level 0 first, at most MAX_MESH_LODS; the levels end at the first empty one): one MeshInfo per level, and with 2+ levels the
     // GPU LOD chain over them - spawnMeshNode places level 0 and the cull picks each instance's level. `errors` = each level's geometric deviation in
     // mesh-local units (0 for level 0; the screen-space-error selector).
-    RenderMesh createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, bool raytraced = true);
+    RenderMesh createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, oc::string_view memTag, bool raytraced = true);
 
     // A terrain node: compact TerrainVertex data over a SHARED index range (one MeshInfo + its BLAS, no LOD chain). Draw it on TerrainLit only: the other
     // pipelines read MeshVertex. `indices` outlives the mesh.
-    RenderMeshIndices createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices);
+    RenderMeshIndices createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices, oc::string_view memTag);
     // The terrain nodes' coarser index ranges for the sun shadow pass, over every 2nd and every 4th vertex ("Shadows/Terrain half-res from (m)"). Main thread.
     void setTerrainShadowIndices(const RenderMeshIndices& half, const RenderMeshIndices& quarter);
-    RenderMesh createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices);
+    RenderMesh createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices, oc::string_view memTag);
     const MeshLodParams& getLodParams() const { return m_lodParams; } // the "LOD" settings the chains are generated and picked with
 
     // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity instance offset: the mesh is its own root).
@@ -292,7 +295,9 @@ public:
 
     uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
     uint32 getNumMeshTypes() const { return m_meshInfos.count(); }    uint32 getNumMaterials() const { return m_materials.count(); }
-    void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
+    // Every live GPU allocation (the Memory panel's VRAM view, --vram-dump). The mesh pools ("MeshVertex", "MeshIndex", "MeshSkinning") are SPLIT: one entry
+    // per memory tag ("MeshVertex/<tag>", its bytes) + "<pool>/<free>", in place of the one buffer - the bytes add up to it.
+    void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const;
     GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
     static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }
 

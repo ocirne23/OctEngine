@@ -80,6 +80,7 @@ void MeshStreamer::registerMeshSet(const MeshSetDesc& desc)
     }
     MeshSet& set = m_sets[setIdx];
     set.fileId = getFileId(desc.filePath);
+    set.memTag = desc.memTag;
     set.numLevels = (uint16)desc.numLevels;
     set.numVertices = desc.numVertices;
     set.vertexByteOffset = desc.vertexByteOffset;
@@ -229,11 +230,11 @@ void MeshStreamer::drainCompletions()
 
         MeshDataManager& meshDataManager = Globals::meshDataManager;
         set.vertexByteOffset = meshDataManager.uploadVertexData(completion.vertexData.get(),
-            (size_t)set.numVertices * sizeof(RendererVKLayout::MeshVertex));
+            (size_t)set.numVertices * sizeof(RendererVKLayout::MeshVertex), set.memTag);
         for (uint32 k = 0; k < set.numLevels; ++k)
         {
             const size_t byteSize = (size_t)set.levels[k].indexCount * sizeof(RendererVKLayout::MeshIndex);
-            set.levels[k].indexByteOffset = meshDataManager.uploadIndexData(completion.indexData[k].get(), byteSize);
+            set.levels[k].indexByteOffset = meshDataManager.uploadIndexData(completion.indexData[k].get(), byteSize, set.memTag);
             Globals::rendererVK.setMeshStreamedIn(set.levels[k].meshInfoIdx,
                 (int32)(set.vertexByteOffset / sizeof(RendererVKLayout::MeshVertex)),
                 (uint32)(set.levels[k].indexByteOffset / sizeof(RendererVKLayout::MeshIndex)),

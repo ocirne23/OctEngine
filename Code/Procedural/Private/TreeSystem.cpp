@@ -31,7 +31,8 @@ namespace
 
 	// `raytraced`: whether RT (GI, RT shadows, RTAO, reflections) sees it - a BLAS only then (TreeSystem::uploadSpecies:
 	// the trees' shadow billboards; bushes never).
-	RenderMesh uploadTreeMesh(Renderer& renderer, const TreeMesh& mesh, bool raytraced)
+	// `memTag`: its box in the VRAM view's mesh pools ("Trees/<species>/<part>").
+	RenderMesh uploadTreeMesh(Renderer& renderer, const TreeMesh& mesh, oc::string_view memTag, bool raytraced)
 	{
 		if (mesh.indices.empty())
 			return {};
@@ -47,7 +48,7 @@ namespace
 		geometry.name = "TreePiece";
 		RenderMeshData data;
 		data.build(geometry);
-		return renderer.createMesh(data, raytraced);
+		return renderer.createMesh(data, memTag, raytraced);
 	}
 
 	size_t numTriangles(const TreeMesh& mesh) { return mesh.indices.size() / 3; }
@@ -55,9 +56,10 @@ namespace
 	// Uploads LEVEL 0 only, no GPU LOD chain (a one-level RenderMesh): trees switch representation through their own tiers
 	// (the voxels, the far volume), and the mesh LOD steps underneath popped visibly (fewer, larger leaf cards per
 	// level, no crossfade). The generator still builds every level (the bakes read level 0); outMeshes[1..] stay empty.
-	void uploadLevelZero(Renderer& renderer, const TreeMesh (&levels)[TREE_PIECE_LODS], RenderMesh (&outMeshes)[TREE_PIECE_LODS], bool raytraced)
+	void uploadLevelZero(Renderer& renderer, const TreeMesh (&levels)[TREE_PIECE_LODS], RenderMesh (&outMeshes)[TREE_PIECE_LODS], oc::string_view memTag,
+		bool raytraced)
 	{
-		outMeshes[0] = uploadTreeMesh(renderer, levels[0], raytraced);
+		outMeshes[0] = uploadTreeMesh(renderer, levels[0], memTag, raytraced);
 	}
 
 	// Species textures are generated ONCE into Assets/Local/Trees/Textures (TREE_TEXTURE_DIR: <species>_bark.tex,
@@ -764,12 +766,13 @@ namespace Procedural
 		const bool barkRaytraced = !species.desc.bush;
 		// The baked whole trees only: the piece library (its trunks and modules) is the bakes' input, never drawn.
 		species.variantMeshes.resize(load.variants.size());
+		const oc::string barkTag = oc::format("Trees/{}/Bark", name), leavesTag = oc::format("Trees/{}/Leaves", name);
 		for (size_t v = 0; v < load.variants.size(); ++v)
 		{
 			const TreePiece& variant = load.variants[v];
 			PieceMeshes& meshes = species.variantMeshes[v];
-			uploadLevelZero(renderer, variant.bark, meshes.bark, barkRaytraced);
-			uploadLevelZero(renderer, variant.leaves, meshes.leaves, meshesRaytraced);
+			uploadLevelZero(renderer, variant.bark, meshes.bark, barkTag, barkRaytraced);
+			uploadLevelZero(renderer, variant.leaves, meshes.leaves, leavesTag, meshesRaytraced);
 			meshes.farCentre = glm::vec3(load.variantBounds[v]);
 			meshes.farRadius = load.variantBounds[v].w;
 			for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
@@ -811,7 +814,7 @@ namespace Procedural
 				meshes.billboardMaterial = createBillboardMaterial(billboard.mask, load.barkColour, load.leafColour,
 					oc::format("TreeBillboard/{}_tree{}", name, v).c_str());
 				// RT: never a bush's.
-				meshes.billboard = uploadTreeMesh(renderer, billboard.cards, !species.desc.bush);
+				meshes.billboard = uploadTreeMesh(renderer, billboard.cards, oc::format("Trees/{}/Billboard", name), !species.desc.bush);
 			}
 			// The VOXEL tier (main pass only: no BLAS). LEAF: the leaf terms (transmission, the N.V bend, the sky wrap).
 			for (size_t v = 0; v < load.voxelTextures.size() && v < species.variantMeshes.size(); ++v)
@@ -821,7 +824,7 @@ namespace Procedural
 				PieceMeshes& meshes = species.variantMeshes[v];
 				meshes.voxelMaterial = createVoxelMaterial(load.voxelTextures[v], load.voxelIndex[v], meshes.voxelIndex,
 					oc::format("TreeVoxel/{}_{}", name, v).c_str(), RendererVKLayout::MATERIAL_FLAG_LEAF);
-				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], false);
+				meshes.voxelBox = uploadTreeMesh(renderer, load.voxelBoxes[v], oc::format("Trees/{}/Voxel box", name), false);
 				// THE GRID AS THE MESH LEAVES FIND IT (buildGpuTypes -> RenderTreeSet::Type's leaf grid): its box, from the box
 				// mesh (treeVoxelBoxMesh: a vertex's normal = its grid corner, its tangent = the box size), and the index
 				// texture's header texel (log2 of the resolution, the levels, log2 of the bricks per atlas row).

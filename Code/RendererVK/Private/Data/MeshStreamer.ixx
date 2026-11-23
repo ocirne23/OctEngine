@@ -34,6 +34,7 @@ public:
     struct MeshSetDesc
     {
         oc::string_view filePath;         // cooked cache file
+        uint16 memTag = 0;                // the owning container's memory tag (MeshDataManager::memTag): its re-streams count there
         uint32 numVertices = 0;
         uint64 vertexByteOffset = 0;       // current allocation in the vertex mega-buffer (all levels share it)
         uint64 srcAttributeOffsets[5] = {};// positions/normals/tangents/bitangents/texCoords (glm::vec3 arrays)
@@ -106,6 +107,7 @@ private:
     {
         uint16 fileId = 0;
         uint16 numLevels = 0;
+        uint16 memTag = 0;
         EState state = EState::Resident;
         uint32 numVertices = 0;
         uint64 vertexByteOffset = 0;

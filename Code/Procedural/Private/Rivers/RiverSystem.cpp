@@ -653,7 +653,7 @@ namespace Procedural
 	oc::unique_ptr<RiverSystem::WaterTile> RiverSystem::spawnTile(Renderer& renderer, const RenderMeshData& data, glm::vec3 origin, glm::ivec2 chunk)
 	{
 		auto tile = oc::make_unique<WaterTile>();
-		tile->mesh = renderer.createMesh(data, false);
+		tile->mesh = renderer.createMesh(data, "Rivers", false);
 		if (!tile->mesh.isValid())
 			return nullptr;
 		tile->node = renderer.spawnMeshNode(tile->mesh, m_material.index(), RendererVKLayout::EPipelineIndex::River,

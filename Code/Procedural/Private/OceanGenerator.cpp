@@ -116,7 +116,7 @@ namespace Procedural
 			geom.indices = indices.data();
 			geom.numIndices = (uint32)indices.size();
 			meshData.build(geom);
-			RenderMesh mesh = Globals::rendererVK.createMesh(meshData);
+			RenderMesh mesh = Globals::rendererVK.createMesh(meshData, "Ocean");
 			if (mesh.isValid())
 			{
 				Sector& s = m_sectors.emplace_back();

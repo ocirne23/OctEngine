@@ -37,6 +37,22 @@ public:
     size_t getVertexBufUsed() const { return m_vertex.bytesAllocated.load(oc::memory_order_relaxed); }
     size_t getIndexBufUsed() const { return m_index.bytesAllocated.load(oc::memory_order_relaxed); }
 
+    // ---- Memory tags: the VRAM view's split of the three pools by asset ----
+    // Every upload / reserve names its owner by a TAG (memTag: an interned name - a container's file path, "Trees/Oak/Bark",
+    // "Terrain", ...; '/' nests it in the VRAM view). Each range's first bucket remembers its tag (2 bytes per bucket, CPU),
+    // so a free needs no tag; per tag and pool a byte count (bucket-rounded, as getVertexBufUsed). Renderer::
+    // forEachGpuAllocation reports a pool as "<pool>/<tag>" entries + "<pool>/<free>" instead of one allocation.
+    static constexpr uint32 MAX_MEM_TAGS = 4096; // past it every new name shares tag 0
+    enum EPool : uint32 { PoolVertex, PoolIndex, PoolSkinning, PoolCount };
+    // The tag for a name (interned: the same name, the same tag; thread-safe, a mutex - take it once per asset, not per
+    // range). 0 = "<untagged>".
+    uint16 memTag(oc::string_view name);
+    // Every tag with bytes in `pool`: its name (valid for the manager's life) and its bytes. Any thread, no lock.
+    using MemTagVisit = void (*)(void* ctx, const char* name, uint64 bytes);
+    void forEachMemTag(EPool pool, MemTagVisit visit, void* ctx) const;
+    // The pool's buffer debug name ("MeshVertex", "MeshIndex", "MeshSkinning"): the VRAM visit's match.
+    static const char* poolName(EPool pool);
+
     // Bumped whenever a mega-buffer is reallocated (capacity growth). The Renderer compares this each
     // frame and re-records its command buffers when it changes (they bind the buffers by handle).
     uint32 getGeneration() const { return m_generation.load(oc::memory_order_acquire); }
@@ -75,12 +91,13 @@ private:
     friend class MeshStreamer;
     friend class Renderer;      // createMesh uploads
     friend class RendererState; // container teardown frees ranges recorded by the container/its skinned bundles
-    size_t uploadVertexData(const void* pData, size_t size);
-    size_t uploadIndexData(const void* pData, size_t size);
-    size_t uploadSkinningData(const void* pData, size_t size);
+    // `tag`: the owner (memTag), counted in the VRAM view.
+    size_t uploadVertexData(const void* pData, size_t size, uint16 tag);
+    size_t uploadIndexData(const void* pData, size_t size, uint16 tag);
+    size_t uploadSkinningData(const void* pData, size_t size, uint16 tag);
     // Reserves (uninitialized) space in the vertex mega-buffer for a per-instance skinned output region;
     // the skinning compute fills it each frame. Returns the byte offset (caller divides by sizeof(MeshVertex)).
-    size_t reserveVertexData(size_t size);
+    size_t reserveVertexData(size_t size, uint16 tag);
 
     // Returns a range to the free list (mesh streaming eviction / ObjectContainer teardown). offset/size
     // must exactly match a prior upload*/reserve* call. The caller is responsible for GPU-lifetime
@@ -97,6 +114,8 @@ private:
         size_t bufSize = 0;
         BitRangeAllocator<true> allocator{ 0 };
         oc::atomic<size_t> bytesAllocated{ 0 }; // bucket-rounded
+        EPool id = PoolVertex;
+        oc::vector<uint16> bucketTag; // per bucket: the tag of the range that STARTS there (sized with the allocator)
     };
 
     // Doubles the buffer until neededSize fits, GPU-copying the used range into the new allocation.
@@ -107,7 +126,7 @@ private:
     // size (MeshInfo stores offsets in elements), holes left by frees are reused by later allocations.
     // Copies `size` bytes from pData into the range when pData is set (nullptr = reserve only). Returns the
     // byte offset, SIZE_MAX on failure.
-    size_t allocate(Pool& pool, size_t bucketBytes, vk::BufferUsageFlags2 usage, size_t size, const void* pData);
+    size_t allocate(Pool& pool, size_t bucketBytes, vk::BufferUsageFlags2 usage, size_t size, const void* pData, uint16 tag);
     void release(Pool& pool, size_t bucketBytes, size_t offset, size_t size);
 
 private:
@@ -131,6 +150,14 @@ private:
     // EXCLUSIVE. Lock order: grow -> staging -> queue.
     std::shared_mutex m_growMutex;
     oc::atomic<std::thread::id> m_holder{}; // the thread inside a BufferHold (one at a time: present)
+
+    // The memory tags (memTag): the names (published by m_numTags, release), the name -> tag map (under m_tagMutex), and
+    // the bytes per tag and pool ([tag * PoolCount + pool]).
+    std::mutex m_tagMutex;
+    oc::unordered_map<oc::string, uint16> m_tagIds;
+    oc::array<oc::string, MAX_MEM_TAGS> m_tagNames;
+    oc::atomic<uint32> m_numTags{ 1 };
+    oc::array<oc::atomic<int64>, MAX_MEM_TAGS * PoolCount> m_tagBytes{};
 };
 
 export namespace Globals

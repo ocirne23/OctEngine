@@ -853,7 +853,7 @@ namespace Procedural
 			{
 				if (upload.mesh.isValid() || upload.result.mesh.vertices.empty())
 					return; // uploaded (or failed) by an earlier kick
-				upload.mesh = renderer.createTerrainMesh(upload.result.mesh, m_nodeIndices);
+				upload.mesh = renderer.createTerrainMesh(upload.result.mesh, m_nodeIndices, "Terrain/Nodes");
 				upload.result.mesh = TerrainChunkMesh{}; // the copy is in the staging ring now
 			};
 			// One chunk per task: the staging memcpy runs outside its mutex, so they copy in parallel.
@@ -1642,11 +1642,11 @@ namespace Procedural
             if (!ready.empty() && m_nodeIndicesRes != nodeRes)
             {
                 const oc::vector<uint32> indices = terrainNodeIndices(nodeRes);
-                m_nodeIndices = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(indices.data(), indices.size()));
+                m_nodeIndices = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(indices.data(), indices.size()), "Terrain/Shared indices");
                 const oc::vector<uint32> half = terrainNodeIndices(nodeRes, 2);
                 const oc::vector<uint32> quarter = terrainNodeIndices(nodeRes, 4);
-                m_nodeShadowIndicesHalf = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(half.data(), half.size()));
-                m_nodeShadowIndicesQuarter = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(quarter.data(), quarter.size()));
+                m_nodeShadowIndicesHalf = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(half.data(), half.size()), "Terrain/Shared indices");
+                m_nodeShadowIndicesQuarter = renderer.createMeshIndices(oc::span<const RendererVKLayout::MeshIndex>(quarter.data(), quarter.size()), "Terrain/Shared indices");
                 renderer.setTerrainShadowIndices(m_nodeShadowIndicesHalf, m_nodeShadowIndicesQuarter);
                 m_nodeIndicesRes = nodeRes;
             }

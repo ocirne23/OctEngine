@@ -535,6 +535,18 @@ EXCLUSIVE (a full allocator re-tries under the exclusive lock before growing: an
 A lock over the allocation alone is not enough: a grow on another thread could replace the buffer between an upload's
 allocation and its staging copy. Lock order: grow → staging → queue.
 
+**The mesh pools' MEMORY TAGS** (the VRAM view by asset): every upload / reserve names its owner by a tag
+(`MeshDataManager::memTag(name)`, interned under its own mutex - once per asset, never per range; up to 4096 names, then
+tag 0 "<untagged>"). The first bucket of each range keeps its tag (`Pool::bucketTag`, 2 B per bucket on the CPU,
+resized with the allocator under the grow lock), so a free needs none; per tag and pool an atomic byte count
+(bucket-rounded, as `getVertexBufUsed`). The owners: an ObjectContainer under its file path (its streamed sets keep it:
+`MeshSetDesc::memTag`), its skinned instances' output regions under "Skinned output/<path>", and `Renderer::createMesh` /
+`createTerrainMesh` / `createMeshIndices`' REQUIRED `memTag` ("Trees/<species>/Bark|Leaves|Billboard|Voxel box",
+"Rocks/<type>", "Terrain/Nodes", "Terrain/Shared indices", "Ocean", "Rivers"). `Renderer::forEachGpuAllocation` reports
+each pool ("MeshVertex", "MeshIndex", "MeshSkinning") as "<pool>/<tag>" entries + "<pool>/<free>" (the rest of the
+buffer) in place of the one buffer, so the Memory panel's VRAM tree and `--vram-dump` show one box per asset and the
+bytes still add up.
+
 **`present()` holds a `MeshDataManager::BufferHold`** (the grow lock, shared) from its mesh-generation check through
 the submit, so the check, the recording and the submit see ONE set of mega-buffers; a worker's grow waits for the
 release right after the submit. It starts AFTER `joinGridBuilds` and after an early join of the GPU-profiler collect

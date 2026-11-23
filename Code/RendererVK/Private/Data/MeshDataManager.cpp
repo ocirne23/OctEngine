@@ -52,17 +52,24 @@ bool MeshDataManager::initialize(size_t vertexBufSize, size_t indexBufSize)
     m_vertex.allocator.resize(uint32(m_vertex.bufSize / VERTEX_BUCKET_BYTES));
     m_index.allocator.resize(uint32(m_index.bufSize / INDEX_BUCKET_BYTES));
     m_skinning.allocator.resize(uint32(RendererVKLayout::INITIAL_SKINNING_DATA / SKINNING_BUCKET_BYTES));
+    m_vertex.id = PoolVertex;
+    m_index.id = PoolIndex;
+    m_skinning.id = PoolSkinning;
+    m_vertex.bucketTag.resize(m_vertex.bufSize / VERTEX_BUCKET_BYTES, 0);
+    m_index.bucketTag.resize(m_index.bufSize / INDEX_BUCKET_BYTES, 0);
+    m_skinning.bucketTag.resize(RendererVKLayout::INITIAL_SKINNING_DATA / SKINNING_BUCKET_BYTES, 0);
+    m_tagNames[0] = "<untagged>";
 
     // Extra usage beyond vertex/index: the GI ray tracer builds BLASes directly from these mega-buffers
     // (eAccelerationStructureBuildInputReadOnlyKHR + eShaderDeviceAddress) and fetches hit-triangle
     // attributes from them in the probe-trace compute shader (eStorageBuffer). eTransferSrc enables the
     // GPU copy that carries contents over on capacity growth.
-    m_vertex.buffer.initialize(m_vertex.bufSize, vertexBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshVertex");
-    m_index.buffer.initialize(m_index.bufSize, indexBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshIndex");
+    m_vertex.buffer.initialize(m_vertex.bufSize, vertexBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, poolName(PoolVertex));
+    m_index.buffer.initialize(m_index.bufSize, indexBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, poolName(PoolIndex));
 
     // Skinning influences for skeletal meshes; sized lazily on first skinned upload (grows on demand).
     m_skinning.bufSize = RendererVKLayout::INITIAL_SKINNING_DATA;
-    m_skinning.buffer.initialize(m_skinning.bufSize, skinningBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshSkinning");
+    m_skinning.buffer.initialize(m_skinning.bufSize, skinningBufferUsage(), vk::MemoryPropertyFlagBits::eDeviceLocal, false, poolName(PoolSkinning));
 
     return true;
 }
@@ -112,14 +119,17 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
 // buffer by handle. A full allocator takes it EXCLUSIVE, retries (another thread may have grown it meanwhile), and
 // only then grows. Before 2026-10-05 a plain mutex covered the allocation alone: a grow on another thread replaced
 // the buffer between an upload's allocation and its staging copy.
-size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsageFlags2 usage, size_t size, const void* pData)
+size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsageFlags2 usage, size_t size, const void* pData, uint16 tag)
 {
     assert(m_holder.load(oc::memory_order_relaxed) != std::this_thread::get_id()
         && "mesh data allocated inside this thread's BufferHold (a job helped inside a wait?) - see MeshDataManager::BufferHold");
     const uint32 numBuckets = uint32((size + bucketBytes - 1) / bucketBytes);
+    // Under the grow lock (shared or exclusive): the bucket tags are resized with the allocator.
     auto commit = [&](int bucketStart)
     {
         pool.bytesAllocated.fetch_add((size_t)numBuckets * bucketBytes, oc::memory_order_relaxed);
+        pool.bucketTag[(size_t)bucketStart] = tag; // the range's own bucket: no other thread writes it
+        m_tagBytes[(size_t)tag * PoolCount + pool.id].fetch_add((int64)numBuckets * (int64)bucketBytes, oc::memory_order_relaxed);
         const size_t offset = (size_t)bucketStart * bucketBytes;
         if (pData)
         {
@@ -143,6 +153,7 @@ size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsage
         // fragmented, so everything allocated must survive) and retry in the fresh tail.
         growBuffer(pool.buffer, pool.bufSize, pool.bufSize, pool.bufSize + (size_t)numBuckets * bucketBytes, bucketBytes, usage);
         pool.allocator.resize(uint32(pool.bufSize / bucketBytes));
+        pool.bucketTag.resize(pool.bufSize / bucketBytes, 0);
         bucketStart = pool.allocator.acquireRange(numBuckets);
         assert(bucketStart >= 0 && "Mesh data allocation failed after growth");
         if (bucketStart < 0)
@@ -155,30 +166,63 @@ void MeshDataManager::release(Pool& pool, size_t bucketBytes, size_t offset, siz
 {
     assert(m_holder.load(oc::memory_order_relaxed) != std::this_thread::get_id()
         && "mesh data freed inside this thread's BufferHold - see MeshDataManager::BufferHold");
-    const std::shared_lock lock(m_growMutex); // a grow replaces the bit array
+    const std::shared_lock lock(m_growMutex); // a grow replaces the bit array (and the bucket tags)
     const uint32 numBuckets = uint32((size + bucketBytes - 1) / bucketBytes);
+    const uint16 tag = pool.bucketTag[offset / bucketBytes]; // before the release: a new range may start there at once
     pool.allocator.releaseRange(int(offset / bucketBytes), numBuckets);
     pool.bytesAllocated.fetch_sub((size_t)numBuckets * bucketBytes, oc::memory_order_relaxed);
+    m_tagBytes[(size_t)tag * PoolCount + pool.id].fetch_sub((int64)numBuckets * (int64)bucketBytes, oc::memory_order_relaxed);
 }
 
-size_t MeshDataManager::uploadVertexData(const void* pData, size_t size)
+size_t MeshDataManager::uploadVertexData(const void* pData, size_t size, uint16 tag)
 {
-    return allocate(m_vertex, VERTEX_BUCKET_BYTES, vertexBufferUsage(), size, pData);
+    return allocate(m_vertex, VERTEX_BUCKET_BYTES, vertexBufferUsage(), size, pData, tag);
 }
 
-size_t MeshDataManager::uploadIndexData(const void* pData, size_t size)
+size_t MeshDataManager::uploadIndexData(const void* pData, size_t size, uint16 tag)
 {
-    return allocate(m_index, INDEX_BUCKET_BYTES, indexBufferUsage(), size, pData);
+    return allocate(m_index, INDEX_BUCKET_BYTES, indexBufferUsage(), size, pData, tag);
 }
 
-size_t MeshDataManager::uploadSkinningData(const void* pData, size_t size)
+size_t MeshDataManager::uploadSkinningData(const void* pData, size_t size, uint16 tag)
 {
-    return allocate(m_skinning, SKINNING_BUCKET_BYTES, skinningBufferUsage(), size, pData);
+    return allocate(m_skinning, SKINNING_BUCKET_BYTES, skinningBufferUsage(), size, pData, tag);
 }
 
-size_t MeshDataManager::reserveVertexData(size_t size)
+size_t MeshDataManager::reserveVertexData(size_t size, uint16 tag)
 {
-    return allocate(m_vertex, VERTEX_BUCKET_BYTES, vertexBufferUsage(), size, nullptr);
+    return allocate(m_vertex, VERTEX_BUCKET_BYTES, vertexBufferUsage(), size, nullptr, tag);
+}
+
+uint16 MeshDataManager::memTag(oc::string_view name)
+{
+    const std::lock_guard lock(m_tagMutex);
+    const oc::string key(name.data(), name.size());
+    if (auto it = m_tagIds.find(key); it != m_tagIds.end())
+        return it->second;
+    const uint32 tag = m_numTags.load(oc::memory_order_relaxed);
+    if (tag >= MAX_MEM_TAGS)
+        return 0;
+    m_tagNames[tag] = key;
+    m_tagIds.emplace(key, (uint16)tag);
+    m_numTags.store(tag + 1, oc::memory_order_release); // the name before the count: forEachMemTag reads without the lock
+    return (uint16)tag;
+}
+
+void MeshDataManager::forEachMemTag(EPool pool, MemTagVisit visit, void* ctx) const
+{
+    const uint32 numTags = m_numTags.load(oc::memory_order_acquire);
+    for (uint32 tag = 0; tag < numTags; ++tag)
+    {
+        const int64 bytes = m_tagBytes[(size_t)tag * PoolCount + pool].load(oc::memory_order_relaxed);
+        if (bytes > 0)
+            visit(ctx, m_tagNames[tag].c_str(), (uint64)bytes);
+    }
+}
+
+const char* MeshDataManager::poolName(EPool pool)
+{
+    return pool == PoolVertex ? "MeshVertex" : pool == PoolIndex ? "MeshIndex" : "MeshSkinning";
 }
 
 void MeshDataManager::freeVertexData(size_t offset, size_t size)

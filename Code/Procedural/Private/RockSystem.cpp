@@ -391,7 +391,7 @@ namespace Procedural
 				}
 				// With 2+ levels the GPU LOD chain too (the cull picks each instance's level by its screen-space error).
 				variant.mesh = renderer.createMesh(oc::span<const RenderMeshData* const>(levels, numLevels),
-					oc::span<const float>(variant.data.lodError, numLevels), true);
+					oc::span<const float>(variant.data.lodError, numLevels), oc::format("Rocks/{}", type.desc.name), true);
 			}
 			const size_t n = glm::max(type.variants.size(), (size_t)1);
 			Log::info(oc::format("Rocks: '{}' - {} variants, triangles per variant per LOD: {} / {} / {} / {}",

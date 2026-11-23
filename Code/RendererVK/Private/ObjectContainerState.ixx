@@ -46,6 +46,10 @@ protected:
         uint16 numNodes = UINT16_MAX;
     };
     oc::string m_filePath;
+    // The mesh pools' memory tags (MeshDataManager::memTag): its uploads under its file path, the skinned instances' output
+    // regions under "Skinned output/<path>".
+    uint16 m_memTag = 0;
+    uint16 m_skinnedMemTag = 0;
 
     oc::vector<NodeInfo> m_nodeInfos;
     oc::vector<NodeMeshRange> m_nodeMeshRanges;

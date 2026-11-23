@@ -84,6 +84,8 @@ ObjectContainer::~ObjectContainer()
 void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempInitData& temp, const ContainerMaterialOverrides* pOverrides)
 {
     const size_t numMeshes = sceneData.getNumMeshes();
+    m_memTag = Globals::meshDataManager.memTag(m_filePath);
+    m_skinnedMemTag = Globals::meshDataManager.memTag(oc::format("Skinned output/{}", m_filePath));
 
     oc::vector<RendererVKLayout::MeshInfo> meshInfos;
     oc::vector<uint32> meshVertexCounts; // parallel to meshInfos: exact counts for the BLAS builder
@@ -183,8 +185,8 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
         const uint32* pIndices = meshData.getIndices();
         const size_t vertexBytes = vertices.size() * sizeof(RendererVKLayout::MeshVertex);
         const size_t indexBytes = numIndices * sizeof(RendererVKLayout::MeshIndex);
-        const size_t vertexByteOffset = meshDataManager.uploadVertexData(vertices.data(), vertexBytes);
-        const size_t indexByteOffset = meshDataManager.uploadIndexData(pIndices, indexBytes);
+        const size_t vertexByteOffset = meshDataManager.uploadVertexData(vertices.data(), vertexBytes, m_memTag);
+        const size_t indexByteOffset = meshDataManager.uploadIndexData(pIndices, indexBytes, m_memTag);
         meshInfo.indexCount   = numIndices;
         meshInfo.vertexOffset = (int32)(vertexByteOffset / sizeof(RendererVKLayout::MeshVertex));
         meshInfo.firstIndex   = (uint32)(indexByteOffset / sizeof(RendererVKLayout::MeshIndex));
@@ -214,7 +216,7 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
                 skinVerts[i].boneWeights = pBoneWeights[i];
             }
             const size_t skinBytes = skinVerts.size() * sizeof(RendererVKLayout::SkinningVertex);
-            const size_t skinByteOffset = meshDataManager.uploadSkinningData(skinVerts.data(), skinBytes);
+            const size_t skinByteOffset = meshDataManager.uploadSkinningData(skinVerts.data(), skinBytes, m_memTag);
             const uint32 skinVertexOffset = (uint32)(skinByteOffset / sizeof(RendererVKLayout::SkinningVertex));
             m_ownedDataRanges.push_back({ skinByteOffset, skinBytes, EOwnedRange::Skinning });
 
@@ -256,7 +258,7 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
                     if (resultCount < 3 || resultCount >= (size_t)((float)prevIndexCount * 0.9f))
                         break;
                     const size_t lodIndexBytes = resultCount * sizeof(RendererVKLayout::MeshIndex);
-                    const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(lodIndices.data(), lodIndexBytes);
+                    const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(lodIndices.data(), lodIndexBytes, m_memTag);
                     m_ownedDataRanges.push_back({ lodIndexByteOffset, lodIndexBytes, EOwnedRange::Index });
                     skinnedSrc.lodFirstIndex[skinnedSrc.numLodLevels] = (uint32)(lodIndexByteOffset / sizeof(RendererVKLayout::MeshIndex));
                     skinnedSrc.lodIndexCount[skinnedSrc.numLodLevels] = (uint32)resultCount;
@@ -283,7 +285,7 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
                 RendererVKLayout::MeshInfo lodInfo = meshInfo; // same vertices + bounds
                 lodInfo.indexCount = numLodIndices;
                 const size_t lodIndexBytes = numLodIndices * sizeof(RendererVKLayout::MeshIndex);
-                const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(pLodIndices, lodIndexBytes);
+                const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(pLodIndices, lodIndexBytes, m_memTag);
                 lodInfo.firstIndex = (uint32)(lodIndexByteOffset / sizeof(RendererVKLayout::MeshIndex));
                 if (!hasStreamSource[meshIdx])
                     m_ownedDataRanges.push_back({ lodIndexByteOffset, lodIndexBytes, EOwnedRange::Index });
@@ -323,7 +325,7 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
                 RendererVKLayout::MeshInfo lodInfo = meshInfo; // same vertices + bounds
                 lodInfo.indexCount = (uint32)resultCount;
                 const size_t lodIndexBytes = resultCount * sizeof(RendererVKLayout::MeshIndex);
-                const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(lodIndices.data(), lodIndexBytes);
+                const size_t lodIndexByteOffset = meshDataManager.uploadIndexData(lodIndices.data(), lodIndexBytes, m_memTag);
                 lodInfo.firstIndex = (uint32)(lodIndexByteOffset / sizeof(RendererVKLayout::MeshIndex));
                 if (!hasStreamSource[meshIdx])
                     m_ownedDataRanges.push_back({ lodIndexByteOffset, lodIndexBytes, EOwnedRange::Index });
@@ -377,6 +379,7 @@ void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempIni
             const RendererVKLayout::MeshInfo& info = meshInfos[meshIdx];
             MeshStreamer::MeshSetDesc desc;
             desc.filePath = src.filePath;
+            desc.memTag = m_memTag;
             desc.numVertices = src.numVertices;
             desc.vertexByteOffset = (uint64)info.vertexOffset * sizeof(RendererVKLayout::MeshVertex);
             desc.srcAttributeOffsets[0] = src.positionsOffset;
@@ -893,7 +896,7 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
             const RendererVKLayout::SkinnedMeshSource& src = renderer.getSkinnedMeshSource(m_baseSkinnedMeshIdx + k);
             // 2 x vertexCount: the deformed vertices, then last frame's positions (the motion vectors).
             const uint32 outVertexOffset = (uint32)(meshDataManager.reserveVertexData(
-                (size_t)src.vertexCount * 2 * sizeof(RendererVKLayout::MeshVertex)) / sizeof(RendererVKLayout::MeshVertex));
+                (size_t)src.vertexCount * 2 * sizeof(RendererVKLayout::MeshVertex), m_skinnedMemTag) / sizeof(RendererVKLayout::MeshVertex));
             outVertexOffsets.push_back(outVertexOffset);
             meshVertexCounts.push_back(src.vertexCount);
 

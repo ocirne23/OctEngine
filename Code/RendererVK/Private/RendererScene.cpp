@@ -465,13 +465,54 @@ void RendererState::setMaterialFlags(uint16 materialIdx, uint32 flags)
     m_materials.upload(materialIdx, 1);
 }
 
-RenderMesh Renderer::createMesh(const RenderMeshData& data, bool raytraced)
+RenderMesh Renderer::createMesh(const RenderMeshData& data, oc::string_view memTag, bool raytraced)
 {
     const RenderMeshData* level = &data;
-    return createMesh(oc::span<const RenderMeshData* const>(&level, 1), {}, raytraced);
+    return createMesh(oc::span<const RenderMeshData* const>(&level, 1), {}, memTag, raytraced);
 }
 
-RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, bool raytraced)
+// THE VRAM VIEW with the mesh pools split by memory tag (MeshDataManager::memTag): each pool's one buffer becomes "<pool>/<tag>" entries (the bucket-rounded
+// bytes) + "<pool>/<free>" (the rest of the buffer), so the boxes add up to the allocation. The names live for the visit call (the Memory panel and
+// --vram-dump copy them).
+void Renderer::forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const
+{
+    struct Outer { GpuAllocationVisit visit; void* ctx; };
+    Outer outer{ visit, ctx };
+    Globals::gpuAllocator.forEachAllocation(+[](void* p, const GpuAllocationInfo& info)
+    {
+        const Outer& o = *static_cast<const Outer*>(p);
+        int pool = -1;
+        for (uint32 k = 0; info.name != nullptr && k < MeshDataManager::PoolCount; ++k)
+            if (oc::string_view(info.name) == MeshDataManager::poolName((MeshDataManager::EPool)k))
+                pool = (int)k;
+        if (pool < 0)
+        {
+            o.visit(o.ctx, info);
+            return;
+        }
+        struct Inner { const Outer* o; const GpuAllocationInfo* info; uint64 tagged; };
+        Inner in{ &o, &info, 0 };
+        Globals::meshDataManager.forEachMemTag((MeshDataManager::EPool)pool, +[](void* q, const char* tagName, uint64 bytes)
+        {
+            Inner& in = *static_cast<Inner*>(q);
+            const oc::string name = oc::format("{}/{}", in.info->name, tagName);
+            GpuAllocationInfo sub = *in.info;
+            sub.name = name.c_str();
+            sub.bytes = bytes;
+            sub.bufferSize = bytes;
+            in.o->visit(in.o->ctx, sub);
+            in.tagged += bytes;
+        }, &in);
+        const oc::string freeName = oc::format("{}/<free>", info.name);
+        GpuAllocationInfo freeInfo = info;
+        freeInfo.name = freeName.c_str();
+        freeInfo.bytes = info.bytes > in.tagged ? info.bytes - in.tagged : 0;
+        freeInfo.bufferSize = freeInfo.bytes;
+        o.visit(o.ctx, freeInfo);
+    }, &outer);
+}
+
+RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, oc::string_view memTag, bool raytraced)
 {
     assert(levels.size() <= RendererVKLayout::MAX_MESH_LODS && (levels.size() <= 1 || errors.size() >= levels.size()));
     RenderMesh mesh;
@@ -500,12 +541,13 @@ RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc
     }
     const RenderMeshData& base = *levels[0];
     MeshDataManager& meshDataManager = Globals::meshDataManager;
+    const uint16 tag = meshDataManager.memTag(memTag);
     mesh.m_numVertices = numVertices;
     mesh.m_numIndices = numIndices;
     mesh.m_firstVertex = (uint32)(meshDataManager.uploadVertexData(numLevels > 1 ? packedVertices.data() : base.vertices.data(),
-        size_t(numVertices) * sizeof(RendererVKLayout::MeshVertex)) / sizeof(RendererVKLayout::MeshVertex));
+        size_t(numVertices) * sizeof(RendererVKLayout::MeshVertex), tag) / sizeof(RendererVKLayout::MeshVertex));
     mesh.m_firstIndex = (uint32)(meshDataManager.uploadIndexData(numLevels > 1 ? packedIndices.data() : base.indices.data(),
-        size_t(numIndices) * sizeof(RendererVKLayout::MeshIndex)) / sizeof(RendererVKLayout::MeshIndex));
+        size_t(numIndices) * sizeof(RendererVKLayout::MeshIndex), tag) / sizeof(RendererVKLayout::MeshIndex));
     mesh.m_bounds = base.bounds;
     mesh.m_numLevels = (uint8)numLevels;
 
@@ -544,13 +586,14 @@ RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc
     return mesh;
 }
 
-RenderMeshIndices Renderer::createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices)
+RenderMeshIndices Renderer::createMeshIndices(oc::span<const RendererVKLayout::MeshIndex> indices, oc::string_view memTag)
 {
     RenderMeshIndices shared;
     if (indices.empty())
         return shared;
     shared.m_numIndices = (uint32)indices.size();
-    shared.m_firstIndex = (uint32)(Globals::meshDataManager.uploadIndexData(indices.data(), indices.size_bytes()) / sizeof(RendererVKLayout::MeshIndex));
+    shared.m_firstIndex = (uint32)(Globals::meshDataManager.uploadIndexData(indices.data(), indices.size_bytes(),
+        Globals::meshDataManager.memTag(memTag)) / sizeof(RendererVKLayout::MeshIndex));
     return shared;
 }
 
@@ -559,7 +602,7 @@ void Renderer::setTerrainShadowIndices(const RenderMeshIndices& half, const Rend
     m_terrainShadowIndices = glm::uvec4(half.m_firstIndex, half.m_numIndices, quarter.m_firstIndex, quarter.m_numIndices);
 }
 
-RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices)
+RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const RenderMeshIndices& indices, oc::string_view memTag)
 {
     RenderMesh mesh;
     if (data.vertices.empty() || !indices.isValid())
@@ -568,7 +611,8 @@ RenderMesh Renderer::createTerrainMesh(const RenderTerrainMeshData& data, const 
     const uint32 numVertices = (uint32)data.vertices.size();
     mesh.m_vertexStride = (uint8)stride;
     mesh.m_numVertices = numVertices;
-    mesh.m_firstVertex = (uint32)(Globals::meshDataManager.uploadVertexData(data.vertices.data(), size_t(numVertices) * stride) / stride);
+    mesh.m_firstVertex = (uint32)(Globals::meshDataManager.uploadVertexData(data.vertices.data(), size_t(numVertices) * stride,
+        Globals::meshDataManager.memTag(memTag)) / stride);
     mesh.m_firstIndex = indices.m_firstIndex;
     mesh.m_bounds = data.bounds;
     mesh.m_minHeight = data.minHeight;
