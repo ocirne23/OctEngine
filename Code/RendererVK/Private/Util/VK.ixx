@@ -16,7 +16,7 @@ import Core;
 // Vk* debug-utils types directly.
 export extern "C++"
 {
-#include <vulkan/vulkan_core.h>
+#include "vulkan/vulkan_core.h" // quoted: no "angled include in the module purview" warning
 }
 #endif
 

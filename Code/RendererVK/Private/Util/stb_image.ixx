@@ -11,7 +11,7 @@ export import <stb/stb_image.h>;
 #else
 export extern "C++"
 {
-#include <stb/stb_image.h>
+#include "stb/stb_image.h" // quoted: no "angled include in the module purview" warning
 }
 #endif
 

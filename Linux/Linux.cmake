@@ -41,10 +41,14 @@ set(OC_NIXPKGS_HEADER_DIRS glslang shaderc spirv-tools assimp SDL3 openxr) # onn
 set(OC_VENDORED_INCLUDE "${CMAKE_BINARY_DIR}/VendoredInclude")
 file(REMOVE_RECURSE "${OC_VENDORED_INCLUDE}")
 file(GLOB OC_VENDORED_ENTRIES RELATIVE "${ROOT_DIR}/Dependencies/Include" "${ROOT_DIR}/Dependencies/Include/*")
+# Warnings inside third-party headers are theirs: each vendored folder is a system-header prefix. (Not an -isystem folder:
+# that would put it after the nixpkgs -isystem folders, and nixpkgs' vulkan-headers would win over the vendored ones.)
+set(OC_VENDORED_HEADER_FLAGS "")
 foreach(entry ${OC_VENDORED_ENTRIES})
 	if(NOT entry IN_LIST OC_NIXPKGS_HEADER_DIRS)
 		file(MAKE_DIRECTORY "${OC_VENDORED_INCLUDE}")
 		file(CREATE_LINK "${ROOT_DIR}/Dependencies/Include/${entry}" "${OC_VENDORED_INCLUDE}/${entry}" SYMBOLIC)
+		list(APPEND OC_VENDORED_HEADER_FLAGS "--system-header-prefix=${entry}/")
 	endif()
 endforeach()
 
@@ -71,25 +75,27 @@ set(COMPILE_OPTIONS
 	"-fno-stack-protector"
 	"-fno-threadsafe-statics"
 	"-fdata-sections" "-ffunction-sections"
+	# Warnings: /W4's counterpart, with the same exceptions as the root CMakeLists (/wd...) plus the ones the port itself
+	# causes. Everything else stays on: a new warning is fixed, not silenced.
 	"-Wall" "-Wextra"
-	"-Wno-unused-parameter"            # /wd4100
-	"-Wno-unknown-pragmas"             # #pragma warning / init_seg / comment
-	"-Wno-reserved-module-identifier"
+	"-ftabstop=4"                           # the sources are written with Visual Studio's 4-column tabs (-Wmisleading-indentation)
+	"-Wno-unused-parameter"                 # /wd4100
+	"-Wno-deprecated-literal-operator"      # /wd5311 (EASTL's string.h)
+	"-Wno-unknown-pragmas"                  # the MSVC #pragma warning / init_seg lines, which clang does not know
+	"-Wno-reserved-module-identifier"       # libc++'s own std / std.compat modules
+	"-Wno-include-angled-in-module-purview" # the port's `export extern "C++" { #include }` wrappers (by design)
+	"-Wno-macro-redefined"                  # the command-line offsetof / assert meet the system headers' own
+	"-Wno-unused-command-line-argument"     # the nix clang wrapper adds its -L / -Wl, / -stdlib flags to every compile
+	# clang's x86 intrinsic headers declare every intrinsic `static __inline__` (always inlined): an exported inline
+	# function or a template that calls one (_mm_*, _tzcnt_u64, _pdep_u32, ...) "exposes a TU-local entity". Every hit
+	# is an intrinsic; no engine entity is TU-local.
+	"-Wno-TU-local-entity-exposure"
+	"-Wno-reference-tu-local-entity-in-other-tu"
+	# Captures clang calls unnecessary (a reference bound to a global, a constant) are ones MSVC requires (C3493).
+	"-Wno-unused-lambda-capture"
+	# The engine's designated initializers leave members out on purpose (value-initialized); /W4 has no counterpart.
 	"-Wno-missing-field-initializers"
-	"-Wno-nan-infinity-disabled"
-	"-Wno-deprecated-declarations"
-	"-Wno-sign-compare"
-	"-Wno-unused-private-field"
-	"-Wno-unused-function"
-	"-Wno-unused-variable"
-	"-Wno-unused-but-set-variable"
-	"-Wno-include-angled-in-module-purview"
-	"-Wno-microsoft-anon-tag"
-	"-Wno-invalid-offsetof"
-	"-Wno-c99-designator"
-	"-Wno-nullability-completeness"
-	"-Wno-deprecated-literal-operator" # /wd5311
-	"-Wno-macro-redefined"             # the command-line offsetof / assert meet the system headers' own
+	"-Wno-missing-designated-field-initializers"
 )
 # The default (nix-wrapped) linker: the wrapper writes the runpath of every nix library the binary links. A bare
 # -fuse-ld=lld bypasses it and App then cannot find libc++.so at start.

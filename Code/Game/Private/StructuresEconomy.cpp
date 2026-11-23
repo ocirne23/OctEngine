@@ -299,7 +299,6 @@ void StructureSystem::tickProduction(float deltaSec)
 
     m_genRateTotal = 0.0f;
     m_useRateTotal = 0.0f;
-    float totalDemand = 0.0f;
     for (const Ref& ref : m_frame)
     {
         GameStructureComponent& s = *ref.state;
@@ -400,7 +399,6 @@ void StructureSystem::tickProduction(float deltaSec)
                 + (isBase ? 0.0f : pressure * (1.0f + m_settings.pressureDrawTension * pressure) * m_settings.emitterPressureDraw)
                 + s.emitter.unitLoad; // enemy units/shots leaning on the bubble
             s.emitter.unitLoad = 0.0f;
-            totalDemand += draw;
             if (s.emitter.down && s.store[0] >= glm::min(m_settings.emitterRestartCharge, energyCapacityOf(ref.type)))
                 s.emitter.down = false;
             bool paid = false;
@@ -448,7 +446,6 @@ void StructureSystem::tickProduction(float deltaSec)
                 s.powered = true;
             continue;
         }
-        totalDemand += draw;
         // Fabricators burn fuel alongside energy (piped into their own tank) - both must be there.
         const float fuelDraw = ref.type == EStructureType::Fabricator ? m_settings.fabricatorFuelPerSec * staff : 0.0f;
         s.powered = s.store[0] >= draw * dt - 1e-4f && s.store[1] >= fuelDraw * dt - 1e-4f;
@@ -463,7 +460,6 @@ void StructureSystem::tickProduction(float deltaSec)
     // ---- totals ----
     m_gridEnergyTotal = 0.0f;
     m_gridCapacityTotal = 0.0f;
-    float fuelSum = 0.0f;
     for (float& f : m_fuelTotal)
         f = 0.0f;
     for (float& m : m_minerals)
@@ -481,7 +477,6 @@ void StructureSystem::tickProduction(float deltaSec)
         if (s.type == EStructureType::MineralSilo || s.type == EStructureType::Base)
             m_minerals[s.state->team] += s.state->store[2];
         m_fuelTotal[s.state->team] += s.state->store[1];
-        fuelSum += s.state->store[1];
     }
 }
 

@@ -363,7 +363,8 @@ namespace
 						const uint32 b0 = lastRow == r - 1 ? lastBase : emitRow(prev);
 						const uint32 b1 = emitRow(w);
 						for (int32 j = 0; j + 1 < across; j++)
-							m.indices.insert(m.indices.end(), { b0 + j, b1 + j, b0 + j + 1, b0 + j + 1, b1 + j, b1 + j + 1 });						lastRow = r;
+							m.indices.insert(m.indices.end(), { b0 + j, b1 + j, b0 + j + 1, b0 + j + 1, b1 + j, b1 + j + 1 });
+						lastRow = r;
 						lastBase = b1;
 					}
 					prevInCell = inCell;

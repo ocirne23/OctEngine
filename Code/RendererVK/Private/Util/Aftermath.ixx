@@ -20,10 +20,10 @@ export import <Aftermath/GFSDK_Aftermath_GpuCrashDumpDecoding.h>;
 // crash dumps - the Windows behaviour without the DLL.
 export extern "C++"
 {
-#include <Aftermath/GFSDK_Aftermath_Defines.h>
-#include <Aftermath/GFSDK_Aftermath.h>
-#include <Aftermath/GFSDK_Aftermath_GpuCrashDump.h>
-#include <Aftermath/GFSDK_Aftermath_GpuCrashDumpDecoding.h>
+#include "Aftermath/GFSDK_Aftermath_Defines.h" // quoted: no "angled include in the module purview" warning
+#include "Aftermath/GFSDK_Aftermath.h"
+#include "Aftermath/GFSDK_Aftermath_GpuCrashDump.h"
+#include "Aftermath/GFSDK_Aftermath_GpuCrashDumpDecoding.h"
 }
 #endif
 

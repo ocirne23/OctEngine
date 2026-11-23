@@ -202,7 +202,7 @@ void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
     }
 
     // Create shader hash for the shader
-    const GFSDK_Aftermath_SpirvCode shader{ data.data(), uint32_t(data.size()) };
+    const GFSDK_Aftermath_SpirvCode shader{ { data.data() }, uint32_t(data.size()) };
     GFSDK_Aftermath_ShaderBinaryHash shaderHash;
     AFTERMATH_CHECK_ERROR(Aftermath::GetShaderHashSpirv(
         GFSDK_Aftermath_Version_API,
@@ -233,8 +233,8 @@ void ShaderDatabase::AddShaderBinaryWithDebugInfo(const char* strippedShaderFile
 
     // Generate shader debug name.
     GFSDK_Aftermath_ShaderDebugName debugName;
-    const GFSDK_Aftermath_SpirvCode shader{ data.data(), uint32_t(data.size()) };
-    const GFSDK_Aftermath_SpirvCode strippedShader{ strippedData.data(), uint32_t(strippedData.size()) };
+    const GFSDK_Aftermath_SpirvCode shader{ { data.data() }, uint32_t(data.size()) };
+    const GFSDK_Aftermath_SpirvCode strippedShader{ { strippedData.data() }, uint32_t(strippedData.size()) };
     AFTERMATH_CHECK_ERROR(Aftermath::GetShaderDebugNameSpirv(
         GFSDK_Aftermath_Version_API,
         &shader,

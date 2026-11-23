@@ -74,10 +74,13 @@ function(apply_compile_settings target)
 		if(interfaces)
 			target_sources(${target} PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${ROOT_DIR}" FILES ${interfaces})
 		endif()
+		# Dependencies/Include becomes the vendored-header folder of Linux.cmake (a plain -I, so it keeps coming before
+		# the nixpkgs -isystem folders; its headers count as system headers through OC_VENDORED_HEADER_FLAGS).
 		get_target_property(include_dirs ${target} INCLUDE_DIRECTORIES)
 		list(TRANSFORM include_dirs REPLACE "^${CMAKE_SOURCE_DIR}/Dependencies/Include/?$" "${OC_VENDORED_INCLUDE}")
 		set_property(TARGET ${target} PROPERTY INCLUDE_DIRECTORIES ${include_dirs})
 		target_include_directories(${target} BEFORE PRIVATE ${OC_LINUX_INCLUDES})
+		target_compile_options(${target} PRIVATE ${OC_VENDORED_HEADER_FLAGS})
 		target_link_libraries(${target} PUBLIC oc_std)
 	endif()
 

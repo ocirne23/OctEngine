@@ -29,7 +29,7 @@ public:
 	SceneData();
 	~SceneData();
 	SceneData(const SceneData&) = delete;
-	SceneData(SceneData&&) = default;
+	SceneData(SceneData&&) = delete; // was `= default`, which a non-movable member deletes anyway
 
 	bool initialize(const char* filePath, bool mergeNodes, bool preTransformVertices) override;
 	bool isValid() const override { return m_pScene != nullptr; }

@@ -320,7 +320,7 @@ namespace
             v = std::tanh(v * drive) * norm;
     }
 
-    void tremolo(Buf& b, float hz, float depth, bool square)
+    [[maybe_unused]] void tremolo(Buf& b, float hz, float depth, bool square) // no sound uses it now
     {
         for (size_t i = 0; i < b.size(); ++i)
         {

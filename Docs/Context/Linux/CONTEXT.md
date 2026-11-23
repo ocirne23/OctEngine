@@ -37,6 +37,20 @@ Build-Linux/Code/App/App        # from the repo root, like on Windows (FileSyste
   `/Zc:threadSafeInit-` = `-fno-threadsafe-statics`; `/GS-` = `-fno-stack-protector`. No `/GT` and no tlsGuards
   equivalent (see Fibers).
 
+## Warnings
+
+A clean Linux build has **zero warnings**; keep it that way (fix a new one, do not silence it). `-Wall -Wextra`, with the
+root CMakeLists' MSVC exceptions (`/wd4100` unused parameter, `/wd5311`) plus a short, commented list in
+`Linux/Linux.cmake`, each with its reason: clang's `static __inline__` x86 intrinsics ("TU-local entity exposed"),
+lambda captures MSVC requires and clang calls unnecessary, designated initializers that leave members out on purpose,
+and flags the port or the nix wrapper itself causes. Third-party headers are system headers (`--system-header-prefix`
+per vendored folder; nixpkgs headers arrive as `-isystem`), and the vendored imgui-node-editor sources are third-party
+code. `-ftabstop=4`: the sources are written with Visual Studio's 4-column tabs (`-Wmisleading-indentation`).
+`Linux/Include/assert.h` keeps the non-Debug `assert` the type-checked `(void)sizeof(e)` of `forceinclude.h` after any
+`<assert.h>` (so an assert-only variable is used on both platforms); Vulkan-Hpp's own asserts stay unevaluated there
+(they name Debug-only members). The purview includes of the wrapper modules are written quoted (`#include "x/y.h"`):
+clang warns about an ANGLED include in a module purview.
+
 ## Rules for code that must keep building on Linux
 
 * **No header units on clang.** CMake drives header units only for MSVC. A wrapper module that `export import <hdr>;`s

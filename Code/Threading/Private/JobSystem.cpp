@@ -71,7 +71,7 @@ static Job** currentJobSlot()
 #ifdef _MSC_VER
 static thread_local uint32 t_tlsPinDepth = 0;
 #else
-static OcFiberSafeTls<uint32, 4> t_tlsPinDepth;
+[[maybe_unused]] static OcFiberSafeTls<uint32, 4> t_tlsPinDepth; // read only by asserts (unevaluated outside Debug)
 #endif
 
 static void assertNotThreadLocalPinned()

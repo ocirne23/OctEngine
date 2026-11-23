@@ -283,16 +283,6 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .alphaToCoverageEnable = vk::False,
         .alphaToOneEnable = vk::False,
     };
-    vk::StencilOpState stencilOpState
-    {
-        .failOp = vk::StencilOp::eKeep,
-        .passOp = vk::StencilOp::eKeep,
-        .depthFailOp = vk::StencilOp::eKeep,
-        .compareOp = vk::CompareOp::eAlways,
-        .compareMask = 0,
-        .writeMask = 0,
-        .reference = 0,
-    };
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo{
         .flags = {},
         .depthTestEnable = layout.depthTestEnable ? vk::True : vk::False,

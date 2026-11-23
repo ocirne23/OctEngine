@@ -15,9 +15,10 @@ export import <SDL3/SDL_scancode.h>;
 #else
 export extern "C++"
 {
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
-#include <SDL3/SDL_scancode.h>
+// Quoted: the same search, without clang's "angled include attaches to the named module" warning (it is intended).
+#include "SDL3/SDL.h"
+#include "SDL3/SDL_vulkan.h"
+#include "SDL3/SDL_scancode.h"
 }
 #endif
 

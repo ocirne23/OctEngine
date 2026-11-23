@@ -21,8 +21,8 @@ export import <glslang/SPIRV/GlslangToSpv.h>;
 #else
 export extern "C++"
 {
-#include <glslang/Public/ResourceLimits.h>
-#include <glslang/Public/ShaderLang.h>
-#include <glslang/SPIRV/GlslangToSpv.h>
+#include "glslang/Public/ResourceLimits.h" // quoted: no "angled include in the module purview" warning
+#include "glslang/Public/ShaderLang.h"
+#include "glslang/SPIRV/GlslangToSpv.h"
 }
 #endif

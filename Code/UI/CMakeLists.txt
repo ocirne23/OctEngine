@@ -11,6 +11,10 @@ if(NOT MSVC) # imgui-node-editor's `#include "imgui.h"`: MSVC finds it next to a
 	target_include_directories(${PROJECT_NAME} PRIVATE "${ROOT_DIR}/Dependencies/Include/imgui")
 	# a plain TU: std::terminate reaches it through MSVC's headers, not libc++'s
 	set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/Private/lib/imgui-node-editor/crude_json.cpp" PROPERTIES COMPILE_OPTIONS "-include;exception")
+	# The vendored imgui-node-editor is third-party code: its own warnings (std::aligned_storage, which the Windows build
+	# silences with _SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING above, and an unused local) are not ours.
+	file(GLOB NODE_EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/Private/lib/imgui-node-editor/*.cpp")
+	set_property(SOURCE ${NODE_EDITOR_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "-Wno-deprecated-declarations;-Wno-unused-but-set-variable")
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC Core RendererVK Entity Script Settings imgui$<$<CONFIG:Debug>:d>)

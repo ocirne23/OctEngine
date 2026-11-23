@@ -39,8 +39,8 @@ bool Device::initialize()
         {
             if (!m_physicalDevice)
                 m_physicalDevice = physDevice;
-            else if (physDevice.getProperties().limits.maxMemoryAllocationCount > m_physicalDevice.getProperties().limits.maxMemoryAllocationCount
-                && physDevice.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu
+            else if ((physDevice.getProperties().limits.maxMemoryAllocationCount > m_physicalDevice.getProperties().limits.maxMemoryAllocationCount
+                && physDevice.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
                 || m_physicalDevice.getProperties().deviceType != vk::PhysicalDeviceType::eDiscreteGpu)
             {
                 m_physicalDevice = physDevice;

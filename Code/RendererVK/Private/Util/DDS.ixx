@@ -11,6 +11,6 @@ export import <dds/dds.h>;
 #else
 export extern "C++"
 {
-#include <dds/dds.h>
+#include "dds/dds.h" // quoted: no "angled include in the module purview" warning
 }
 #endif

@@ -226,7 +226,6 @@ void SwapChain::submitCommandBuffer(CommandBuffer& commandBuffer)
 
 bool SwapChain::present()
 {
-    vk::PipelineStageFlags2 waitStage = { vk::PipelineStageFlagBits2::eColorAttachmentOutput };
     vk::PresentInfoKHR presentInfo{
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &m_syncObjects[m_currentImageIdx].renderComplete,

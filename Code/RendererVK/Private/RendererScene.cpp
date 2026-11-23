@@ -748,18 +748,6 @@ void RendererState::freeRenderNode(RenderNode& node)
     node.m_meshInstances.clear();
 }
 
-namespace
-{
-    uint32 growCapacity(uint32 current, uint32 needed, uint32 limit = UINT32_MAX)
-    {
-        uint64 capacity = current;
-        while (capacity < needed)
-            capacity *= 2;
-        assert(needed <= limit);
-        return (uint32)oc::min<uint64>(capacity, limit);
-    }
-}
-
 void RendererState::waitForGpuAndFlushStaging()
 {
     // Drain first: some buffers being grown here (e.g. m_instanceOffsets.getBuffer()) aren't per-frame-in-flight,

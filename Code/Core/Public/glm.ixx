@@ -15,9 +15,10 @@ export import <glm/gtc/random.hpp>;
 import std.compat;
 export extern "C++"
 {
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/quaternion.hpp>
-#include <glm/gtc/random.hpp>
+// Quoted: the same -I search, without clang's "angled include attaches to the named module" warning (it is intended).
+#include "glm/glm.hpp"
+#include "glm/gtc/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
+#include "glm/gtc/random.hpp"
 }
 #endif

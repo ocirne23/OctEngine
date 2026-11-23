@@ -235,25 +235,25 @@ void* operator new[](std::size_t n, std::size_t align, [[maybe_unused]] std::siz
     return Globals::allocator.allocate(n);
 }
 
-void operator delete(void* p)
+void operator delete(void* p) noexcept
 {
     if (p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete(void* p, std::align_val_t align)
+void operator delete(void* p, std::align_val_t align) noexcept
 {
     if (p)
         Globals::allocator.deallocateAligned(p, (size_t)align);
 }
 
-void operator delete[](void* p)
+void operator delete[](void* p) noexcept
 {
     if (p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete[](void* p, std::align_val_t align)
+void operator delete[](void* p, std::align_val_t align) noexcept
 {
     if (p)
         Globals::allocator.deallocateAligned(p, (size_t)align);

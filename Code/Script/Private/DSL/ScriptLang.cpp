@@ -1186,8 +1186,6 @@ DSLType AutoCompleteRules::enclosingFunctionReturnType(const DSLCodeLine& atLine
 
 DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScriptFile& file)
 {
-	using ST = DSLSymbol::SymbolType;
-
 	switch (slot.kind)
 	{
 	case SlotRef::Kind::LineHead:

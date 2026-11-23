@@ -629,7 +629,7 @@ void AssetBrowser::renderContentList()
 			{
 				const uint64 bytes = entry.size;
 				if (bytes < 1024)
-					ImGui::TextDisabled("%llu B", bytes);
+					ImGui::TextDisabled("%llu B", (unsigned long long)bytes);
 				else if (bytes < 1024 * 1024)
 					ImGui::TextDisabled("%.1f KB", bytes / 1024.0);
 				else

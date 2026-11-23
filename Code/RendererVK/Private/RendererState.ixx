@@ -445,7 +445,7 @@ protected:
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes); // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.
 
     // -- Skinning resources --
-    friend class AnimatorComponent;
+    friend struct AnimatorComponent;
     using SkinnedInstanceBundle = SkinnedMeshRegistry::Bundle;
     uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources) { return m_skinned.addSources(sources); }
     const RendererVKLayout::SkinnedMeshSource& getSkinnedMeshSource(uint32 idx) const { return m_skinned.getSource(idx); }

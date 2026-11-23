@@ -30,6 +30,9 @@ if(MSVC)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=__noop")
 else()
 	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=(void)sizeof") # __noop: unevaluated
+	# Vulkan-Hpp's own asserts name Debug-only dispatcher members (getVkHeaderVersion), so they must not be type-checked
+	# outside Debug: not the engine's (void)sizeof assert (Linux/Include/assert.h), which MSVC tolerates there and clang not.
+	target_compile_options(${PROJECT_NAME} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-DVULKAN_HPP_ASSERT(x)=((void)0)>")
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings Animation File Threading vulkan-1
