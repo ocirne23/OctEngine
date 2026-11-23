@@ -167,12 +167,16 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   its value types are nested: `Rep`, `Type`, `Piece`, `ChunkDraw`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / voxel / shadow-billboard representations + the crossfade band), each
   chunk uploaded ONCE to DEVICE-LOCAL buffers (`TreeCullPieceGpu` 64 B: transform + band centre/radius + type;
-  `TreeCullTypeGpu` 128 B, four 32-byte sectors, mirrored in `tree_type.inc.glsl`: the six records, the distance / band
+  `TreeCullTypeGpu` 192 B, six 32-byte sectors, mirrored in `tree_type.inc.glsl`: the six records, the distance / band
   and a `shadowDistance` - beyond it from
   the cascades' centre the shadow cull drops the piece from every cascade, before the transform loads: the
   bushes, a texel or less in the far cascades - then the type's VOXEL GRID (its box: min, size, 1 / size, the cube
   root of its volume; its textures and header - `RenderTreeSet::Type`'s `voxelGrid*`, required with a voxel record),
-  which the LitTree shaders and the voxel tier's fragment shader read). **The main cull writes a tree's TYPE into the low 16 bits of its
+  which the LitTree shaders and the voxel tier's fragment shader read - then the type's LEAF COLOURS (`Type::leafColour
+  / leafTone / leafAccent / leafTwig`, linear): a `MATERIAL_FLAG_LEAF` material's texture on LitTree holds NO colour (a
+  tone, a shade, a twig share; the accent share in its normal map's B), so the species with one leaf shape draw ONE
+  texture, and `treeLeafAlbedo` (`tree_type.inc.glsl`) forms the colour in the fragment shader - Procedural
+  [Trees.md](../Procedural/Trees.md) "Leaf textures are shared"). **The main cull writes a tree's TYPE into the low 16 bits of its
   record's `meshIdxMaterialIdx`** (a plain instance's mesh index; no scene shader reads a tree's): at most 65536 types
   a set. Trees do not move, so nothing about them is written per frame: no render
   nodes, no stream entries, no pass of their own (**do not rewrite tree records into the host-visible stream per
@@ -762,7 +766,7 @@ Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ran
 `BitRangeAllocator<true>` (lock-free) free lists in `MeshDataManager` (see "The graphics-queue mutex" ([CONTEXT.md](CONTEXT.md)) for its grow lock).
 A full pool grows by **1.1x** (at least the request, rounded up to whole buckets), not 2x: these are the largest
 device-local buffers, and a doubling leaves up to half of one unused. Each grow is a GPU drain + a full GPU copy.
-Their initial sizes (`INITIAL_VERTEX_DATA` 384 MiB, about 8.4 M `MeshVertex`, `INITIAL_INDEX_DATA` 96 MiB = 24 M indices; the
+Their initial sizes (`INITIAL_VERTEX_DATA` 256 MiB, about 5.6 M `MeshVertex`, `INITIAL_INDEX_DATA` 64 MiB = 16 M indices; the
 sandbox uses ~245 MiB and ~58 MiB: the VRAM view's "<pool>/<tag>" boxes), the
 mesh instance capacity (`INITIAL_INSTANCE_DATA` 1048576), the render node capacity (`INITIAL_RENDER_NODES` 65536) and
 the GI TLAS instance capacity (`GI_INITIAL_TLAS_INSTANCES` 32768) are set so the world's load does not grow them (each

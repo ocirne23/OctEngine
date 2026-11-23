@@ -64,8 +64,7 @@ TreeSpecies Bushwillow
 		Aspect 0.8
 		PerBranch 2
 		Levels 1
-		ClusterLeaves 7
-		ClusterLeafSize 0.32
+		Texture Oak
 		NormalBend 0.4
 	Bake
 		Variants 2

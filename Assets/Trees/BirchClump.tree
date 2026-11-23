@@ -72,9 +72,7 @@ TreeSpecies BirchClump
 		Keep 0.83 0.6
 		Levels 2
 		Align 0.1
-		ClusterLeaves 8
-		ClusterLeafSize 0.26
-		ClusterLeafWidth 0.30
+		Texture Birch
 		NormalBend 0.0
 	Bark
 		Plates 4 12

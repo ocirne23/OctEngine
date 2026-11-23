@@ -128,6 +128,7 @@ private:
     // byte offset, SIZE_MAX on failure.
     size_t allocate(Pool& pool, size_t bucketBytes, vk::BufferUsageFlags2 usage, size_t size, const void* pData, uint16 tag);
     void release(Pool& pool, size_t bucketBytes, size_t offset, size_t size);
+    uint32 largestFreeRun(const Pool& pool) const; // in buckets; under the grow lock, exclusive (the grow log)
 
 private:
 

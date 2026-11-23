@@ -23,8 +23,31 @@ namespace
 		float signed1() { return next01() * 2.0f - 1.0f; }
 	};
 
-	// Float RGBA canvas: rgb holds the 8-bit sRGB-encoded colour as 0..1 (the species colours are authored
-	// that way, like the solid-colour materials), a is coverage.
+	float decodeSrgb(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+	float encodeSrgb(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
+	glm::vec3 decodeSrgb(const glm::vec3& c) { return glm::vec3(decodeSrgb(c.x), decodeSrgb(c.y), decodeSrgb(c.z)); }
+
+	// The autumn tint a leaf's TONE leans to: x the leaf colour (sRGB).
+	constexpr glm::vec3 AUTUMN_TINT{ 1.25f, 1.1f, 0.6f };
+	constexpr float SHADE_SCALE = 0.5f; // the shade as stored: up to 2 fits
+
+	// A NEUTRAL texel (the atlas holds no species colour, TreeLeafTexture.ixx): the tone, the shade, the twig share, as
+	// stored. The tone and the twig share go through the sRGB curve (`toneEncoded`: a leaf's tone, encoded once).
+	glm::vec3 ink(float toneEncoded, float shade, float twigEncoded)
+	{
+		return glm::vec3(toneEncoded, glm::clamp(shade * SHADE_SCALE, 0.0f, 1.0f), twigEncoded);
+	}
+	const glm::vec3 TWIG_INK = ink(0.0f, 1.0f, 1.0f);
+
+	// A leaf's own values: its tone (encoded), its brightness (x the shade) and whether it is an accent leaf.
+	struct LeafInk
+	{
+		float toneEncoded = 0.0f;
+		float bright = 1.0f;
+		float accent = 0.0f;
+	};
+
+	// Float RGBA canvas: rgb holds the 8-bit texel as 0..1 (a neutral texel, `ink`), a is coverage.
 	struct Canvas
 	{
 		uint32 size = 0;
@@ -43,18 +66,17 @@ namespace
 		Canvas& canvas;
 		glm::vec2 origin; // pixels
 		float cellPx;     // pixels per cell unit
-		// The LEAF NORMAL MAP (tangent space: x along u, y along v, encoded * 0.5 + 0.5; nullptr = none), blended with
-		// the same coverage as the colour, and the RIM map beside it (0 at a leaf's midrib .. 1 at its edge, 0 on twigs:
-		// the normal map's A - the leaf is thicker in its centre, so less sun gets through there).
-		Canvas* normals = nullptr;
-		Canvas* rims = nullptr;
+		// The LEAF NORMAL MAP (tangent space: x along u, y along v, encoded * 0.5 + 0.5), blended with the same coverage
+		// as the colour, and the map of its other two channels beside it: x = the RIM (0 at a leaf's midrib .. 1 at its
+		// edge, 0 on twigs: the normal map's A - the leaf is thicker in its centre, so less sun gets through there),
+		// y = the ACCENT share (the normal map's B).
+		Canvas& normals;
+		Canvas& rims;
 
-		void blendNormal(int x, int y, glm::vec3 n, float a, float rim = 0.0f) const
+		void blendNormal(int x, int y, glm::vec3 n, float a, float rim = 0.0f, float accent = 0.0f) const
 		{
-			if (normals)
-				normals->blend(x, y, glm::normalize(n) * 0.5f + 0.5f, a);
-			if (rims)
-				rims->blend(x, y, glm::vec3(rim), a);
+			normals.blend(x, y, glm::normalize(n) * 0.5f + 0.5f, a);
+			rims.blend(x, y, glm::vec3(rim, accent, 0.0f), a);
 		}
 
 		// Visits every pixel of the cell-local box [lo, hi] (clipped to the cell) with its cell-local centre.
@@ -122,7 +144,7 @@ namespace
 	// plus `tilt` - the whole leaf's own random lean, so neighbouring leaves catch the sun differently. VEINS: secondary
 	// veins leaving the midrib toward the tip and curving out to the edge (lighter, a groove in the normal, thicker - less
 	// sun through them); WRINKLE: fine noise bumps over the blade. Both break up the shading and the transmission.
-	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const glm::vec3& color,
+	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const LeafInk& leaf,
 		const LeafDetail& detail = LeafDetail{})
 	{
 		const float cup = detail.cup;
@@ -187,20 +209,17 @@ namespace
 			if (r > 0.0f)
 				shade *= 0.92f;               // fold
 			shade *= (1.0f + 0.14f * vein) * (1.0f + 0.08f * tone);
-			cell.canvas.blend(x, y, glm::clamp(color * shade, 0.0f, 1.0f), alpha);
-			if (cell.normals)
-			{
-				// A smooth CONVEX blade: across it the sides fall away from the midrib (the slope grows linearly - a
-				// parabolic blade, the normal leaning OUT toward the rim), along it the tip curls down - one dome. (Sides
-				// curving up toward the face made a saddle with the tip curl, lit on the wrong half; a crease at the midrib
-				// read as a bright ridge.) The vein grooves and the bumps on top.
-				const float fold = cup * 0.5f * across;
-				const glm::vec2 lean = side * fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt
-					+ veinGrad * (0.035f * veinSlope) + bump * 0.35f;
-				// The RIM (the transmission's thickness): thin toward the edge, thick on the veins, uneven with the bumps.
-				const float rim = glm::clamp(glm::abs(across) * (1.0f - 0.65f * glm::min(vein, 1.0f)) + 0.25f * bump.x, 0.0f, 1.0f);
-				cell.blendNormal(x, y, glm::vec3(lean, 1.0f), alpha, rim);
-			}
+			cell.canvas.blend(x, y, ink(leaf.toneEncoded, leaf.bright * shade, 0.0f), alpha);
+			// A smooth CONVEX blade: across it the sides fall away from the midrib (the slope grows linearly - a
+			// parabolic blade, the normal leaning OUT toward the rim), along it the tip curls down - one dome. (Sides
+			// curving up toward the face made a saddle with the tip curl, lit on the wrong half; a crease at the midrib
+			// read as a bright ridge.) The vein grooves and the bumps on top.
+			const float fold = cup * 0.5f * across;
+			const glm::vec2 lean = side * fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt
+				+ veinGrad * (0.035f * veinSlope) + bump * 0.35f;
+			// The RIM (the transmission's thickness): thin toward the edge, thick on the veins, uneven with the bumps.
+			const float rim = glm::clamp(glm::abs(across) * (1.0f - 0.65f * glm::min(vein, 1.0f)) + 0.25f * bump.x, 0.0f, 1.0f);
+			cell.blendNormal(x, y, glm::vec3(lean, 1.0f), alpha, rim, leaf.accent);
 		});
 	}
 
@@ -222,11 +241,10 @@ namespace
 		{
 			const float t0 = (float)i / TWIG_SEGMENTS, t1 = (float)(i + 1) / TWIG_SEGMENTS;
 			drawCapsule(cell, bezier(base, ctrl, tip, t0), bezier(base, ctrl, tip, t1),
-				glm::mix(0.012f, 0.004f, t0), glm::mix(0.012f, 0.004f, t1), species.leafTwigColor());
+				glm::mix(0.012f, 0.004f, t0), glm::mix(0.012f, 0.004f, t1), TWIG_INK);
 		}
 
 		const int numLeaves = glm::max(species.clusterLeaves, 1);
-		const glm::vec3 autumn = species.leafColor * glm::vec3(1.25f, 1.1f, 0.6f);
 		for (int i = 0; i < numLeaves; ++i)
 		{
 			const bool last = i == numLeaves - 1;
@@ -237,12 +255,17 @@ namespace
 			const float angle = last ? rng.signed1() * 0.15f : sideSign * glm::radians(rng.range(35.0f, 65.0f));
 			const glm::vec2 dir(tangent.x * std::cos(angle) - tangent.y * std::sin(angle), tangent.x * std::sin(angle) + tangent.y * std::cos(angle));
 			float length = species.clusterLeafSize * rng.range(0.75f, 1.15f) * (1.0f - 0.25f * t);
-			// `Color LeafVariation` widens the autumn mix and the brightness; `Color Accent` replaces AccentShare of them.
+			// The leaf's TONE (the palette leans it toward the autumn tint by `Color LeafVariation`) and its brightness, which
+			// `Color LeafVariation` widens; `Color AccentShare` of the leaves are ACCENT leaves.
 			const float variation = species.leafVariation;
-			glm::vec3 color = glm::mix(species.leafColor, autumn, glm::min(rng.next01() * 0.35f * variation, 1.0f))
-				* rng.range(glm::max(1.0f - 0.15f * variation, 0.3f), 1.0f + 0.12f * variation);
+			LeafInk leaf;
+			leaf.toneEncoded = encodeSrgb(rng.next01());
+			leaf.bright = rng.range(glm::max(1.0f - 0.15f * variation, 0.3f), 1.0f + 0.12f * variation);
 			if (rng.next01() < species.accentShare)
-				color = species.accentColor * rng.range(0.85f, 1.1f);
+			{
+				leaf.accent = 1.0f;
+				leaf.bright = rng.range(0.85f, 1.1f);
+			}
 			const glm::vec2 tilt(rng.signed1() * species.leafTilt, rng.signed1() * species.leafTilt);
 			// Inside the cell: the cell clips the drawing, and a large leaf (the tip leaf above all, which grows on from
 			// v = 0.88) lost its tip. Shrunk until its tip and its widest points (at about 0.6 of its length,
@@ -263,15 +286,14 @@ namespace
 				length *= 0.92f;
 			const LeafDetail detail{ .cup = species.leafCup, .tilt = tilt, .veins = species.leafVeins, .wrinkle = species.leafWrinkle,
 				.seed = rng.next() };
-			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f), detail);
+			drawLeaf(cell, origin, dir, length, length * widthRatio, leaf, detail);
 		}
 	}
 
 	// `Style Needles`: one conifer SHOOT along the quadratic Bezier base -> ctrl -> tip - a thin twig densely set with
 	// needles on both sides (alternating, slightly curved toward the shoot tip, shorter and steeper toward it) and a
 	// tuft at the tip. `needleLength` in cell units; every needle is shortened until it fits inside the cell.
-	void drawNeedleShoot(const Cell& cell, glm::vec2 base, glm::vec2 ctrl, glm::vec2 tip, float twigRadius, float needleLength,
-		const TreeSpeciesDesc& species, Rng& rng)
+	void drawNeedleShoot(const Cell& cell, glm::vec2 base, glm::vec2 ctrl, glm::vec2 tip, float twigRadius, float needleLength, Rng& rng)
 	{
 		constexpr int TWIG_SEGMENTS = 10;
 		float shootLength = 0.0f;
@@ -279,7 +301,7 @@ namespace
 		{
 			const float t0 = (float)i / TWIG_SEGMENTS, t1 = (float)(i + 1) / TWIG_SEGMENTS;
 			const glm::vec2 a = bezier(base, ctrl, tip, t0), b = bezier(base, ctrl, tip, t1);
-			drawCapsule(cell, a, b, glm::mix(twigRadius, twigRadius * 0.4f, t0), glm::mix(twigRadius, twigRadius * 0.4f, t1), species.leafTwigColor());
+			drawCapsule(cell, a, b, glm::mix(twigRadius, twigRadius * 0.4f, t0), glm::mix(twigRadius, twigRadius * 0.4f, t1), TWIG_INK);
 			shootLength += glm::distance(a, b);
 		}
 
@@ -298,9 +320,8 @@ namespace
 				length *= 0.85f;
 			const glm::vec2 mid = at + dir * (length * 0.55f);
 			const glm::vec2 end = mid + dirOuter * (length * 0.45f);
-			const glm::vec3 color = glm::clamp(species.leafColor * shade, 0.0f, 1.0f);
-			drawCapsule(cell, at, mid, width, width * 0.75f, color);
-			drawCapsule(cell, mid, end, width * 0.75f, width * 0.25f, color * 1.08f);
+			drawCapsule(cell, at, mid, width, width * 0.75f, ink(0.0f, shade, 0.0f));
+			drawCapsule(cell, mid, end, width * 0.75f, width * 0.25f, ink(0.0f, shade * 1.08f, 0.0f));
 		};
 		for (int i = 0; i < rows; ++i)
 		{
@@ -369,9 +390,9 @@ namespace
 				const glm::vec2 end = at + sideDir * sideLength;
 				// Bent a little toward the branch's direction (side shoots sweep forward).
 				const glm::vec2 sideCtrl = at + sideDir * (sideLength * 0.5f) + tangent * (sideLength * 0.12f);
-				drawNeedleShoot(cell, at, sideCtrl, end, 0.005f, needleLength * 0.85f, species, rng);
+				drawNeedleShoot(cell, at, sideCtrl, end, 0.005f, needleLength * 0.85f, rng);
 			}
-			drawNeedleShoot(cell, base, ctrl, tip, numBranches > 1 ? 0.008f : 0.011f, needleLength, species, rng);
+			drawNeedleShoot(cell, base, ctrl, tip, numBranches > 1 ? 0.008f : 0.011f, needleLength, rng);
 		}
 	}
 
@@ -429,7 +450,7 @@ namespace
 				length *= 0.85f;
 			const glm::vec2 tip = at + dir * length;
 			const glm::vec2 ctrl = at + dir * (length * 0.5f) + tangent * (length * 0.1f);
-			drawNeedleShoot(cell, at, ctrl, tip, 0.004f, needleLength, species, rng);
+			drawNeedleShoot(cell, at, ctrl, tip, 0.004f, needleLength, rng);
 		};
 		for (int i = 0; i < shoots; ++i)
 			drawShoot();
@@ -439,7 +460,7 @@ namespace
 			{
 				const float t0 = (float)s / TWIG_SEGMENTS, t1 = (float)(s + 1) / TWIG_SEGMENTS;
 				drawCapsule(cell, bezier(twig.base, twig.ctrl, twig.tip, t0), bezier(twig.base, twig.ctrl, twig.tip, t1),
-					glm::mix(twig.radius, twig.radius * 0.4f, t0), glm::mix(twig.radius, twig.radius * 0.4f, t1), species.leafTwigColor());
+					glm::mix(twig.radius, twig.radius * 0.4f, t0), glm::mix(twig.radius, twig.radius * 0.4f, t1), TWIG_INK);
 			}
 		for (int i = 0; i < shoots / 3; ++i)
 			drawShoot();
@@ -458,11 +479,11 @@ namespace
 	};
 
 	void drawPinnateLeaf(const Cell& cell, glm::vec2 base, glm::vec2 ctrl, glm::vec2 tip, int pairs, float leafletLength,
-		const PinnateVariant& variant, const TreeSpeciesDesc& species, Rng& rng)
+		const PinnateVariant& variant, Rng& rng)
 	{
 		auto rotate = [](glm::vec2 v, float a) { return glm::vec2(v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a)); };
 		const float px = 1.0f / cell.cellPx;
-		const glm::vec3 stemColor = glm::mix(species.leafTwigColor(), species.leafColor, 0.45f);
+		const glm::vec3 stemColor = ink(0.0f, 1.0f, encodeSrgb(0.55f)); // a greenish stem: 0.55 twig, the rest leaf
 		constexpr int RACHIS_SEGMENTS = 10;
 		float rachisLength = 0.0f;
 		for (int i = 0; i < RACHIS_SEGMENTS; ++i)
@@ -509,7 +530,7 @@ namespace
 						const glm::vec2 ld = rotate(pt, leafSide * glm::radians(rng.range(72.0f, 84.0f)));
 						// One half of the comb a little darker (the fold of the pinna); small per-leaflet variation.
 						const float shade = pinnaShade * rng.range(0.92f, 1.06f) * (leafSide * side > 0.0f ? 0.9f : 1.0f);
-						drawLeaf(cell, p, ld, len, len * 0.2f, glm::clamp(species.leafColor * shade, 0.0f, 1.0f));
+						drawLeaf(cell, p, ld, len, len * 0.2f, LeafInk{ .bright = shade });
 					}
 				}
 				// The pinna's midrib over its leaflets' bases.
@@ -540,7 +561,7 @@ namespace
 		const float bend = rng.signed1() * 0.16f;  // its rachis curves (x its length)
 		const float lengthScale = rng.range(0.78f, 1.0f);
 		// A short woody twig the leaves grow from.
-		drawCapsule(cell, base, base + glm::vec2(0.0f, 0.03f), 0.008f, 0.006f, species.leafTwigColor());
+		drawCapsule(cell, base, base + glm::vec2(0.0f, 0.03f), 0.008f, 0.006f, TWIG_INK);
 		oc::small_vector<int, 8> drawOrder;
 		for (int b = 0; b < numLeaves; ++b)
 			drawOrder.push_back(b);
@@ -556,7 +577,7 @@ namespace
 				length *= 0.9f;
 			const glm::vec2 tip = start + dir * length;
 			const glm::vec2 ctrl = start + dir * (length * 0.5f) + glm::vec2(-dir.y, dir.x) * (length * (bend + rng.signed1() * 0.04f));
-			drawPinnateLeaf(cell, start, ctrl, tip, pairs, leafletLength, variant, species, rng);
+			drawPinnateLeaf(cell, start, ctrl, tip, pairs, leafletLength, variant, rng);
 		}
 	}
 
@@ -611,45 +632,143 @@ namespace
 
 namespace Procedural
 {
-	void generateLeafClusterImage(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outRgba, oc::vector<uint8>* outNormal)
+	TreeLeafPalette treeLeafPalette(const TreeSpeciesDesc& species)
+	{
+		// The shade is stored x SHADE_SCALE and decoded by the sampler: a shade of 1 must give the colour itself.
+		const float scale = 1.0f / decodeSrgb(SHADE_SCALE);
+		const glm::vec3 leaf = decodeSrgb(glm::clamp(species.leafColor, 0.0f, 1.0f));
+		// Tone 1: the leaf 0.35 x `Color LeafVariation` of the way to its autumn tint (mixed in sRGB, as the tint is authored).
+		const float reach = glm::min(0.35f * species.leafVariation, 1.0f);
+		const glm::vec3 toned = decodeSrgb(glm::clamp(glm::mix(species.leafColor, species.leafColor * AUTUMN_TINT, reach), 0.0f, 1.0f));
+		TreeLeafPalette palette;
+		palette.leaf = leaf * scale;
+		palette.tone = (toned - leaf) * scale;
+		palette.accent = decodeSrgb(glm::clamp(species.accentColor, 0.0f, 1.0f)) * scale;
+		palette.twig = decodeSrgb(glm::clamp(species.leafTwigColor(), 0.0f, 1.0f)) * scale;
+		return palette;
+	}
+
+	void generateLeafClusterImage(const TreeSpeciesDesc& shape, uint32 size, oc::vector<uint8>& outRgba, oc::vector<uint8>& outNormal)
 	{
 		Canvas canvas;
 		canvas.size = size;
-		// Transparent texels carry the leaf colour, so filtering at the silhouette never darkens it.
-		canvas.px.assign((size_t)size * size, glm::vec4(species.leafColor, 0.0f));
-		// The normal map: flat (+z) where nothing is drawn; the rim map: an edge (1) there.
+		// Transparent texels are a plain leaf (tone 0, shade 1, no twig), so filtering at the silhouette never darkens it.
+		canvas.px.assign((size_t)size * size, glm::vec4(ink(0.0f, 1.0f, 0.0f), 0.0f));
+		// The normal map: flat (+z) where nothing is drawn; the rim map: an edge (1) and no accent there.
 		Canvas normals, rims;
 		normals.size = size;
 		rims.size = size;
-		if (outNormal)
-		{
-			normals.px.assign((size_t)size * size, glm::vec4(0.5f, 0.5f, 1.0f, 0.0f));
-			rims.px.assign((size_t)size * size, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
-		}
+		normals.px.assign((size_t)size * size, glm::vec4(0.5f, 0.5f, 1.0f, 0.0f));
+		rims.px.assign((size_t)size * size, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
 
-		Rng rng(treeHash(species.seed, 3000u));
+		Rng rng(treeHash(shape.seed, 3000u));
 		const float cellPx = (float)size / (float)TREE_LEAF_ATLAS_CELLS;
 		for (uint32 cy = 0; cy < TREE_LEAF_ATLAS_CELLS; ++cy)
 			for (uint32 cx = 0; cx < TREE_LEAF_ATLAS_CELLS; ++cx)
 			{
-				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx, outNormal ? &normals : nullptr,
-					outNormal ? &rims : nullptr };
-				if (species.clusterStyle == ETreeClusterStyle::Needles)
-					drawNeedleCluster(cell, species, rng);
-				else if (species.clusterStyle == ETreeClusterStyle::Mat)
-					drawNeedleMat(cell, species, rng);
-				else if (species.clusterStyle == ETreeClusterStyle::Pinnate)
-					drawPinnateCluster(cell, species, rng);
+				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx, normals, rims };
+				if (shape.clusterStyle == ETreeClusterStyle::Needles)
+					drawNeedleCluster(cell, shape, rng);
+				else if (shape.clusterStyle == ETreeClusterStyle::Mat)
+					drawNeedleMat(cell, shape, rng);
+				else if (shape.clusterStyle == ETreeClusterStyle::Pinnate)
+					drawPinnateCluster(cell, shape, rng);
 				else
-					drawCluster(cell, species, rng);
+					drawCluster(cell, shape, rng);
 			}
 		outRgba = toRgba8(canvas, 1.0f);
-		if (outNormal)
+		// The normal's X / Y; B = the ACCENT share (the shader rebuilds Z), A = the RIM (the leaf FS's transmission thickness).
+		outNormal = toRgba8(normals, 0.0f);
+		for (size_t i = 0; i < rims.px.size(); ++i)
 		{
-			// A = the RIM (the normal chain's mips average it, buildNormalMips): the leaf FS's transmission thickness.
-			*outNormal = toRgba8(normals, 0.0f);
-			for (size_t i = 0; i < rims.px.size(); ++i)
-				(*outNormal)[i * 4 + 3] = (uint8)(glm::clamp(rims.px[i].x, 0.0f, 1.0f) * 255.0f + 0.5f);
+			outNormal[i * 4 + 2] = (uint8)(glm::clamp(rims.px[i].y, 0.0f, 1.0f) * 255.0f + 0.5f);
+			outNormal[i * 4 + 3] = (uint8)(glm::clamp(rims.px[i].x, 0.0f, 1.0f) * 255.0f + 0.5f);
+		}
+	}
+
+	// A texel's four palette weights (leaf, tone, accent, twig), x its shade: its colour = their sum x the palette.
+	// decode = the sRGB curve per byte.
+	static glm::vec4 leafTexelWeights(const uint8* albedo, const uint8* normal, const float* decode)
+	{
+		const float tone = decode[albedo[0]], shade = decode[albedo[1]], twig = decode[albedo[2]];
+		const float accent = (float)normal[2] * (1.0f / 255.0f);
+		const float blade = shade * (1.0f - twig);
+		return glm::vec4(blade * (1.0f - accent), blade * (1.0f - accent) * tone, blade * accent, shade * twig);
+	}
+
+	static void srgbDecodeTable(float (&table)[256])
+	{
+		for (uint32 i = 0; i < 256; ++i)
+			table[i] = decodeSrgb((float)i / 255.0f);
+	}
+
+	void colourLeafClusterImage(oc::span<const uint8> albedo, oc::span<const uint8> normal, const TreeLeafPalette& palette, oc::vector<uint8>& outRgba)
+	{
+		float decode[256];
+		srgbDecodeTable(decode);
+		outRgba.resize(albedo.size());
+		for (size_t i = 0; i + 3 < albedo.size(); i += 4)
+		{
+			const glm::vec4 w = leafTexelWeights(&albedo[i], &normal[i], decode);
+			const glm::vec3 colour = palette.leaf * w.x + palette.tone * w.y + palette.accent * w.z + palette.twig * w.w;
+			for (uint32 c = 0; c < 3; ++c)
+				outRgba[i + c] = (uint8)(encodeSrgb(glm::clamp(colour[(int)c], 0.0f, 1.0f)) * 255.0f + 0.5f);
+			outRgba[i + 3] = albedo[i + 3];
+		}
+	}
+
+	glm::vec4 leafClusterSums(oc::span<const uint8> albedo, oc::span<const uint8> normal)
+	{
+		float decode[256];
+		srgbDecodeTable(decode);
+		glm::dvec4 sum(0.0);
+		double weight = 0.0;
+		for (size_t i = 0; i + 3 < albedo.size(); i += 4)
+		{
+			const float cover = (float)albedo[i + 3] * (1.0f / 255.0f);
+			sum += glm::dvec4(leafTexelWeights(&albedo[i], &normal[i], decode) * cover);
+			weight += cover;
+		}
+		// No cover at all: a plain leaf.
+		return weight > 0.0 ? glm::vec4(sum / weight) : glm::vec4(decodeSrgb(SHADE_SCALE), 0.0f, 0.0f, 0.0f);
+	}
+
+	glm::vec3 leafClusterMean(const glm::vec4& sums, const TreeLeafPalette& palette)
+	{
+		return palette.leaf * sums.x + palette.tone * sums.y + palette.accent * sums.z + palette.twig * sums.w;
+	}
+
+	void buildLeafNormalMips(oc::span<const uint8> normal0, uint32 size, oc::vector<oc::vector<uint8>>& outMips)
+	{
+		outMips.clear();
+		outMips.push_back(oc::vector<uint8>(normal0.begin(), normal0.end()));
+		for (uint32 srcSize = size; srcSize > 1; srcSize /= 2)
+		{
+			const oc::vector<uint8>& src = outMips.back();
+			const uint32 dstSize = srcSize / 2;
+			oc::vector<uint8> dst((size_t)dstSize * dstSize * 4);
+			for (uint32 y = 0; y < dstSize; ++y)
+				for (uint32 x = 0; x < dstSize; ++x)
+				{
+					glm::vec3 n(0.0f);
+					uint32 accent = 0, rim = 0;
+					for (uint32 k = 0; k < 4; ++k)
+					{
+						const uint8* p = &src[((size_t)(y * 2 + (k >> 1)) * srcSize + (x * 2 + (k & 1))) * 4];
+						// The texel's unit normal: Z rebuilt from X / Y, as the shader does (B holds the accent share).
+						const glm::vec2 xy = glm::vec2(p[0], p[1]) / 127.5f - 1.0f;
+						n += glm::vec3(xy, std::sqrt(glm::max(1.0f - glm::dot(xy, xy), 0.0f)));
+						accent += p[2];
+						rim += p[3];
+					}
+					n = glm::dot(n, n) > 1e-8f ? glm::normalize(n) : glm::vec3(0.0f, 0.0f, 1.0f);
+					uint8* d = &dst[((size_t)y * dstSize + x) * 4];
+					d[0] = (uint8)(glm::clamp(n.x * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+					d[1] = (uint8)(glm::clamp(n.y * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f);
+					d[2] = (uint8)((accent + 2) / 4);
+					d[3] = (uint8)((rim + 2) / 4);
+				}
+			outMips.push_back(oc::move(dst));
 		}
 	}
 

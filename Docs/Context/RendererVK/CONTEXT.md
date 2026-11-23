@@ -532,7 +532,9 @@ its flush and submit (a writer takes no lock to finish, so the wait under the mu
 fences a GROW: every allocate / `upload*` / `free*` holds it SHARED - over the staging copy too, which names the
 buffer by handle - and `growBuffer`, which replaces the buffer AND the allocator's bit array, holds it
 EXCLUSIVE (a full allocator re-tries under the exclusive lock before growing: another thread may have grown it).
-A lock over the allocation alone is not enough: a grow on another thread could replace the buffer between an upload's
+Each grow logs one line first: the bytes used of the pool, its longest free run, the request and the request's tag - a
+grow with much free space but a short longest run is FRAGMENTATION (see the start-slot rule of `BitRangeAllocator` in
+Core's CONTEXT), not a leak. A lock over the allocation alone is not enough: a grow on another thread could replace the buffer between an upload's
 allocation and its staging copy. Lock order: grow → staging → queue.
 
 **The mesh pools' MEMORY TAGS** (the VRAM view by asset): every upload / reserve names its owner by a tag

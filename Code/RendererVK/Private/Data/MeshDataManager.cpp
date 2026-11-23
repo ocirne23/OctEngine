@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import Core.Log;
 import Core.BitRangeAllocator;
 import :StagingManager;
 import :Buffer;
@@ -111,7 +112,23 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
     }
     bufSize = newSize;
     m_generation.fetch_add(1, oc::memory_order_release);
-    printf("MeshDataManager: grew buffer to %zu bytes\n", newSize);
+    Log::info(oc::format("MeshDataManager: grew {} to {:.1f} MB", buffer.getDebugName(), (double)newSize / (1024.0 * 1024.0)));
+}
+
+// The longest run of free buckets (the grow log's fragmentation figure). Under the grow lock, EXCLUSIVE: no allocation
+// changes the bits meanwhile.
+uint32 MeshDataManager::largestFreeRun(const Pool& pool) const
+{
+    uint32 best = 0, run = 0;
+    const uint32 numBuckets = (uint32)pool.bucketTag.size(); // sized with the allocator
+    for (uint32 b = 0; b < numBuckets; ++b)
+    {
+        if (const_cast<BitRangeAllocator<true>&>(pool.allocator).isBitSet((int)b))
+            run = 0;
+        else
+            best = oc::max(best, ++run);
+    }
+    return best;
 }
 
 // The fast path holds m_growMutex SHARED: the allocator is lock-free, and the shared lock only keeps a grow from
@@ -151,6 +168,12 @@ size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsage
     {
         // No contiguous free run: grow the buffer (the whole old range is copied over - it may be
         // fragmented, so everything allocated must survive) and retry in the fresh tail.
+        // Why it is full: the pool's use NOW against its size (a load-time peak, or fragmentation: the use well under the
+        // size), the request and its owner, and the largest free run there is.
+        constexpr double MB = 1.0 / (1024.0 * 1024.0);
+        Log::info(oc::format("MeshDataManager: {} full - {:.1f} of {:.1f} MB used, largest free run {:.2f} MB, request {:.2f} MB for '{}'",
+            poolName(pool.id), (double)pool.bytesAllocated.load(oc::memory_order_relaxed) * MB, (double)pool.bufSize * MB,
+            (double)largestFreeRun(pool) * (double)bucketBytes * MB, (double)numBuckets * (double)bucketBytes * MB, m_tagNames[tag].c_str()));
         growBuffer(pool.buffer, pool.bufSize, pool.bufSize, pool.bufSize + (size_t)numBuckets * bucketBytes, bucketBytes, usage);
         pool.allocator.resize(uint32(pool.bufSize / bucketBytes));
         pool.bucketTag.resize(pool.bufSize / bucketBytes, 0);

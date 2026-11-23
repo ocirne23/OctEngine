@@ -129,7 +129,7 @@ clang warns about an ANGLED include in a module purview.
   read here; `Terrain/V3/FP16 inference` halves the models' VRAM (its tiles go to `<seed>_fp16`). On Linux only: latent and coarse
   batches of 2 (the noise is per window, so the batch size does not change the tiles), the sequential executor, the
   cuDNN heuristic search without the maximum workspace, an arena that grows by the request and shrinks after every
-  run. The starting mesh pools are the Windows ones (`INITIAL_VERTEX_DATA` 384 MB, `INITIAL_INDEX_DATA` 96 MB in
+  run. The starting mesh pools are the Windows ones (`INITIAL_VERTEX_DATA` 256 MB, `INITIAL_INDEX_DATA` 64 MB in
   `Layout.ixx`; the sandbox's load reaches ~245 / ~58 MB on Windows - check Linux with `--vram-dump`). The streaming budgets are no lever here: meshes stream inside those fixed
   pools, and a freed texture stays in its VMA block. Inference can still run out of memory when the desktop or the
   resolution takes more; a failed inference is then retried and never saved ("A failed inference never reaches a

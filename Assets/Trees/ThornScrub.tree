@@ -63,14 +63,11 @@ TreeSpecies ThornScrub
 			Sides 3
 	Leaves
 		Type Cluster
-		Style Pinnate
+		Texture Acacia
 		Size 0.5
 		Aspect 0.85
 		PerBranch 2
 		Levels 2
-		Shoots 1
-		ClusterLeaves 3
-		ClusterLeafSize 0.08
 		NormalBend 0.5
 	Bake
 		Variants 2

@@ -60,15 +60,12 @@ TreeSpecies Juniper
 			Sides 3
 	Leaves
 		Type Cluster
-		Style Needles
+		Texture Pine
 		Size 0.45
 		Aspect 0.75
 		PerBranch 2
 		Levels 2
 		Cross false
-		Shoots 3
-		ClusterLeaves 3
-		ClusterLeafSize 0.13
 		NormalBend 0.4
 	Bake
 		Variants 2

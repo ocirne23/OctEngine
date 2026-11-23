@@ -542,6 +542,8 @@ species grow around the trees of their `Climate` (picked by `Weight`); a tree's 
 how far out. A bush with a `Placement` block ALSO grows on its own, no tree needed (the desert succulents `Agave` and
 `Aloe`: `Climate Desert`, leaves as flat module blades - `Section`, `Swell`, `Tip`, `Cup`).
 A trunk may grow several stems (`Trunk Stems`: birch clumps).
+**A leaf texture holds no colour**: `Leaves Texture <species>` makes a species draw that species' leaf texture in its own
+`Color`s (one texture in VRAM per leaf shape, not per species).
 **The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, `Aspen.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
 Entity, above Procedural). Their generated textures are saved to `Assets/Local/Trees/Textures/*.tex` (not in git), each

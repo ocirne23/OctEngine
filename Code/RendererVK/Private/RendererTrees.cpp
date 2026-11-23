@@ -36,8 +36,8 @@ namespace
     };
 
     // A piece TYPE (one baked variant of one species, or a rock variant): its representations, its crossfade band and its
-    // voxel grid. Four 32-byte sectors (tree_type.inc.glsl): the culls read the first two, the LitTree and voxel-tier
-    // shaders the last two.
+    // voxel grid, its leaf colours. Six 32-byte sectors (tree_type.inc.glsl): the culls read the first two, the LitTree and
+    // voxel-tier shaders the next two, LitTree's leaves the last two.
     struct TreeCullTypeGpu
     {
         TreeCullRecordGpu bark;
@@ -60,8 +60,17 @@ namespace
         float pad2 = 0.0f;
         glm::vec3 gridSize{ 0.0f };
         float pad3 = 0.0f;
+        // The mesh leaves' colours (RenderTreeSet::Type's leaf*), linear.
+        glm::vec3 leafColour{ 0.0f };
+        float pad4 = 0.0f;
+        glm::vec3 leafTone{ 0.0f };
+        float pad5 = 0.0f;
+        glm::vec3 leafAccent{ 0.0f };
+        float pad6 = 0.0f;
+        glm::vec3 leafTwig{ 0.0f };
+        float pad7 = 0.0f;
     };
-    static_assert(sizeof(TreeCullTypeGpu) == 128);
+    static_assert(sizeof(TreeCullTypeGpu) == 192);
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -284,6 +293,10 @@ void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeIn
         gpu.shadowDistance = type.shadowDistance;
         auto fixed = [](float v) { return (uint32)std::round(glm::clamp(v, 0.0f, 15.99f) * 4096.0f); };
         gpu.wind = fixed(type.windTrunk) | (fixed(type.windBranch) << 16);
+        gpu.leafColour = type.leafColour;
+        gpu.leafTone = type.leafTone;
+        gpu.leafAccent = type.leafAccent;
+        gpu.leafTwig = type.leafTwig;
         const bool hasGrid = type.voxelGridSize.x > 0.0f && type.voxelGridSize.y > 0.0f && type.voxelGridSize.z > 0.0f;
         if (hasGrid)
         {

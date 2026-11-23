@@ -69,8 +69,7 @@ TreeSpecies Brush
 		Aspect 0.8
 		PerBranch 6
 		Levels 3
-		ClusterLeaves 12
-		ClusterLeafSize 0.28
+		Texture Oak
 		NormalBend 0.4
 	Bake
 		Variants 2

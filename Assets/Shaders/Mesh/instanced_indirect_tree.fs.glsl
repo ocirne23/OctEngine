@@ -138,18 +138,24 @@ void main()
 			distance(u_viewPos, pos)), 1e-4)) * u_foliage_voxelSelfShadow;
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness and the normal-map
-	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES. A tree material has NO
+	// decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen). A tree material has NO
 	// metal-roughness texture (Procedural createTreeMaterial): the metalness is the constant 0, so the lit core's
 	// specular colour is the one F0 scalar.
 	float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
 
-	f16vec3 materialColor = terrainFactionAlbedo(f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz), pos.xz,
+	// THE NORMAL MAP: Z rebuilt from X / Y for EVERY layout, no branch on the format - the bark's two-channel BC5 has no Z
+	// (.z reads 0), the uncompressed bark's RGB normal is unit with Z > 0 (the rebuilt Z is its stored one), and the
+	// leaves' B is not Z at all: the leaf's ACCENT share.
+	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
+
+	// THE COLOUR. The bark's is its texture's. A LEAF texture holds NONE (Procedural TreeLeafTexture: the species that
+	// share one leaf shape draw one texture): the tree's type gives its colours (treeLeafAlbedo), then the crown's PATCHES.
+	vec3 albedo = diffuseSample.xyz;
+	if (leaf)
+		albedo = leafPatchTint(treeLeafAlbedo(typeIdx, albedo, float(normalTap.z)), pos);
+	f16vec3 materialColor = terrainFactionAlbedo(f16vec3(albedo), pos.xz,
 		leaf ? 1.0 : u_terrain_factionSolidScale); // bark: the weaker tint, as the near bark's (instanced_indirect.fs.glsl)
 
-	// THE NORMAL MAP: Z rebuilt from X / Y for BOTH layouts, no branch on the format - the bark's two-channel BC5 has no Z
-	// (.z reads 0), and the leaves' (and the uncompressed bark's) RGB normals are unit with Z > 0, so the rebuilt Z is
-	// their stored one.
-	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
 	const f16vec2 normalXY = normalTap.xy * float16_t(2.0) - float16_t(1.0);
 	const f16vec3 rawTangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
 	// Leaves: the normal map's slope x "Trees/Leaf normal strength" (0 = flat cards; the cupped, tilted leaves of the

@@ -24,7 +24,7 @@ export namespace Procedural
 	constexpr uint32 CLUTTER_MESH_CACHE_VERSION = 1; // generateClutterMeshes (its pebbles: generateRockVariant too)
 	// The bark / leaf generators, their mip chains (buildBarkMips, buildLeafClusterMips, buildNormalMips) and the BC
 	// encoders (TextureConvert)
-	constexpr uint32 TEXTURE_CACHE_VERSION = 6;
+	constexpr uint32 TEXTURE_CACHE_VERSION = 7;
 
 	constexpr const char* TREE_MESH_DIR = "Local/Trees/Meshes";
 	constexpr const char* ROCK_MESH_DIR = "Local/Rocks/Meshes";
@@ -67,6 +67,9 @@ export namespace Procedural
 		oc::vector<oc::vector<uint8>> albedo;
 		oc::vector<oc::vector<uint8>> normal; // empty: none
 		glm::vec3 mean{ 0.0f };
+		// A tree LEAF atlas holds no colour (TreeLeafTexture.ixx): its statistics instead (leafClusterSums), from which
+		// every species that draws it gets its own mean.
+		glm::vec4 leafSums{ 0.0f };
 	};
 	bool loadCachedTexture(const oc::string& path, uint64 hash, CachedTexture& out);
 	void saveCachedTexture(const oc::string& path, uint64 hash, const CachedTexture& texture);

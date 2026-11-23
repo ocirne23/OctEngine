@@ -203,6 +203,11 @@ export namespace Procedural
 		float padHeight = 0.08f;
 		float padTilt = 0.25f;      // the cards' random tilt off level (a vector of up to this x unit, added to up)
 		float padStart = 0.15f;     // where along the limb the pad begins; its cards denser toward the limb's end
+		// Cluster: `Leaves Texture <species>` - this species draws THAT species' leaf texture, in its own `Color`s (the atlas
+		// holds no colour: TreeLeafTexture.ixx). The keys that only shape the texture are then that species': Style,
+		// ClusterLeaves, Shoots, ClusterLeafSize, ClusterLeafWidth, Cup, Veins, Wrinkle, Tilt, and `Color AccentShare` and
+		// the brightness spread of `Color LeafVariation`. Empty = its own.
+		oc::string leafTexture;
 		ETreeClusterStyle clusterStyle = ETreeClusterStyle::Leaves; // Cluster: what the texture draws
 		int clusterLeaves = 12;     // Cluster: leaves drawn per texture variant (Needles: side shoots per branch;
 		                            // Pinnate: pinna pairs per compound leaf)

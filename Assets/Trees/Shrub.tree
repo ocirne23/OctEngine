@@ -63,8 +63,7 @@ TreeSpecies Shrub
 		Aspect 0.8
 		PerBranch 2
 		Levels 2
-		ClusterLeaves 10
-		ClusterLeafSize 0.3
+		Texture Oak
 		NormalBend 0.4
 	Bake
 		Variants 2

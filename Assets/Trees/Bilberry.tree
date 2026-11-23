@@ -51,8 +51,7 @@ TreeSpecies Bilberry
 		Aspect 0.8
 		PerBranch 4
 		Levels 2
-		ClusterLeaves 14
-		ClusterLeafSize 0.18
+		Texture Elm
 		NormalBend 0.4
 	Bake
 		Variants 2

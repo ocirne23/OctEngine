@@ -107,25 +107,39 @@ public:
         const int numInts = (m_size + 63) / 64;
 
         if constexpr (ThreadSafe)
-        {	// In a multithreaded environment we spread out different thread allocations to minimize contention
+        {
+            // WHERE TO START: a SMALL range (under a word) goes into a word that is already PARTLY used and holds a free run of
+            // its length - empty words stay whole for the ranges that span words. Only without one: the first empty word, else
+            // the emptiest. The search begins past the last acquired word, so threads still spread out. (Any word with
+            // "comfortable" room, empty ones included, sprinkled the small ranges over every word: MeshDataManager's vertex
+            // pool grew at 244 of 384 MB used, its longest free run one word.)
             const int lastUsed = (int)lastAcquired();
-            int emptiestSlotBits = 64;
-            startSlot = 0;
+            int partlyUsed = -1, firstEmpty = -1, emptiest = 0, emptiestBits = 65;
             for (int i = 0; i < numInts; ++i)
             {
                 const int intIdx = (i + lastUsed + 1) % numInts;
-                const int numSetBits = (int)oc::popcnt(loadBits(intIdx));
-                if (numSetBits + numBucketsWanted * 2 < 64) // If we find a slot that can comfortably fit the allocation try to use it
+                const uint64 usedBits = loadBits(intIdx);
+                const int numSetBits = (int)oc::popcnt(usedBits);
+                if (numSetBits == 0)
                 {
-                    startSlot = intIdx;
+                    if (firstEmpty < 0)
+                        firstEmpty = intIdx;
+                    if (numBucketsWanted >= 64)
+                        break; // a large range starts at the first empty word
+                    continue;
+                }
+                if (numBucketsWanted < 64 && 64 - numSetBits >= numBucketsWanted && hasFreeRun(usedBits, numBucketsWanted))
+                {
+                    partlyUsed = intIdx;
                     break;
                 }
-                if (numSetBits < emptiestSlotBits) // otherwise find the emptiest slot
+                if (numSetBits < emptiestBits)
                 {
-                    startSlot = intIdx;
-                    emptiestSlotBits = numSetBits;
+                    emptiestBits = numSetBits;
+                    emptiest = intIdx;
                 }
             }
+            startSlot = partlyUsed >= 0 ? partlyUsed : firstEmpty >= 0 ? firstEmpty : emptiest;
             setLastAcquired(startSlot);
         }
         else
@@ -215,6 +229,21 @@ private:
     {
         if (m_size % 64 != 0)
             m_pBits[m_size / 64] |= ~0ull << (m_size % 64);
+    }
+
+    // Whether a word's FREE bits hold a run of n (1..63) consecutive ones: the free mask ANDed with itself shifted, the
+    // run lengths doubling (log2(n) steps).
+    static bool hasFreeRun(uint64 usedBits, int n)
+    {
+        uint64 m = ~usedBits;
+        int have = 1;
+        while (have < n && m != 0)
+        {
+            const int step = oc::min(have, n - have);
+            m &= m >> step;
+            have += step;
+        }
+        return m != 0;
     }
 
     uint64 loadBits(int intIdx) const

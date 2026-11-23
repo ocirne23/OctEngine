@@ -317,7 +317,7 @@ namespace Procedural
 			return true;
 		};
 		return r.pod(out.width) && r.pod(out.height) && r.pod(out.albedoEncoding) && r.pod(out.normalEncoding) && r.pod(out.mean)
-			&& chain(out.albedo) && chain(out.normal) && !out.albedo.empty() && r.cursor == raw.size();
+			&& r.pod(out.leafSums) && chain(out.albedo) && chain(out.normal) && !out.albedo.empty() && r.cursor == raw.size();
 	}
 
 	void saveCachedTexture(const oc::string& path, uint64 hash, const CachedTexture& texture)
@@ -328,6 +328,7 @@ namespace Procedural
 		w.pod(texture.albedoEncoding);
 		w.pod(texture.normalEncoding);
 		w.pod(texture.mean);
+		w.pod(texture.leafSums);
 		const auto chain = [&](const oc::vector<oc::vector<uint8>>& levels)
 		{
 			w.pod((uint32)levels.size());

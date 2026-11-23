@@ -1,8 +1,9 @@
 // A TREE SET's TYPE TABLE (RendererTrees.cpp TreeCullTypeGpu - keep in step): one entry per baked variant of a species, or
-// per rock variant. 128 B = four 32-byte sectors: the representations (two), then the type's voxel grid. Read by the
-// culls (tree_cull.inc.glsl: what draws, and the band), by the LitTree shaders (tree_leaf_sun.inc.glsl: the mesh leaves'
-// sun self-shadow) and by the voxel tier's fragment shader (instanced_indirect_tree_voxel.fs.glsl: the box). A tree's
-// record names its type in the low 16 bits of its meshIdxMaterialIdx (the main cull).
+// per rock variant. 192 B = six 32-byte sectors: the representations (two), the type's voxel grid (two), its leaf colours
+// (two). Read by the culls (tree_cull.inc.glsl: what draws, and the band), by the LitTree shaders (tree_leaf_sun.inc.glsl:
+// the mesh leaves' sun self-shadow; instanced_indirect_tree.fs.glsl: the leaves' colours) and by the voxel tier's fragment
+// shader (instanced_indirect_tree_voxel.fs.glsl: the box). A tree's record names its type in the low 16 bits of its
+// meshIdxMaterialIdx (the main cull).
 // TREE_TYPES_BINDING (the includer's define) declares the table as in_treeTypes[]; tree_cull.inc.glsl declares its own.
 #ifndef TREE_TYPE_INC_GLSL
 #define TREE_TYPE_INC_GLSL
@@ -36,10 +37,28 @@ struct TreeCullType
     float pad2;
     vec3 gridSize;                 // the box's size
     float pad3;
+    // THE MESH LEAVES' COLOURS, linear (treeLeafAlbedo): the leaf texture holds no colour, so several species draw one.
+    vec3 leafColour;               // a leaf at tone 0
+    float pad4;
+    vec3 leafTone;                 // + this x the leaf's tone
+    float pad5;
+    vec3 leafAccent;               // an accent leaf
+    float pad6;
+    vec3 leafTwig;                 // the twigs
+    float pad7;
 };
 
 #ifdef TREE_TYPES_BINDING
 layout (binding = TREE_TYPES_BINDING, std430) readonly buffer TreeTypes { TreeCullType in_treeTypes[]; };
+
+// A LEAF TEXTURE's texel in its type's colours (a MATERIAL_FLAG_LEAF material on LitTree; Procedural TreeLeafTexture.ixx -
+// keep in step with its colourLeafClusterImage). tap = the albedo tap: r = the leaf's tone, g = the shade, b = the twig
+// share (the texture is sRGB: all three arrive decoded). accent = the normal map's B.
+vec3 treeLeafAlbedo(uint typeIdx, vec3 tap, float accent)
+{
+    const vec3 leaf = in_treeTypes[typeIdx].leafColour + in_treeTypes[typeIdx].leafTone * tap.r;
+    return mix(mix(leaf, in_treeTypes[typeIdx].leafAccent, accent), in_treeTypes[typeIdx].leafTwig, tap.b) * tap.g;
+}
 #endif
 
 #endif

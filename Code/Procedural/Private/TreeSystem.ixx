@@ -13,6 +13,7 @@ import Settings;
 import :TerrainSampler;
 import :TreeSpecies;
 import :TreeGenerator;
+import :TreeLeafTexture;
 import :TreeWorld;
 #ifndef _MSC_VER
 import :GeneratorV3; // teardown order on Linux: this global dies before the diffusion runtime (GeneratorV3.ixx)
@@ -94,23 +95,35 @@ export namespace Procedural
 			// The GPU meshes of the baked whole-tree variants (bakeTreeVariant: what a record expands to). The CPU meshes
 			// (the piece library too) are not kept: the load frees them once uploaded and baked.
 			oc::vector<PieceMeshes> variantMeshes;
-			// The materials the trees draw with: ownBarkMaterial's / ownLeafMaterial's, or a shared one (the solid leaf colour).
+			// The materials the trees draw with: ownBarkMaterial's, and for the leaves a shared one - a LEAF TEXTURE's
+			// (m_leafTextures: a cluster species) or the solid leaf colour's.
 			uint16 barkMaterial = 0;
 			uint16 leafMaterial = 0;
 			RenderMaterial ownBarkMaterial; // the procedural bark texture material
-			RenderMaterial ownLeafMaterial; // a cluster texture material
 			RendererVKLayout::EPipelineIndex leafPipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
+			// A cluster species' COLOURS for its leaf texture (the texture holds none): into its piece types (buildGpuTypes).
+			TreeLeafPalette leafPalette;
 			// The mesh -> voxels crossfade: the bark and the leaf material derived with a distance fade-OUT (shared
 			// textures). Invalid without a far tier (`Billboard Distance` 0).
 			RenderMaterial barkFadeMaterial;
 			RenderMaterial leafFadeMaterial;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
+		// A LEAF TEXTURE: the cluster atlas of one species' `Leaves` block and its normal map, with NO colour in it
+		// (TreeLeafTexture.ixx). Every cluster species that names that species (`Leaves Texture`) - and the species itself -
+		// draws this one material, each in its own colours (Species::leafPalette).
+		struct LeafTexture
+		{
+			RenderMaterial material; // LitTree, MATERIAL_FLAG_LEAF
+			glm::vec4 sums{ 0.0f };  // leafClusterSums: a species' mean leaf colour from its palette
+		};
 
 		// THE SPECIES LOAD runs on JOBS (one Low job per .tree, loadSpecies): the meshes (MeshCache or generated), the
 		// textures (.tex or generated), the shadow billboards' masks and the voxel grids - everything but the GPU objects.
 		// Main uploads each species as its job finishes (uploadSpecies: meshes, materials) and frees its CPU data; the trees
 		// spawn once every species is in. The job reads only its slot and a snapshot of the settings.
+		// kickLoad PARSES every .tree first (main): which leaf textures exist follows from the species (`Leaves Texture`),
+		// and each one loads on its own job (loadLeafTexture). A species uploads once its leaf texture is in.
 		struct LoadSettings
 		{
 			bool compressTextures = true;
@@ -125,6 +138,7 @@ export namespace Procedural
 		struct SpeciesLoad
 		{
 			oc::string path, fileName;
+			bool parsed = false; // kickLoad read `desc` and `name` from the file
 			bool valid = false;
 			TreeSpeciesDesc desc;
 			oc::string name;
@@ -132,12 +146,15 @@ export namespace Procedural
 			oc::vector<glm::vec4> variantBounds; // per baked variant: its box's centre + half diagonal (tree space)
 			oc::vector<TreeDensityGrid> density;
 			CachedTexture bark;
-			CachedTexture leaves; // cluster species only
-			glm::vec3 volumeAlbedo{ 0.0f };
-			// The shadow billboard's two colours for the rays (linear): the bark texture's mean, the leaves' (x `Billboard
-			// AlbedoScale`).
-			glm::vec3 barkColour{ 0.0f };
-			glm::vec3 leafColour{ 0.0f };
+			// A cluster species' LEAF TEXTURE (kickLoad): its index in m_leafLoadSlots / m_leafTextures, and the species
+			// whose `Leaves` block draws it (the slot's: fixed while the jobs run) - the bakes' input is drawn from it.
+			int32 leafTexture = -1;
+			const TreeSpeciesDesc* leafShape = nullptr;
+			// The textures' linear means: the bark's, and a Single species' leaf colour (a cluster species: from its leaf
+			// texture's statistics, at the upload). leafless: no leaf geometry (a succulent's bark blades).
+			glm::vec3 barkMean{ 0.0f };
+			glm::vec3 leafMean{ 0.0f };
+			bool leafless = false;
 			bool farTier = false;                           // `Billboard Distance` > 0: the shadow billboards (and the voxel tier)
 			oc::vector<VariantBillboard> variantBillboards; // per baked variant
 			oc::vector<CachedTexture> voxelTextures;       // per baked variant: the voxel tier's atlases (empty: none)
@@ -150,6 +167,15 @@ export namespace Procedural
 			oc::atomic<bool> done{ false };
 			bool uploaded = false;
 		};
+		struct LeafLoadSlot // one leaf texture's load: `shape` and `name` are fixed by kickLoad, the job writes the texture
+		{
+			TreeSpeciesDesc shape; // the species whose `Leaves` block the atlas draws
+			oc::string name;
+			CachedTexture texture;
+			oc::atomic<bool> done{ false };
+			bool uploaded = false;
+		};
+		static void loadLeafTexture(const LoadSettings& settings, LeafLoadSlot& out);
 		void kickLoad();
 		// Uploads the species whose jobs finished; true once every one is in (the species list is then final).
 		bool pumpLoad(Renderer& renderer);
@@ -282,6 +308,7 @@ export namespace Procedural
 		// drops the failed ones.
 		bool m_loading = false;
 		oc::vector<oc::unique_ptr<LoadSlot>> m_loadSlots;
+		oc::vector<oc::unique_ptr<LeafLoadSlot>> m_leafLoadSlots; // m_leafTextures[i] is slot i's
 		JobCounter m_loadCounter;
 
 		TreeWorld m_world; // every tree of the terrain ring as records (Docs/Context/Procedural/Trees.md)
@@ -306,6 +333,9 @@ export namespace Procedural
 		oc::atomic<int32> m_expandInFlight{ 0 };
 		JobCounter m_expandCounter;
 
+		// The leaf textures the cluster species draw. Declared before m_species: a species' fade-out leaf material is derived
+		// from its leaf texture's, and goes first.
+		oc::vector<LeafTexture> m_leafTextures;
 		oc::vector<Species> m_species;
 	};
 }

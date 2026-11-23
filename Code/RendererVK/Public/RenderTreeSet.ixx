@@ -30,6 +30,13 @@ public:
     {
         // The MESHES (the main pass up to the voxel tier). barkFade / leavesFade: the same meshes on LitTree with fade-OUT materials (the crossfade band).
         Rep bark, barkFade, leaves, leavesFade;
+        // THE MESH LEAVES' COLOURS (a MATERIAL_FLAG_LEAF material on LitTree: its texture holds NO colour - a tone, a shade, a twig share and, in the
+        // normal map's B, an accent share; Procedural TreeLeafTexture), linear: the types of several species draw one leaf texture, each in its own
+        // colours. A texel's colour = mix(mix(leafColour + leafTone x tone, leafAccent, accent), leafTwig, twig) x shade (instanced_indirect_tree.fs.glsl).
+        glm::vec3 leafColour{ 0.0f };
+        glm::vec3 leafTone{ 0.0f };
+        glm::vec3 leafAccent{ 0.0f };
+        glm::vec3 leafTwig{ 0.0f };
         // The VOXEL tier (LitTreeVoxel; none = mesh nullptr: the meshes draw at every distance): past farDistance it takes the meshes' place in the MAIN
         // pass, on a material with the band's fade-IN. Its mesh = the grid's BOX, 8 corners, its FIRST 6 INDICES the bottom face (Procedural
         // treeVoxelBoxMesh): every draw of it - the main pass, the far voxel trees, the voxel shadow caster - takes those 6 indices, as a rectangle around the box.

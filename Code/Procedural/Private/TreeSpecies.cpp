@@ -267,6 +267,8 @@ namespace Procedural
 				out.clusterStyle = iequals(n->asString(), "Needles") ? ETreeClusterStyle::Needles
 					: iequals(n->asString(), "Pinnate") ? ETreeClusterStyle::Pinnate
 					: iequals(n->asString(), "Mat") ? ETreeClusterStyle::Mat : ETreeClusterStyle::Leaves;
+			if (const AssetNode* n = leaves->find("Texture"))
+				out.leafTexture = n->asString();
 			readInt(*leaves, "ClusterLeaves", out.clusterLeaves);
 			readInt(*leaves, "Shoots", out.clusterShoots);
 			readFloat(*leaves, "NormalBend", out.leafNormalBend);

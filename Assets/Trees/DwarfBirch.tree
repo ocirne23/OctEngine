@@ -66,8 +66,7 @@ TreeSpecies DwarfBirch
 		Aspect 0.85
 		PerBranch 5
 		Levels 3
-		ClusterLeaves 12
-		ClusterLeafSize 0.26
+		Texture Birch
 		NormalBend 0.4
 	Bake
 		Variants 2

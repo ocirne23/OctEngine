@@ -75,7 +75,9 @@ TreeSpecies <name>
 	        the parent's horizontal side - children fan out in a flat sheet; default 0) · Radius · <shape> }  (up to 3)
 	Leaves  Size (m) · Aspect (width/length) · PerBranch (0..128, per average last-level branch; other branches
 	        scale it by their length) · Levels (1..4 deepest tiers that carry leaves; 1 = last level only)
-	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate|Mat · ClusterLeaves (Mat: shoots per cell; Needles: side
+	        Type Single|Cluster · Cross true|false · Texture <species> (Cluster: this species draws THAT species' leaf
+	        texture, in its own `Color`s - "Leaf textures are shared"; the texture keys here are then not read) ·
+	        Style Leaves|Needles|Pinnate|Mat · ClusterLeaves (Mat: shoots per cell; Needles: side
 	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
 	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafWidth (Leaves: a texture leaf's
 	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · Cup (Leaves: 0..1, default 0.5 - the
@@ -153,10 +155,12 @@ TreeSpecies <name>
 	Color   Bark r g b · Leaf r g b · Mark r g b (the lenticels' and patches' colour; default 0.09 0.08 0.07)
 	        Section r g b (default 0.45 0.33 0.24) · Twig r g b (the twigs / stems drawn in the LEAF texture; absent =
 	        Bark - a birch's white bark read wrong on its twigs) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
-	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`) · LeafVariation (0..3, default 1: the Leaves
-	        style's per-leaf spread - toward the autumn tint by up to 0.35 x it, brightness -15 % .. +12 % x it) · Accent
-	        r g b + AccentShare (0..1, default 0: that share of the Leaves style's leaves in the accent colour - the odd
-	        yellow or red leaf)
+	        the leaf texture's cover-weighted mean in this species' colours, `leafClusterMean`) · LeafVariation (0..3,
+	        default 1: the Leaves style's per-leaf spread - toward the autumn tint by up to 0.35 x it, brightness
+	        -15 % .. +12 % x it) · Accent r g b + AccentShare (0..1, default 0: that share of the Leaves style's leaves
+	        in the accent colour - the odd yellow or red leaf). On another species' leaf texture (`Leaves Texture`) the
+	        colours are this species' own, but WHICH leaves are accent leaves (AccentShare) and the brightness spread are
+	        the texture's: that species'
 	Placement (WORLD placement, TreeWorld; absent or Density 0 = never placed in the world on its own - a Bush then only
         grows as a tree's undergrowth; a Bush's block uses Density, the climate box, Cluster, MaxSlope and Altitude)
 	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)
@@ -382,10 +386,12 @@ are unused, and RendererVK allocates no hysteresis slots for tree records.
 
 ### The species load
 
-**On JOBS, one Low job per `.tree`** ("Tree species load", `kickLoad` -> `loadSpecies`): the `.tree` parse, the meshes
-(the `.treemesh` cache or generated), the textures (`.tex` or generated), the shadow billboards' masks and the voxel
+`kickLoad` PARSES every `.tree` on main (small texts; the set of leaf textures follows from all of them - "Leaf textures
+are shared"). Then **on JOBS, one Low job per `.tree`** ("Tree species load", `loadSpecies`): the meshes
+(the `.treemesh` cache or generated), the bark texture (`.tex` or generated), the shadow billboards' masks and the voxel
 grids (`buildFarTier`) - everything but the GPU objects - into the job's own slot (`SpeciesLoad`), from a snapshot of
-the settings (`LoadSettings`). Each `TreeSystem::update` UPLOADS the species whose jobs finished (`pumpLoad` ->
+the settings (`LoadSettings`); **and one Low job per leaf texture** ("Tree leaf texture load", `loadLeafTexture`).
+Each `TreeSystem::update` UPLOADS the leaf textures and then the species whose jobs finished (`pumpLoad` ->
 `uploadSpecies`: the baked variants' meshes, the materials, the shadow billboards, the voxel tier, the derived fade materials) and frees that slot's
 CPU data at once; once every species is in, the failed ones drop out of `m_species` (name order kept), the fade bands
 are written and the trees spawn. Nothing draws while a load runs. `clearAll` (a reload, a disable, the destructor)
@@ -578,14 +584,51 @@ Generated output under `Assets/Local`, so NOT in git: a fresh checkout generates
 **Each material is ONE `.tex` file AS UPLOADED** (MeshCache's `CachedTexture`, see "The generated-mesh cache" in
 [CONTEXT.md](CONTEXT.md)): the albedo and normal mip chains in their GPU encoding plus the albedo's linear mean (the
 far volume's colour), zstd. A load is one read and one decompress - no image decode, no mip build, no BC encode.
-`<species>_bark.tex`, `<species>_leaves.tex` (cluster species only; its normal map: the leaves' tangent-space normals -
-cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage as the colour; A = the leaf's RIM, 0
-at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness; BC3 on the GPU for the A), plus the
+`<species>_bark.tex`, `<species>_leaves.tex` (ONE PER LEAF TEXTURE - a cluster species whose `Leaves` block is drawn,
+by itself or by a species that names it; "Leaf textures are shared" below for its channels), plus the
 shadow masks and the voxel grids `<stem>.tex`. Keyed inside by the species file's text, `Compress textures` and the
 size, so a changed `.tree` regenerates them; `Trees/Regenerate textures` overwrites all. Writing a `.tex` removes the
 level-0 PNGs it replaces. **A `.tex` holds no RGBA8 level 0**: a mask or voxel bake miss regenerates the bark / leaf
-images it needs (`buildFarTier`; the generators are deterministic). The rocks' DEAD WOOD keeps its own tinted bark
-`.tex` ([Rocks.md](Rocks.md)).
+images it needs (`buildFarTier`; the generators are deterministic). A species on ANOTHER species' leaf texture has the
+text of that species in its mask and voxel keys too, and its own stale `_leaves.tex` is removed. The rocks' DEAD WOOD
+keeps its own tinted bark `.tex` ([Rocks.md](Rocks.md)).
+
+### Leaf textures are shared (`Leaves Texture <species>`)
+
+**A leaf texture holds NO species colour**: it is the SHAPE of a `Leaves` block (`TreeLeafTexture.ixx`), and every
+species that names it draws the same texture in its own `Color`s. VRAM is per leaf texture (1024², two BC3 chains:
+2.7 MB), not per species. Without the key a species draws the texture of its own block.
+
+* **The channels.** Albedo (sRGB, so RGB reach the shader decoded): R = the leaf's TONE (its own random, 0..1; 0 on
+  twigs and needles), G = the SHADE x 0.5 (midrib, rim, fold, veins, the leaf's brightness), B = the TWIG share (a
+  pinnate stem: 0.55), A = the cover. Normal map: RG = the normal's X / Y (the shader rebuilds Z), B = the ACCENT share,
+  A = the leaf's RIM (0 at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness). The normal's
+  mip chain is its own (`buildLeafNormalMips`: the bark's renormalizes RGB as a vector, which would destroy B).
+* **The colours** (`TreeLeafPalette`, `treeLeafPalette(desc)`, linear, x 1 / decode(0.5) for the stored shade): `leaf`,
+  `tone` (added x the tone: the leaf 0.35 x `LeafVariation` toward its autumn tint), `accent`, `twig`. A texel =
+  `mix(mix(leaf + tone x TONE, accent, ACCENT), twig, TWIG) x SHADE`.
+* **On the GPU** the palette is in the tree's TYPE (`RenderTreeSet::Type::leafColour / leafTone / leafAccent /
+  leafTwig`, `buildGpuTypes`), and LitTree's fragment shader forms the colour for a `MATERIAL_FLAG_LEAF` material
+  (`treeLeafAlbedo`, `tree_type.inc.glsl`). The species on one texture draw ONE material (`m_leafTextures[i].material`);
+  each keeps its own derived fade-out material (its band).
+* **On the CPU** the bakes (the voxel grids' colours, the shadow masks' cover) take the atlas in the species' colours:
+  `colourLeafClusterImage` - the same formula, keep the two in step. The species' mean leaf colour (the far volume, the
+  shadow billboard's colour for the rays) comes from the texture's four STATISTICS (`leafClusterSums`, in the `.tex`:
+  the cover-weighted mean share of each palette colour) x its palette (`leafClusterMean`): no image is read for it.
+* **What the texture owns** (read from the NAMED species, not from the one that names it): `Style`, `ClusterLeaves`,
+  `Shoots`, `ClusterLeafSize`, `ClusterLeafWidth`, `Cup`, `Veins`, `Wrinkle`, `Tilt`, its `Seed`, and of `Color` the
+  `AccentShare` and the brightness spread of `LeafVariation`. Everything else of `Leaves` (the cards: `Size`, `Aspect`,
+  `PerBranch`, ...) and every colour stay the species' own.
+* **The load:** `kickLoad` parses every `.tree` on main, so the set of leaf textures is known before any job runs. Each
+  leaf texture loads on its own job (`loadLeafTexture`); `pumpLoad` makes its material, and uploads a species only once
+  its leaf texture is in. A name that is no cluster species = a warning, and the species draws its own block. The name
+  is not followed further: `B Texture A` draws A's OWN block, also when A itself names a third species.
+* **Rule: a cluster species needs a far tier** (`Billboard Distance` > 0). The rays read a material's texture as its
+  colour; without the shadow billboard the leaf MESH stands in the TLAS, and the rays would see the neutral channels
+  (the load warns).
+* The groups now: `Oak` (Shrub, Thicket, Bramble, Brush, Bushwillow), `Birch` (BirchClump, DwarfBirch), `Hazel`
+  (Raspberry), `Elm` (Bilberry), `Pine` (Juniper), `Acacia` (ThornScrub); `Aspen`, `Willow` and `Cedar` alone - 9 leaf
+  textures for 20 cluster species.
 
 **GPU formats** (`Trees/Compress textures`, default on, reloads; a change is a `.tex` miss, so it re-bakes the
 masks and the voxel grids): the finished mip chains are BC-compressed when generated
@@ -595,7 +638,7 @@ masks and the voxel grids): the finished mip chains are BC-compressed when gener
 |---|---|
 | bark albedo | BC1 sRGB (opaque) |
 | bark normal | BC5 (XY; MATERIAL_FLAG_BC5_NORMAL rebuilds Z) |
-| leaf cluster atlas | BC3 sRGB (alpha-tested) |
+| leaf cluster atlas, and its normal map | BC3 sRGB (alpha-tested; no colour: tone, shade, twig share) / BC3 (X, Y, accent share; A = the rim) |
 | shadow billboard mask | BC5 (two channels: the cover, then the bark share; the depth) |
 | voxel opacity atlas / surface atlas | BC4 / BC3 linear |
 
@@ -634,11 +677,11 @@ same height field (x along u, y along v — the tube's tangent / bitangent), eac
   **Both faces are separate triangles** (back-face culled); the BACK face's tangent and bitangent are the front's
   NEGATED (`appendCard` / `appendLeaf`), so its normal-map normal is exactly the front's negated - the same leaf from
   below, its cup convex. (The front's frame on the back mirrored the surface through the card: concave from both sides.)
-  The texture is PROCEDURAL until authored textures exist (`TreeLeafTexture.cpp`): per species a 1024² 2×2
-  atlas of cluster variants (stem at v = 0, each card picks a cell), sRGB colours from `Color Leaf` / `Bark`,
+  The texture is PROCEDURAL until authored textures exist (`TreeLeafTexture.cpp`): per LEAF TEXTURE ("Leaf textures are
+  shared") a 1024² 2×2 atlas of cluster variants (stem at v = 0, each card picks a cell), with no colour in it,
   and its OWN mip chain — every level's alpha is rescaled (binary search) so the fraction of texels passing
   `TREE_LEAF_ALPHA_CUTOFF` (0.5) matches level 0, otherwise the crown thins with distance. Uploaded through
-  `RenderMaterial::createTextured`, freed with the species (its `RenderMaterial`s, `TreeSystem::clearAll`). Every leaf / needle / shoot /
+  `RenderMaterial::createTextured`, owned by `TreeSystem::m_leafTextures` (freed after the species, `clearAll`). Every leaf / needle / shoot /
   pinna is shortened until it fits inside its cell (the cell clips the drawing).
   **`Style Needles`** (conifers, `drawNeedleCluster`): each cell is a conifer SPRAY instead of a leafy twig - `Shoots`
   needle branches fanned from the stem (the middle one along v, the others over up to ±18° and a little shorter;
@@ -700,8 +743,8 @@ Every baked variant also carries its FAR-TREE VOLUME grid (`bakeTreeDensity`, `T
 over its box, from the LOD-0 LEAF triangles only; cluster leaves count half opaque. No bark: a trunk's whole
 area in one thin voxel column draws dashed vertical streaks through the far blobs - EXCEPT for a piece with no leaves at
 all (the succulents' bark blades), which splats its bark at a quarter of its surface) and the species leaf colour — the
-leaf texture's alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures upload as sRGB, so the
-raw `leafColor` taken as linear reads light yellow-green; a leafless species: its BARK texture's mean) — handed to the set as the type's density / albedo
+leaf texture's cover-weighted mean in the species' colours, LINEAR (`leafClusterMean`; a Single species: its `leafColor`
+decoded from sRGB, `meanLeafAlbedo` - taken as linear it reads light yellow-green; a leafless species: its BARK texture's mean) — handed to the set as the type's density / albedo
 (RendererVK "Far-tree volume"). The SHADOW BILLBOARD is the piece's only shadow / GI / RT representation at
 every distance: the meshes and the voxels draw in the MAIN pass only. The set is destroyed on respawn / reload / disable.
 
