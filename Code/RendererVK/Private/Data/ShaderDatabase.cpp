@@ -166,6 +166,30 @@ void ShaderDatabase::registerVariant(oc::span<const unsigned int> spirv, const o
     g_variants[hash.hash] = RegisteredVariant{ cachePath, debugFilePath };
 }
 
+uint32 ShaderDatabase::writeAllVariants(const oc::string& folder)
+{
+    oc::vector<oc::pair<uint64, RegisteredVariant>> variants;
+    {
+        std::lock_guard<std::mutex> lock(g_variantMutex);
+        for (const auto& entry : g_variants)
+            variants.push_back({ entry.first, entry.second });
+    }
+    uint32 written = 0;
+    oc::vector<unsigned int> spirv;
+    for (const auto& [hash, variant] : variants)
+    {
+        if (!Shader::readCachedSpirv(variant.cachePath, spirv))
+            continue;
+        const oc::string outPath = oc::format("{}/{}.{:016x}.spv", folder, variant.debugFilePath, hash);
+        FileSystem::createDirectories(FileSystem::parentPath(outPath), /*allowMainThread*/ true);
+        if (FileSystem::writeFileBytes(outPath, oc::span<const uint8>(reinterpret_cast<const uint8*>(spirv.data()), spirv.size() * sizeof(unsigned int)),
+            /*allowMainThread*/ true))
+            ++written;
+    }
+    printf("GpuCrashTracker: %u registered shader variants written to %s (%zu registered)\n", written, folder.c_str(), variants.size());
+    return written;
+}
+
 ShaderDatabase::ShaderDatabase()
     : m_shaderBinaries()
     , m_shaderBinariesWithDebugInfo()
@@ -289,7 +313,11 @@ bool ShaderDatabase::FindShaderBinary(const GFSDK_Aftermath_ShaderBinaryHash& sh
         std::lock_guard<std::mutex> lock(g_variantMutex);
         const auto found = g_variants.find(shaderHash.hash);
         if (found == g_variants.end())
+        {
+            printf("GpuCrashTracker: the decoder asked for shader hash %016llx - not registered (%zu registered)\n",
+                (unsigned long long)shaderHash.hash, g_variants.size());
             return false;
+        }
         variant = found->second;
     }
     oc::vector<unsigned int> spirv;

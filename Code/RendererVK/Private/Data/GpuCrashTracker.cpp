@@ -325,6 +325,9 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     FileSystem::writeFileBytes(crashDumpFileName,
         oc::span<const uint8>((const uint8*)pGpuCrashDump, gpuCrashDumpSize), /*allowMainThread*/ true);
 
+    // Every registered shader variant as a raw .spv next to the dump (Local/CrashShaders: Nsight Graphics' search path for
+    // the dump's shader hashes), then the decode below.
+    ShaderDatabase::writeAllVariants(dumpFolder + "CrashShaders");
     // Decode the crash dump to a JSON string.
     // Step 1: Generate the JSON and get the size.
     uint32_t jsonSize = 0;
