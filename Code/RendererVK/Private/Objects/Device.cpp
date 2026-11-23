@@ -552,6 +552,7 @@ void Device::destroy()
         m_device.destroy();
     }
     m_device = nullptr;
+    m_graphicsQueue = nullptr; // a later graphicsQueueWaitIdle() (a data manager's dtor) must not wait on the dead queue
 }
 
 void Device::setDebugName(vk::ObjectType type, uint64 handle, const char* name) const

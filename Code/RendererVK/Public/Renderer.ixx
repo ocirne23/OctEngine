@@ -13,6 +13,15 @@ import :RendererTypes;
 import :RendererState; // the state and the private helpers; through it, every partition the API names
 
 import Core.fwd;
+#ifndef _MSC_VER
+// Linux: InitSeg.h's order as DIRECT imports (a module unit's globals are constructed after those of the units it imports
+// directly, so destructed before them): the renderer goes before the device, the GPU allocator, the XR session and the
+// instance.
+import :Device;
+import :Allocator;
+import :OpenXRSession;
+import :Instance;
+#endif
 
 export enum class EValidation { ENABLED, DISABLED };
 export enum class EVr { ENABLED, DISABLED };

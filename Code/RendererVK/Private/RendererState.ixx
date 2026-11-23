@@ -462,8 +462,12 @@ protected:
         m_skinned.setInstance(jobIdx, baseVertexOffset, skinVertexOffset, outVertexOffset, vertexCount, paletteHandle, meshIdx, firstIndex, indexCount);
     }
 
+#ifdef _MSC_VER
+    // Unused; their dtors still run with the renderer's (~Instance destroys Globals::device). Linux leaves them out: there
+    // the data managers outlive the renderer (see Docs/Context/Linux, Global teardown) and still need the device.
     Instance m_instance;
     Device m_device;
+#endif
     Surface m_surface;
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;

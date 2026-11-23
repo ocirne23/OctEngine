@@ -29,6 +29,8 @@ StagingManager::StagingManager()
 StagingManager::~StagingManager()
 {
     vk::Device vkDevice = Globals::device.getDevice();
+    if (!vkDevice)
+        return; // never initialized (a headless server): the Vulkan loader aborts on calls through a null device
     for (int i = 0; i < NUM_STAGING_BUFFERS; i++)
     {
         //m_stagingBuffers[m_currentBuffer].unmapMemory();

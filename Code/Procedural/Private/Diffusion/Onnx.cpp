@@ -149,6 +149,10 @@ namespace Procedural::Diffusion
 					(void)ortEnv();
 					OrtCUDAProviderOptions cuda{};
 					cuda.device_id = 0;
+					// The renderer shares this VRAM. The defaults grow the arena by powers of two and run cuDNN's
+					// exhaustive convolution search with its large workspaces: both ran out of memory on an 8 GB laptop GPU.
+					cuda.arena_extend_strategy = 1; // kSameAsRequested
+					cuda.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
 					opts.AppendExecutionProvider_CUDA(cuda);
 					dml = true;
 #endif

@@ -393,14 +393,5 @@ int main(int argc, char* argv[])
     Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
     Globals::world.joinSelection();
     Globals::forceSystem.joinMerge();
-#ifndef _MSC_VER
-    // Linux: no global teardown. InitSeg.h orders it with init_seg, and ELF has no way to give the engine globals that
-    // order (clang ignores init_priority in a module interface, where they are defined; seen: ~EntityAllocator ran
-    // before ~World and ~World crashed). So the exit is the one-shot tools' _Exit after a flush, plus the one thing a
-    // global dtor would persist: a Saved tweak still inside its write debounce (~TweakRegistry).
-    TweakRegistry::get().update(1.0e9f);
-    fflush(nullptr);
-    _Exit(0);
-#endif
     return 0;
 }

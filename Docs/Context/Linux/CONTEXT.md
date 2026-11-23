@@ -67,15 +67,30 @@ Build-Linux/Code/App/App        # from the repo root, like on Windows (FileSyste
   has no `/GT`, so `JobSystem.cpp`'s thread-locals are `OcFiberSafeTls` (every access a fresh, non-inlined lookup). A
   `thread_local` in OTHER job code read again after a wait in the same function may still be cached by clang: the
   ThreadLocalScope rules (Threading) matter more here, not less.
-* **No global teardown.** clang ignores `[[gnu::init_priority]]` in a module interface, where every engine global is
-  defined, and neither link order nor module import order gives InitSeg.h's order (~EntityAllocator ran before ~World).
-  `main()` ends in `_Exit` after a flush and a flush of a pending Saved tweak (the one thing a global dtor persists).
-  `OC_INIT_SEG` is empty on Linux.
+* **Global teardown: InitSeg.h's order is written as imports.** ELF has no init_seg, and `[[gnu::init_priority]]`
+  orders only WITHIN one module unit (clang emits no `.init_array.N` for a module interface: the unit initializes as
+  one block, when its first importer does). Across units a global is constructed after the globals of the units its
+  own unit imports, so destructed before them. `OC_INIT_SEG` is empty on Linux; instead the units that define the
+  globals carry `#ifndef _MSC_VER` imports that state the teardown: `World.ixx` imports the Entity partitions and the
+  modules ~World releases into, `PhysicsWorld.ixx` imports Threading, and the RendererVK chain (renderer -> data
+  managers / XR -> GPU allocator -> device -> instance) imports downward. **A new global whose dtor uses another global
+  needs such an import on Linux.** One order cannot be stated: the data managers outlive the renderer (the reverse
+  would be an import cycle); their dtors use only the device.
+* **Swapchain on Wayland**: the surface reports no current extent, so the swapchain takes the window's pixel size; an
+  unsupported present mode falls back to mailbox, then FIFO.
 * **Off on Linux**: DLSS / Streamline (Windows-only SDK; the not-loaded paths), Nsight Aftermath (asks for the Windows
   DLL name), script fault containment (no SEH), runtime script DLL compilation (MSVC command line; `SCRIPTS_STATIC`
   builds the scripts into App).
-* **Diffusion terrain: no GPU inference.** DirectML is Windows-only, so the generator (which asks for the GPU) fails and
-  the sandbox world stays empty. A CUDA build of onnxruntime would be the Linux equivalent.
+* **Diffusion terrain on CUDA**: ONNX Runtime 1.24.4 (the version of the vendored headers) comes as Microsoft's prebuilt
+  GPU package from NuGet (`flake.nix`; the GitHub release page is gone), with the CUDA 12 / cuDNN 9 runtime from
+  nixpkgs and the NVIDIA driver's libcuda (`/run/opengl-driver/lib`). `Onnx.cpp` appends the CUDA provider where
+  Windows appends DirectML; the CUDA provider needs the `Ort::Env` (its logger) to exist first.
+
+## After every upstream pull
+
+MSVC accepts code that breaks the rules above (a missing `ImguiGmf.h`, a missing `OC_FWD_ATTACH`, a name used without
+its import), so an upstream change written on Windows often breaks the Linux build in small ways. Build Linux after
+every pull.
 * **Network crypto** uses OpenSSL 3 with the same primitives as the CNG code (ECDH P-256, SHA-256 KDF over the secret
   plus the context, AES-128-GCM, HMAC-SHA256). Linux <-> Windows handshakes are untested: they agree only if CNG hashes
   the shared secret in the same byte order.

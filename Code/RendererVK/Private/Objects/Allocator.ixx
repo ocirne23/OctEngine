@@ -14,6 +14,9 @@ export module RendererVK:Allocator;
 import Core;
 import :VK;
 import :RenderParams;
+#ifndef _MSC_VER
+import :Device; // Linux: InitSeg.h's order as an import - the GPU allocator goes before the device
+#endif
 
 // Opaque VMA handles re-exported as aliases, so vk_mem_alloc.h stays out of this interface (and out of
 // every module that imports it). The definitions live in Vma.cpp via VMA_IMPLEMENTATION.

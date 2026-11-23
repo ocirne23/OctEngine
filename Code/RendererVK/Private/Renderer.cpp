@@ -40,6 +40,10 @@ Renderer& RendererState::self() { return static_cast<Renderer&>(*this); }
 
 RendererState::~RendererState()
 {
+    // A headless server never initializes the renderer: nothing to wait on or shut down (the Vulkan loader aborts on a
+    // wait on the null queue, and ImGui_ImplVulkan_Shutdown dereferences a backend that was never created).
+    if (!m_initialized)
+        return;
     auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {

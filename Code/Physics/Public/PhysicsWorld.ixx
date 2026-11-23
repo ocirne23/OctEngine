@@ -7,6 +7,9 @@ import Settings;
 import :PhysicsTypes;
 import :Body;
 import :PhysicsWorldState; // the box3d world, the step, the command queue, the task scheduler, the sinks
+#ifndef _MSC_VER
+import Threading; // Linux: InitSeg.h's order as an import - ~PhysicsWorld fans tasks onto the job system, which must outlive it
+#endif
 
 // THE PHYSICS WORLD (Globals::physics): box3d behind integer handles. The state and the private helpers are in PhysicsWorldState.ixx.
 export class PhysicsWorld final : public PhysicsWorldState

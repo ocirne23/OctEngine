@@ -12,6 +12,23 @@ import File;
 import :Entity;
 import :Component;
 import :WorldState; // the caches, the template builders, the update pass and the SIM LOD
+#ifndef _MSC_VER
+// Linux: InitSeg.h's teardown as imports. On ELF a module unit's globals are constructed after those of every unit it
+// imports, so destructed before them (init_seg does not exist, and init_priority does not reach across units): ~World
+// runs before the globals it releases into - the change and network queues, the entity memory, the asset tables, the
+// spatial index, the GPU effect systems, audio and the job system.
+import :ScriptEventManager;
+import :NetworkManager;
+import :Allocator; // Globals::entityAllocator
+import :EntityNames;
+import :AssetRegistry;
+import :ScriptContext;
+import Spatial;
+import Particle;
+import Force;
+import Audio;
+import Threading;
+#endif
 
 // THE WORLD (Globals::world): the root entities, spawning and the per-frame parallel update pass with its SIM LOD. SimLodConfig ("Game/Sim LOD") is
 // Globals::settings.world.simLod (Settings.World). The state and the private helpers are in WorldState.ixx; the multi-line bodies are below the class.

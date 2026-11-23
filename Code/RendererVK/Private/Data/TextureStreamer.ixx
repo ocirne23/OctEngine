@@ -5,6 +5,9 @@ import :VK;
 import :Layout;
 import :Allocator;
 import Settings.fwd;
+#ifndef _MSC_VER
+import :Device; // Linux: InitSeg.h's order as an import - the data managers go before the device
+#endif
 
 // One mip level's byte range in the source .dds file plus its dimensions.
 export struct TextureMipRange

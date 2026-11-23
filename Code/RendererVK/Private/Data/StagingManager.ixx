@@ -5,6 +5,10 @@ import Core;
 import :VK;
 import :Buffer;
 import :CommandBuffer;
+#ifndef _MSC_VER
+import :Device;    // Linux: InitSeg.h's order as imports - the data managers go before the device and the GPU allocator
+import :Allocator;
+#endif
 
 class SwapChain;
 
