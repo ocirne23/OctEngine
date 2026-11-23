@@ -977,6 +977,10 @@ protected:
         Buffer ubo;
         Buffer lodStatsBuffer;
         oc::span<uint32> mappedLodStats;
+        // TEMPORARY (the voxel lighting crash): the first pixel whose voxel header names a texture past the live count
+        // (instanced_indirect_tree_voxel.fs.glsl), read back in snapshotLodStats.
+        Buffer voxelDebugBuffer;
+        oc::span<uint32> mappedVoxelDebug;
     };
     oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

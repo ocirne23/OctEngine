@@ -60,6 +60,9 @@ vec3 voxelTreePrevDelta(uint tree, vec3 hitPos)
 	return prevDelta;
 }
 
+// TEMPORARY (the voxel lighting crash readback; the preamble enables GL_EXT_buffer_reference).
+layout (buffer_reference, scalar, buffer_reference_align = 4) buffer VoxelDebugBuffer { uint w[]; };
+
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target
 
@@ -124,6 +127,31 @@ void main()
 	voxelTreeRay(tree, dirW, camG, dirG, tNear, tFar);
 
 	const MaterialInfo material = in_materialInfos[voxelTreeTypeMaterial(tree) >> 16];
+	// TEMPORARY (the voxel lighting crash readback): a header that names a texture past the live descriptors is written
+	// to the readback (the first such pixel of the frame) and the pixel leaves, before the fetch through it.
+	{
+		const uint opacityTex = material.diffuseNormalTexIdx & 0xFFFFu;
+		const uint lo = uint(texelFetch(u_textures[nonuniformEXT(opacityTex)], ivec2(1, 1), 0).r * 255.0 + 0.5);
+		const uint hi = uint(texelFetch(u_textures[nonuniformEXT(opacityTex)], ivec2(5, 1), 0).r * 255.0 + 0.5);
+		if ((lo | (hi << 8)) >= u_foliage_debugTextureCount || opacityTex >= u_foliage_debugTextureCount)
+		{
+			VoxelDebugBuffer dbg = VoxelDebugBuffer(u_foliage_debugBuffer.xy);
+			if (atomicCompSwap(dbg.w[0], 0u, 1u) == 0u)
+			{
+				const uint i = tree & VOXEL_HIT_INDEX_MASK;
+				dbg.w[1] = hitWord.x;
+				dbg.w[2] = voxelTreeTypeMaterial(tree);
+				dbg.w[3] = material.diffuseNormalTexIdx;
+				dbg.w[4] = lo;
+				dbg.w[5] = hi;
+				dbg.w[6] = voxelTreeIsFar(tree) ? 0xFFFFFFFFu : in_voxelNearTrees[i].rest.x;
+				dbg.w[7] = voxelTreeIsFar(tree) ? 0u : in_voxelNearTrees[i].rest.y;
+				dbg.w[8] = uint(gl_FragCoord.x) | (uint(gl_FragCoord.y) << 16);
+				dbg.w[9] = floatBitsToUint(voxelTreePosScale(tree).w);
+			}
+			discard;
+		}
+	}
 	// The material's albedo slot = the grid's opacity atlas (its header names the index), its normal slot = the surface atlas.
 	const VoxelGrid grid = voxelGrid(material.diffuseNormalTexIdx & 0xFFFFu);
 	const uint surfaceTex = material.diffuseNormalTexIdx >> 16;
