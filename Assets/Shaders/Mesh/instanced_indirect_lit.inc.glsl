@@ -116,9 +116,9 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 #ifndef SUN_SHADOW_FIRST
 #error "LIT_SNOW needs SUN_SHADOW_FIRST (the glints read g_sunShadowFirst)"
 #endif
-float16_t g_snowW = float16_t(0.0);       // the snow's share of this pixel's surface (after its blend)
-float16_t g_snowGlint = float16_t(1.0);   // the glint factor on the facets' D (1 = the smooth lobe)
-float16_t g_snowBaseNoL = float16_t(0.0); // the smooth base normal's sun cosine: the diffusion's target
+float16_t g_snowW = float16_t(0.0);                  // the snow's share of this pixel's surface (after its blend)
+float16_t g_snowGlint = float16_t(1.0);              // the glint factor on the facets' D (1 = the smooth lobe)
+float16_t g_snowSunK = float16_t(0.0);               // the snow's diffuse sun reflection / the albedo (snowSunDiffuseK)
 #include "snow_brdf.inc.glsl"
 #endif
 
@@ -280,7 +280,7 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	{
 #ifdef LIT_SNOW
 		// The snow's diffusion lights a relief flank turned from the sun while its smooth base faces it.
-		if (!(g_snowW > float16_t(0.0) && g_snowBaseNoL > float16_t(0.0)))
+		if (!(g_snowW > float16_t(0.0) && g_snowSunK > float16_t(0.0)))
 #endif
 		return vec3(0.0);
 	}
@@ -317,15 +317,15 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	}
 #endif
 #ifdef LIT_SNOW
-	if (g_snowW > float16_t(0.0))
-	{
+	// ONE BRDF for every pixel: snowSunLightH at a snow share of 0 IS doLightH / doLightSplitH (the same lobe, the same
+	// Lambert), and only its radiative-transfer part is a branch. A snow branch beside the plain BRDF compiled both, and
+	// cost the lit FS 16 B of spill.
 #ifdef LEAF_SPEC_NORMAL
-		const f16vec3 Ns = g_leafSpecOn ? normalize(mix(g_leafSpecN, Nh, g_snowW)) : Nh; // no jump where the snow starts
+	const f16vec3 Ns = g_leafSpecOn ? normalize(mix(g_leafSpecN, Nh, g_snowW)) : Nh; // no jump where the snow starts
 #else
-		const f16vec3 Ns = Nh;
+	const f16vec3 Ns = Nh;
 #endif
-		return snowSunLightH(lightRadiance, f16vec3(L), V, Nh, Ns, specularCol, matColOverPi, roughness);
-	}
+	return snowSunLightH(lightRadiance, f16vec3(L), V, Nh, Ns, specularCol, matColOverPi, roughness);
 #endif
 #ifdef LEAF_SPEC_NORMAL
 	// A LEAF's sun specular from its own, more CURVED normal (g_leafSpecN): the diffuse keeps N, the highlight sweeps a
@@ -498,24 +498,9 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 			canopyVis = float16_t(canopySkyVisibility(canopy, canopyHeight));
 		}
 	}
-#ifdef LIT_SNOW
-	// THE SNOW'S BRIGHT CAVITIES ("Weather/Snow/Bright cavities"): the light bounces between the walls of a snow cavity, so it
-	// is lighter - the multi-bounce fit of the occlusion per channel (Jimenez et al.'s cubic in o with its terms linear in the
-	// albedo; red is lost first: a blue-white hollow). Bounded: a wall of rock or a building next to the snow still shades.
-	const float16_t occ = ao * texAO;
-	f16vec3 occRgb = f16vec3(occ);
-	if (u_snow_brightCavities > 0.5 && g_snowW > float16_t(0.0))
-	{
-		const f16vec3 a = materialColor;
-		const f16vec3 A = float16_t(2.0404) * a - float16_t(0.3324);
-		const f16vec3 B = float16_t(-4.7951) * a + float16_t(0.6417);
-		const f16vec3 C = float16_t(2.7552) * a + float16_t(0.6903);
-		occRgb = mix(occRgb, max(occRgb, ((A * occ + B) * occ + C) * occ), g_snowW);
-	}
-	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (occRgb * canopyVis));
-#else
+	// (Tried: the snow's BRIGHT CAVITIES - the multi-bounce fit of the occlusion on snow, a lighter hollow - dropped because any
+	// form of it, per channel, scalar, or its share packed into texAO, cost the lit and tree FS 16 B of spill.)
 	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (ao * texAO * canopyVis));
-#endif
 
 	const ivec3 gridPos = getGridPos(worldPos);
 	uint tableIdx = getTableIdx(gridPos);

@@ -93,6 +93,7 @@ Parsed by `parseCommandLine` (Session.ixx); an unknown argument logs a warning.
 | `--scenario <save\|default>` / `--scenario-at <sec>` (default 1) | Runs `GameMatch::runScenario` once; needs `--game`. |
 | `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` (default `Local/profile.txt`) / `--profile-workers` | |
 | `--quit-after <sec>` | |
+| `--vram-dump <path>` | With `--quit-after`: at the quit, every live GPU allocation (`Renderer::forEachGpuAllocation`, the Memory panel's VRAM registry) is written to `<path>` (relative to `Assets/`, e.g. `Local/vram.txt`) - the total, a sum per top-level name, then each allocation largest first with its format / extent or buffer size; `(host)` = not device-local. The unattended VRAM measure: `App.exe --sandbox --quit-after 45 --vram-dump Local/vram.txt`. |
 | `--screenshot-after <sec>` / `--screenshot-out path` | The frame presented after `<sec>` is written as a PNG (default `Local/screenshot.png`, relative to `Assets/`) by `Renderer::requestScreenshot`: read back from the swapchain image itself, so the window may be covered, unfocused or on another monitor. `Tools/screenshot.ps1` runs it (sandbox, fullscreen, ~10 s is enough) and copies the PNG out. |
 | `--no-vsync` | Just `setOverride("Time/VSync=0")`. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |

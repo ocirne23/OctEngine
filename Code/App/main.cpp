@@ -34,6 +34,55 @@ import Particle;
 import Force;
 import Network;
 
+// --vram-dump <path> (an unattended run's measure of the GPU memory): every live GpuAllocator allocation, largest first,
+// with the totals and a sum per top-level name (the first part of the debug name, as the Memory panel's VRAM view splits
+// it). Main thread, at the quit timer.
+static void writeVramDump(const oc::string& path)
+{
+    struct Entry { oc::string name; uint64 bytes; bool image; bool deviceLocal; oc::string detail; };
+    oc::vector<Entry> entries;
+    Globals::rendererVK.forEachGpuAllocation(+[](void* ctx, const GpuAllocationInfo& info)
+    {
+        char format[64] = "";
+        if (info.image)
+            Renderer::gpuEnumName(GpuEnum::Format, info.format, format, sizeof(format));
+        const oc::string detail = info.image
+            ? oc::format("{} {}x{}x{} mips {} layers {}", format, info.width, info.height, info.depth, info.mips, info.layers)
+            : oc::format("buffer {} B", info.bufferSize);
+        static_cast<oc::vector<Entry>*>(ctx)->push_back({ info.name ? oc::string(info.name) : oc::string("<unnamed>"), info.bytes, info.image,
+            info.deviceLocal, detail });
+    }, &entries);
+    oc::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.bytes > b.bytes; });
+
+    uint64 total = 0, local = 0;
+    oc::vector<oc::pair<oc::string, uint64>> groups;
+    for (const Entry& e : entries)
+    {
+        total += e.bytes;
+        if (e.deviceLocal)
+            local += e.bytes;
+        const size_t cut = e.name.find_first_of("/\\.");
+        const oc::string group = cut == oc::string::npos ? e.name : e.name.substr(0, cut);
+        auto it = oc::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == group; });
+        if (it == groups.end())
+            groups.push_back({ group, e.bytes });
+        else
+            it->second += e.bytes;
+    }
+    oc::sort(groups.begin(), groups.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    constexpr double MB = 1.0 / (1024.0 * 1024.0);
+    oc::string out = oc::format("VRAM: {} allocations, {:.1f} MB ({:.1f} MB device-local)\n\n== By top-level name ==\n",
+        entries.size(), (double)total * MB, (double)local * MB);
+    for (const auto& g : groups)
+        out += oc::format("{:10.2f} MB  {}\n", (double)g.second * MB, g.first);
+    out += "\n== Allocations ==\n";
+    for (const Entry& e : entries)
+        out += oc::format("{:10.2f} MB  {}{}  {}\n", (double)e.bytes * MB, e.deviceLocal ? "" : "(host) ", e.name, e.detail);
+    if (FileSystem::writeFileStr(path, out, /*allowMainThread*/ true))
+        Log::info(oc::format("VRAM dump: {}", path));
+}
+
 int main(int argc, char* argv[])
 {
     Globals::profiler.endStaticInit();
@@ -233,7 +282,9 @@ int main(int argc, char* argv[])
             });
     oc::optional<Timer> quitTimer;
     if (options.quitAfterSec > 0.0)
-        quitTimer.emplace(timerDelay(options.quitAfterSec), [](Timer&) {
+        quitTimer.emplace(timerDelay(options.quitAfterSec), [&options, headlessServer](Timer&) {
+                if (!options.vramDumpPath.empty() && !headlessServer)
+                    writeVramDump(options.vramDumpPath);
                 g_running = false;
                 return Timer::DONE;
             });

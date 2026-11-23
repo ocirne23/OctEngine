@@ -39,15 +39,15 @@ void main()
 	g_sunShadowFirst = dot(geoN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(shadowPos, geoN) : 0.0;
 
 	const vec2 dx = dFdx(pos.xz), dz = dFdy(pos.xz);
-	// The state: the point lies over the top, so the catch is its column's pass - as the roof's object layer reads it.
+	// The state: the open snow's at the point's temperature (snowStateAt), as the roof's object layer reads it.
 	const float tempC = terrainTemperatureAt(terrainClimateAt(pos.xz), pos.y);
-	const SnowState st = snowStateAt(tempC, snowSiteCatch(pos));
+	const SnowState st = snowStateAt(tempC, 1.0);
 	const f16vec3 geoNh = f16vec3(geoN);
 	const f16vec3 N = snowNormalOn(geoNh, snowObjectRelief(pos.xz, dx, dz));
 	const f16vec3 albedo = f16vec3(snowAlbedo(st));
 	const float16_t rough = float16_t(snowAlpha(st));
 
 	const vec3 V = normalize(u_viewPos - pos);
-	snowLitSetup(pos.xz, N, geoNh, V, float16_t(1.0), rough, snowGlintDensity(st), snowFootprint(dx, dz));
+	snowLitSetup(pos.xz, N, geoNh, V, float16_t(1.0), rough, snowGlintDensity(st), snowFootprint(dx, dz), albedo);
 	out_color = vec4(computeLitColor(pos, V, N, albedo, rough, float16_t(0.0), float16_t(1.0)), 1.0);
 }

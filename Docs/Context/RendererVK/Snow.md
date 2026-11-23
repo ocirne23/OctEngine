@@ -427,35 +427,40 @@ photo texture. One set of functions, so a cap's rim, the roof's layer under it a
   * The terrain FS replaces the splat's fresh placeholders (`snowSurfaceSample`) after the splat by the snow's share
     (`terrainSplatLayers`'s `snowShare`, the share after the height blend - exact for the linear mix); the rock FS before
     its mix; the object layer and the caps directly.
-* **The sun BRDF** (`LIT_SNOW`, `snowSunLightH` in doSunLight on pixels with `g_snowW` > 0; set by `snowLitSetup` before
-  `computeLitColor`, the object layer in `snowApplyUp`):
-  * the asymptotic radiative-transfer reflection of a snow layer, R0(mu0, mu, theta) x r_s^(u(mu0) u(mu) / R0) with the
-    ice grains' phase function: about Lambert with the sun overhead, a bright FORWARD SHEEN with the sun ahead at grazing
-    angles ("Forward scattering" scales the phase);
-  * the DIFFUSION across the relief ("Soft terminator"): per channel the incidence cosine pulled toward the smooth base
-    normal's (`g_snowBaseNoL`; the terrain's is the smooth mesh normal in both variants): a soft terminator, blue farthest
-    (0.3 x (0.18, 0.38, 1.0) at 1). It moves light, it adds none. A relief flank turned from the sun passes the facing test
-    while its base faces it; the tessellated relief's sun gate opens earlier under snow (to -0.2);
+* **The sun BRDF** (`LIT_SNOW`): `snowSunLightH` is doSunLight's ONE BRDF on every pixel of the includer (at a share of
+  0 it is doLightH / doLightSplitH); `snowLitSetup` sets its inputs before `computeLitColor` (the object layer in
+  `snowApplyUp`): the share `g_snowW`, the glint factor `g_snowGlint` and the diffuse scalar `g_snowSunK` - three halves
+  live into the sun, nothing across the AO or the light loop:
+  * THE DIFFUSE (`snowSunDiffuseK`, in the setup): the asymptotic radiative-transfer reflection of a snow layer,
+    R0(mu0, mu, theta) x r_s^(u(mu0) u(mu) / R0) with the ice grains' phase function - about Lambert with the sun overhead,
+    a bright FORWARD SHEEN with the sun ahead at grazing angles ("Forward scattering" scales the phase) - as ONE scalar K =
+    R / the albedo (r_s^(e-1) to first order in the absorption, at the albedo's luminance; the phase's angle as 81 deg x
+    sqrt(1 - cos theta), no acos), x the DIFFUSED incidence cosine ("Soft terminator": pulled toward the smooth base
+    normal's by 0.114 at 1 - the terrain's base is the smooth mesh normal in both variants; it moves light, it adds none).
+    doSunLight forms the albedo / pi x ((1 - F) N.L (1 - share) + share x K) x the sun (its shadow, its underwater
+    factor). A relief flank turned from the sun passes the facing test while K > 0; the tessellated relief's sun gate
+    opens earlier under snow (to -0.2). Tried: the diffuse inside doSunLight, or a colour (the diffusion's blue on the
+    shaded flank) carried into it - each cost the lit FS 16 B of spill;
   * the ice facets: GGX at F0 0.018 x "Sparkle strength" (3: the light the grains reflect inside them, near and far
     alike) x the glints' X, capped AFTER the Fresnel term at "Sparkle max (x white)" (`u_snow_glintCap` = max / pi);
   * mixed with the surface's own BRDF by the share (the surface's own lobe keeps its full, uncapped value by 1 - share).
     The local lights, GI and the ambient keep Lambert + GGX with the snow's albedo; a leaf keeps its curved specular
     normal under thin snow (blended to N by the share). The voxel crowns take it too (`SNOW_NO_GLINTS`), so the tiers'
     crossfade keeps the snow's brightness.
-* **The glints** ("Sparkle", lockable: locked off, compiled out; `snowGlint`): a discrete-microfacet POISSON estimate on a
-  fixed world lattice. lambda = the mirror facets per cell ("Sparkle density" / grain^2, fewer once wet) x the cell's area
-  x D x NoH x the half vectors' solid angle (the sun's disc / 4 HoL + the facet cone of "Sparkle spread (deg)"); each of the
-  4 nearest cells draws its count from a hash of the cell and the half vector's slope bin (offset per cell), X = the
-  bilinear count / lambda, E[X] = 1. The cell (2^-10 m and up) follows the pixel's footprint (`snowFootprint`: the xz
-  derivatives' area, floored by a quarter of the long axis), two levels blended, so far away the glints converge into the
-  smooth lobe (and stop at lambda 16: no hashes). No frame index: a still view is a still pattern under TAA / DLSS.
+* **The glints** ("Sparkle", lockable: locked off, compiled out; `snowGlint`): a discrete-microfacet estimate on a fixed
+  world lattice. lambda = the mirror facets per cell ("Sparkle density" / grain^2, fewer once wet) x the cell's area x D x
+  NoH x the half vectors' solid angle (the sun's disc / 4 HoL + the facet cone of "Sparkle spread (deg)"); the cell the point
+  lies in draws its count from a hash of the cell and the half vector's slope bin (offset per cell) by RANDOMIZED ROUNDING,
+  floor(lambda + u) (`snowFacetCount`: mean lambda, a Poisson draw's 0 or 1 when sparse), X = the count / lambda, E[X] = 1.
+  The cell (2^-10 m and up) follows the pixel's footprint (`snowFootprint`: the xz derivatives' area, floored by a quarter
+  of the long axis), two levels blended, so far away the glints converge into the smooth lobe (and stop at lambda 16: no
+  hashes). No frame index: a still view is a still pattern under TAA / DLSS. Tried: a Poisson inverse CDF and the 4
+  nearest cells blended per level (8 cells x 3 hashes) - with the diffuse in doSunLight they made the lit FS spill.
   X's mean is 1 at every distance (the strength multiplies the lobe, never X's contrast: a clamped contrast gain made
   the near snow ~gain x brighter than the far). Not on movers, leaves and the voxel tier; only on sunlit pixels
   (`g_sunShadowFirst`). The bark's glints and its relief tap anchor at its position before the wind's sway.
-* **Bright cavities** ("Bright cavities", lockable): the ambient's occlusion on snow takes the multi-bounce fit per
-  channel (a cubic in o with terms linear in the albedo, max(o, ...)): a snow hollow is lit by its walls (red lost first:
-  blue-white), but bounded - a rock or a wall next to the snow still shades it (the infinite-bounce form o / (1 - a (1 -
-  o)) erased every contact shade at a = 0.98).
+* **No bright cavities**: tried, the ambient's occlusion on snow by the multi-bounce fit (a lighter, blue-white hollow) -
+  dropped because every form (per channel, scalar, its share packed into texAO) cost the lit and tree FS 16 B of spill.
 * **The tracks** (the tessellated ground; `trackShade`, taken in `terrainTessPixelNormal` before the splat and packed with
   the relief's strength in one register): "Cavity bounces (per 10 cm)" darkens the albedo to a^(1 + n) with n = bounces x
   the hole's depth (blue in a deep track); the pressed snow (full from 5 cm) has 0.7 fewer glints and 0.3 lower alpha; the
@@ -472,6 +477,6 @@ photo texture. One set of functions, so a cap's rim, the roof's layer under it a
   "Melt wetting (1/s)" x the pack state's meltwater at each texel (`u_snow_meltWet`), read even when the pack is gone, so
   the ground stays wet as the snow melts out.
 * **Not covered**: glints and the radiative-transfer lobe from the local lights (night snow is Lambert + GGX); the track
-  shading past the tessellation range and on the caps and objects (the bright cavities carry the blue there); the snow
+  shading past the tessellation range and on the caps and objects; the diffusion's blue on a shaded flank; the snow
   BRDF and the pack's state on the far-tree volume (it takes the fresh albedo, Lambert); the 10 m tile repeat of the relief (no second, rotated tap); the relief's height keeps only ~30 %
   of the 8-bit range (`HEIGHT_SCALE` is applied in the bake, before the BC5 quantization: ~77 levels over a few cm).

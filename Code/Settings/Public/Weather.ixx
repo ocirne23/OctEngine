@@ -63,7 +63,6 @@ export struct WeatherSettings
     float wetRough = 0.15f;          // ... of wet snow (a film of meltwater)
     float softTerminator = 1.0f;     // the light that scatters through the snow across its relief (a soft terminator, blue on the shaded flank)
     float forwardScatter = 1.0f;     // the sheen with the sun ahead at grazing angles (the grains' forward scattering)
-    bool brightCavities = true;      // the snow's cavities are lit by the snow around them (bounces, red lost first)
     bool sparkle = true;             // the sun glints on single ice grains
     float sparkleDensity = 0.3f;     // the share of the grains that have a mirror facet
     float sparkleSpread = 0.15f;     // deg: how far off the mirror direction a facet still glints (larger = more, dimmer glints)

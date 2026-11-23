@@ -111,7 +111,8 @@ struct SnowState { float grainM; float liquid; float grime; }; // m, 0..1, 0..1
 SnowState snowStateFrom(vec4 cell) { return SnowState(max(cell.x, 0.01) * 1e-3, clamp(cell.y, 0.0, 1.0), clamp(cell.z, 0.0, 1.0)); }
 // New snow: the climate's permanent snow, and every path while the pack is off.
 SnowState snowFreshState() { return SnowState(u_snow_freshGrainM, 0.0, 0.0); }
-// The state where the ground's depth is read (its temperature, its site catch).
+// The state at a temperature and catch. Every path reads the OPEN snow's (catch 1): the shelter thins the depth and the
+// cover, and changes the surface's state little - a second site-map read per snow pixel for it was not worth its fetches.
 SnowState snowStateAt(float tempC, float catchF) { return snowPackLive() ? snowStateFrom(snowPackCell(tempC, catchF)) : snowFreshState(); }
 
 // The surface's albedo: the spherical albedo of a weakly absorbing granular medium, exp(-sqrt(gamma x path)). A water film
@@ -319,56 +320,36 @@ float snowTrackSunShadow(vec2 xz, float drawn0, float lift, out float wallPath)
 
 // ---- THE SNOW BRDF'S SETUP (LIT_SNOW: the lit core's snow sun BRDF, snow_brdf.inc.glsl): the share, the glints ----
 // The includer defines LIT_SNOW before the lit core (instanced_indirect_lit.inc.glsl: the globals g_snowW, g_snowGlint,
-// g_snowBaseNoL) and calls snowLitSetup before computeLitColor - the object layer does it in snowApplyUp.
+// g_snowSunK) and calls snowLitSetup before computeLitColor - the object layer does it in snowApplyUp.
 #ifdef LIT_SNOW
 #ifndef INSTANCED_INDIRECT_LIT_INC_GLSL
 #error "LIT_SNOW: include instanced_indirect_lit.inc.glsl before snow.inc.glsl"
 #endif
 #define SNOW_GLINT_LEVEL0 10 // the finest glint cell: 2^-10 m (~1 mm)
 
-// A Poisson draw from a uniform u: the inverse CDF, exact (k <= 5) under lambda 2, the logistic normal approximation above.
-float snowPoisson(float u, float lambda)
+// A cell's facet count from a uniform u: RANDOMIZED ROUNDING, floor(lambda + u) - the mean is lambda exactly (so far away
+// the glints still converge into the lobe), and for a sparse cell (lambda << 1) it is a Poisson draw's 0 or 1. Less
+// variance than Poisson at lambda ~ 1 .. 16 (fewer doubled glints). A Poisson inverse CDF (a 5-step loop with exp per cell,
+// 8 cells) cost the lit FS 16 B of spill.
+float snowFacetCount(float u, float lambda)
 {
-	if (lambda < 2.0)
-	{
-		float pk = exp(-lambda), c = pk, k = 0.0;
-		for (int i = 1; i <= 5; ++i)
-		{
-			if (u >= c)
-			{
-				pk *= lambda / float(i);
-				c += pk;
-				k = float(i);
-			}
-		}
-		return k;
-	}
-	return max(0.0, lambda + sqrt(lambda) * 0.5513 * log(u / (1.0 - u)));
+	return floor(lambda + u);
 }
 
-// One lattice level: the bilinear sum of the 4 nearest cells' facet counts over the expected count. Exact integer cells at
-// any world distance: floor(xz) x 2^n + the cell inside the metre. The draw is keyed by the cell and the half vector's slope
-// BIN (offset per cell, so the cells do not all change their facet set at once): a still view is a still pattern.
+// One lattice level: the facet count of the cell the point lies in over the expected count. Exact integer cells at any
+// world distance: floor(xz) x 2^n + the cell inside the metre. The draw is keyed by the cell and the half vector's slope
+// BIN (offset per cell, so the cells do not all change their facet set at once): a still view is a still pattern. The
+// NEAREST cell, not the 4 around it blended: a cell is about a pixel (the level follows the footprint), and the blend's 8
+// cells x 3 hashes cost the lit FS its spill; TAA / DLSS smooth a cell's edge.
 float snowGlintLevel(vec2 xz, int l, float lambda, vec2 slope)
 {
 	const int n = SNOW_GLINT_LEVEL0 - l; // cells per metre = 2^n, n >= 1
-	const float cpm = float(1 << n);
-	const vec2 q = fract(xz) * cpm - 0.5;
-	const vec2 qf = floor(q);
-	const ivec2 base = ivec2(floor(xz)) * (1 << n) + ivec2(qf); // * not <<: defined for negative xz
-	const vec2 f = q - qf;
-	float sum = 0.0;
-	for (int j = 0; j < 4; ++j)
-	{
-		const ivec2 c = base + ivec2(j & 1, j >> 1);
-		const uint h = hashU((uint(c.x) * 1973u) ^ hashU(uint(c.y) * 9277u + uint(l) * 26699u));
-		const ivec2 b = ivec2(floor(slope + vec2(float(h & 0xFFFFu), float(h >> 16u)) * (1.0 / 65536.0)));
-		const uint hu = hashU(h ^ (uint(b.x) * 73856093u) ^ (uint(b.y) * 19349663u));
-		const float u = (float(hu >> 8u) + 0.5) * (1.0 / 16777216.0);
-		const float wgt = ((j & 1) != 0 ? f.x : 1.0 - f.x) * ((j >> 1) != 0 ? f.y : 1.0 - f.y);
-		sum += wgt * snowPoisson(u, lambda);
-	}
-	return sum / lambda;
+	const ivec2 c = ivec2(floor(xz)) * (1 << n) + ivec2(fract(xz) * float(1 << n)); // * not <<: defined for negative xz
+	const uint h = hashU((uint(c.x) * 1973u) ^ (uint(c.y) * 9277u) ^ (uint(l) * 26699u));
+	const ivec2 b = ivec2(floor(slope + vec2(float(h & 0xFFFFu), float(h >> 16u)) * (1.0 / 65536.0)));
+	const uint hu = hashU(h ^ (uint(b.x) * 73856093u) ^ (uint(b.y) * 19349663u));
+	const float u = (float(hu >> 8u) + 0.5) * (1.0 / 16777216.0);
+	return snowFacetCount(u, lambda) / lambda;
 }
 
 // THE GLINTS: X = the effective facet density over the smooth one at the sun's half vector (E[X] = 1, so far away the
@@ -403,10 +384,17 @@ float snowGlint(vec2 xz, f16vec3 N, f16vec3 V, float16_t alpha, float rho, float
 // Plain ALU: any control flow.
 // "Sparkle strength" scales the facets' whole lobe (the light the grains reflect inside them), near and far alike: the
 // glints' X keeps its mean of 1, so the averaged snow does not change with the distance. Without "Sparkle" the plain lobe.
-void snowLitSetup(vec2 anchorXZ, f16vec3 N, f16vec3 baseN, vec3 V, float16_t share, float16_t alpha, float glintRho, float footprint)
+// THE SNOW'S DIFFUSE SUN (snow_brdf.inc.glsl snowSunDiffuseK) is formed here too, as one scalar (doSunLight multiplies it by
+// the albedo and the sun). A relief flank turned from the sun takes it while its smooth base (baseN) faces it.
+void snowLitSetup(vec2 anchorXZ, f16vec3 N, f16vec3 baseN, vec3 V, float16_t share, float16_t alpha, float glintRho, float footprint, f16vec3 albedo)
 {
 	g_snowW = share;
-	g_snowBaseNoL = dot(baseN, f16vec3(u_sunDirection.xyz));
+	if (share > float16_t(0.0))
+	{
+		const f16vec3 Lh = f16vec3(u_sunDirection.xyz), Vh = f16vec3(V);
+		g_snowSunK = snowSunDiffuseK(dot(N, Lh), dot(baseN, Lh), max(dot(N, Vh), float16_t(0.0)), dot(Lh, Vh),
+			dot(albedo, f16vec3(0.2126, 0.7152, 0.0722)));
+	}
 	if (u_snow_glintOn > 0.5 && share > float16_t(0.0))
 	{
 		float X = 1.0;
@@ -449,7 +437,7 @@ float snowObjectCover(vec3 pos, float upN, bool shelter, out vec4 cell)
 		return 0.0;
 	const float catchF = shelter ? snowSiteCatch(pos) : 1.0;
 	if (snowPackLive())
-		cell = snowPackCell(tempC, catchF);
+		cell = snowPackCell(tempC, 1.0); // the open snow's state (snowStateAt), as every path reads it
 	// The pack only out of the water (as on the ground and the rocks: it melts into the sea, a lake, a river).
 	const float dry = snowPackLive() ? smoothstep(-0.1, 0.2, pos.y - terrainDataAt(pos.xz).y) : 0.0;
 	// The permanent snow stops where the pack's catch does (a roof keeps both off; a crown thins neither by much). The slope
@@ -495,7 +483,7 @@ void snowApplyUp(vec3 pos, float upN, inout f16vec3 N, inout f16vec3 albedo, ino
 	metal *= float16_t(1.0) - c;
 	N = normalize(mix(N, snowNormalOn(N, snowObjectRelief(anchorXZ, dPosX, dPosZ)), c)); // the relief where the glints are
 #ifdef LIT_SNOW
-	snowLitSetup(anchorXZ, N, baseN, V, c, rough, glints ? snowGlintDensity(st) : 0.0, snowFootprint(dPosX, dPosZ));
+	snowLitSetup(anchorXZ, N, baseN, V, c, rough, glints ? snowGlintDensity(st) : 0.0, snowFootprint(dPosX, dPosZ), albedo);
 #endif
 }
 void snowApply(vec3 pos, inout f16vec3 N, inout f16vec3 albedo, inout float16_t rough, inout float16_t metal, bool shelter, float scale,

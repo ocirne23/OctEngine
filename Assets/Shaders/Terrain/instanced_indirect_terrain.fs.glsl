@@ -213,7 +213,7 @@ void main()
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers, snowShare);
 #endif
 
-	// THE SNOW'S STATE (the pack's cell at this point: snowStateAt - the temperature and the site catch terrainLayers read):
+	// THE SNOW'S STATE (the pack's cell at this point's temperature, open sky: snowStateAt):
 	// its albedo and its facets' roughness replace the splat's fresh-snow placeholders by the snow's share (exact for the
 	// splat's linear mix). Read AFTER the splat: only the share, the glint density and the meltwater cross the far grass and
 	// the wet look, nothing crosses the splat.
@@ -221,7 +221,7 @@ void main()
 	float16_t snowLiquid = float16_t(0.0);
 	if (snowShare > float16_t(TERRAIN_BLEND_EPS))
 	{
-		const SnowState st = snowStateAt(fields.temperature, snowSiteCatch(TERRAIN_LIT_POS));
+		const SnowState st = snowStateAt(fields.temperature, 1.0); // the open snow's state (snowStateAt)
 		surf.albedo += snowShare * (f16vec3(snowAlbedo(st)) - f16vec3(u_snow_freshAlbedo));
 		surf.rough += snowShare * (float16_t(snowAlpha(st)) - float16_t(u_snow_grainRough));
 		snowRho = snowGlintDensity(st);
@@ -388,7 +388,7 @@ void main()
 	// THE SNOW BRDF's setup (snow.inc.glsl): the share, the smooth mesh normal as the diffusion's target (coverN: in both
 	// variants, so the near band - the relief in the geometry - and the far one - in the normal map - blur toward the same
 	// base), the glints on the seen (lifted, displaced) surface. At the top level of main: the derivatives in uniform flow.
-	snowLitSetup(in_pos.xz, surf.normal, f16vec3(coverN), V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)));
+	snowLitSetup(in_pos.xz, surf.normal, f16vec3(coverN), V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)), surf.albedo);
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 
 	// THE WET SKY REFLECTION (the lit core has no environment specular, so wet ground read as merely darker): the

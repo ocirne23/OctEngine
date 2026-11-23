@@ -2575,9 +2575,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("snow_capMaxStep", [&w] { return glm::max(w.capMaxStep, 0.05f); }, w.capMaxStep);
         // THE LOOK (snow_brdf.inc.glsl, snowLitSetup): this slot's state table (after the depths, live), the fresh snow's
         // grain and albedo (the splat's placeholder, the climate's permanent snow), the facets' roughness, the sun BRDF's
-        // diffusion per channel (blue farthest) and forward scattering, the bright cavities, the glints (the facet cone and
-        // its slope bin, the sun's cone, the gain and the cap) and the tracks' shading. All lockable: locked off, the switch
-        // compiles its code out.
+        // diffusion and forward scattering, the glints (the facet cone and its slope bin, the sun's cone, the gain and the
+        // cap) and the tracks' shading. All lockable: locked off, the switch compiles its code out.
         const SkyParams& sky = Globals::settings.sky;
         list.add("snow_stateTable", [this]
         {
@@ -2595,9 +2594,9 @@ void RendererState::registerUboValues(UboBlock& list)
         }, w.freshGrain);
         list.add("snow_grainRough", [&w] { return glm::clamp(w.grainRough, 0.02f, 1.0f); }, w.grainRough);
         list.add("snow_wetRough", [&w] { return glm::clamp(w.wetRough, 0.02f, 1.0f); }, w.wetRough);
-        list.add("snow_diffusion", [&w] { return glm::clamp(glm::max(w.softTerminator, 0.0f) * 0.3f * glm::vec3(0.18f, 0.38f, 1.0f), 0.0f, 1.0f); }, w.softTerminator);
+        // The diffusion's pull of the incidence cosine toward the smooth base's (snowSunDiffuseK): 0.114 at "Soft terminator" 1.
+        list.add("snow_diffusion", [&w] { return glm::clamp(glm::max(w.softTerminator, 0.0f) * 0.114f, 0.0f, 1.0f); }, w.softTerminator);
         list.add("snow_forward", [&w] { return glm::max(w.forwardScatter, 0.0f); }, w.forwardScatter);
-        list.add("snow_brightCavities", [&w] { return w.brightCavities; }, w.brightCavities);
         list.add("snow_glintOn", [&w] { return w.sparkle; }, w.sparkle);
         list.add("snow_glintShare", [&w] { return glm::clamp(w.sparkleDensity, 0.0f, 1.0f); }, w.sparkleDensity);
         list.add("snow_glintConeFacet", [&w]

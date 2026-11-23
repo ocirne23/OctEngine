@@ -121,10 +121,14 @@ calls `reloadShaders()`.
     (`underwaterSunTransmittance`): the terrain ground only. Every other material under the water takes the
     Beer-Lambert absorption alone (`underwaterSunAbsorption`, no ocean-map taps). The pattern is the surface's fold
     field projected down the sun's direction with no occlusion, which is right on the open seabed and wrong on a mesh.
-  * `LIT_SNOW` (compiles a path IN; needs `SUN_SHADOW_FIRST`) - the snow's sun BRDF (`snow_brdf.inc.glsl`), its facing
-    exception and the bright cavities, on the pixels `snowLitSetup` gives a snow share: the terrain ground, the rocks, the
+  * `LIT_SNOW` (compiles a path IN; needs `SUN_SHADOW_FIRST`) - the snow's sun BRDF (`snow_brdf.inc.glsl`) as doSunLight's
+    ONE BRDF and its facing exception, on the pixels `snowLitSetup` gives a snow share: the terrain ground, the rocks, the
     caps, the lit, tree and voxel FS (see The look in [Snow.md](Snow.md)). Without a call its three globals keep their
     constants (the blended lit variant). `SNOW_NO_GLINTS` (snow.inc.glsl) compiles the glints out (the voxel crowns).
+    **Its register rules, each measured:** nothing of the snow may live across the AO or the light loop (the bright
+    cavities' share across the AO cost the lit and tree FS 16 B, in every form); the diffuse is worked out BEFORE
+    computeLitColor and enters as one half scalar (in doSunLight, or as a colour, it cost the lit FS 16 B); a branch of a
+    second BRDF beside doLightH compiles both.
   * `LIT_DIELECTRIC` - no metalness: the specular colour is the ONE F0 scalar (`LIT_SPECULAR_F0`, default 0.04) across
     the light loop, the diffuse takes no (1 - metalness). The two tree shaders.
   * `LIT_LIGHTS_DIFFUSE` - the local lights' diffuse only (`doLightDiffuse`: the same radiance, falloff, cone, one-sided
@@ -353,12 +357,15 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 
 **Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants; its VS 48/0, the unlit
 VS 30/0 and 46/0), tree FS 64/16
-(its VS 40/0), the voxel trees' march FS 40/0 (its VS 80/0, the far trees' 48/0) and lighting FS 64/0 (the voxel
-shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the voxel pipeline 54/0), tree_volume_march 64/0 (handover 62/0),
+(its VS 40/0), the voxel trees' march FS 40/0 (its VS 80/0, the far trees' 48/0) and lighting FS 56/48 (the driver's
+pick: its snow code out, it stays 56/48; the voxel shadow caster FS 40/0), the shadow VS 31/0 (the far casters 40/0, the
+voxel pipeline 54/0), tree_volume_march 64/0 (handover 64/0),
 tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
 cull 46/0, the shadow cull 39/0, grass FS 56/32 (the far rings' simple variant 56/16), grass VS 53/0 (the near casters 44/0), grass cull 48/0, clutter / flower FS
-64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 64/48, film 64/32, ocean 96/64,
-river FS 96/48, rock 64/16, sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
+64/16, flower VS 70/0 (textured 68/0), terrain ground FS 64/32, tessellated ground 72/32 (64/64 with the snow state and
+the wet-snow reflection out: the driver trades), its TCS 46/0 and TES 47/0, film 64/32, ocean 96/64, river FS 96/48, rock
+64/16 (its VS 34/0), the snow caps FS 64/0 and VS 48/0, snow_cap_prepare 48/0, snow_deform 40/0, terrain_wetness 38/0,
+sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,
 decal 53/0, force_union FS 72/48 (8 teams; 56/32 with 2). The driver moves its

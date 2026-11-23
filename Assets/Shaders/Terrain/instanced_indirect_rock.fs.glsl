@@ -227,12 +227,12 @@ void main()
 		if (!own)
 			terrainApplyMacro(surf, macro);
 
-		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough): the relief, and the pack's state at
-		// the shell's catch (read again here, not held across the layers above: snow pixels only).
+		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough): the relief, and the pack's state (the
+		// open snow's: snowStateAt).
 		if (snowW > blendEps)
 		{
 			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
-			const SnowState st = snowStateAt(in_rockFields.y, snowRockCatch(in_pos));
+			const SnowState st = snowStateAt(in_rockFields.y, 1.0);
 			TerrainSample snow = snowSurfaceSample(snowMat, in_pos.xz, geoNh);
 			snow.albedo = f16vec3(snowAlbedo(st));
 			snow.rough = float16_t(snowAlpha(st));
@@ -277,6 +277,6 @@ void main()
 	const vec3 V = normalize(u_viewPos - in_pos);
 	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, u_terrain_factionSolidScale);
 	// THE SNOW BRDF's setup (snow.inc.glsl), at the top level of main: the derivatives in uniform flow.
-	snowLitSetup(in_pos.xz, surf.normal, geoNh, V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)));
+	snowLitSetup(in_pos.xz, surf.normal, geoNh, V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)), surf.albedo);
 	out_color = vec4(computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao), 1.0);
 }

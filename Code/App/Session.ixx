@@ -41,6 +41,7 @@ export struct LaunchOptions
     double screenshotAfterSec = 0.0;
     oc::string screenshotOutPath = "Local/screenshot.png";
     oc::string profileOutPath = "Local/profile.txt";
+    oc::string vramDumpPath;   // --vram-dump: every live GPU allocation, written when --quit-after ends the run
     ProfileReportOptions profileOptions;
     bool scenario = false;
     oc::string scenarioSave;
@@ -63,6 +64,7 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
         else if (arg == "--profile-out" && i + 1 < argc)  o.profileOutPath = argv[++i];
         else if (arg == "--profile-workers")              o.profileOptions.perWorkerTrees = true;
         else if (arg == "--quit-after" && i + 1 < argc)   o.quitAfterSec = oc::max(std::atof(argv[++i]), 0.01);
+        else if (arg == "--vram-dump" && i + 1 < argc)    o.vramDumpPath = argv[++i];
         else if (arg == "--screenshot-after" && i + 1 < argc) o.screenshotAfterSec = oc::max(std::atof(argv[++i]), 0.01);
         else if (arg == "--screenshot-out" && i + 1 < argc) o.screenshotOutPath = argv[++i];
         else if (arg == "--no-vsync")                    TweakRegistry::get().setOverride("Time/VSync=0");

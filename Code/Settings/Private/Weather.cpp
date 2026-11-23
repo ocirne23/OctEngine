@@ -65,7 +65,6 @@ void Settings::registerWeather(WeatherSettings& s)
     Tweak::floatVar("Weather/Snow", "Wet snow roughness", &s.wetRough, 0.02f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Soft terminator", &s.softTerminator, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Weather/Snow", "Forward scattering", &s.forwardScatter, 0.0f, 2.0f, 0.05f);
-    Tweak::boolean("Weather/Snow", "Bright cavities", &s.brightCavities);
     Tweak::boolean("Weather/Snow", "Sparkle", &s.sparkle);
     Tweak::floatVar("Weather/Snow", "Sparkle density", &s.sparkleDensity, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Sparkle spread (deg)", &s.sparkleSpread, 0.05f, 5.0f, 0.01f);
