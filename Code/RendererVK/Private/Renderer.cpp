@@ -914,8 +914,15 @@ void RendererState::snapshotLodStats(PerFrameData& frameData)
             const uint32 opacityTex = d[3] & 0xFFFFu;
             float scale;
             memcpy(&scale, &d[9], sizeof(float));
-            const bool opacityLive = opacityTex < Globals::textureManager.getNumTextures()
-                && Globals::textureManager.getViewForDescriptor((uint16)opacityTex) != Globals::textureManager.getViewForDescriptor(RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
+            const auto live = [](uint32 tex)
+            {
+                return tex < Globals::textureManager.getNumTextures()
+                    && Globals::textureManager.getViewForDescriptor((uint16)tex) != Globals::textureManager.getViewForDescriptor(RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
+            };
+            const bool opacityLive = live(opacityTex);
+            const uint32 indexTex = d[4] | (d[5] << 8);
+            Log::error(oc::format("VoxelDebug: index tex {} live {} (the header's id; textures uploaded {})", indexTex, live(indexTex),
+                Globals::textureManager.getNumTextures()));
             Log::error(oc::format("VoxelDebug: frame {} slot pixel ({}, {}) hit 0x{:08x} tree {} typeMaterial 0x{:08x} (type {}, material {} of {}) "
                 "GPU diffuseNormal 0x{:08x} CPU diffuseNormal 0x{:08x} flags 0x{:08x} | opacity tex {} (live {}) header lo {} hi {} -> index tex {} | "
                 "descriptors {} textures {} | near record type {} mesh-material 0x{:08x} posScale.w {}",

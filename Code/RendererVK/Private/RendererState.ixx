@@ -130,6 +130,9 @@ protected:
 	void beginFrame(); // through kickBeginFrameJob() and joinBeginFrameJob(): sets up the frame's per-frame data, cull, and UBOs.
 
     void recordCommandBuffers();       // the frame's work batch (everything but the swapchain pass); before the acquire
+    // TEMPORARY (the voxel lighting crash): true over recordCommandBuffers. A GPU drain inside it
+    // (waitForGpuAndFlushStaging: it destroys the queued and retired texture images at once) logs an error.
+    oc::atomic<bool> m_inRecord{ false };
     void recordPresentCommandBuffer(); // the swapchain pass (composite + ImGui): the batch that waits for the image
     void recordSceneSecondaries(uint32 frameIdx);
     void recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary);

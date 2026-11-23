@@ -2355,8 +2355,9 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
         list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
         list.add("foliage_voxelLodBias", f.voxelLodBias);
-        // TEMPORARY (the voxel lighting crash readback): the live descriptor count and this slot's readback buffer.
-        list.add("foliage_debugTextureCount", [this] { return m_textures.getDescriptorCount(); }, UboLive);
+        // TEMPORARY (the voxel lighting crash readback): the textures uploaded so far (the slots a record writes; the
+        // descriptors above them are never written) and this slot's readback buffer.
+        list.add("foliage_debugTextureCount", [] { return (uint32)Globals::textureManager.getNumTextures(); }, UboLive);
         list.add("foliage_debugBuffer", [this]
         {
             const uint64 address = m_perFrameData[m_swapChain.getCurrentFrameIndex()].voxelDebugBuffer.getDeviceAddress();

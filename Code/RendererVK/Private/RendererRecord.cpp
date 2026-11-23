@@ -2135,6 +2135,13 @@ void RendererState::recordCommandBuffers()
 {
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     PerFrameData& frameData = m_perFrameData[frameIdx];
+    // TEMPORARY (the voxel lighting crash): see m_inRecord.
+    struct InRecord
+    {
+        oc::atomic<bool>& flag;
+        explicit InRecord(oc::atomic<bool>& f) : flag(f) { flag.store(true, oc::memory_order_relaxed); }
+        ~InRecord() { flag.store(false, oc::memory_order_relaxed); }
+    } inRecord(m_inRecord);
 
     // Streamed textures: refresh swapped bindless slots in this frame slot's sets before anything
     // records against them (safe here: present() waited this slot's fence, and the texture
