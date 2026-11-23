@@ -78,13 +78,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // swapchain is made and the pipelines compile.
     attachSettingsListeners();
     registerUboLocks(); // the sections whose UBO struct a lock bakes (applyUboLocks)
+    // Aftermath's GPU crash dumps BEFORE the Vulkan device exists: enabled after it, a device lost writes no dump.
+    m_gpuCrashTracker.Initialize(false);
     if (!initDeviceAndSwapchain(window, validation, vr))
         return false;
     initPipelines();
     initPerFrameResources();
     initSharedBuffers();
 
-    m_gpuCrashTracker.Initialize(false);
     m_initialized = true; // headless server mode never calls initialize; renderer-touching paths gate on this
     return true;
 }

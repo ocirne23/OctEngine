@@ -21,6 +21,9 @@ export namespace Streamline
 {
     // "Post/DLSS/Mode" order.
     enum class DlssMode : int { Off, DLAA, Quality, Balanced, Performance, UltraPerformance };
+    // NGX's smallest render / output size per axis: below it the feature creation fails (0xbad00005, InvalidParameter).
+    // The Renderer skips the upscale for such a frame (a startup frame, a collapsed editor panel); evaluateDlss refuses it.
+    constexpr uint32 MIN_DLSS_SIZE = 32;
 
     // logDir: absolute folder for SL's log file (sl.log, plus what NGX writes); empty = no file (the Renderer passes
     // empty: messages go through the log callback only).

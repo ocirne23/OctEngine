@@ -268,8 +268,8 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
 {
     if (!dlssAvailable() || frame.mode == DlssMode::Off)
         return false;
-    if (frame.outputSize.x < 32 || frame.outputSize.y < 32)
-        return false; // NGX rejects a smaller output (InvalidParameter); a startup frame can be that small
+    if (frame.outputSize.x < MIN_DLSS_SIZE || frame.outputSize.y < MIN_DLSS_SIZE || frame.renderSize.x < MIN_DLSS_SIZE || frame.renderSize.y < MIN_DLSS_SIZE)
+        return false; // NGX rejects a smaller size (InvalidParameter); the Renderer skips such frames before calling
     VkCommandBuffer vkCmd = static_cast<VkCommandBuffer>(cmd);
 
     if (g_applied.mode != (int)frame.mode || g_applied.preset != frame.preset
@@ -394,9 +394,6 @@ namespace
         return evaluateFailed(oc::format("Streamline: {} failed (sl::Result {})", call, (int)result));
     }
 
-    // NGX's smallest output / render size per axis: below it the feature creation fails (0xbad00005, InvalidParameter) -
-    // a collapsed editor panel, a startup frame.
-    constexpr uint32 MIN_DLSS_SIZE = 32;
     // The inputs a FAILED evaluate had (SL re-creates the NGX feature on every evaluate while it fails): not tried again
     // until one of them changes.
     struct EvaluateKey

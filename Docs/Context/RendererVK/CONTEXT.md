@@ -6,7 +6,8 @@
 Modern Vulkan renderer. Links Animation, File and Threading (+ vulkan, glslang PRIVATE). Nsight
 Aftermath is NOT linked: `Util/Aftermath.ixx` (`RendererVK:Aftermath`) `LoadLibrary`s
 `GFSDK_Aftermath_Lib.x64.dll` in `GpuCrashTracker::Initialize` and holds one function pointer per
-entry point. **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
+entry point. **`Renderer::initialize` calls it BEFORE the Vulkan device is created** (enabled after it, a device lost wrote
+no dump); a crash writes `Assets/Local/<app>-<pid>-<n>.nv-gpudmp` (open it in Nsight Graphics). **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
 the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call). **Streamline / DLSS is optional the
 same way** (`Util/Streamline.ixx`, see "DLSS" in [PostProcess.md](PostProcess.md)).
 **Minimum spec RTX 2000.**

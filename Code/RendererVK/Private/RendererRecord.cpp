@@ -1088,9 +1088,13 @@ void RendererState::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primar
     // everywhere else, but DLSS cannot take it: its output would not fit, the render rect is clamped below the
     // feature's dynamic range (NGX InvalidParameter), and the output copy would run out of bounds (device lost -
     // slEvaluateFeature still returns OK when NGX fails inside it). Skip the upscale on such frames.
+    // Nor a render or output size under NGX's minimum (a startup frame, a collapsed panel): skipped quietly, the output
+    // keeps its last image - a logged failure would also hide a later real one (m_dlssFailed logs once).
     const vk::Extent2D swapExtent = m_swapChain.getLayout().extent;
+    const glm::ivec2 minDlss((int)Streamline::MIN_DLSS_SIZE);
     if (glm::any(glm::lessThan(m_viewportRect.min, glm::ivec2(0)))
-        || m_viewportRect.max.x > (int)swapExtent.width || m_viewportRect.max.y > (int)swapExtent.height)
+        || m_viewportRect.max.x > (int)swapExtent.width || m_viewportRect.max.y > (int)swapExtent.height
+        || glm::any(glm::lessThan(m_viewportRect.getSize(), minDlss)) || glm::any(glm::lessThan(m_renderRect.getSize(), minDlss)))
     {
         m_dlssReset = true;
         TaaPipeline::endExternalWrite(primary);
@@ -1149,6 +1153,7 @@ void RendererState::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primar
     if (Streamline::evaluateDlss(primary, frame))
     {
         m_dlssReset = false;
+        m_dlssFailed = false; // a later failure logs again
         if (!direct)
             m_dlssPipeline.recordOutputCopy(primary, resolved.image, m_viewportRect.min, glm::uvec2(outputSize));
     }
