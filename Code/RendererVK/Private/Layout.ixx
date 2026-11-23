@@ -526,8 +526,15 @@ export namespace RendererVKLayout
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
     // load does not grow them:
+#ifdef _MSC_VER
     constexpr size_t INITIAL_VERTEX_DATA = 700ull * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
     constexpr size_t INITIAL_INDEX_DATA = 45 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+#else
+    // Linux: the diffusion models share VRAM with the renderer, and the driver does not page video memory out. The
+    // sandbox uses ~256 MB of vertex and ~60 MB of index data, so these still cover it with ~1.5x to spare.
+    constexpr size_t INITIAL_VERTEX_DATA = 400ull * 1024 * 1024 / sizeof(RendererVKLayout::MeshVertex) * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_INDEX_DATA = 25 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+#endif
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)

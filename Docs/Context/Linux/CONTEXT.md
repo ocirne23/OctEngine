@@ -119,7 +119,9 @@ clang warns about an ANGLED include in a module purview.
   inference`; their tiles go to `<seed>_fp16`, so tiles made from the fp32 models are not read), latent and coarse
   batches of 2 (the noise is per window, so the batch size does not change the tiles), the sequential executor, the
   cuDNN heuristic search without the maximum workspace, an arena that grows by the request and shrinks after every
-  run. Even so inference can still run out of memory: the renderer grows with the resolution and the desktop's share
+  run, and smaller starting mesh pools (`INITIAL_VERTEX_DATA` 400 MB, `INITIAL_INDEX_DATA` 100 MB in `Layout.ixx`; the
+  sandbox fills ~256 / ~60 MB of them). The streaming budgets are no lever here: meshes stream inside those fixed pools,
+  and a freed texture stays in its VMA block. Even so inference can still run out of memory: the renderer grows with the resolution and the desktop's share
   varies. A tile whose own inference fails is not saved, but the stage caches keep a failed batch's zero output, and a
   later tile that reads those windows is saved as if it were real terrain.
 
