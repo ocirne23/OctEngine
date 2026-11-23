@@ -179,6 +179,8 @@ void main()
         }
     }
 
+    // The faction look (the same rule as the ground under it), before the snow: snow is white on any side's land.
+    albedo = terrainFactionTint(albedo, in_pos.xz, 1.0);
     // THE SNOW on its top (the cull's value: the ground's white x "Clutter snow"): by how much the surface faces up, on the
     // geometric normal (a cap on a pebble, a log's upper side, a mushroom's top).
     albedo = mix(albedo, u_snow_freshAlbedo, float((in_look.z >> 8) & 63u) * (1.0 / 63.0) * smoothstep(0.2, 0.7, geoN.y));
@@ -188,6 +190,6 @@ void main()
     ao *= 1.0 - u_clutter_contactDarkening * (1.0 - smoothstep(0.0, band, in_fields.y));
 
     const vec3 V = normalize(-in_relPos); // in_relPos = pos - camera, exact near the camera
-    out_color = vec4(computeLitColor(in_pos, V, N, terrainFactionAlbedo(f16vec3(albedo), in_pos.xz), float16_t(max(roughness, 0.05)), float16_t(0.0),
+    out_color = vec4(computeLitColor(in_pos, V, N, f16vec3(albedo), float16_t(max(roughness, 0.05)), float16_t(0.0),
         float16_t(ao)), 1.0);
 }

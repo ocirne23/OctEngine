@@ -358,8 +358,9 @@ void main()
 	g_sunVisMaterial *= mix(one, float16_t(tessUnpacked.y), snowShare);
 #endif
 
-	// The faction look: before the blade light and the lit core, which both take the albedo.
-	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz);
+	// The faction look: before the blade light and the lit core, which both take the albedo. Not on the snow: the weight goes
+	// down by its share (the splat has mixed it in already), so snow is white on any side's land.
+	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, float(one - snowShare));
 
 	// The grass canopy: the ground's sun only (the water film keeps its own) and its ambient.
 	// V HERE, not at the top: its 3 registers are then not live across the shadow, the layers and the splat.

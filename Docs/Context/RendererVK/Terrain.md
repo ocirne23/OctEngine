@@ -50,7 +50,11 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   grass blades (`grass.fs.glsl`), the clutter and the flowers (`clutter.fs.glsl`, `clutter_flower.fs.glsl`), and the
   trees and bushes at every tier (`instanced_indirect_tree.fs.glsl`, `instanced_indirect_foliage.fs.glsl`,
   `instanced_indirect_tree_voxel.fs.glsl`). Each applies the same rule to its own albedo at the FRAGMENT's world x / z,
-  before its transmitted light and the lit core, so everything on a piece of land agrees. **BARK AND ROCK take a
+  before its transmitted light and the lit core, so everything on a piece of land agrees. **THE SNOW IS NEVER TINTED**
+  (white on any side's land): a reader that puts its snow on itself does it AFTER the tint (the grass, the clutter, the
+  flowers, the trees' `snowApply`, the far-tree march). The ground and the rocks have the snow in their splat already, so
+  they scale the tint's weight by `1 - snowShare` (the rule is linear in the albedo: exact under full snow and on bare
+  ground). **BARK AND ROCK take a
   weaker tint** (x "Trunk and rock tint", `u_terrain_factionSolidScale`): the rocks and dead wood
   (`instanced_indirect_rock.fs.glsl`), the bark on the tree tiers (not a leaf material), and **the NEAR bark, which
   draws on LitOpaque for its early depth** - the regular lit FS (`instanced_indirect.fs.glsl`) tints only a material

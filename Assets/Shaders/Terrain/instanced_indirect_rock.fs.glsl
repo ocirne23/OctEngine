@@ -275,7 +275,8 @@ void main()
 
 	// V HERE, not at the top: its registers are then not live across the shadow and the splat.
 	const vec3 V = normalize(u_viewPos - in_pos);
-	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, u_terrain_factionSolidScale);
+	// The faction look, not on the snow (mixed in above): the weight goes down by its share, as on the ground.
+	surf.albedo = terrainFactionAlbedo(surf.albedo, in_pos.xz, u_terrain_factionSolidScale * float(one - snowShare));
 	// THE SNOW BRDF's setup (snow.inc.glsl), at the top level of main: the derivatives in uniform flow.
 	snowLitSetup(in_pos.xz, surf.normal, geoNh, V, snowShare, surf.rough, snowRho, snowFootprint(dFdx(in_pos.xz), dFdy(in_pos.xz)), surf.albedo);
 	out_color = vec4(computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao), 1.0);
