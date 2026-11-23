@@ -64,15 +64,22 @@ void main()
 	const vec3 dirW = voxelPixelDir();
 	vec3 camG, dirG;
 	float tNear, tFar;
+	// Every early out is `discard; return;`: a discard is a demote (Shaders.md "discard"), and the lane would march on.
 	if (!voxelTreeRay(tree, dirW, camG, dirG, tNear, tFar))
+	{
 		discard;
+		return;
+	}
 
 	const uint typeMaterial = voxelTreeTypeMaterial(tree);
 	const MaterialInfo material = in_materialInfos[typeMaterial >> 16];
 	const vec4 posScale = voxelTreePosScale(tree);
 	// The crossfade with the meshes (the type's band), per tree: before the march. The distance only on a material that fades.
 	if ((material.flags & MATERIAL_FLAG_DISTANCE_FADE) != 0u && treeDistanceFaded(material.flags, distance(u_viewPos, posScale.xyz)))
+	{
 		discard;
+		return;
+	}
 
 	// The material's albedo slot = the grid's opacity atlas (its header names the index).
 	const VoxelGrid grid = voxelGrid(material.diffuseNormalTexIdx & 0xFFFFu);
@@ -140,7 +147,10 @@ void main()
 	}
 #undef VOXEL_VIEW_STEP
 	if (hitOpacity <= 0.0)
+	{
 		discard;
+		return;
+	}
 
 	// THE DEPTH at the hit: on the pixel's own view ray, t from the camera. Never nearer than the rectangle (depth_less).
 	const vec4 clip = u_mvp * vec4(u_viewPos + voxelPixelDir() * t, 1.0);

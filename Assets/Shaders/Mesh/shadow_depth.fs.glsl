@@ -71,7 +71,10 @@ void main()
 		const vec3 tHigh = max(t0, t1);
 		t = max(max(max(tLow.x, tLow.y), tLow.z), 0.0);
 		if (t >= min(min(tHigh.x, tHigh.y), tHigh.z))
-			discard;
+		{
+			discard; // a demote (Shaders.md "discard"): the return keeps the lane from marching on
+			return;
+		}
 	}
 	// The march in the level's voxel coordinates (tree_voxel.inc.glsl). An EMPTY brick is jumped to its far side.
 	// THIS MARCH SETS THE SHADER'S REGISTER COUNT (40), so its ray is NOT held in voxel coordinates: the rectangle's point and

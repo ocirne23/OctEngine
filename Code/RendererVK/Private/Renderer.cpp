@@ -314,12 +314,6 @@ void RendererState::initPerFrameResources()
         perFrame.mappedLodStats = perFrame.lodStatsBuffer.mapMemory<uint32>();
         memset(perFrame.mappedLodStats.data(), 0, perFrame.mappedLodStats.size_bytes());
 
-        // TEMPORARY (the voxel lighting crash readback).
-        perFrame.voxelDebugBuffer.initialize(16 * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "VoxelDebug");
-        perFrame.mappedVoxelDebug = perFrame.voxelDebugBuffer.mapMemory<uint32>();
-        memset(perFrame.mappedVoxelDebug.data(), 0, perFrame.mappedVoxelDebug.size_bytes());
     }
 
     if (m_sceneViewCount > 1)
@@ -899,40 +893,6 @@ void RendererState::snapshotLodStats(PerFrameData& frameData)
         m_lodInstanceCounts[i] = frameData.mappedLodStats[i];
     memset(frameData.mappedLodStats.data(), 0, frameData.mappedLodStats.size_bytes());
     frameData.lodStatsBuffer.flushMappedMemory(vk::WholeSize);
-
-    // TEMPORARY (the voxel lighting crash): what the voxel lighting found at its first bad pixel of this slot's last frame.
-    const oc::span<uint32> d = frameData.mappedVoxelDebug;
-    if (d[0] != 0u)
-    {
-        static uint32 s_reports = 0;
-        if (s_reports < 20)
-        {
-            ++s_reports;
-            const uint32 material = d[2] >> 16;
-            const uint32 numMaterials = m_materials.count();
-            const RendererVKLayout::MaterialInfo cpu = material < numMaterials ? m_materials.items()[material] : RendererVKLayout::MaterialInfo{};
-            const uint32 opacityTex = d[3] & 0xFFFFu;
-            float scale;
-            memcpy(&scale, &d[9], sizeof(float));
-            const auto live = [](uint32 tex)
-            {
-                return tex < Globals::textureManager.getNumTextures()
-                    && Globals::textureManager.getViewForDescriptor((uint16)tex) != Globals::textureManager.getViewForDescriptor(RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
-            };
-            const bool opacityLive = live(opacityTex);
-            const uint32 indexTex = d[4] | (d[5] << 8);
-            Log::error(oc::format("VoxelDebug: index tex {} live {} (the header's id; textures uploaded {})", indexTex, live(indexTex),
-                Globals::textureManager.getNumTextures()));
-            Log::error(oc::format("VoxelDebug: frame {} slot pixel ({}, {}) hit 0x{:08x} tree {} typeMaterial 0x{:08x} (type {}, material {} of {}) "
-                "GPU diffuseNormal 0x{:08x} CPU diffuseNormal 0x{:08x} flags 0x{:08x} | opacity tex {} (live {}) header lo {} hi {} -> index tex {} | "
-                "descriptors {} textures {} | near record type {} mesh-material 0x{:08x} posScale.w {}",
-                m_frameCounter, d[8] & 0xFFFFu, d[8] >> 16, d[1], d[1] & 0x00FFFFFFu, d[2], d[2] & 0xFFFFu, material, numMaterials,
-                d[3], (uint32)cpu.diffuseTexIdx | ((uint32)cpu.normalTexIdx << 16), cpu.flags,
-                opacityTex, opacityLive, d[4], d[5], d[4] | (d[5] << 8),
-                m_textures.getDescriptorCount(), Globals::textureManager.getNumTextures(), d[6] & 0xFFFFu, d[7], scale));
-        }
-        memset(d.data(), 0, d.size_bytes());
-    }
 }
 
 // Assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) into m_ubo and hands it to

@@ -327,6 +327,13 @@ calls `reloadShaders()`.
   lights a point evaluates, its grid's LARGE lights included: green → red at the cell cap of 24, magenta = the point's
   grid is missing from the hash table), Light ranges (a step of blue per covering light). Not saved.
 * SPIR-V plus source dumps land in `Assets/Local/` for Aftermath crash analysis.
+* **`discard` IS A DEMOTE, NOT AN EXIT.** The shaders compile to SPIR-V 1.6 with `shaderDemoteToHelperInvocation` on,
+  and glslang emits `discard` as `OpDemoteToHelperInvocation`: the lane runs on as a HELPER (for its quad's
+  derivatives) through the rest of `main`, with all its loads and texture fetches. Its stores and atomics have no effect.
+  **An early out whose later code is unsafe or costly for that pixel is `discard; return;`.** Unsafe means it indexes
+  with data that is not valid for that pixel. Example: the voxel lighting's no-hit pixels, whose tree 0 named a mesh's
+  material as a voxel grid. That gave an MMU fault through a garbage descriptor id, on one GPU and driver only. A
+  helper's stores are dropped, so a debug readback written after a `discard` never arrives either.
 
 ## Pipeline statistics (register counts)
 

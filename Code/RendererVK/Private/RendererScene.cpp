@@ -795,12 +795,7 @@ void RendererState::freeRenderNode(RenderNode& node)
 }
 
 void RendererState::waitForGpuAndFlushStaging()
-{
-    // TEMPORARY (the voxel lighting crash): this drain destroys texture images at once (processPendingFrees below); inside
-    // a frame's record the sets already written for that frame can still name them.
-    if (m_inRecord.load(oc::memory_order_relaxed))
-        Log::error(oc::format("Renderer: a GPU drain (capacity growth) ran DURING the frame record (frame {})", m_frameCounter));
-    // Drain first: some buffers being grown here (e.g. m_instanceOffsets.getBuffer()) aren't per-frame-in-flight,
+{    // Drain first: some buffers being grown here (e.g. m_instanceOffsets.getBuffer()) aren't per-frame-in-flight,
     // so an already-submitted draw/dispatch may still be reading one while a queued staging copy is about
     // to write into it (WRITE_AFTER_READ - no fence/semaphore otherwise orders a fresh copy submission
     // against earlier submissions on the same queue). Flushing pending copies only after this first wait
