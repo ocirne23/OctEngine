@@ -139,7 +139,9 @@ public:
                     emptiest = intIdx;
                 }
             }
-            startSlot = partlyUsed >= 0 ? partlyUsed : firstEmpty >= 0 ? firstEmpty : emptiest;
+            // A large range starts one word BEFORE the first empty one: a free tail there joins the run (from the empty word,
+            // a run that began in the word before was cut short - a 65-bucket range failed in a free run of 127).
+            startSlot = partlyUsed >= 0 ? partlyUsed : firstEmpty > 0 && numBucketsWanted >= 64 ? firstEmpty - 1 : firstEmpty >= 0 ? firstEmpty : emptiest;
             setLastAcquired(startSlot);
         }
         else
@@ -147,7 +149,10 @@ public:
             startSlot = m_lastAcquiredIdx; // In a single threaded environment we try to make allocations as linear as possible
         }
 
-        for (int i = 0; i < numInts; ++i)
+        // Past one full lap by the words a range spans: a free run that holds the start word, but began before it, is then
+        // seen whole when the search comes round again.
+        const int numSteps = numInts + (numBucketsWanted + 63) / 64 + 1;
+        for (int i = 0; i < numSteps; ++i)
         {
             const int intIdx = (i + startSlot) % numInts;
             if (intIdx == 0) // If we looped around make sure to break the continuous range
