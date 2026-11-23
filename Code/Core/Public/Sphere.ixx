@@ -3,7 +3,7 @@ export module Core.Sphere;
 import Core;
 import Core.glm;
 
-export struct Sphere
+export OC_FWD_ATTACH struct Sphere
 {
     glm::vec3 pos = glm::vec3(FLT_NAN);
     float radius = 0.0f;

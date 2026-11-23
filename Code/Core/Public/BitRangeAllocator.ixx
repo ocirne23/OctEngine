@@ -5,7 +5,7 @@ import Core;
 // ThreadSafe: acquire* / release* may run concurrently (atomic bit words, lock-free). resize() and isBitSet()
 // are NOT concurrent-safe: resize() replaces the bit array, so the owner must exclude every other call around it
 // (MeshDataManager: its grow lock).
-export template<bool ThreadSafe = false>
+export OC_FWD_ATTACH template<bool ThreadSafe = false>
 class BitRangeAllocator final
 {
 public:

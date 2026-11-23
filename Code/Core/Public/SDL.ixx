@@ -1,10 +1,25 @@
+module;
+
+#ifndef _MSC_VER
+#include "LinuxGmfPrelude.h"
+#endif
+
 export module Core.SDL;
 
 import Core;
 
+#ifdef _MSC_VER
 export import <SDL3/SDL.h>;
 export import <SDL3/SDL_vulkan.h>;
 export import <SDL3/SDL_scancode.h>;
+#else
+export extern "C++"
+{
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
+#include <SDL3/SDL_scancode.h>
+}
+#endif
 
 #undef SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN
 #undef SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN

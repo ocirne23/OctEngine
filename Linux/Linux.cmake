@@ -30,6 +30,14 @@ if(NOT "$ENV{OC_CLANG_SCAN_DEPS}" STREQUAL "" AND NOT CMAKE_CXX_COMPILER_CLANG_S
 		"delete the build folder and configure again from inside `nix develop`")
 endif()
 
+# The nix compiler wrapper passes every buildInput's include folder as -isystem, so CMake counts them as implicit and
+# drops them from -I. They must stay explicit to come BEFORE Dependencies/Include (see apply_compile_settings).
+list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES ${OC_NIX_INCLUDES})
+list(REMOVE_ITEM CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES ${OC_NIX_INCLUDES})
+
+# Searched first: Linux/Include holds the stand-ins for MSVC-only headers (<intrin.h>, ...), then the nixpkgs headers.
+set(OC_LINUX_INCLUDES "${ROOT_DIR}/Linux/Include" ${OC_NIX_INCLUDES})
+
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -71,6 +79,7 @@ set(COMPILE_OPTIONS
 	"-Wno-c99-designator"
 	"-Wno-nullability-completeness"
 	"-Wno-deprecated-literal-operator" # /wd5311
+	"-Wno-macro-redefined"             # the command-line offsetof / assert meet the system headers' own
 )
 set(LINK_OPTIONS "-fuse-ld=lld" "-Wl,--gc-sections" "-pthread")
 
@@ -83,8 +92,19 @@ set(LINK_OPTIONS "-fuse-ld=lld" "-Wl,--gc-sections" "-pthread")
 # it imports first, so each global is constructed after (and destructed before) every global it can reach through an
 # import. That matches InitSeg.h's order wherever one global's dtor uses another; see "Globals and teardown" in
 # .claude/CLAUDE.md.
+#
+# __debugbreak and __int64 are MSVC keywords that need no header there; offsetof arrives through forceinclude.h's
+# <cstdlib> on MSVC.
 list(APPEND COMPILE_OPTIONS
 	"-DOC_INIT_SEG(seg)="
+	"-D__debugbreak()=__builtin_debugtrap()"
+	"-D__int64=long long"
+	"-D__stdcall="
+	"-D_alloca=__builtin_alloca"
+	"-DOC_FWD_ATTACH=extern \"C++\""
+	"-DOC_FWD_ATTACH_BEGIN=extern \"C++\" {"
+	"-DOC_FWD_ATTACH_END=}"
+	"-Doffsetof(type,member)=__builtin_offsetof(type,member)"
 	"$<IF:$<CONFIG:Debug>,-Dassert=[](bool oc_ok){ if (!oc_ok) __builtin_debugtrap(); },-Dassert=(void)sizeof>")
 
 # ---- import std (libc++'s own std.cppm / std.compat.cppm) ----

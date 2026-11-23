@@ -2,7 +2,7 @@ export module Core.Rect;
 
 import Core.glm;
 
-export struct Rect
+export OC_FWD_ATTACH struct Rect
 {
     Rect() {}
     Rect(glm::ivec2 min, glm::ivec2 max) : min(min), max(max) {}

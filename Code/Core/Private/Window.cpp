@@ -9,6 +9,8 @@ import Core.SDL;
 import Core.Profiler;
 import Core.Windows; // timeBeginPeriod (real 1 ms sleeps for the frame limiter)
 
+OC_FWD_ATTACH_BEGIN
+
 Window::~Window()
 {
     if (!m_running.load(oc::memory_order_relaxed))
@@ -199,3 +201,5 @@ void Window::getWindowSize(glm::ivec2& size) const
 {
     SDL_GetWindowSizeInPixels((SDL_Window*)m_windowHandle, &size.x, &size.y); // cached-state read, cross-thread tolerated
 }
+
+OC_FWD_ATTACH_END

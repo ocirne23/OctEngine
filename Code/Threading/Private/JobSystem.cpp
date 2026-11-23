@@ -2,6 +2,9 @@ module;
 
 #include <intrin.h>
 #pragma comment(lib, "Synchronization.lib") // WaitOnAddress with a timeout (idle's forced sleep)
+#ifndef _MSC_VER
+#include "OcFiberCompat.h" // Linux: the Win32 fiber / thread calls below, and OcFiberSafeTls in place of /GT
+#endif
 
 module Threading;
 
@@ -18,26 +21,43 @@ static constexpr DWORD FiberFlagFloatSwitch = 0x1;
 
 // The worker (or registered main-thread) context of the current thread. Fibers migrate between
 // worker threads across a parked wait, so job code must re-read this after any wait - which is
-// exactly what happens naturally as long as TLS isn't cached across the switch (/GT).
+// exactly what happens naturally as long as TLS isn't cached across the switch (/GT). clang has no /GT, so on Linux
+// every thread_local of this file is an OcFiberSafeTls: each access is a fresh, non-inlined lookup.
+#ifdef _MSC_VER
 static thread_local WorkerContext* t_worker = nullptr;
+#else
+static OcFiberSafeTls<WorkerContext*, 0> t_worker;
+#endif
 
 // Nesting depth of inline job execution on a non-fiber thread (main helping in wait). A job run
 // inline that waits helps again, possibly picking up another waiting job - without a cap that
 // recursion grows the host stack unboundedly under sustained load. Beyond the cap the thread
 // just waits; the workers guarantee progress.
+#ifdef _MSC_VER
 static thread_local uint32 t_helpDepth = 0;
+#else
+static OcFiberSafeTls<uint32, 1> t_helpDepth;
+#endif
 static constexpr uint32 MaxHelpDepth = 4;
 
 // The external helper's consecutive failed High-ring pops (tryRunOneHighJob): past a few,
 // externalHelperWait treats a ring that "looks" non-empty as a claimed-but-unpublished cell and
 // sleeps timed instead of returning to spin - the same case as WorkerContext::idleStreak.
+#ifdef _MSC_VER
 static thread_local uint32 t_helperMissStreak = 0;
+#else
+static OcFiberSafeTls<uint32, 2> t_helperMissStreak;
+#endif
 
 // The innermost job executing on a NON-FIBER thread (main helping, the window helper, a timer-
 // thread inline fallback). On a fiber the same slot is Fiber::currentJob, because it must travel
 // with the fiber across a park: a resumed fiber lands on a thread whose own slot says nothing about
 // it. currentJobSlot() picks the right one; re-resolve it after anything that can park.
+#ifdef _MSC_VER
 static thread_local Job* t_currentJob = nullptr;
+#else
+static OcFiberSafeTls<Job*, 3> t_currentJob;
+#endif
 
 static Job** currentJobSlot()
 {
@@ -47,7 +67,11 @@ static Job** currentJobSlot()
 
 // ThreadLocalScope's pin count on this thread (debug only). Nonzero = job code on this thread is
 // mid-use of thread-local state, so nothing may park this fiber or run another job body here.
+#ifdef _MSC_VER
 static thread_local uint32 t_tlsPinDepth = 0;
+#else
+static OcFiberSafeTls<uint32, 4> t_tlsPinDepth;
+#endif
 
 static void assertNotThreadLocalPinned()
 {
@@ -82,6 +106,32 @@ static constexpr uint32 c_logicalWorkerCoreMax = 16;
 
 // PHYSICAL cores via RelationProcessorCore (one record per core, however many logical CPUs it
 // carries). 0 on failure - the caller falls back to a logical-count guess.
+#ifndef _MSC_VER
+// Linux: distinct (package, core) pairs in /proc/cpuinfo.
+static uint32 physicalCoreCount()
+{
+    FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (!cpuinfo)
+        return 0;
+    oc::vector<uint64> cores;
+    char line[256];
+    uint32 package = 0;
+    while (fgets(line, sizeof(line), cpuinfo))
+    {
+        uint32 value = 0;
+        if (sscanf(line, "physical id : %u", &value) == 1)
+            package = value;
+        else if (sscanf(line, "core id : %u", &value) == 1)
+        {
+            const uint64 key = (uint64(package) << 32) | value;
+            if (oc::find(cores.begin(), cores.end(), key) == cores.end())
+                cores.push_back(key);
+        }
+    }
+    fclose(cpuinfo);
+    return uint32(cores.size());
+}
+#else
 static uint32 physicalCoreCount()
 {
     DWORD bytes = 0;
@@ -101,6 +151,7 @@ static uint32 physicalCoreCount()
     }
     return cores;
 }
+#endif
 
 void JobSystem::initialize(const JobSystemDesc& desc)
 {

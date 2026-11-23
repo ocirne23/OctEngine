@@ -7,6 +7,9 @@ module Core.Time;
 import Core;
 import Core.Windows;
 import Core.Window;
+import Core.glm;
+
+OC_FWD_ATTACH_BEGIN
 
 static Clock::duration secondsToDuration(double sec)
 {
@@ -215,3 +218,5 @@ void Time::processTimers()
         m_lastCheckedBucket = currentBucket;
     }
 }
+
+OC_FWD_ATTACH_END

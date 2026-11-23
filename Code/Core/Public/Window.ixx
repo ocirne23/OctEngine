@@ -23,7 +23,7 @@ export import Core.fwd;
 // Window-affine SDL calls from other threads go through runOnWindowThread() (executed at the next
 // pump; wait=true blocks - init-time only: Vulkan surface creation, the ImGui SDL backend init).
 // Cross-thread SDL READS (getWindowSize, GetKeyboardState) stay direct - cached-state reads.
-export class Window
+export OC_FWD_ATTACH class Window
 {
 public:
 

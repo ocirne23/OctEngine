@@ -39,7 +39,7 @@ add_definitions(/FI"${ROOT_DIR}/Code/Core/Private/forceinclude.h"
 	/wd5311 # deprecated literal-operator-id form in EASTL's string.h (third-party), re-fires in every importer of Core
 )
 else()
-	include(Dependencies/Linux.cmake) # clang + libc++ + Ninja; the same flags, translated
+	include(Linux/Linux.cmake) # clang + libc++ + Ninja; the same flags, translated
 endif()
 
 # Cooked/shipping build: compile the visual scripts straight INTO the engine (the App-Scripts target) so their

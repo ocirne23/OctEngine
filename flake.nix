@@ -3,7 +3,7 @@
 
   # The Windows build uses the prebuilt .libs in Dependencies/Lib. On Linux the system libraries come from nixpkgs, and the
   # libraries whose vendored headers carry a pinned upstream revision (or a local patch) are built from that exact
-  # revision by Dependencies/Linux.cmake, against the vendored headers in Dependencies/Include.
+  # revision by Linux/Linux.cmake, against the vendored headers in Dependencies/Include.
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";

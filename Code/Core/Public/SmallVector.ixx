@@ -4,8 +4,12 @@
 // so Core.OcSTL must never import back.
 export module Core.SmallVector;
 
+#ifdef _MSC_VER
 import <memory>; // size_t
 import <new>;    // placement new
+#else
+import std.compat;
+#endif
 
 import Core.OcSTL;
 

@@ -15,8 +15,8 @@ export struct TimeSettings
     float pumpLeadMs = 2.0f;
 };
 
-export class Timer;
-export class Time
+export OC_FWD_ATTACH class Timer;
+export OC_FWD_ATTACH class Time
 {
 public:
 
@@ -129,7 +129,7 @@ export namespace Globals
     Time time;
 }
 
-export class Timer
+export OC_FWD_ATTACH class Timer
 {
 public:
 

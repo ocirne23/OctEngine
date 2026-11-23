@@ -25,7 +25,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE VULKAN_HPP_NO_SPACESHIP_OPERA
 if(MSVC)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=__noop")
 else()
-	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT(x)=((void)0)")
+	target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=(void)sizeof") # __noop: unevaluated
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings Animation File Threading vulkan-1
