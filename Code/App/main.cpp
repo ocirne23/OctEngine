@@ -393,5 +393,11 @@ int main(int argc, char* argv[])
     Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
     Globals::world.joinSelection();
     Globals::forceSystem.joinMerge();
+#ifndef _MSC_VER
+    // The one explicit teardown call. glibc runs exit handlers newest first, and cuDNN registers its statics lazily
+    // during the first inferences - after every App global - so they die before the terrain could stop an inference
+    // in flight. Unload the models (waits that inference out) and release ORT while cuDNN is whole.
+    Procedural::TerrainGenV3::shutdownInference();
+#endif
     return 0;
 }

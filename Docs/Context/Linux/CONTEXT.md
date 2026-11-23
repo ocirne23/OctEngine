@@ -90,6 +90,16 @@ clang warns about an ANGLED include in a module purview.
   managers / XR -> GPU allocator -> device -> instance) imports downward. **A new global whose dtor uses another global
   needs such an import on Linux.** One order cannot be stated: the data managers outlive the renderer (the reverse
   would be an import cycle); their dtors use only the device.
+  A global in a module IMPLEMENTATION unit (`.cpp`) is outside that cascade: it is constructed after every interface
+  global and destroyed before them. The diffusion runtime is such a global, and the procedural systems' jobs sample
+  it until their dtors join them, so on Linux its lifetime is `g_diffusionRuntimeLifetime` in `GeneratorV3.ixx`
+  (trivial storage in the `.cpp`), and the partitions of the procedural globals import `:GeneratorV3`.
+  **Libraries loaded at run time come last of all**: glibc runs exit handlers newest first, and cuDNN registers its
+  statics during the first inferences, so they die before any App global. `main()` therefore ends, on Linux only, with
+  the one explicit teardown call, `TerrainGenV3::shutdownInference()` (unloads the models, waiting out an inference in
+  flight, and destroys the `Ort::Env`), while cuDNN is whole.
+* **Crash reports**: the unattended fatal-signal handler (`UnattendedRun.ixx`) prints the faulting thread's stack, then
+  re-raises the signal, so systemd-coredump keeps a core with every thread (`coredumpctl debug <pid>`).
 * **GPU profiler timeline**: the `QueryPerformanceCounter` shim reads `CLOCK_MONOTONIC`, so `GpuProfiler` calibrates
   against `VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR`, not the QPC domain. The NVIDIA driver accepts a QPC request on Linux and
   returns `VK_SUCCESS` with a host time of 0, which put every GPU scope one system uptime in the past. `CLOCK_MONOTONIC_RAW`
@@ -103,6 +113,15 @@ clang warns about an ANGLED include in a module purview.
   GPU package from NuGet (`flake.nix`; the GitHub release page is gone), with the CUDA 12 / cuDNN 9 runtime from
   nixpkgs and the NVIDIA driver's libcuda (`/run/opengl-driver/lib`). `Onnx.cpp` appends the CUDA provider where
   Windows appends DirectML; the CUDA provider needs the `Ort::Env` (its logger) to exist first.
+  **VRAM is shared with the renderer, with no oversubscription** (WDDM pages video memory to system RAM on Windows; the
+  Linux driver fails the allocation). Measured on the 8 GB RTX 3080 Laptop in the sandbox: the desktop 1.6 - 2.0 GB, the
+  renderer about 3.9 GB, so CUDA gets about 2 GB. Hence, on Linux only: the fp16 models by default (`Terrain/V3/FP16
+  inference`; their tiles go to `<seed>_fp16`, so tiles made from the fp32 models are not read), latent and coarse
+  batches of 2 (the noise is per window, so the batch size does not change the tiles), the sequential executor, the
+  cuDNN heuristic search without the maximum workspace, an arena that grows by the request and shrinks after every
+  run. Even so inference can still run out of memory: the renderer grows with the resolution and the desktop's share
+  varies. A tile whose own inference fails is not saved, but the stage caches keep a failed batch's zero output, and a
+  later tile that reads those windows is saved as if it were real terrain.
 
 ## After every upstream pull
 

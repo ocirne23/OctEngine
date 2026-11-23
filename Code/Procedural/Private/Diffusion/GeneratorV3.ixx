@@ -188,6 +188,9 @@ export namespace Procedural
 		// generator so the construction does not kick a load. On: the next construction loads them.
 		static void setModelLoadingEnabled(bool enabled);
 		static bool modelLoadingEnabled();
+		// For process exit: switches model loading off (waits out an inference in flight) and destroys the ONNX
+		// Runtime environment while the GPU libraries are still whole.
+		static void shutdownInference();
 		// What the preview and the seeder wait for: the models are up, OR loading is switched off and
 		// the caches serve (a preview then shows only what was generated before).
 		static bool canGenerate();
@@ -323,3 +326,19 @@ export namespace Procedural
 		float m_invMpp = 1.0f / 30.0f;
 	};
 }
+
+#ifndef _MSC_VER
+namespace Procedural
+{
+	// Linux has no init_seg: a global in GeneratorV3.cpp would be constructed after every Procedural global and so
+	// destroyed BEFORE Globals::terrain, whose destructor joins the chunk pump jobs that sample the diffusion runtime.
+	// This object constructs and destroys that runtime from this partition's initializer instead, which runs before the
+	// partitions defining the procedural globals (they import this one).
+	struct DiffusionRuntimeLifetime
+	{
+		DiffusionRuntimeLifetime();
+		~DiffusionRuntimeLifetime();
+	};
+	DiffusionRuntimeLifetime g_diffusionRuntimeLifetime;
+}
+#endif

@@ -15,7 +15,8 @@ import Core.Windows;
 
 #ifndef _MSC_VER
 // Linux: the same job with signals. A fatal signal prints the faulting thread's stack (glibc backtrace: function names
-// from the dynamic symbol table, no file:line - run `addr2line -e App` on the addresses for those) and exits.
+// from the dynamic symbol table, no file:line - run `addr2line -e App` on the addresses for those) and dies of the same
+// signal, so a core dump follows.
 namespace
 {
     void unattendedCrashHandler(int signalNumber)
@@ -31,7 +32,10 @@ namespace
         void* frames[64];
         const int count = backtrace(frames, 64);
         backtrace_symbols_fd(frames, count, STDERR_FILENO);
-        _exit(128 + signalNumber);
+        // Re-raised with the default action, not _exit: the process still ends with this signal, and the core dump
+        // (coredumpctl) keeps every thread's stack, which the backtrace above cannot show.
+        signal(signalNumber, SIG_DFL);
+        raise(signalNumber);
     }
 }
 

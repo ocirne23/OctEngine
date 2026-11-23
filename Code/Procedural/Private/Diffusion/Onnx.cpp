@@ -36,11 +36,22 @@ namespace Procedural::Diffusion
 		// on the CPU because they compute tensor metadata, and a GPU round-trip per op to produce a few
 		// integers would be slower. Nothing here reads ORT's warning stream: a DirectML EP that genuinely
 		// fails to attach THROWS, and is reported below as an explicit error plus "inference provider: CPU".
+#ifdef _MSC_VER
 		Ort::Env& ortEnv()
 		{
 			static Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "OctEngine.Diffusion");
 			return env;
 		}
+#else
+		// Linux: namespace scope, so releaseEnvironment() can destroy it before exit (see TerrainGenV3::shutdownInference).
+		oc::optional<Ort::Env> g_ortEnv;
+		Ort::Env& ortEnv()
+		{
+			if (!g_ortEnv)
+				g_ortEnv.emplace(ORT_LOGGING_LEVEL_ERROR, "OctEngine.Diffusion");
+			return *g_ortEnv;
+		}
+#endif
 
 		std::mutex g_providerMutex;
 		oc::string g_resolvedProvider;
@@ -103,6 +114,13 @@ namespace Procedural::Diffusion
 
 	OnnxModel::OnnxModel() : m_impl(oc::make_unique<Impl>()) {}
 	OnnxModel::~OnnxModel() = default;
+
+	void OnnxModel::releaseEnvironment()
+	{
+#ifndef _MSC_VER
+		g_ortEnv.reset();
+#endif
+	}
 
 	bool OnnxModel::isValid() const
 	{

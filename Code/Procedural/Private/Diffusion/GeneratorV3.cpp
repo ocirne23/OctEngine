@@ -799,8 +799,15 @@ namespace Procedural
 		// chunk pump jobs. As a function-local static it was constructed LATE (at the first terrain
 		// enable, after every global) and so destroyed FIRST at exit - while a pump job could still be
 		// inside fetchTile erasing from m_pending: a crash on any quit during chunk generation.
+#ifdef _MSC_VER
 		DiffusionRuntime g_diffusionRuntime;
 		DiffusionRuntime& DiffusionRuntime::get() { return g_diffusionRuntime; }
+#else
+		// Linux: trivially destructible storage, so this unit registers no destructor of its own; the runtime's lifetime
+		// is g_diffusionRuntimeLifetime's (GeneratorV3.ixx).
+		alignas(DiffusionRuntime) unsigned char g_diffusionRuntimeStorage[sizeof(DiffusionRuntime)];
+		DiffusionRuntime& DiffusionRuntime::get() { return *std::launder(reinterpret_cast<DiffusionRuntime*>(g_diffusionRuntimeStorage)); }
+#endif
 
 		FieldTilePtr DiffusionRuntime::fetchTile(int32 ti, int32 tj)
 		{
@@ -1055,6 +1062,17 @@ namespace Procedural
 			return tile;
 		}
 	}
+
+#ifndef _MSC_VER
+	DiffusionRuntimeLifetime::DiffusionRuntimeLifetime()
+	{
+		std::construct_at(reinterpret_cast<DiffusionRuntime*>(g_diffusionRuntimeStorage));
+	}
+	DiffusionRuntimeLifetime::~DiffusionRuntimeLifetime()
+	{
+		std::destroy_at(&DiffusionRuntime::get());
+	}
+#endif
 
 	// =====================================================================================================
 	// TerrainGenV3
@@ -1571,6 +1589,11 @@ namespace Procedural
 	void TerrainGenV3::unloadModels() { DiffusionRuntime::get().unloadModels(); }
 	void TerrainGenV3::setModelLoadingEnabled(bool enabled) { DiffusionRuntime::get().setLoadEnabled(enabled); }
 	bool TerrainGenV3::modelLoadingEnabled() { return DiffusionRuntime::get().isLoadEnabled(); }
+	void TerrainGenV3::shutdownInference()
+	{
+		DiffusionRuntime::get().setLoadEnabled(false);
+		OnnxModel::releaseEnvironment();
+	}
 	bool TerrainGenV3::canGenerate() { return modelsLoaded() || (!modelLoadingEnabled() && isReady()); }
 	TerrainGenV3::TileStats TerrainGenV3::tileStats() { return DiffusionRuntime::get().tileStats(); }
 	bool TerrainGenV3::hasFailed() { return DiffusionRuntime::get().hasFailed(); }

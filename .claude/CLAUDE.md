@@ -342,7 +342,8 @@ The constraints that shape it:
 * The procedural systems go FIRST — they free render residency and collider bodies and may wait on
   in-flight jobs. **Order among them is link-order-undefined and deliberately independent.**
 
-**main() has NO explicit teardown calls.** A new global that holds EntityPtrs, or whose dtor calls
+**main() has NO explicit teardown calls** (on Windows; Linux has one, `TerrainGenV3::shutdownInference()`, see
+[`Docs/Context/Linux/CONTEXT.md`](../Docs/Context/Linux/CONTEXT.md)). A new global that holds EntityPtrs, or whose dtor calls
 another library's global, **must slot into InitSeg.h.** Globals in *different* libraries otherwise
 have no defined construction order — see `ScriptEventManager::initialize` for the register-from-main
 pattern.
