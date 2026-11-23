@@ -34,14 +34,11 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
 
 void IndirectCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
 {
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        // One entry per DRAW SLOT (a bucket's firstInstance + its index): the LOD-expanded bucket total, which present()
-        // keeps within the instance capacity. The shadow cull writes its smaller records here first (it runs before).
-        perFrame.outMeshInstancesBuffer.initialize(maxMeshInstances * sizeof(RendererVKLayout::OutMeshInstance), // 6
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutInstances");
-    }
+    // One entry per DRAW SLOT (a bucket's firstInstance + its index): the LOD-expanded bucket total, which present() keeps
+    // within the instance capacity. The shadow cull writes its smaller records here first (it runs before).
+    m_outMeshInstancesBuffer.initialize(maxMeshInstances * sizeof(RendererVKLayout::OutMeshInstance), // 6
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutInstances");
 }
 
 void IndirectCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
@@ -245,8 +242,8 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = {
                 vk::DescriptorBufferInfo {
-                    .buffer = frameData.outMeshInstancesBuffer.getBuffer(),
-                    .range = frameData.outMeshInstancesBuffer.getSize(),
+                    .buffer = m_outMeshInstancesBuffer.getBuffer(),
+                    .range = m_outMeshInstancesBuffer.getSize(),
                 }
             }
         },

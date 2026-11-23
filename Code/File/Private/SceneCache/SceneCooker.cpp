@@ -499,9 +499,9 @@ namespace
     // Mips + BC compression + .dds write for an already-decoded RGBA8 image (the shared tail of the
     // TextureConvert entry points; alpha-coverage preservation is a cooked-scene concern, not needed here).
     // pChannelMin (4 entries, or null): a per-channel floor re-applied after every mip resize - the caller
-    // has already applied it to level 0.
+    // has already applied it to level 0. maxSize > 0: the mips larger than it are left out (convertChannelsToDds).
     bool compressRgbaToDds(const uint8* pRgba, uint32 width, uint32 height, TextureConvert::EUsage usage, const char* outPath,
-        const uint8* pChannelMin = nullptr)
+        const uint8* pChannelMin = nullptr, uint32 maxSize = 0)
     {
         dds::DXGI_FORMAT format = dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM;
         if (usage == TextureConvert::EUsage::NormalMap || usage == TextureConvert::EUsage::TwoChannel)
@@ -519,11 +519,14 @@ namespace
         }
 
         const uint32 numMips = 1 + (uint32)std::floor(std::log2((float)oc::max(width, height)));
+        uint32 firstMip = 0;
+        while (maxSize > 0 && firstMip + 1 < numMips && (oc::max(width, height) >> firstMip) > maxSize)
+            ++firstMip;
         oc::vector<uint8> fileData(sizeof(dds::Header));
-        dds::write_header(fileData.data(), format, width, height, numMips);
+        dds::write_header(fileData.data(), format, oc::max(1u, width >> firstMip), oc::max(1u, height >> firstMip), numMips - firstMip);
 
         oc::vector<uint8> mipPixels;
-        for (uint32 mip = 0; mip < numMips; ++mip)
+        for (uint32 mip = firstMip; mip < numMips; ++mip)
         {
             const uint32 mipW = oc::max(1u, width >> mip);
             const uint32 mipH = oc::max(1u, height >> mip);
@@ -1363,7 +1366,7 @@ bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPat
     return compressRgbaToDds(rgba.data(), width, height, EUsage::Data, outPath);
 }
 
-bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath)
+bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath, uint32 maxSize)
 {
     // Each distinct source decoded once (as RGBA: a grayscale source replicates into RGB).
     struct Decoded { const char* path; stbi_uc* pixels; };
@@ -1427,7 +1430,7 @@ bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsa
         const bool hasFloor = (channelMin[0] | channelMin[1] | channelMin[2] | channelMin[3]) != 0;
         if (hasFloor)
             applyChannelFloor(rgba.data(), numPixels, channelMin);
-        ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath, hasFloor ? channelMin : nullptr);
+        ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath, hasFloor ? channelMin : nullptr, maxSize);
     }
     else
         ok = false;

@@ -148,7 +148,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   `updateTreeRecords`, main thread after beginFrame; Procedural TreeWorld): every
   terrain chunk's 4-byte tree records - right after its GROUND (`TREE_RECORD_GROUND_RES`² = 17² heights over the chunk,
   16-bit above its minimum, `TREE_RECORD_GROUND_WORDS`; every chunk has one, trees or not) - in ONE fixed-size
-  HOST-VISIBLE sequential-write pool (ReBAR when the device has it; `Trees/World/GPU pool (MB)`, 128; 64-record
+  HOST-VISIBLE sequential-write pool (ReBAR when the device has it; `Trees/World/GPU pool (MB)`, 48; 64-record
   blocks, best-fit `IndexRangeFreeList` + a bump top) and a TABLE of the resident chunks (`TreeRecordChunkGpu`: coord,
   first, count; host-visible per frame slot, rewritten for the current slot when changed). **The pool never grows**: a
   chunk that does not fit is refused (`stats().refused`); only a size change drains the GPU. A chunk's range is
@@ -876,6 +876,11 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
   * the shadow cull writes the MAIN cull's out-instance buffer (`OutShadowMeshInstance` at its draw slot; its
     48 B fit the main 64 B stride, static_assert in Layout.ixx) and its OPAQUE list (binding 8). Only the compacted
     count is the shadow cull's own. No shadow capacity of its own to resize.
+  * **That out-instance buffer (`CullOutInstances`) is ONE copy for all frame slots**, and so are the far voxel trees'
+    appended + sorted records (both lists): the GPU writes and reads them inside one frame on one queue. A barrier at the
+    top of `recordPrimaryPreScene` (before the far shadow casters' and the shadow cull's writes) waits for the previous
+    frame's reads - the indirect fetch, the vertex, tessellation and fragment stages, the far scatter's compute. A new
+    reader in another stage must join that barrier.
   * the shadow execute uses the static mesh pass's OPAQUE DGC scratch (`getOpaquePreprocessBuffer`), sized for both:
     `ShadowMapGraphicsPipeline::getPreprocessRequirement` -> `StaticMeshGraphicsPipeline::reserveOpaquePreprocess`,
     called by the Renderer after every shadow-pipeline initialize / reload / mesh-capacity growth. The transparent

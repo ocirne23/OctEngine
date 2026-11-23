@@ -54,7 +54,7 @@ export struct TreeWorldSettings
 	float forestMinority = 0.05f;
 
 	int maxGenJobs = 0;             // concurrent chunk placements (Low pump jobs, preemptible); 0 = one per job worker
-	int poolMB = 128;               // the GPU record pool (MB; fixed - a change drains the GPU and regenerates)
+	int poolMB = 48;                // the GPU record pool (MB; fixed - a change drains the GPU and regenerates). The sandbox's full ring: ~18 MB
 	int uploadKB = 1024;            // record bytes uploaded per frame
 	int keepRadius = 4;             // chunks (Chebyshev) whose records the CPU keeps
 	bool reloadSpecies = false;     // button: re-read the Placement blocks, regenerate (TreeWorld clears it)

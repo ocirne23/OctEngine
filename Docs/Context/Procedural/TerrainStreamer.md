@@ -221,7 +221,11 @@ four sources): `diffr` = albedo + ROUGHNESS in the alpha (the ARM's G; BC3; floo
 height blend in "Terrain/Textures", the displacement in "Terrain/Tessellation"; see
 [`Docs/Context/RendererVK/Terrain.md`](../RendererVK/Terrain.md)) + AO (the ARM's R; BC5). A set's `heightScale`
 (`TerrainTexSource`, default 1) scales its baked height about 0.5 - the relief of that set alone (Moss002: 0.25); the
-scale is part of the file name (`<stem>_hao_h25.dds`), so a change re-bakes. The ARM's metalness is dropped (terrain is
+scale is part of the file name (`<stem>_hao_h25.dds`), so a change re-bakes. The hao keeps at most 1024 texels per axis
+(`TERRAIN_HAO_MAX_SIZE`; the 2k sources lose their top mip, `TextureConvert::convertChannelsToDds`'s `maxSize`): 4 MB of
+VRAM less per set, and the cap is in the name too (`<stem>_hao_h25_s1024.dds`; a bake deletes the uncapped file). Every
+terrain hao fetch (`texture` / `textureGrad`) takes its LOD from the texture's own size, so the smaller map needs no shader
+change; a fetch at a FIXED LOD (the ocean's seabed `textureLod`) would read it one level blurrier. The ARM's metalness is dropped (terrain is
 never metallic). A packed output is stale when EITHER of its sources is newer. The SNOW set is generated, not a photo:
 `SnowRelief::ensureSources` writes its PNG sources into `Local/TerrainTex/Gen/` at the start of the bake (once; see The look
 in [`Docs/Context/RendererVK/Snow.md`](../RendererVK/Snow.md)), and its entry has `noArm` (no ARM source: the diffr alpha

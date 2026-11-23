@@ -195,11 +195,23 @@ namespace
 		return oc::format("Textures/Terrain/{}/{}_{}_2k.{}", src.stem, src.stem, map, m == "disp" ? "png" : "jpg");
 	}
 
-	// A scaled height lands in its own file (hao_h50 = heightScale 0.5): a changed scale re-bakes, never reads a stale one.
+	// The height + AO bake keeps at most this many texels per axis (the 2k sources lose their top mip): the height blend, the
+	// parallax and the AO hold up at half the albedo's resolution, and it saves 4 MB of VRAM per material.
+	constexpr uint32 TERRAIN_HAO_MAX_SIZE = 1024;
+
+	// The hao name carries its parameters, so a change re-bakes and never reads a stale file: a scaled height
+	// (_h50 = heightScale 0.5) and the size cap (_s1024).
+	oc::string terrainHaoCachePath(const TerrainTexSource& src, uint32 maxSize)
+	{
+		const oc::string scale = src.heightScale != 1.0f ? oc::format("_h{}", (int)(src.heightScale * 100.0f + 0.5f)) : oc::string();
+		const oc::string size = maxSize > 0 ? oc::format("_s{}", maxSize) : oc::string();
+		return oc::format("{}{}_hao{}{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, scale, size);
+	}
+
 	oc::string terrainTexCachePath(const TerrainTexSource& src, const char* map)
 	{
-		if (src.heightScale != 1.0f && oc::string_view(map) == "hao")
-			return oc::format("{}{}_hao_h{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, (int)(src.heightScale * 100.0f + 0.5f));
+		if (oc::string_view(map) == "hao")
+			return terrainHaoCachePath(src, TERRAIN_HAO_MAX_SIZE);
 		// The roughness floor is part of the diffr name (diffr_f3 = alpha >= 3/255): a changed floor re-bakes.
 		if (oc::string_view(map) == "diffr")
 			return oc::format("{}{}_diffr_f{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, (int)TERRAIN_ROUGHNESS_FLOOR);
@@ -295,7 +307,10 @@ namespace
 					const bool hasDisp = FileSystem::exists(disp);
 					const TextureConvert::PackChannel channels[4] = { { hasDisp ? disp.c_str() : nullptr, 0, 128, src.heightScale },
 						src.noArm ? TextureConvert::PackChannel{ nullptr, 0, 255 } : TextureConvert::PackChannel{ arm.c_str(), 0 }, {}, {} };
-					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::TwoChannel, terrainTexCachePath(src, "hao").c_str());
+					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::TwoChannel, terrainTexCachePath(src, "hao").c_str(),
+						TERRAIN_HAO_MAX_SIZE);
+					if (ok) // the full-size bake of the old name is dead
+						FileSystem::remove(terrainHaoCachePath(src, 0));
 					break;
 				}
 				}

@@ -62,15 +62,15 @@ void TreeVoxelFarPipeline::initLists(Lists& lists, uint32 maxInstances, const ch
             oc::format("{}/Buckets", name).c_str(), BufferHostAccess::eSequentialWrite);
         lists.chunksMapped[i] = lists.chunks[i].mapMemory();
         lists.bucketsMapped[i] = lists.buckets[i].mapMemory();
-        lists.appended[i].initialize(maxInstances * sizeof(InstanceGpu), address, vk::MemoryPropertyFlagBits::eDeviceLocal, false,
-            oc::format("{}/Appended", name).c_str());
         lists.state[i].initialize(STATE_WORDS * sizeof(uint32), address | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal,
             false, oc::format("{}/State", name).c_str());
         lists.commands[i].initialize(MAX_BUCKETS * COMMAND_SIZE, address | vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, oc::format("{}/Commands", name).c_str());
-        lists.sorted[i].initialize(maxInstances * sizeof(InstanceGpu), address | vk::BufferUsageFlagBits2::eVertexBuffer,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, oc::format("{}/Sorted", name).c_str());
     }
+    lists.appended.initialize(maxInstances * sizeof(InstanceGpu), address, vk::MemoryPropertyFlagBits::eDeviceLocal, false,
+        oc::format("{}/Appended", name).c_str());
+    lists.sorted.initialize(maxInstances * sizeof(InstanceGpu), address | vk::BufferUsageFlagBits2::eVertexBuffer,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, oc::format("{}/Sorted", name).c_str());
 }
 
 void TreeVoxelFarPipeline::initialize()
@@ -150,9 +150,9 @@ void TreeVoxelFarPipeline::runPasses(vk::CommandBuffer cmd, uint32 frameIdx, con
     const VoxelFarPush push{
         .records = params.records, .map = params.map, .types = params.types,
         .chunks = lists.chunks[frameIdx].getDeviceAddress(), .farTypes = m_types[frameIdx].getDeviceAddress(),
-        .buckets = lists.buckets[frameIdx].getDeviceAddress(), .appended = lists.appended[frameIdx].getDeviceAddress(),
+        .buckets = lists.buckets[frameIdx].getDeviceAddress(), .appended = lists.appended.getDeviceAddress(),
         .state = lists.state[frameIdx].getDeviceAddress(), .commands = lists.commands[frameIdx].getDeviceAddress(),
-        .sorted = lists.sorted[frameIdx].getDeviceAddress(),
+        .sorted = lists.sorted.getDeviceAddress(),
         .numChunks = lists.numChunks[frameIdx], .numTypes = params.numTypes, .numFarTypes = m_numTypes[frameIdx],
         .numBuckets = lists.numBuckets[frameIdx], .worldSeed = params.worldSeed, .mapSize = params.mapSize,
         .chunkSize = params.chunkSize, .endDistance = params.endDistance, .maxInstances = maxInstances, .pad = 0,

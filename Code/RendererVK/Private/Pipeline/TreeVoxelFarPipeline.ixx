@@ -12,7 +12,8 @@ import :Layout;
 // THE FAR VOXEL TREES ("Trees/Voxel far trees"; Docs/Context/RendererVK/Scene.md): the world tree records of the chunks
 // outside the near set, expanded on the GPU into their variants' VOXEL boxes (tree_voxel_far.cs.glsl: cull, prefix,
 // scatter), and drawn by StaticMeshGraphicsPipeline's far voxel pipeline - one indexed indirect draw per voxel mesh.
-// Per frame slot: the CPU's chunk list and type tables (host-visible), the GPU's appended + sorted records and draws.
+// Per frame slot: the CPU's chunk list and type tables (host-visible), the GPU's counts and draws. One copy for all slots: the
+// appended + sorted records.
 export class TreeVoxelFarPipeline final
 {
 public:
@@ -75,11 +76,11 @@ public:
     void record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     // Off: the draws emptied.
     void recordClear(vk::CommandBuffer cmd, uint32 frameIdx);
-    Draw getDraw(uint32 frameIdx) { return Draw{ &m_view.sorted[frameIdx], &m_view.commands[frameIdx] }; }
+    Draw getDraw(uint32 frameIdx) { return Draw{ &m_view.sorted, &m_view.commands[frameIdx] }; }
     // The far shadow casters the same way (before the shadow draw); off: emptied.
     void recordShadow(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     void recordShadowClear(vk::CommandBuffer cmd, uint32 frameIdx);
-    Draw getShadowDraw(uint32 frameIdx) { return Draw{ &m_shadow.sorted[frameIdx], &m_shadow.commands[frameIdx] }; }
+    Draw getShadowDraw(uint32 frameIdx) { return Draw{ &m_shadow.sorted, &m_shadow.commands[frameIdx] }; }
 
 private:
     void buildLayout(ComputePipelineLayout& layout, uint32 pass, bool shadow = false);
@@ -90,10 +91,12 @@ private:
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> chunks;  // host-visible
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> buckets; // host-visible
         oc::array<oc::span<uint8>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> chunksMapped, bucketsMapped;
-        oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> appended;
+        // The records, appended then sorted: ONE copy each for all frame slots (the GPU writes and reads them inside one frame;
+        // RendererState::recordPrimaryPreScene's barrier holds the next frame's culls back until the last reads are done).
+        Buffer appended;
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> state;
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> commands;
-        oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> sorted;
+        Buffer sorted;
         oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> numChunks{};
         oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> numBuckets{};
     };

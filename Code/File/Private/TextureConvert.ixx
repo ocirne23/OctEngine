@@ -42,8 +42,9 @@ export namespace TextureConvert
 
 	// General channel packing: output RGBA channel i = channels[i]. Each distinct source is decoded once; all
 	// must share dimensions (else false, with a warning). usage picks the format (e.g. ColorAlpha: albedo +
-	// roughness in one BC3; TwoChannel: height + AO in one BC5). At least one channel needs a path.
-	bool convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath);
+	// roughness in one BC3; TwoChannel: height + AO in one BC5). At least one channel needs a path. maxSize > 0: the mips
+	// larger than it on either axis are left out (the output starts at the first mip that fits, made from the full source).
+	bool convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath, uint32 maxSize = 0);
 
 	// In-memory BC compression of RGBA8 images generated at runtime (the procedural trees). Pure, any thread; the
 	// same stb_dxt compressor as above. BC1 = RGB, BC3 = RGBA, BC4 = R, BC5 = RG. Any size: edge texels repeat

@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core.glm;
+import Core.Log;
 import Core.Window;
 import :VK;
 import :Device;
@@ -210,6 +211,10 @@ SwapChain::EFenceWait SwapChain::waitForFrame(uint32 frameIdx, uint64 timeoutNs)
         return EFenceWait::Signaled;
     if (result == vk::Result::eTimeout)
         return EFenceWait::Timeout;
+    // DEVICE LOST (-4) = the GPU crashed or the driver reset it (a TDR): every later Vulkan call fails, DLSS's too. With
+    // GFSDK_Aftermath_Lib.x64.dll next to the exe, the crash leaves a dump.
+    Log::error(oc::format("SwapChain: waiting for the frame fence failed (VkResult {}{})", (int)result,
+        result == vk::Result::eErrorDeviceLost ? ", device lost" : ""));
     assert(false && "Failed to wait for fence");
     return EFenceWait::Error;
 }

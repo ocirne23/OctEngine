@@ -849,7 +849,7 @@ before its `Enabled` check: it runs with "Trees/Enabled" off.
   grassland / forest type tweaks, `Reload species`, a new sampler, a chunk size or bounds change, a rock change (`setRocks`). The generation
   counter is monotonic, so a late pump result of an old config never merges.
 * **GPU:** each merged chunk joins an upload queue; `Upload KB per frame` (1024) of records per frame go to the
-  renderer's pool (`Renderer::addTreeRecordChunk`, RendererVK "WORLD TREE RECORDS"; `GPU pool (MB)`, 128, fixed - a
+  renderer's pool (`Renderer::addTreeRecordChunk`, RendererVK "WORLD TREE RECORDS"; `GPU pool (MB)`, 48 - the sandbox's full ring of 14641 chunks and 2 M trees fills ~18 MB -, fixed - a
   full pool refuses chunks and warns once; a change drains the GPU and regenerates), each with its GROUND:
   `placeChunk` also writes the chunk's `TREE_RECORD_GROUND_RES`² = 17² heights (16 m at 256 m chunks, bilinear in its
   Full 8 m grid, 16-bit above the minimum - TreeRecordPool's encoding), the ground the far volume stands the records'

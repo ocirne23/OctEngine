@@ -104,8 +104,16 @@ too: its UBO was built for the old size). A rebuild per frame of the drag would 
   "Hook sl.common:Vulkan:CmdBindPipeline / CmdBindDescriptorSets / BeginCommandBuffer is NOT supported" are
   expected: they are command-buffer state-tracking hooks, which manual hooking does not use.
 * **No SL log file** (`pathToLogsAndData` null, no `sl.log`): SL's messages reach the engine log through the log
-  callback only, and the console gets only its warnings and errors. "Verbose log (restart)" (saved) sets SL's verbose
-  level, read once at slInit.
+  callback only - its ERRORS in every configuration, its warnings in Debug only (some repeat every frame). A failed
+  `evaluateDlss` also logs the SL call that failed and its `sl::Result` (the first of a run of failures). "Verbose log
+  (restart)" (saved) sets SL's verbose level, read once at slInit.
+* **NGX refuses a render or output size under 32 px** on either axis (the feature creation fails, 0xbad00005 =
+  InvalidParameter: a collapsed editor panel, a startup frame), so `evaluateDlss` skips such a frame on both platforms.
+  A failed evaluate is not tried again until the mode, preset, render size or output size changes: SL re-creates the
+  NGX feature on every evaluate while it fails.
+* **A lost device** (`SwapChain::waitForFrame` logs the VkResult, -4 = device lost: a GPU crash or a driver reset) fails
+  every later SL call too, so a "DLSS evaluate failed" next to it is a symptom. `GFSDK_Aftermath_Lib.x64.dll` next to the
+  exe makes the crash leave a dump.
 * **The OUTPUT must start at (0, 0)**: SL never sets NGX's `DLSS.Enable.Output.Subrects`, and NGX fails the
   evaluate (0xbad00005, "the output subrect base must be set to 0 ...") for any other output offset. So a viewport
   at the origin (the game) is written straight into TAA's resolved image; any other (the editor panel) goes to

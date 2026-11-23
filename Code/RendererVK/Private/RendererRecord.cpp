@@ -214,7 +214,7 @@ void RendererState::recordShadowCull(uint32 frameIdx)
         .inMeshInstanceOffsetsBuffer = m_instanceOffsets.getBuffer(),
         .inMeshInfoBuffer = m_meshInfos.getBuffer(),
         .inFirstInstancesBuffer = instances.firstInstances,
-        .outMeshInstancesBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .outMeshInstancesBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(),
         .outIndirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .inMaterialInfoBuffer = m_materials.getBuffer(),
         .inNodeStatesBuffer = instances.nodeStates,
@@ -250,7 +250,7 @@ void RendererState::recordShadowDraw(uint32 frameIdx)
         .descriptorSet = frameData.shadowDrawDescriptorSet,
         .ubo = frameData.ubo,
         // The main cull's buffers, written by the shadow cull (it runs first; see recordPrimaryPreScene).
-        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(),
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
         .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
@@ -515,7 +515,7 @@ void RendererState::recordStaticMeshPhase(CommandBuffer& cb, uint32 frameIdx, ui
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
         .materialInfoBuffer = m_materials.getBuffer(),
-        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(),
         .treeTypesBuffer = treeCullTypes(),
         .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
@@ -1155,7 +1155,7 @@ void RendererState::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primar
     else if (!m_dlssFailed)
     {
         m_dlssFailed = true;
-        Log::error("Renderer: DLSS evaluate failed (see Streamline's messages above in the log); the output keeps its last image");
+        Log::error("Renderer: DLSS evaluate failed (the failing call is logged just above); the output keeps its last image");
     }
     TaaPipeline::endExternalWrite(primary);
     m_gpuProfiler.endScope(primary);
@@ -1711,6 +1711,18 @@ void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer pri
     // static mesh pass's opaque DGC scratch, so both are free again before the main cull and the scene.
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays).
     const bool shadowCascades = !m_rtParams.effectiveSunShadow();
+    // The cull output (CullOutInstances) and the far voxel lists are ONE copy for all frame slots: the previous frame's
+    // reads of them (the draws' vertex, tessellation and fragment stages, the indirect fetch, the far scatter's compute)
+    // finish before this frame's culls write them. Execution only (write after read). The shadow cascades' pass waits for
+    // the same fragment + compute work a moment later anyway (ShadowMap's render pass).
+    const vk::MemoryBarrier2 sharedOutputsBarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eVertexAttributeInput
+            | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eTessellationControlShader
+            | vk::PipelineStageFlagBits2::eTessellationEvaluationShader | vk::PipelineStageFlagBits2::eFragmentShader
+            | vk::PipelineStageFlagBits2::eComputeShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eCopy,
+    };
+    primary.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &sharedOutputsBarrier });
     // The far voxel trees' and far shadow casters' inputs (only while their chunks are listed: the record pool exists).
     const auto farParams = [&]
     {

@@ -59,7 +59,10 @@ public:
     // [4] the trees' voxel tier.
     static constexpr uint32 NUM_DRAW_LISTS = 5;
     Buffer& getDrawCountBuffer(uint32 idx) { return m_perFrameData[idx].drawCountBuffer; }
-    Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; } // per draw slot (gl_InstanceIndex)
+    // Per draw slot (gl_InstanceIndex). ONE copy, not one per frame slot: the GPU writes it (the shadow cull, then the main cull)
+    // and reads it (the draws' vertex, tessellation and fragment stages) inside one frame, and the frames run in order on one
+    // queue. RendererState::recordPrimaryPreScene's barrier holds the next frame's writes back until those reads are done.
+    Buffer& getOutMeshInstancesBuffer() { return m_outMeshInstancesBuffer; }
     // Dispatch-size buffer { numInstances, 1, 1 }; reused by the shadow cull which dispatches the
     // same instance set against each cascade's frustum.
     Buffer& getDispatchIndirectBuffer(uint32 idx) { return m_perFrameData[idx].inIndirectCommandBuffer; }
@@ -77,8 +80,7 @@ private:
     struct PerFrameData
     {
         Buffer inIndirectCommandBuffer;
-        Buffer outMeshInstancesBuffer;            // 6 - per draw slot
-        Buffer outIndirectCommandBuffer;          // 8 - opaque
+        Buffer outIndirectCommandBuffer;         // 8 - opaque
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
         Buffer outTerrainFilmCommandBuffer;         // 17 - terrain film (plain indirect draws, never tessellated)
@@ -88,4 +90,5 @@ private:
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };
     oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+    Buffer m_outMeshInstancesBuffer; // 6 - per draw slot (getOutMeshInstancesBuffer)
 };

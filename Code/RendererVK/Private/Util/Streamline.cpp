@@ -23,6 +23,7 @@ module RendererVK;
 
 import Core;
 import Core.glm;
+import Core.Log;
 import :VK;
 import :Streamline;
 
@@ -357,14 +358,56 @@ namespace
 
     constexpr const char* PROJECT_ID = "5c0b6e1a-8f42-4d7e-9a31-b7d2e4c8f615";
 
+    // SL's ERRORS go to the engine log in every configuration (there is no sl.log: Streamline::load passes no log dir);
+    // its warnings in Debug only (it repeats some every frame).
     void logMessage(sl::LogType type, const char* msg)
     {
-#ifdef _DEBUG
         if (type == sl::LogType::eInfo)
-            return; // the SL log file already has them; the console only gets warnings and errors
-        printf("Streamline: %s", msg);
+            return;
+#ifndef _DEBUG
+        if (type != sl::LogType::eError)
+            return;
 #endif
+        oc::string_view text(msg ? msg : "");
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+            text.remove_suffix(1);
+        const oc::string line = oc::format("Streamline: {}", text);
+        if (type == sl::LogType::eError)
+            Log::error(line);
+        else
+            Log::warning(line);
     }
+
+    // The first failing SL call of a run of failed evaluates, with its sl::Result; logged again after a success.
+    bool g_evaluateFailureLogged = false;
+    bool evaluateFailed(const oc::string& message)
+    {
+        if (!g_evaluateFailureLogged)
+        {
+            g_evaluateFailureLogged = true;
+            Log::error(message);
+        }
+        return false;
+    }
+    bool slFailed(const char* call, sl::Result result)
+    {
+        return evaluateFailed(oc::format("Streamline: {} failed (sl::Result {})", call, (int)result));
+    }
+
+    // NGX's smallest output / render size per axis: below it the feature creation fails (0xbad00005, InvalidParameter) -
+    // a collapsed editor panel, a startup frame.
+    constexpr uint32 MIN_DLSS_SIZE = 32;
+    // The inputs a FAILED evaluate had (SL re-creates the NGX feature on every evaluate while it fails): not tried again
+    // until one of them changes.
+    struct EvaluateKey
+    {
+        int mode = -1;
+        int preset = -1;
+        glm::uvec2 renderSize{ 0 };
+        glm::uvec2 outputSize{ 0 };
+        bool operator==(const EvaluateKey&) const = default;
+    };
+    EvaluateKey g_failedKey;
 
     sl::DLSSMode toSlMode(Streamline::DlssMode mode)
     {
@@ -711,6 +754,12 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
 {
     if (!dlssAvailable() || frame.mode == DlssMode::Off)
         return false;
+    if (frame.outputSize.x < MIN_DLSS_SIZE || frame.outputSize.y < MIN_DLSS_SIZE || frame.renderSize.x < MIN_DLSS_SIZE || frame.renderSize.y < MIN_DLSS_SIZE)
+        return evaluateFailed(oc::format("Streamline: DLSS skipped, render {}x{} -> output {}x{} is below NGX's {} px",
+            frame.renderSize.x, frame.renderSize.y, frame.outputSize.x, frame.outputSize.y, MIN_DLSS_SIZE));
+    const EvaluateKey key{ .mode = (int)frame.mode, .preset = frame.preset, .renderSize = frame.renderSize, .outputSize = frame.outputSize };
+    if (key == g_failedKey)
+        return false; // logged when it failed
     const sl::ViewportHandle viewport(0u);
 
     if (g_applied.mode != (int)frame.mode || g_applied.preset != frame.preset || g_applied.outputSize != frame.outputSize)
@@ -729,15 +778,15 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
         options.performancePreset = preset;
         options.ultraPerformancePreset = preset;
         options.ultraQualityPreset = preset;
-        if (g_sl.dlssSetOptions(viewport, options) != sl::Result::eOk)
-            return false;
+        if (const sl::Result result = g_sl.dlssSetOptions(viewport, options); result != sl::Result::eOk)
+            return slFailed("slDLSSSetOptions", result);
         g_applied = AppliedOptions{ .mode = (int)frame.mode, .preset = frame.preset, .outputSize = frame.outputSize };
     }
 
     sl::FrameToken* token = nullptr;
     const uint32_t frameIndex = frame.frameIndex;
-    if (g_sl.getNewFrameToken(token, &frameIndex) != sl::Result::eOk || !token)
-        return false;
+    if (const sl::Result result = g_sl.getNewFrameToken(token, &frameIndex); result != sl::Result::eOk || !token)
+        return slFailed("slGetNewFrameToken", result);
 
     sl::Constants constants{};
     constants.cameraViewToClip = toSl(frame.viewToClip);
@@ -763,8 +812,8 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
     constants.orthographicProjection = sl::Boolean::eFalse;
     constants.motionVectorsDilated = sl::Boolean::eFalse;
     constants.motionVectorsJittered = sl::Boolean::eFalse;
-    if (g_sl.setConstants(constants, *token, viewport) != sl::Result::eOk)
-        return false;
+    if (const sl::Result result = g_sl.setConstants(constants, *token, viewport); result != sl::Result::eOk)
+        return slFailed("slSetConstants", result);
 
     sl::SubresourceRange ranges[5];
     sl::Resource colorIn = toSl(frame.colorIn, ranges[0]);
@@ -784,11 +833,20 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
     };
     const uint32_t numTags = frame.biasCurrentColor.image ? 5u : 4u; // the optional tag is last
     sl::CommandBuffer* slCmd = reinterpret_cast<sl::CommandBuffer*>(static_cast<VkCommandBuffer>(cmd));
-    if (g_sl.setTagForFrame(*token, viewport, tags, numTags, slCmd) != sl::Result::eOk)
-        return false;
+    if (const sl::Result result = g_sl.setTagForFrame(*token, viewport, tags, numTags, slCmd); result != sl::Result::eOk)
+        return slFailed("slSetTagForFrame", result);
 
     const sl::BaseStructure* inputs[] = { &viewport };
-    return g_sl.evaluateFeature(sl::kFeatureDLSS, *token, inputs, 1, slCmd) == sl::Result::eOk;
+    if (const sl::Result result = g_sl.evaluateFeature(sl::kFeatureDLSS, *token, inputs, 1, slCmd); result != sl::Result::eOk)
+    {
+        g_failedKey = key;
+        return evaluateFailed(oc::format("Streamline: slEvaluateFeature failed (sl::Result {}) for render {}x{} at ({}, {}) -> output {}x{}, mode {}, preset {}",
+            (int)result, frame.renderSize.x, frame.renderSize.y, frame.renderOffset.x, frame.renderOffset.y, frame.outputSize.x, frame.outputSize.y,
+            (int)frame.mode, frame.preset));
+    }
+    g_failedKey = EvaluateKey{};
+    g_evaluateFailureLogged = false;
+    return true;
 }
 
 void Streamline::freeDlss()
