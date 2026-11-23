@@ -14,9 +14,11 @@ public:
 
     bool deviceSupportsSurface() const;
     vk::SurfaceKHR getSurface() const { return m_surface; }
+    Window* getWindow() const { return m_window; } // the swapchain's size where the surface reports none (Wayland)
 
 private:
 
+    Window* m_window = nullptr;
     vk::SurfaceKHR m_surface;
     vk::Instance m_instance;
 };

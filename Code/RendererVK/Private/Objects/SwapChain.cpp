@@ -1,5 +1,7 @@
 module RendererVK;
 
+import Core.glm;
+import Core.Window;
 import :VK;
 import :Device;
 import :Surface;
@@ -47,6 +49,15 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         return false;
     }
     vk::SurfaceCapabilitiesKHR capabilities = surfaceCapResult.value;
+    // currentExtent 0xFFFFFFFF = the surface takes the swapchain's size (Wayland): use the window's, within the limits.
+    if (capabilities.currentExtent.width == UINT32_MAX && surface.getWindow())
+    {
+        glm::ivec2 size(0);
+        surface.getWindow()->getWindowSize(size);
+        capabilities.currentExtent = vk::Extent2D{
+            glm::clamp(uint32(oc::max(size.x, 1)), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+            glm::clamp(uint32(oc::max(size.y, 1)), capabilities.minImageExtent.height, capabilities.maxImageExtent.height) };
+    }
     auto presentModesResult = vkPhysicalDevice.getSurfacePresentModesKHR(vkSurface);
     if (presentModesResult.result != vk::Result::eSuccess)
     {
@@ -72,6 +83,12 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         }
     }
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+
+    // Immediate (vsync off) is optional in Vulkan and absent on some Wayland drivers: then mailbox, else FIFO (always there).
+    vk::PresentModeKHR presentMode = vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate;
+    if (oc::find(presentModes.begin(), presentModes.end(), presentMode) == presentModes.end())
+        presentMode = oc::find(presentModes.begin(), presentModes.end(), vk::PresentModeKHR::eMailbox) != presentModes.end()
+            ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
 
     const uint32 imageCount = oc::max(capabilities.minImageCount, oc::min(swapChainSize, capabilities.maxImageCount));
     m_syncObjects.resize(imageCount);
@@ -120,7 +137,7 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         .imageSharingMode = vk::SharingMode::eExclusive,
         .preTransform = capabilities.currentTransform,
         .compositeAlpha = compositeAlpha,
-        .presentMode = vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate,
+        .presentMode = presentMode,
         .clipped = vk::True,
     };
 
