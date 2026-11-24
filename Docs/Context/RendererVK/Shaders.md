@@ -9,7 +9,8 @@ calls `reloadShaders()`.
 
 * `*.inc.glsl` are includes.
 * **Feature folders:** `Common` (shared/ubo + small utility includes), `Mesh` (instanced_indirect, shadow
-  depth, skinning, debug lines, draw compaction), `Lighting` (light grid, shadows, RT shadow, RTAO + AO filters), `GI`,
+  depth, skinning, debug lines, draw compaction), `Lighting` (light grid, shadows, RT shadow, RTAO + AO filters), `GI` (probes,
+  sky map, volume bake, `gi_direct` = the diffuse direct light at a ray hit, also used by vol_scatter),
   `PostProcess` (composite, bloom, TAA, DLSS mvecs, eye adaptation, motion blur), `Sky` (sky, atmosphere, clouds,
   volumetric fog, aerial LUT, rain occlusion), `Ocean`, `River`, `Terrain` (terrain, film, wetness, grass, rocks),
   `Clutter` (the ground clutter), `Trees`, `Particles` (+ decals), `Force`. Pipelines name the full path
@@ -103,11 +104,11 @@ calls `reloadShaders()`.
   BEFORE the init / idle test, because an override fires at registration and `initialize()` must build with it. The
   ocean, fog and GI still read the uniforms. `computeLitColor` evaluates the sun FIRST, so no AO/GI value is live
   across the shadow search.
-* **ONE light shadow trace** (`lightShadowVisibility`, punctual_lights.inc.glsl): the light kinds differ only in the
+* **ONE light shadow trace** (`lightShadowVisibility`, local_lights.inc.glsl): the light kinds differ only in the
   point their ray aims at (`areaLightShadowTarget`, `beamLightShadowTarget`, the light's position), so they share one
   `traceLightVisibility` call. Each call site inlines the whole trace (the terrain march + the ray query with its
   alpha-test loop): three sites were three copies, ~27 KB of every lit fragment shader (lit FS 107 -> 80 KB).
-  `PL_LIGHT_TRACE_TWO_SITES` (an includer's define, by its pipeline stats) keeps two sites - the tessellated ground: 72
+  `LL_LIGHT_TRACE_TWO_SITES` (an includer's define, by its pipeline stats) keeps two sites - the tessellated ground: 72
   registers / 32 B with one site, 64 / 48 with two.
 * **The lit core's includer defines** (instanced_indirect_lit.inc.glsl), each compiling a path OUT for a material that
   never takes it:
@@ -381,7 +382,7 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
 * **The rules:**
   * **A half sum that can CANCEL needs a floor before it is normalized**: `normalize(L + V)` at V = -L (looking at the
     light through the surface) underflows its squared length to 0 and gives inf / NaN, and NaN x a zero light term is
-    still NaN - a bright point at the sun's position on the ocean after sunset. `halfVectorH` (punctual_lights.inc.glsl)
+    still NaN - a bright point at the sun's position on the ocean after sunset. `halfVectorH` (local_lights.inc.glsl)
     floors it at 1e-4 IN HALF (an fp32 sum there moved the grass FS from 64/16 to 56/48) for the SUN's BRDF
     (`doLightH`, `doLightSplitH`); the ocean takes its fp32 floored form (no register change there). NOT in the area
     lights' specular (`doAreaLightSpecularH`, the light loop - the register peak): there it took the lit and tree
@@ -400,7 +401,7 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
   * **One light loop per shader** (large + cell lights in one loop): every `doLightShadowed` call inlines all light
     types plus the shadow ray query. Merging a double loop cut 36-40 KB of code each in the ocean and the film, and
     vol_scatter's single loop (`volLightScatter` inlines a ray query) cut its registers. The GI trace's
-    `giGatherDirect` (lighting.inc.glsl) likewise: 104 -> 89 KB, its 128 registers and its time as before.
+    `giGatherDirect` (gi_direct.inc.glsl) likewise: 104 -> 89 KB, its 128 registers and its time as before.
   * **Write a dual-source OUTPUT at each return, never as an up-front default.** An `out_factor = vec4(0)` at the top
     of main kept the output live through the whole shader once one store became dynamic (+16 B on the ocean).
   * **Keep the accumulators few across a ray query:** fold the result into one accumulator before the loop / trace,
@@ -411,14 +412,14 @@ register/spill split by +-16 B on neutral changes, so re-measure before trusting
   * **Packing halves by hand does NOT work on this driver:** it folds `packFloat2x16` / `unpackFloat2x16` pairs away
     (a BYTE-IDENTICAL binary). Each live half costs a full 32-bit register, so fewer live VALUES is the only lever.
     Rebuilding loop-invariant values per iteration does not help either: the compiler hoists them back out.
-  * **The light loops' `min(count, MAX)` in `lighting.inc.glsl` and `particle.vs.glsl` stay**, although the counts are
+  * **The light loops' `min(count, MAX)` in `gi_direct.inc.glsl` and `particle.vs.glsl` stay**, although the counts are
     written capped: without them gi_probe_trace went 96 -> 125 registers and the particle VS 56 -> 61 (an unbounded
     loop). The lit / ocean / river / film / vol_scatter loops read the counts raw at no cost.
   * **fp32 stays, for a certain reason, where:** positions, UVs, depths and ray data (precision); absolute heights (a
     1 m band at 500 m altitude is 1 half step); a distance squared (overflows half past 256 m); E[x^2] - E[x]^2
     (catastrophic cancellation - the LEAN variance); a value that underflows half's normal range (0.02^4, the water's
     base alpha^2); hash inputs (`fract` of large products); the GI cascade walk (+16 B in half).
-* **The direct-light BRDF** (`punctual_lights.inc.glsl`, the `*H` copies beside the fp32 functions): N, V, L, H, the
+* **The direct-light BRDF** (`local_lights.inc.glsl`, the `*H` copies beside the fp32 functions): N, V, L, H, the
   dots, GGX D + visibility, Fresnel and the colour factors; each light's factor widens once, at the multiply with its
   fp32 radiance. GGX D is Filament's fp16 form: `1 - NoH^2` as `|N x H|^2` (no cancellation near the peak) and the
   square after the divide (alpha^4 never forms), clamped to 65504. **Alpha must be >= 0.01** (the lit FS, the splat and

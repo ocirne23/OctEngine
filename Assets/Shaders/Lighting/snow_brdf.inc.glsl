@@ -16,7 +16,7 @@
 //     strength" x snow.inc.glsl snowGlint: single grains that mirror the sun; its mean is the strength at every distance),
 //     capped at "Sparkle max" after the Fresnel term; the surface's own lobe and Lambert by 1 - the share.
 // The local lights, the GI and the ambient keep Lambert + GGX with the snow's albedo. The includer has
-// punctual_lights.inc.glsl (the fp16 BRDF) and the frame UBO.
+// local_lights.inc.glsl (the fp16 BRDF) and the frame UBO.
 
 #define SNOW_ICE_F0 0.018 // ice, n = 1.31
 

@@ -614,7 +614,7 @@ ride `u_foliage_*`. A tree's SHADOW BILLBOARD is no lit variant: it draws in the
   **Leaf specular curve** (`LEAF_SPEC_NORMAL` + `g_leafSpecN` / `g_leafSpecOn` in `doSunLight`, LitTree only,
   `Trees/Leaf specular curve` 3): a leaf's SUN SPECULAR comes from its own normal - the raw normal map's slope x that,
   the same edge-on bend - while the diffuse keeps the `Leaf normal strength` normal: ONE `doLightSplitH`
-  (punctual_lights.inc.glsl: one H, one Fresnel, one GGX, the diffuse N·L from the other normal; two `doLightH` calls ran
+  (local_lights.inc.glsl: one H, one Fresnel, one GGX, the diffuse N·L from the other normal; two `doLightH` calls ran
   the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing). A more curved leaf sweeps the highlight over a wider
   range, so some spot on it meets the half vector (a glint); from the shading normal it was a faint even sheen.
   **Leaf specular** (`Trees/Leaf specular` 0.06, LitTree leaves only): the leaves' F0 - the includer's `LIT_SPECULAR_F0`

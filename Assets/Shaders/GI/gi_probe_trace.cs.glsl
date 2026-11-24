@@ -92,7 +92,7 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_PART_MAX 4.0            // the largest normalized sun / sky part a visit stores (the rescale, see main)
 
 // Alpha-mask-aware shadow rays: sun visibility at gather-ray hits, and the grid lights' shadows there
-// (GI_LIGHT_RT_SHADOWS - lighting.inc.glsl needs rtShadowVisibility in scope, so this comes first).
+// (GI_LIGHT_RT_SHADOWS - gi_direct.inc.glsl needs rtShadowVisibility in scope, so this comes first).
 #include "rt_shadow.inc.glsl"
 #define GI_LIGHT_RT_SHADOWS
 #include "tree_card.inc.glsl" // a tree's shadow billboard at a hit: its colour
@@ -102,7 +102,7 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GRID_TABLE_NAME in_gridTable
 #define TABLE_SIZE_NAME in_tableSize
 #include "light_grid.inc.glsl"
-#include "lighting.inc.glsl"
+#include "gi_direct.inc.glsl"
 
 // GI probe clipmap (read + write).
 #define GI_PROBE_WRITE

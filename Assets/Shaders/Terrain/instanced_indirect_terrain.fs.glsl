@@ -41,7 +41,7 @@ layout (location = 1) out vec4 out_motion;
 #define LIT_SNOW        // instanced_indirect_lit.inc.glsl: the snow's sun BRDF (snow_brdf.inc.glsl), set by snowLitSetup
 #define LIT_CAUSTICS    // instanced_indirect_lit.inc.glsl: the underwater caustic pattern (the ground is its only receiver)
 #ifdef TERRAIN_TESS
-#define PL_LIGHT_TRACE_TWO_SITES // punctual_lights.inc.glsl: the tessellated ground keeps 64 registers with two trace sites (72 with one)
+#define LL_LIGHT_TRACE_TWO_SITES // local_lights.inc.glsl: the tessellated ground keeps 64 registers with two trace sites (72 with one)
 #endif
 
 #define LIT_CANOPY_HEIGHT 0.0 // instanced_indirect_lit.inc.glsl: the ground under the trees' canopy

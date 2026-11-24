@@ -1,6 +1,6 @@
 #version 460
 
-#extension GL_EXT_shader_explicit_arithmetic_types : enable // the BRDF colour side is half (punctual_lights.inc.glsl)
+#extension GL_EXT_shader_explicit_arithmetic_types : enable // the BRDF colour side is half (local_lights.inc.glsl)
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -59,7 +59,7 @@ layout (location = 0, index = 1) out vec4 out_factor;
 #define OCEAN_DEBUG_MODE 0
 #endif
 
-// fp16 copies for the top side's shading block (GGX D is punctual_lights.inc.glsl's D_GGX_H).
+// fp16 copies for the top side's shading block (GGX D is local_lights.inc.glsl's D_GGX_H).
 float16_t V_SmithGGX_H(float16_t NoV, float16_t NoL, float16_t a)
 {
     const float16_t a2 = a * a;

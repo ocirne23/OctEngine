@@ -84,7 +84,7 @@ layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;
 #include "shadows.inc.glsl"
-#include "punctual_lights.inc.glsl"
+#include "local_lights.inc.glsl"
 #include "reflection_fog.inc.glsl"
 
 float D_GGX(float NoH, float a)
@@ -250,7 +250,7 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     vec3 radiance = vec3(albedo * (sunOverPi + (indirect + f16vec3(u_ambientColor)) * ambientAtten));
 
 #ifdef OCEAN_HIT_LIGHTS
-    const f16vec3 matColOverPi = albedo * float16_t(INV_PI); // half: the BRDF colour side (punctual_lights.inc.glsl)
+    const f16vec3 matColOverPi = albedo * float16_t(INV_PI); // half: the BRDF colour side (local_lights.inc.glsl)
     const f16vec3 V = f16vec3(-rayDir);
     const ivec3 gridPos = getGridPos(hit.pos);
     uint tableIdx = getTableIdx(gridPos);

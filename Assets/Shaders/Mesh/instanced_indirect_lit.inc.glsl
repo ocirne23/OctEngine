@@ -107,7 +107,7 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 
 #include "rt_shadow.inc.glsl"
 
-#include "punctual_lights.inc.glsl"
+#include "local_lights.inc.glsl"
 
 #ifdef LIT_SNOW
 // THE SNOW'S SUN BRDF (snow_brdf.inc.glsl): an includer with snow surfaces (the terrain, the rocks, the caps, the lit and
@@ -534,7 +534,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 				const LightInfo light = in_lightInfos[lightId];
 				// The analytic term goes HALF before the shadow ray: only the half result is live across the query,
 				// the loop's peak.
-#ifdef LIT_LIGHTS_DIFFUSE // the includer's surface takes no highlight from a local light (punctual_lights.inc.glsl doLightDiffuse)
+#ifdef LIT_LIGHTS_DIFFUSE // the includer's surface takes no highlight from a local light (local_lights.inc.glsl doLightDiffuse)
 				const vec3 lit = doLightDiffuse(light, worldPos, N, diffuseColOverPi);
 #elif defined(LIT_LIGHTS_ROUGHNESS)
 				// The includer's roughness is a frame constant (LIT_LIGHTS_ROUGHNESS reads it) and its view vector the
@@ -545,8 +545,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #endif
 				const f16vec3 litH = f16vec3(min(lit, vec3(MEDIUMP_FLT_MAX)));
 				float16_t visibility = float16_t(1.0);
-#if PL_RT_LIGHTS_COMPILED
-				if (PL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
+#if LL_RT_LIGHTS_COMPILED
+				if (LL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
 					visibility = float16_t(lightShadowVisibility(light, worldPos, vec3(N)));
 #endif
 				colorH = min(colorH + litH * visibility, f16vec3(MEDIUMP_FLT_MAX));

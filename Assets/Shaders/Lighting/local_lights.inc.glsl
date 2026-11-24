@@ -1,4 +1,4 @@
-// Point / spot / area / beam light evaluation + ray-traced light shadows, shared by the lit forward shaders and the
+// Local lights (every light but the sun): point / spot / area / beam light evaluation + ray-traced light shadows, shared by the lit forward shaders and the
 // water shaders. GGX specular with representative-point approximations for area (rect) and beam lights;
 // doLightShadowed gates the analytic result with shadow rays (u_rt_lightShadows): an area light's jittered over the
 // emitter per pixel and frame for TAA to integrate, a beam's at a fixed point (no noise).
@@ -9,8 +9,8 @@
 //   - fragment stage (gl_FragCoord-based shadow jitter)
 //   - GL_EXT_shader_explicit_arithmetic_types (the light types evaluate through the fp16 BRDF, see D_GGX_H)
 
-#ifndef PUNCTUAL_LIGHTS_INC_GLSL
-#define PUNCTUAL_LIGHTS_INC_GLSL
+#ifndef LOCAL_LIGHTS_INC_GLSL
+#define LOCAL_LIGHTS_INC_GLSL
 
 // Hard ray-traced visibility toward a point on the light; tMax stops just short of it, so the light itself never hits.
 float traceLightVisibility(vec3 pos, vec3 N, vec3 target)
@@ -540,23 +540,23 @@ vec3 beamLightShadowTarget(LightInfo light, vec3 pos)
 // The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The ocean has no
 // define and reads the uniform.
 #ifdef LIT_RT_LIGHT_SHADOWS
-#define PL_RT_LIGHTS_COMPILED LIT_RT_LIGHT_SHADOWS
-#define PL_RT_LIGHTS_ON true
+#define LL_RT_LIGHTS_COMPILED LIT_RT_LIGHT_SHADOWS
+#define LL_RT_LIGHTS_ON true
 #else
-#define PL_RT_LIGHTS_COMPILED 1
-#define PL_RT_LIGHTS_ON (u_rt_lightShadows > 0.5)
+#define LL_RT_LIGHTS_COMPILED 1
+#define LL_RT_LIGHTS_ON (u_rt_lightShadows > 0.5)
 #endif
 
 // One light's ray-traced shadow visibility at pos (N = the ray origin's offset). The caller gates it on
-// PL_RT_LIGHTS_COMPILED / PL_RT_LIGHTS_ON and on a non-black analytic term.
+// LL_RT_LIGHTS_COMPILED / LL_RT_LIGHTS_ON and on a non-black analytic term.
 // ONE trace call for every light kind: they differ only in the point the ray aims at, and each call site inlines the
 // whole trace (the terrain march and the ray query with its alpha-test loop) - three sites were three copies of it
 // (~27 KB of every lit fragment shader).
-// PL_LIGHT_TRACE_TWO_SITES (an includer's choice, by its pipeline stats): one site for the area / beam lights and one
+// LL_LIGHT_TRACE_TWO_SITES (an includer's choice, by its pipeline stats): one site for the area / beam lights and one
 // for the punctual ones. The tessellated ground: with one site its allocator took 72 registers / 32 B, with two 64 / 48.
 float lightShadowVisibility(LightInfo light, vec3 pos, vec3 N)
 {
-#ifdef PL_LIGHT_TRACE_TWO_SITES
+#ifdef LL_LIGHT_TRACE_TWO_SITES
 	if (light.width > 0.0)
 		return traceLightVisibility(pos, N, light.range < 0.0 ? beamLightShadowTarget(light, pos) : areaLightShadowTarget(light));
 	return traceLightVisibility(pos, N, light.pos);
@@ -576,11 +576,11 @@ float lightShadowVisibility(LightInfo light, vec3 pos, vec3 N)
 vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	vec3 lit = doLight(light, pos, V, Nh, specularCol, matColOverPi, metalness, roughness);
-#if PL_RT_LIGHTS_COMPILED
-	if (PL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
+#if LL_RT_LIGHTS_COMPILED
+	if (LL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
 		lit *= lightShadowVisibility(light, pos, vec3(Nh));
 #endif
 	return lit;
 }
 
-#endif // PUNCTUAL_LIGHTS_INC_GLSL
+#endif // LOCAL_LIGHTS_INC_GLSL

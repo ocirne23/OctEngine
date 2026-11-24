@@ -6,8 +6,8 @@
 //   - the UBO, PI (shared.inc.glsl)
 //   - u_shadowMap (sampler2DArrayShadow)
 
-#ifndef LIGHTING_INC_GLSL
-#define LIGHTING_INC_GLSL
+#ifndef GI_DIRECT_INC_GLSL
+#define GI_DIRECT_INC_GLSL
 
 float giSquareFalloff(float dist, float lightRadius)
 {
@@ -41,7 +41,7 @@ float giSunShadow(vec3 worldPos, vec3 N)
 }
 
 // Incoming irradiance (radiance * NdotL) from one grid light. The type has the forward pass' doLight() encoding
-// (punctual_lights.inc.glsl): width < 0 = spot, width > 0 && range < 0 = tube, width > 0 = rect area, width == 0 =
+// (local_lights.inc.glsl): width < 0 = spot, width > 0 && range < 0 = tube, width > 0 = rect area, width == 0 =
 // point. Every light is a point at its centre for the falloff, but the spot cone and the rect's one-sided emission
 // are kept, to match the primary surfaces.
 vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)

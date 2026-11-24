@@ -202,10 +202,10 @@ which is a baked define).
   relocated canopy probes on every visit and marked them dead. The escape, the dead skip/rejection and the
   just-escaped flush all read the weighted value.
 * **Direct light at a gather hit is ray-traced-shadowed for EVERY light:** the sun through `g_sunShadowOverride`, the
-  grid lights through `giLightIrradianceShadowed` (lighting.inc.glsl, compiled in by the trace's
+  grid lights through `giLightIrradianceShadowed` (gi_direct.inc.glsl, compiled in by the trace's
   `GI_LIGHT_RT_SHADOWS`; one ray to the light's centre, only past `GI_LIGHT_SHADOW_MIN`, and only while
   `u_rt_lightShadows` is on). Unshadowed, a lamp lights every hit in its range through walls — a leak the probe
-  visibility test cannot see. The trace includes rt_shadow.inc.glsl BEFORE lighting.inc.glsl for this.
+  visibility test cannot see. The trace includes rt_shadow.inc.glsl BEFORE gi_direct.inc.glsl for this.
 * **Every ray-hit vertex fetch** (the trace, RTAO, `rt_shadow.inc.glsl`, the ocean's and the terrain's mirror hits)
   reads `MeshVertex in_vertices[]` from `mesh_vertex.inc.glsl` (plain std430; the skinning pass uses it too).
   **`MeshVertex` is 3 × vec4 — `positionU`, `normalV`, `tangent` — with the texCoord in the two `.w`**, so every member
@@ -379,7 +379,7 @@ baked under the "Sky" lock).
 A straight line of light of any length: a lamp tube, or a column kilometres tall (the co-op Base's beacon). The record
 is the former tube light's (`radius < 0`, `width` = the core radius, `direction` x the full length, `pos` = the CENTRE).
 
-* **Surfaces** (`doBeamLight`, punctual_lights.inc.glsl): the closest point on the line drives the falloff over the
+* **Surfaces** (`doBeamLight`, local_lights.inc.glsl): the closest point on the line drives the falloff over the
   light's range; the specular is the representative point.
 * **The shadow is ONE ray at a FIXED point** (`beamLightVisibility`): the closest point on the line, moved along the
   axis by the distance to the line (the ray leaves at 45 degrees, over what stands at the beam's foot), clamped to the

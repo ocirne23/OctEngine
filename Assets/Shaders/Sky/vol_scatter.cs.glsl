@@ -98,7 +98,7 @@ float riverWaterAt(vec2 worldXZ)
 #define GRID_TABLE_NAME in_gridTable
 #define TABLE_SIZE_NAME in_tableSize
 #include "light_grid.inc.glsl"
-#include "lighting.inc.glsl"
+#include "gi_direct.inc.glsl"
 
 // GI probe clipmap (read-only): fog picks up bounced/ambient light.
 #define GI_GRID_DATA_NAME gi_gridData
