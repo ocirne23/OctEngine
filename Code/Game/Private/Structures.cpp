@@ -391,9 +391,9 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
 StructureSystem::StructureSystem()
 {
     // The transport tick: rates/capacities re-stamp at the next network rebuild.
-    Tweak::onChange(m_settings.transportTickHz, this, [this] { m_linksDirty = true; });
-    Tweak::onChange(m_settings.transportSubsteps, this, [this] { m_linksDirty = true; });
-    Tweak::onChange(m_settings.transportSpread, this, [this] { m_linksDirty = true; });
+    Tweak::onChange(m_settings.transportTickHz, this, [this] { markLinksDirty(); });
+    Tweak::onChange(m_settings.transportSubsteps, this, [this] { markLinksDirty(); });
+    Tweak::onChange(m_settings.transportSpread, this, [this] { markLinksDirty(); });
 }
 
 StructureSystem::~StructureSystem()
@@ -544,7 +544,7 @@ void StructureSystem::clear()
     m_net = TransportNet{};
     m_savedFills.clear();
     m_terrainBlocked.clear();
-    m_linksDirty = true;
+    markLinksDirty();
 }
 
 // ---------------------------------------------------------------- nodes + world

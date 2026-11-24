@@ -411,6 +411,7 @@ void StructureSystem::rebuildNetworks()
     solveWalkwayDecks();
     for (const Ref& s : m_frame)
         updateArms(s);
+    ++m_layoutVersion; // the walkways' pieces (deck or stairs, the tilt) are road heights: the carriers' road graph again
 }
 
 // THE WALKWAY'S PIECE: a built Walkway carries a DECK (walkwayDeck.pre), or STAIRS (walkwayStairs.pre) down to a plain

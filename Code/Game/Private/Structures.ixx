@@ -981,6 +981,7 @@ private:
     // ONE breadth-first search over the road cells, from a structure's footprint (fromStructure >= 0) or from one road
     // cell. goal(roster index) of every building a visited cell touches: 2 = take it (the search ends), 1 = keep the
     // first such as the fallback, 0 = no. Returns the roster index (-1 = none) and the walking path to its road cell.
+    // Both walk THE ROAD GRAPH (ensureRoadGraph), with the visited marks of their depth (a search inside a search's cost: two).
     int roadSearch(int fromStructure, glm::ivec2 fromCell, const oc::function<int(int)>& goal, oc::vector<glm::vec3>& outPath) const;
     // The same search, but it takes the building of the LOWEST cost: cost(roster index, road steps to it) >= the steps, or
     // < 0 = no. It stops once the steps alone pass the best cost (and at maxSteps).
@@ -990,11 +991,46 @@ private:
     int findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2 fromCell, int good, bool consumersOnly, int work,
         oc::vector<glm::vec3>& outPath) const;
     // Another storage of the team that holds a load of `good` within maxSteps of the consumer by road (findRoadTarget).
+    // From m_nearStores: one search per consumer and good a tick, not one per question.
     bool nearerStorage(int consumerIdx, int sourceIdx, int good, int maxSteps) const;
     bool carrierSendGood(int index, int good, bool& consumersOnly) const; // does it have a load of `good` to send?
     bool carrierHoldsStone(int index) const;                              // stone a walker can take to a blueprint
     // THE JOB PICK: the building as a walker's job, as road cells added to the walk there (-1 = no job for a walker).
     float carrierJobCost(int index, uint8 team) const;
+
+    // ---- The road graph (the carriers' searches) ----
+    // Every road cell (roadAt) as a node with its four links, built again on the first search after the LAYOUT changed
+    // (m_layoutVersion: every markLinksDirty, and the end of a network rebuild - the walkways' pieces). A search walks the
+    // links: no hash lookup per cell. A blueprint a walker finishes is road for its next search at once (investMaterials
+    // marks the layout).
+    struct RoadNode
+    {
+        int cx, cz;
+        float y;           // roadAt's height
+        int next[4];       // the road node through each side (the carriers' c_neighbours order; -1 = none, or a ship's rail between)
+        int touches[4][2]; // roster indices of the structures in that neighbour cell, occupant and under-cable (-1 = none)
+    };
+    struct RoadVisit { int node, parent, steps; }; // node -1: the search's own start cell (a guard's Watch post: no road)
+    struct RoadSearchScratch
+    {
+        oc::vector<uint32> stamp; // == gen: visited in this search
+        uint32 gen = 0;
+        oc::vector<RoadVisit> open;
+    };
+    void ensureRoadGraph() const;
+    void roadLinks(int cx, int cz, RoadNode& node) const; // node.next / touches of the cell (m_roadNodeAt must be complete)
+    mutable oc::vector<RoadNode> m_roadNodes;
+    mutable oc::unordered_map<uint64, int> m_roadNodeAt; // cellKey -> road node
+    mutable uint64 m_roadGraphVersion = UINT64_MAX;
+    mutable RoadSearchScratch m_roadScratch[2];
+    mutable int m_roadSearchDepth = 0;
+    uint64 m_layoutVersion = 0;
+    void markLinksDirty() { m_linksDirty = true; ++m_layoutVersion; } // a structure came, went, was built or fell: the networks and the road
+    // The two nearest storages of a good with a load to send, by road from a consumer (index -1 = none), for this tick
+    // (m_carrierTick). Slot = consumer roster index x NumStores + good.
+    struct NearStores { uint32 tick = 0; int index[2] = { -1, -1 }; int steps[2] = {}; };
+    mutable oc::vector<NearStores> m_nearStores;
+    uint32 m_carrierTick = 0;
 
     // ---- CELL OCCUPANCY + DERIVED LINKS ----
     // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a

@@ -409,7 +409,7 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 		const float wet = smoothstep(0.0, u_terrainTex_snowAridity, f.humidity);
 		depth = snowGroundDepth(f.temperature, worldPos); // + the site map's shelter (snow.inc.glsl)
 		if (depth > 0.0)
-			depth *= snowGroundDry(worldPos.y, f.waterLevel, f.river) * holds;
+			depth *= snowGroundDry(worldPos, f.waterLevel, f.river) * holds;
 		const float pack = snowCoverFromDepth(depth);
 		snowW = float16_t(max(cold * wet * holds, pack));
 		// Without the lift ("Weather/Snow/Depth" off) nothing sinks: the snow buries by its cover.

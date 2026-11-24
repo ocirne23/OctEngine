@@ -198,7 +198,7 @@ float StructureSystem::investMaterials(const Ref& s, float amount, float repairH
         if (s.state->rubble) // built again: solid, and a target again
             setRubble(s, false);
         applyStructureTint(s); // back to the authored color
-        m_linksDirty = true;   // a finished cable segment starts conducting
+        markLinksDirty();      // a finished cable segment starts conducting, a finished road piece is road
         Log::info(oc::string(structureTypeName(s.type)) + " constructed");
         GameSound::post(EGameSound::StructureBuilt, s.entity->pos, isCableOrCrossing(s.type) ? 0.4f : 1.0f);
         if (onStructureBuilt) // server: re-fire GPl - cables are outside GSt, so this IS the
@@ -520,7 +520,7 @@ void StructureSystem::tickDamage(float)
                 store = 0.0f;
             c.powered = false;
             setRubble(s, true);
-            m_linksDirty = true; // what it joined is no longer joined
+            markLinksDirty(); // what it joined is no longer joined
             ++i;
             continue;
         }

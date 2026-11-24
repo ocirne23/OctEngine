@@ -576,6 +576,8 @@ ClutterSystem bakes it with the forest floor map: R = the blurred tree cover, G 
   `1 - "Canopy sky occlusion" (u_foliage_canopyOcclusion, 0.8) x cover x the share of the canopy ABOVE the point`
   (`canopyCover`, then `canopySkyVisibility` with the point's height above the ground: 1 - height / top). Formed and
   used before the light loop. The sun is not touched: that is the cascades' work.
+* **The snow reads it too** (`canopyTreeCover`: the raw cover, without the occlusion's tweak): the site map's shelter
+  under the crowns blends toward it ("Weather/Snow/Canopy snow blend"; Snow.md, the site map).
 * **The height** is the includer's `LIT_CANOPY_HEIGHT`: `0.0` for what lies on the ground (the terrain, the grass, the
   clutter), the fragment's height over the tree's origin for LitTree (the origin read from the tree's instance record
   there, not interpolated), the hit's

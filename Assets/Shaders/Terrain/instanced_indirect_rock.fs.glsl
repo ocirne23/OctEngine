@@ -174,7 +174,7 @@ void main()
 			const float humid = smoothstep(0.0, u_terrainTex_snowAridity, in_rockFields.z);
 			// The catch is the shell's (snowRockCatch: the looser shelter test), so a swollen top is white where it swells.
 			// The slope rule thins the pack's DEPTH, as on the ground and in the shell (the shell swells by depth x holds).
-			const float dry = smoothstep(-0.1, 0.2, in_pos.y - in_rockFields.w);
+			const float dry = snowGroundDry(in_pos, in_rockFields.w, 0.0); // as the shell (the VS): the water and the shore
 			snowDepth = snowPackLive() ? snowPackDepth(in_rockFields.y, snowRockCatch(in_pos)) * holds * dry : 0.0;
 			snowW = float16_t(max(cold * humid * holds, snowCoverFromDepth(snowDepth)));
 		}

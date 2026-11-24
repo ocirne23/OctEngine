@@ -26,9 +26,13 @@ export struct WeatherSettings
     float fullCoverDepth = 0.03f;    // m: the ground is fully white from this depth on (thinner snow shows it through)
     bool clearSnow = false;          // a button: the renderer empties the snowpack and resets this
     bool shelter = true;             // the site map: no snow under roofs and overhangs, less under trees (needs RT)
-    float foliageBlock = 0.7f;       // the share of the snow one layer of foliage stops (the site map's alpha-tested cards)
+    float foliageBlock = 1.0f;       // the share of the snow one layer of foliage stops (the site map's alpha-tested cards)
+    float canopyBlend = 0.25f;        // how much the snow under the trees follows the canopy map's smooth cover (0 = the site map's crowns alone)
     bool snowDepth = true;           // the ground rises by the snow's depth (the terrain VS); off: a texture layer only
     float buryDepth = 0.3f;          // m of snow that buries the grass and the clutter (taller blades poke through thinner)
+    float shoreFade = 4.0f;          // m above the sea over which the pack thins out toward the shore (0 = only the waterline)
+    float shoreVariation = 0.6f;     // how much that edge wanders (0 = an even line along the height contour)
+    float riverBankFade = 0.4f;      // how much the pack thins over a river's floodplain toward its channel
     bool objectSnow = true;          // the snow layer on the objects (buildings, props, bark, leaves)
     float leafSnow = 0.6f;           // x the snow on the up-facing leaves (a crown sheds part of it)
     float grassSnow = 0.6f;          // how white the grass gets where the ground is white (the blades poking through thin snow, the far grass)
@@ -63,6 +67,8 @@ export struct WeatherSettings
     // ---- The snow's look (snow_brdf.inc.glsl, snow.inc.glsl) ----
     float grainRough = 0.6f;         // the GGX alpha of dry snow's ice facets
     float wetRough = 0.15f;          // ... of wet snow (a film of meltwater)
+    float grimeStrength = 0.4f;      // x the grime's absorption: how dark dirty (melting) snow gets
+    float grimeBrownness = 0.4f;     // 1 = the dust's brown (it absorbs blue most), 0 = a neutral grey of the same mean darkening
     float softTerminator = 1.0f;     // the light that scatters through the snow across its relief (a soft terminator, blue on the shaded flank)
     float forwardScatter = 1.0f;     // the sheen with the sun ahead at grazing angles (the grains' forward scattering)
     bool sparkle = true;             // the sun glints on single ice grains

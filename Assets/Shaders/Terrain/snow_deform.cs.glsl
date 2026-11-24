@@ -11,8 +11,9 @@
 //            (the berm share x the pressed depth, on undisturbed snow only). CAS loops: the stamps of one frame and of
 //            different deformers meet in any order.
 // The snow at a stamp: the ground = the site map's top (a roof is a ground: a foot a metre or more under it is inside the
-// building and dents nothing), else the terrain-data map's height; the undisturbed depth = the pack there (once per stamp,
-// at its centre: snow.inc.glsl snowGroundDepth + the water gate). The readers refill a track by the snow fallen since.
+// building and dents nothing), else the terrain-data map's height; the undisturbed depth = the pack there at the OPEN
+// sky's catch (once per stamp, at its centre, + the slope and water gates; the readers clamp to their own depth). The
+// readers refill a track by the snow fallen since.
 
 layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -132,8 +133,12 @@ void main()
     const vec3 centre = crater ? d.a : 0.5 * (d.a + d.b);
     if (gl_LocalInvocationIndex == 0u)
     {
-        // The undisturbed depth, once per stamp at its centre (the pack varies over kilometres, the ground per texel), as
-        // the VS lifts it: x the slope rule (the terrain's normal over +-1 m, about the near mesh's step) and the water gate.
+        // The undisturbed depth, once per stamp at its centre (the pack varies over kilometres, the ground per texel): x the
+        // slope rule (the terrain's normal over +-1 m, about the near mesh's step) and the water gate - at the OPEN SKY's
+        // catch, not the site map's. Every reader clamps a track to ITS depth (snowDeformApply), and a foot stands on the
+        // true ground, so the press reaches through whatever lies there. The site's catch here (the traced crowns alone)
+        // was thinner than the ground's (the canopy blend): under the trees a track pressed a fraction of the snow. A roof
+        // needs no catch: a foot under it is skipped below, one on it stands on its top.
         float depth = 0.0;
         if (snowPackLive() && terrainHeightMapPresent())
         {
@@ -142,8 +147,8 @@ void main()
             const float hx = terrainHeightAt(centre.xz + vec2(1.0, 0.0)) - terrainHeightAt(centre.xz - vec2(1.0, 0.0));
             const float hz = terrainHeightAt(centre.xz + vec2(0.0, 1.0)) - terrainHeightAt(centre.xz - vec2(0.0, 1.0));
             const float normalY = 2.0 / sqrt(hx * hx + hz * hz + 4.0);
-            depth = snowGroundDepth(terrainTemperatureAt(climate, ground), vec3(centre.x, ground, centre.z))
-                * snowGroundHolds(normalY) * snowGroundDry(ground, terrainDataAt(centre.xz).y, 0.0);
+            depth = snowPackDepth(terrainTemperatureAt(climate, ground), 1.0)
+                * snowGroundHolds(normalY) * snowGroundDry(vec3(centre.x, ground, centre.z), terrainDataAt(centre.xz).y, 0.0);
         }
         s_depth = depth;
     }

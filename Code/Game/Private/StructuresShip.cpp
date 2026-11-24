@@ -194,7 +194,7 @@ void StructureSystem::tickShipStructures()
     if (m_shipJoined && m_gangwayRetry > 0 && --m_gangwayRetry == 0)
     {
         buildGangways(); // a flight had no ground collider under it: try again (it sets the retry again while one has none)
-        m_linksDirty = true; // the stairs' road cells
+        markLinksDirty(); // the stairs' road cells
     }
     if (m_shipLanded == m_shipJoined)
         return;
@@ -229,7 +229,7 @@ void StructureSystem::tickShipStructures()
         buildGangways();
     else
         clearGangways();
-    m_linksDirty = true; // the road: the deck's tiles came or went
+    markLinksDirty(); // the road: the deck's tiles came or went
     ++m_shipRevision;
 }
 

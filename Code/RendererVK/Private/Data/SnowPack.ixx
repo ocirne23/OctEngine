@@ -67,8 +67,11 @@ public:
     static float snowFraction(float airC, float snowBelow, float rainAbove);
 
     // The surface's albedo (linear RGB) at a state: the spherical albedo of a weakly absorbing granular medium. The C++ twin
-    // of snowAlbedo (snow.inc.glsl): the same constants.
-    static glm::vec3 surfaceAlbedo(float grainMm, float liquid, float grime);
+    // of snowAlbedo (snow.inc.glsl): the same constants. grimeAbs = grimeAbsorption's (u_snow_grimeAbs).
+    static glm::vec3 surfaceAlbedo(float grainMm, float liquid, float grime, const glm::vec3& grimeAbs);
+    // The grime's absorption per channel at full grime (m^-1; u_snow_grimeAbs): the dust's, x "Grime strength", toward a
+    // neutral grey of the same mean by 1 - "Grime brownness".
+    static glm::vec3 grimeAbsorption(float strength, float brownness);
 
 private:
     oc::array<double, RendererVKLayout::SNOW_TABLE_CELLS> m_depth{};

@@ -21,17 +21,23 @@ float SnowPack::snowFraction(float airC, float snowBelow, float rainAbove)
     return 1.0f - glm::smoothstep(snowBelow, glm::max(rainAbove, snowBelow + 0.01f), airC);
 }
 
-// The ice's absorption per channel (m^-1, from its imaginary index: gamma = 4 pi k / lambda; good to ~2x), the grime's at
-// full grime (a look value: dust absorbs blue most), and the absorption path per grain diameter. snow.inc.glsl has the
-// same three (SNOW_ICE_ABS, SNOW_GRIME_ABS, SNOW_ABS_PATH).
+// The ice's absorption per channel (m^-1, from its imaginary index: gamma = 4 pi k / lambda; good to ~2x), the dust's at
+// full grime (a look value: dust absorbs blue most; the shaders take it through u_snow_grimeAbs, grimeAbsorption), and the
+// absorption path per grain diameter. snow.inc.glsl has the ice's and the path (SNOW_ICE_ABS, SNOW_ABS_PATH).
 static const glm::vec3 ICE_ABS = glm::vec3(0.31f, 0.046f, 0.016f);
 static const glm::vec3 GRIME_ABS = glm::vec3(6.0f, 8.0f, 11.0f);
 static constexpr float ABS_PATH = 13.0f;
 
-glm::vec3 SnowPack::surfaceAlbedo(float grainMm, float liquid, float grime)
+glm::vec3 SnowPack::surfaceAlbedo(float grainMm, float liquid, float grime, const glm::vec3& grimeAbs)
 {
     const float dEff = grainMm * 1e-3f * (1.0f + 2.0f * liquid); // a water film joins the grains into larger optical ones
-    return glm::exp(-glm::sqrt((ICE_ABS + grime * GRIME_ABS) * (ABS_PATH * dEff)));
+    return glm::exp(-glm::sqrt((ICE_ABS + grime * grimeAbs) * (ABS_PATH * dEff)));
+}
+
+glm::vec3 SnowPack::grimeAbsorption(float strength, float brownness)
+{
+    const float mean = (GRIME_ABS.x + GRIME_ABS.y + GRIME_ABS.z) / 3.0f;
+    return glm::max(strength, 0.0f) * glm::mix(glm::vec3(mean), GRIME_ABS, glm::clamp(brownness, 0.0f, 1.0f));
 }
 
 // Per cell, over the step: + the snowfall x the catch, then the settling, then the melt (degree-hours over 0 C plus the

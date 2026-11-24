@@ -196,7 +196,7 @@ void main()
 		const float window = 1.0 - smoothstep(0.38, 0.43, max(abs(rel.x), abs(rel.y)));
 		const float range = 1.0 - smoothstep(0.8 * u_snow_capRange, u_snow_capRange, distance(xz, camXZ));
 		s_depth[i] = snowPackDepth(terrainTemperatureAt(climate, top), catchF) * snowGroundHolds(normalY)
-			* snowGroundDry(top, terrainDataAt(xz).y, 0.0) * window * range;
+			* snowGroundDry(vec3(xz.x, top, xz.y), terrainDataAt(xz).y, 0.0) * window * range;
 	}
 	barrier();
 

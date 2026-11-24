@@ -30,7 +30,7 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
             if (m_frame[existing].state->rubble) // a road piece built up again from rubble
                 setRubble(m_frame[existing], false);
             applyStructureTint(m_frame[existing]);
-            m_linksDirty = true;
+            markLinksDirty();
             GameSound::post(EGameSound::StructureBuilt, m_frame[existing].entity->pos, isCableOrCrossing(type) ? 0.4f : 1.0f);
         }
         return;
@@ -65,7 +65,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     {
         s.blueprint = blueprint; // completion (or a fresh ghost) - swap the tint to match
         applyStructureTint(ref);
-        m_linksDirty = true;     // built buildings attach to runs; ghosts detach
+        markLinksDirty();        // built buildings attach to runs; ghosts detach
     }
     s.health = healthFrac * s.healthMax;
     s.store[0] = chargeFrac * s.capacity[0]; // per-instance (a barracks' capacity = its unit's cost)
@@ -107,7 +107,7 @@ void StructureSystem::mirrorCableProgress(uint32 id, float healthFrac, bool rubb
     {
         s.blueprint = true;
         setRubble(m_frame[index], true);
-        m_linksDirty = true;
+        markLinksDirty();
     }
     if (!s.blueprint)
         return; // a finished segment's health is authoritative from the built flip (GPl)
@@ -204,7 +204,7 @@ void StructureSystem::clearAllStructures()
     joinTransport();
     m_net = TransportNet{};
     m_savedFills.clear();
-    m_linksDirty = true;
+    markLinksDirty();
 }
 
 void StructureSystem::loadFrom(const AssetNode& root)

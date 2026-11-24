@@ -80,7 +80,15 @@ about 0.2 m.
 slope start / full" on the smooth normal). The pack needs no humidity (it is the snow that did fall), but only DRY ground
 keeps it: `depth = snowGroundDepth(T, pos)` (the table at the SITE MAP's catch, below) x `snowGroundDry` (smoothstep(-0.1,
 0.2, height over the local water level) x (1 - smoothstep(0.9, 1, the river influence)): the seabed, a river channel and
-the ground under the water stay bare), and `pack = snowCoverFromDepth(depth)`. The permanent snow takes no shelter on the
+the ground under the water stay bare), and `pack = snowCoverFromDepth(depth)`. **`snowGroundDry` is THE water test of
+every path** (the ground's white and its lift, the rock FS and shell, the objects' layer, the caps, the tracks). **THE
+SHORE:** by the OCEAN (the local level within 1 m of the sea's) the pack thins out over "Shore fade (m)" (4) above the
+water - the height, not a distance (the terrain-data map has none): a flat beach loses its snow over a wide strip, a
+cliff over a narrow one. **THE RIVER BANKS:** x (1 - "River bank fade" (0.4) x smoothstep(0.2, 0.9, the river
+influence)), the floodplain's inner part (only the ground passes the river influence; the other paths pass 0). Both
+edges WANDER by a two-octave integer-hashed value noise (`snowShoreNoise`, ~45 m and ~11 m cells; "Shore fade
+variation" 0.6 = the band's height x 1 +- 0.6, the river edge +- 0.3), so neither is a line along the water. A point
+outside both bands pays two compares; the noise (8 hashes) only inside one. Lakes keep their snow to the waterline. The permanent snow takes no shelter on the
 ground. The temperature is the climate's at the shaded height (per vertex), so the snow line follows the height. Three
 places compute it:
 
@@ -165,8 +173,11 @@ call from main before `joinBeginFrameJob` is lost) - the entity pass, the game u
   both maps; a scrolled-in FINE texel takes the coarse texel under it raw, so walking back over a trail finds it again),
   then the STAMPS (one workgroup per stamp over its footprint in both maps), back to SHADER_READ_ONLY_OPTIMAL. A frame
   that records nothing (minimized, no instances) commits nothing: the next one runs the same maintenance, a pending clear
-  included. The stamp takes the undisturbed depth ONCE at its centre (the pack at the site catch x the slope rule on the
-  terrain's normal over +-1 m x the water gate: the VS's lift) and the ground per texel
+  included. The stamp takes the undisturbed depth ONCE at its centre (the pack at the OPEN SKY's catch x the slope rule
+  on the terrain's normal over +-1 m x the water gate) and the ground per texel. **Not the site catch:** every reader
+  clamps a track to ITS OWN depth (`snowDeformApply`), and a foot stands on the true ground, so a press at the open
+  depth reaches through whatever lies there. The stamp's site catch is the traced crowns alone (its own samplers: no
+  canopy blend), thinner than the ground's, so under the trees a track pressed only a fraction of the snow.
   (the site map's top in its window: a roof is a ground, else the terrain-data map). It PRESSES (the offset goes down to
   the ball's or the bowl's bottom, never under the ground: min) and pushes a BERM up in a ring of 0.6 x the radius
   outside it ("Berm": the share of the pressed depth, x 4u(1-u) across the ring; only on undisturbed or berm texels:
@@ -222,7 +233,15 @@ the foliage above it lets through, and the highest blocking foliage's height ove
 point (`snowSiteCatch`, snow.inc.glsl) = that pass where the point lies under the highest foliage (a branch over its
 crown's shadow card, a mover over a forest: the open sky), x 0 where a solid top stands more than 0.3 .. 0.8 m over the
 point: none under a roof or an overhang, less under a crown, the full share on a roof itself. The table is read at that
-catch, so a forest floor collects a thin layer (two crown layers at "Foliage block" 0.7 let 9 % through).
+catch. "Foliage block" (1.0) is the share one foliage layer stops: at 1 the traced pass is 0 under any crown, and the
+snow there comes from the canopy blend alone (below); at 0.7 two layers let 9 % through.
+**THE CROWNS' SHELTER IS SOFTENED by the canopy map** (`canopyTreeCover`, canopy_occlusion.inc.glsl: the tree cover
+blurred over a few metres, not the sky occlusion's tweak): the foliage pass goes toward `1 - "Foliage block" x cover` by
+"Canopy snow blend" (0.25: with "Foliage block" 1, under a traced crown the catch is 0.25 x (1 - cover), 0 under full
+cover; between the crowns 0.75 + 0.25 x (1 - cover)). The traced pass alone has each crown's sharp edge, a bare blob under every tree. One fetch,
+inside the site window only. The readers with the bindless array take it (`SNOW_CANOPY`, set with the default site
+samplers): the ground's white and lift, the rocks, the objects, the snow caps' FS. The ones that bind their own site
+samplers keep the traced pass: the grass cull (the blades' white), the wetness, the caps' prepare, the tracks.
 
 * **The window**: `SNOW_SITE_RES`^2 (1024^2) texels of `SNOW_SITE_TEXEL` (0.25 m) = 256 m, world-snapped and TOROIDAL
   around the scene focus (slot = lattice & 1023; the origin is a lattice coord, `Tick::origin`). Readers sample with
@@ -430,9 +449,13 @@ photo texture. One set of functions, so a cap's rim, the roof's layer under it a
 * **The material** from the pack's STATE (`snowStateAt` / `snowStateFrom`; the climate's permanent snow and every path
   with the pack off read the fresh state):
   * `snowAlbedo`: the spherical albedo of a weakly absorbing granular medium, exp(-sqrt(gamma x 13 x d_eff)) per channel
-    - gamma the ice's absorption (0.31, 0.046, 0.016 /m, from its imaginary index) + grime x (6, 8, 11) /m, d_eff the
+    - gamma the ice's absorption (0.31, 0.046, 0.016 /m, from its imaginary index) + grime x `u_snow_grimeAbs`, d_eff the
     grain x (1 + 2 x meltwater). Fresh 0.1 mm grains: (0.980, 0.991, 0.996); old wet grimy snow greys. C++ twin:
     `SnowPack::surfaceAlbedo` ("snow_freshAlbedo", the splat's placeholder).
+  * **The grime's look** (`u_snow_grimeAbs`, lockable; `SnowPack::grimeAbsorption`): the dust's absorption at full grime,
+    (6, 8, 11) /m (it absorbs blue most: dirty snow goes brown), x "Grime strength" (0.4: how dark), toward a neutral grey
+    of the same mean (8.33 /m) by 1 - "Grime brownness" (0.4: how brown; 1 = the dust's full brown). How much grime a cell holds is the state's ("Grime
+    (per day)", "Melt grime"); these two change only how it looks.
   * `snowAlpha`: "Grain roughness" (0.6) toward "Wet snow roughness" (0.15) with the meltwater.
   * The terrain FS replaces the splat's fresh placeholders (`snowSurfaceSample`) after the splat by the snow's share
     (`terrainSplatLayers`'s `snowShare`, the share after the height blend - exact for the linear mix); the rock FS before

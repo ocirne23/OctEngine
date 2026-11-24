@@ -30,9 +30,14 @@ void Settings::registerWeather(WeatherSettings& s)
     Tweak::boolean("Weather/Snow", "Clear snow", &s.clearSnow);
     Tweak::boolean("Weather/Snow", "Shelter", &s.shelter);
     Tweak::floatVar("Weather/Snow", "Foliage block", &s.foliageBlock, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Weather/Snow", "Canopy snow blend", &s.canopyBlend, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Weather/Snow", "Depth", &s.snowDepth);
     Tweak::floatVar("Weather/Snow", "Bury depth (m)", &s.buryDepth, 0.01f, 2.0f, 0.01f);
     Tweak::boolean("Weather/Snow", "Objects", &s.objectSnow);
+    // Near the water (snow.inc.glsl snowGroundDry: every path - the ground, its lift, the rocks, the objects, the caps).
+    Tweak::floatVar("Weather/Snow", "Shore fade (m)", &s.shoreFade, 0.0f, 30.0f, 0.1f);
+    Tweak::floatVar("Weather/Snow", "Shore fade variation", &s.shoreVariation, 0.0f, 0.9f, 0.01f);
+    Tweak::floatVar("Weather/Snow", "River bank fade", &s.riverBankFade, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Leaf snow", &s.leafSnow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Grass snow", &s.grassSnow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Clutter snow", &s.clutterSnow, 0.0f, 1.0f, 0.01f);
@@ -65,6 +70,9 @@ void Settings::registerWeather(WeatherSettings& s)
     // The look.
     Tweak::floatVar("Weather/Snow", "Grain roughness", &s.grainRough, 0.1f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Wet snow roughness", &s.wetRough, 0.02f, 1.0f, 0.01f);
+    // The dirty snow's look (the state's grime is "Grime (per day)" / "Melt grime"): how dark, and how brown.
+    Tweak::floatVar("Weather/Snow", "Grime strength", &s.grimeStrength, 0.0f, 3.0f, 0.01f);
+    Tweak::floatVar("Weather/Snow", "Grime brownness", &s.grimeBrownness, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Weather/Snow", "Soft terminator", &s.softTerminator, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Weather/Snow", "Forward scattering", &s.forwardScatter, 0.0f, 2.0f, 0.05f);
     Tweak::boolean("Weather/Snow", "Sparkle", &s.sparkle);

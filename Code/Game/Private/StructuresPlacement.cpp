@@ -313,7 +313,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     if (insert)
         insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
     invalidateSnowSite(m_frame.back(), /*hide*/ false); // its roof shelters and carries snow once the site map sees it
-    m_linksDirty = true;
+    markLinksDirty();
     m_carrierPassTimer = 0.0f; // the walkers' ~1 s pass at once: a new blueprint gets its stone without the wait
     if (!built) // a blueprint goes down (a load or a join replay spawns built structures: silent)
         GameSound::post(EGameSound::StructurePlaced, pos, isCableOrCrossing(type) ? 0.5f : 1.0f);
@@ -346,7 +346,7 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
         Globals::world.removeRootEntity(s.walkLegs.get());
     clearWardPieces(s); // the wards' pieces on a wall segment
     eraseCells(s); // promotes an under-cable back to primary occupant
-    m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
+    markLinksDirty(); // the transport graph rebuilds before its next tick (roster pointers)
     if (s.onShip)
         ++m_shipRevision; // its box leaves the ship's body
     m_frame.erase(m_frame.begin() + index);

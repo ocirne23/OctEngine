@@ -27,6 +27,20 @@ vec2 canopyCover(vec2 xz)
 	return vec2(u_foliage_canopyOcclusion * tap.r * min(edge * 20.0, 1.0), max(tap.g * CANOPY_MAP_MAX_HEIGHT, 1.0));
 }
 
+// The tree COVER over xz (0..1, the map's R, blurred over a few metres), without the sky occlusion's tweak: the snow's
+// shelter under the crowns (snow.inc.glsl snowSiteCatch). 0 with no map and outside it (faded over the outer 5 %).
+float canopyTreeCover(vec2 xz)
+{
+	if (u_foliage_canopyInvSize <= 0.0)
+		return 0.0;
+	const vec2 uv = (xz - u_foliage_canopyOrigin) * u_foliage_canopyInvSize;
+	const vec2 inside = min(uv, 1.0 - uv);
+	const float edge = min(inside.x, inside.y);
+	if (edge <= 0.0)
+		return 0.0;
+	return textureLod(u_textures[u_foliage_canopyTex], uv, 0.0).r * min(edge * 20.0, 1.0);
+}
+
 // The ambient's factor `height` metres above the ground under that canopy: the share of it that stands ABOVE the point.
 float canopySkyVisibility(vec2 cover, float height)
 {

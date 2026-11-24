@@ -67,6 +67,10 @@ float snowPackCover(float tempC, float catchF)
 #ifndef SNOW_SITE_TOP_SAMPLER
 #define SNOW_SITE_TOP_SAMPLER u_textures[u_snow_siteTopTex]
 #define SNOW_SITE_PASS_SAMPLER u_textures[u_snow_sitePassTex]
+// With the bindless array: the canopy map too (snowSiteCatch's smooth shelter under the crowns). A reader that binds its
+// own site samplers (the grass cull, the wetness, the caps' prepare, the tracks) takes the site map's pass alone.
+#define SNOW_CANOPY
+#include "canopy_occlusion.inc.glsl"
 #endif
 #ifndef SNOW_SITE_ORIGIN
 #define SNOW_SITE_ORIGIN u_snow_siteOrigin
@@ -94,16 +98,23 @@ float snowSiteCatch(vec3 pos, float under0, float under1)
 	// Under the foliage only: a point above the column's highest blocking layer (a branch over its crown's shadow card, a
 	// mover over a forest) has the open sky.
 	const float underFoliage = smoothstep(-0.5, 0.5, top + pass.y * SNOW_SITE_FOLIAGE_RANGE - pos.y);
-	return mix(1.0, mix(1.0, pass.x, underFoliage) * exposed, inside);
+	// THE CROWNS' SHELTER: the site map's pass has each crown's sharp edge (a bare blob under every tree); toward the canopy
+	// map's smooth cover by "Canopy snow blend" - full cover stops "Foliage block" of the snowfall, as one foliage layer.
+	float foliage = pass.x;
+#ifdef SNOW_CANOPY
+	if (u_snow_canopyBlend > 0.0)
+		foliage = mix(foliage, 1.0 - u_snow_canopyShelter * canopyTreeCover(pos.xz), u_snow_canopyBlend);
+#endif
+	return mix(1.0, mix(1.0, foliage, underFoliage) * exposed, inside);
 }
 float snowSiteCatch(vec3 pos) { return snowSiteCatch(pos, 0.3, 0.8); }
 
 // ---- THE SNOW'S MATERIAL (every path: the splat, the object layer, the caps, the rocks): from the state, not a texture ----
 // Physics, not tweaks: the ice's absorption per channel (m^-1, from its imaginary index, gamma = 4 pi k / lambda; good to
-// ~2x), the grime's at full grime (a look value: dust absorbs blue most) and the absorption path per grain diameter. The
-// C++ twin is SnowPack::surfaceAlbedo (the same three).
+// ~2x) and the absorption path per grain diameter. The grime's at full grime is a LOOK value, u_snow_grimeAbs ("Grime
+// strength", "Grime brownness": SnowPack::grimeAbsorption - the dust absorbs blue most). The C++ twin is
+// SnowPack::surfaceAlbedo.
 #define SNOW_ICE_ABS   vec3(0.31, 0.046, 0.016)
-#define SNOW_GRIME_ABS vec3(6.0, 8.0, 11.0)
 #define SNOW_ABS_PATH  13.0
 
 struct SnowState { float grainM; float liquid; float grime; }; // m, 0..1, 0..1
@@ -120,7 +131,7 @@ SnowState snowStateAt(float tempC, float catchF) { return snowPackLive() ? snowS
 vec3 snowAlbedo(SnowState s)
 {
 	const float dEff = s.grainM * (1.0 + 2.0 * s.liquid);
-	return exp(-sqrt((SNOW_ICE_ABS + s.grime * SNOW_GRIME_ABS) * (SNOW_ABS_PATH * dEff)));
+	return exp(-sqrt((SNOW_ICE_ABS + s.grime * u_snow_grimeAbs) * (SNOW_ABS_PATH * dEff)));
 }
 // The ice facets' GGX alpha: "Grain roughness" dry, toward "Wet snow roughness" with the meltwater.
 float snowAlpha(SnowState s) { return mix(u_snow_grainRough, u_snow_wetRough, s.liquid); }
@@ -166,10 +177,45 @@ float snowGroundHolds(float normalY)
 	return 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, 1.0 - clamp(normalY, 0.0, 1.0));
 }
 
-// Dry ground only: the pack melts into the sea, a lake, a river channel (the beds under the water stay bare).
-float snowGroundDry(float y, float waterLevel, float river)
+// A two-octave VALUE NOISE over the world XZ (0..1; ~45 m and ~11 m cells), integer-hashed: exact at any world coordinate,
+// and the same in every stage (the ground's VS lift and FS white agree).
+float snowShoreHash(ivec2 c)
 {
-	return smoothstep(-0.1, 0.2, y - waterLevel) * (1.0 - smoothstep(0.9, 1.0, river));
+	uint h = uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u;
+	h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
+	return float(h ^ (h >> 12u)) * (1.0 / 4294967296.0);
+}
+float snowShoreValue(vec2 p)
+{
+	const ivec2 i = ivec2(floor(p));
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(snowShoreHash(i), snowShoreHash(i + ivec2(1, 0)), f.x), mix(snowShoreHash(i + ivec2(0, 1)), snowShoreHash(i + ivec2(1, 1)), f.x), f.y);
+}
+float snowShoreNoise(vec2 xz) { return 0.65 * snowShoreValue(xz * (1.0 / 45.0)) + 0.35 * snowShoreValue(xz * (1.0 / 11.0) + 17.0); }
+
+// Dry ground only: the pack melts into the sea, a lake, a river channel (the beds under the water stay bare). Every path
+// takes it (the ground's white and lift, the rocks, the objects' layer, the caps, the tracks).
+// THE SHORE: by the OCEAN (the local level is the sea's) it thins out over "Shore fade (m)" above the water - the height,
+// not the distance (the map has none): a flat beach loses its snow over a wide strip, a cliff over a narrow one. THE RIVER
+// BANKS: the floodplain's inner part thins by "River bank fade" toward the channel. Both edges wander by the noise
+// ("Shore fade variation"), so neither is a line along the water. Only a point in a band pays the noise.
+float snowGroundDry(vec3 pos, float waterLevel, float river)
+{
+	const float above = pos.y - waterLevel;
+	float dry = smoothstep(-0.1, 0.2, above) * (1.0 - smoothstep(0.9, 1.0, river));
+	const float band = u_snow_shoreFade * (1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_terrain_seaLevel)));
+	const bool inShore = band > 0.0 && above < band * (1.0 + u_snow_shoreVariation);
+	const bool inBank = u_snow_riverBankFade > 0.0 && river > 0.05;
+	if (dry > 0.0 && (inShore || inBank))
+	{
+		const float n = snowShoreNoise(pos.xz) - 0.5; // -0.5 .. 0.5
+		if (inShore)
+			dry *= smoothstep(0.0, 1.0, above / (band * (1.0 + 2.0 * u_snow_shoreVariation * n)));
+		if (inBank)
+			dry *= 1.0 - u_snow_riverBankFade * smoothstep(0.2, 0.9, river + 0.5 * u_snow_shoreVariation * n);
+	}
+	return dry;
 }
 
 // THE GROUND'S LIFT (m, up): the terrain VS raises every vertex by the pack's depth there - the same depth terrainLayers
@@ -183,7 +229,7 @@ float snowGroundLift(vec3 pos, float tempC, float normalY, float waterLevel, flo
 	const float holds = snowGroundHolds(normalY);
 	if (holds <= 0.0)
 		return 0.0;
-	return snowGroundDepth(tempC, pos) * holds * snowGroundDry(pos.y, waterLevel, river);
+	return snowGroundDepth(tempC, pos) * holds * snowGroundDry(pos, waterLevel, river);
 }
 
 // ---- THE ROCK SHELL (instanced_indirect_rock.vs.glsl): rocks, dead wood and cacti swell by the snow on their top ----
@@ -209,7 +255,7 @@ float snowRockShell(vec3 pos, float normalY, float tempC, float waterLevel, floa
 	const float fade = 1.0 - smoothstep(0.8 * u_snow_rockShellRange, u_snow_rockShellRange, distance(pos.xz, u_views_viewPos[VIEW_CENTER].xz));
 	if (holds * fade <= 0.0)
 		return 0.0;
-	return snowPackDepth(tempC, snowRockCatch(pos)) * holds * fade * snowGroundDry(pos.y, waterLevel, 0.0);
+	return snowPackDepth(tempC, snowRockCatch(pos)) * holds * fade * snowGroundDry(pos, waterLevel, 0.0);
 }
 
 // ---- THE DEFORMATION (SnowDeformPipeline, snow_deform.cs.glsl): the tracks, the berms, the craters ----
@@ -438,8 +484,8 @@ float snowObjectCover(vec3 pos, float upN, bool shelter, out vec4 cell)
 	const float catchF = shelter ? snowSiteCatch(pos) : 1.0;
 	if (snowPackLive())
 		cell = snowPackCell(tempC, 1.0); // the open snow's state (snowStateAt), as every path reads it
-	// The pack only out of the water (as on the ground and the rocks: it melts into the sea, a lake, a river).
-	const float dry = snowPackLive() ? smoothstep(-0.1, 0.2, pos.y - terrainDataAt(pos.xz).y) : 0.0;
+	// The pack only out of the water and thinned by the shore (snowGroundDry, as on the ground and the rocks).
+	const float dry = snowPackLive() ? snowGroundDry(pos, terrainDataAt(pos.xz).y, 0.0) : 0.0;
 	// The permanent snow stops where the pack's catch does (a roof keeps both off; a crown thins neither by much). The slope
 	// rule thins the pack's DEPTH, as on the ground and in the caps (a cap's rim then matches the layer on a steep roof).
 	const float pack = snowPackLive() ? snowCoverFromDepth(snowPackDepth(tempC, catchF) * holds) : 0.0;

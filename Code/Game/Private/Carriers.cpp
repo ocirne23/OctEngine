@@ -473,20 +473,84 @@ int StructureSystem::roadSearch(int fromStructure, glm::ivec2 fromCell, const oc
     }, outPath);
 }
 
+void StructureSystem::roadLinks(int cx, int cz, RoadNode& node) const
+{
+    for (int d = 0; d < 4; ++d)
+    {
+        const int nx = cx + c_neighbours[d].x, nz = cz + c_neighbours[d].y;
+        node.next[d] = -1;
+        node.touches[d][0] = node.touches[d][1] = -1;
+        if (railEdgeBetween(cx, cz, nx, nz))
+            continue; // the ship's rail between them: not off the ship that way
+        if (const auto it = m_roadNodeAt.find(cellKey(nx, nz)); it != m_roadNodeAt.end())
+            node.next[d] = it->second;
+        // Both occupants of the cell: a CANNON rides under a road piece or a walkway deck (underId).
+        if (const auto it = m_cells.find(cellKey(nx, nz)); it != m_cells.end())
+        {
+            node.touches[d][0] = it->second.id != 0 ? structureIndexById(it->second.id) : -1;
+            node.touches[d][1] = it->second.underId != 0 ? structureIndexById(it->second.underId) : -1;
+        }
+    }
+}
+
+// The road cells are where roadAt can say yes: an occupied cell (m_cells), the landed ship's deck, the gangway stairs.
+void StructureSystem::ensureRoadGraph() const
+{
+    if (m_roadGraphVersion == m_layoutVersion)
+        return;
+    m_roadGraphVersion = m_layoutVersion;
+    m_roadNodes.clear();
+    m_roadNodeAt.clear();
+    const auto add = [&](int cx, int cz)
+    {
+        float y;
+        if (m_roadNodeAt.count(cellKey(cx, cz)) || !roadAt(cx, cz, y))
+            return;
+        m_roadNodeAt[cellKey(cx, cz)] = (int)m_roadNodes.size();
+        m_roadNodes.push_back(RoadNode{ cx, cz, y, {}, {} });
+    };
+    const auto addKey = [&](uint64 key) { add((int)(int32)(uint32)(key >> 32), (int)(int32)(uint32)key); };
+    for (const auto& [key, entry] : m_cells)
+        addKey(key);
+    for (const auto& [key, y] : m_gangwayRoad)
+        addKey(key);
+    if (m_shipJoined)
+        for (int cz = m_deckCellMin.y; cz <= m_deckCellMax.y; ++cz)
+            for (int cx = m_deckCellMin.x; cx <= m_deckCellMax.x; ++cx)
+                add(cx, cz);
+    for (RoadNode& node : m_roadNodes)
+        roadLinks(node.cx, node.cz, node);
+}
+
 int StructureSystem::roadSearchBest(int fromStructure, glm::ivec2 fromCell, const oc::function<float(int, int)>& cost,
     oc::vector<glm::vec3>& outPath, int maxSteps) const
 {
-    struct Visit { int cx, cz, parent, steps; float y; };
-    oc::vector<Visit> open;
-    oc::unordered_map<uint64, int> seen;
-    const auto visit = [&](int cx, int cz, int parent, int steps)
+    ensureRoadGraph();
+    assert(m_roadSearchDepth < 2);
+    RoadSearchScratch& scratch = m_roadScratch[m_roadSearchDepth++];
+    struct DepthScope { int& depth; ~DepthScope() { --depth; } } depthScope{ m_roadSearchDepth };
+    if (scratch.stamp.size() < m_roadNodes.size())
+        scratch.stamp.resize(m_roadNodes.size(), 0u);
+    if (++scratch.gen == 0) // wrapped: no stale mark may match
     {
-        float y;
-        if ((int)open.size() >= c_maxRoadCells || seen.count(cellKey(cx, cz)) || !roadAt(cx, cz, y))
-            return;
-        seen[cellKey(cx, cz)] = (int)open.size();
-        open.push_back({ cx, cz, parent, steps, y });
+        oc::fill(scratch.stamp.begin(), scratch.stamp.end(), 0u);
+        scratch.gen = 1;
+    }
+    oc::vector<RoadVisit>& open = scratch.open;
+    open.clear();
+    const auto nodeAt = [&](int cx, int cz)
+    {
+        const auto it = m_roadNodeAt.find(cellKey(cx, cz));
+        return it != m_roadNodeAt.end() ? it->second : -1;
     };
+    const auto visit = [&](int node, int parent, int steps)
+    {
+        if (node < 0 || (int)open.size() >= c_maxRoadCells || scratch.stamp[node] == scratch.gen)
+            return;
+        scratch.stamp[node] = scratch.gen;
+        open.push_back({ node, parent, steps });
+    };
+    RoadNode start{};
     if (fromStructure >= 0)
     {
         const Ref& source = m_frame[fromStructure];
@@ -494,16 +558,19 @@ int StructureSystem::roadSearchBest(int fromStructure, glm::ivec2 fromCell, cons
         {
             for (const glm::ivec2& n : c_neighbours)
                 if (!railEdgeBetween(cx, cz, cx + n.x, cz + n.y))
-                    visit(cx + n.x, cz + n.y, -1, 0);
+                    visit(nodeAt(cx + n.x, cz + n.y), -1, 0);
         });
     }
     else if (watchPostAt(fromCell.x, fromCell.y)) // a guard on a Watch post (no road): it starts from the top
     {
-        seen[cellKey(fromCell.x, fromCell.y)] = 0;
-        open.push_back({ fromCell.x, fromCell.y, -1, 0, wardTopY(m_frame[structureIndexById(m_cells.find(cellKey(fromCell.x, fromCell.y))->second.id)]) });
+        start.cx = fromCell.x;
+        start.cz = fromCell.y;
+        start.y = wardTopY(m_frame[structureIndexById(m_cells.find(cellKey(fromCell.x, fromCell.y))->second.id)]);
+        roadLinks(fromCell.x, fromCell.y, start);
+        open.push_back({ -1, -1, 0 });
     }
     else
-        visit(fromCell.x, fromCell.y, -1, 0);
+        visit(nodeAt(fromCell.x, fromCell.y), -1, 0);
 
     // Breadth first, so the steps never go down: once they pass the best cost (a cost is never under its steps), no
     // building farther on can beat it. A tie keeps the nearer one.
@@ -511,38 +578,32 @@ int StructureSystem::roadSearchBest(int fromStructure, glm::ivec2 fromCell, cons
     float bestCost = FLT_MAX;
     for (int i = 0; i < (int)open.size(); ++i)
     {
-        const Visit cell = open[i]; // a copy: visit() grows the vector
+        const RoadVisit cell = open[i]; // a copy: visit() grows the vector
         const int steps = cell.steps + 1; // to a building next to this cell
         if ((float)steps > bestCost || steps > maxSteps)
             break;
-        for (const glm::ivec2& n : c_neighbours)
+        const RoadNode& node = cell.node >= 0 ? m_roadNodes[cell.node] : start;
+        for (int d = 0; d < 4; ++d)
         {
-            const int cx = cell.cx + n.x, cz = cell.cz + n.y;
-            if (railEdgeBetween(cell.cx, cell.cz, cx, cz))
-                continue; // the ship's rail between them: not off the ship that way
-            // Both occupants of the cell: a CANNON rides under a road piece or a walkway deck (underId).
-            if (const auto it = m_cells.find(cellKey(cx, cz)); it != m_cells.end())
-                for (const uint32 id : { it->second.id, it->second.underId })
-                {
-                    const int index = id != 0 ? structureIndexById(id) : -1;
-                    if (index < 0)
-                        continue;
+            for (const int index : node.touches[d])
+                if (index >= 0)
                     if (const float c = cost(index, steps); c >= 0.0f && c < bestCost)
                     {
                         bestCost = c;
                         found = index;
                         foundCell = i;
                     }
-                }
-            visit(cx, cz, i, steps);
+            visit(node.next[d], i, steps);
         }
     }
     if (found < 0)
         return -1;
     outPath.clear();
     for (int i = foundCell; i >= 0; i = open[i].parent)
-        outPath.push_back(glm::vec3(((float)open[i].cx + 0.5f) * GridCellSize, open[i].y + c_walkHeight,
-            ((float)open[i].cz + 0.5f) * GridCellSize));
+    {
+        const RoadNode& node = open[i].node >= 0 ? m_roadNodes[open[i].node] : start;
+        outPath.push_back(glm::vec3(((float)node.cx + 0.5f) * GridCellSize, node.y + c_walkHeight, ((float)node.cz + 0.5f) * GridCellSize));
+    }
     oc::reverse(outPath.begin(), outPath.end());
     return found;
 }
@@ -568,19 +629,37 @@ int StructureSystem::findRoadTarget(int sourceIdx, int fromStructure, glm::ivec2
     }, outPath);
 }
 
+// The nearest storage but the source: of the two nearest ones, the first that is not the source (BFS order: by steps).
 bool StructureSystem::nearerStorage(int consumerIdx, int sourceIdx, int good, int maxSteps) const
 {
-    const uint32 team = m_frame[sourceIdx].state->team;
-    oc::vector<glm::vec3> scratch;
-    return roadSearchBest(consumerIdx, glm::ivec2(0), [&](int index, int steps) -> float
+    if (m_nearStores.size() < m_frame.size() * GameStructureComponent::NumStores)
+        m_nearStores.resize(m_frame.size() * GameStructureComponent::NumStores);
+    NearStores& near = m_nearStores[(size_t)consumerIdx * GameStructureComponent::NumStores + good];
+    if (near.tick != m_carrierTick)
     {
-        if (index == sourceIdx || index == consumerIdx)
-            return -1.0f;
-        const Ref& r = m_frame[index];
-        bool consumersOnly = false;
-        return r.state->team == team && !r.state->blueprint && transportRoleOf(r.type, good) == ETransportRole::Storage
-            && carrierSendGood(index, good, consumersOnly) ? (float)steps : -1.0f;
-    }, scratch, maxSteps) >= 0;
+        near = NearStores{};
+        near.tick = m_carrierTick;
+        const uint32 team = m_frame[consumerIdx].state->team; // (the source's: carrierAccepts takes only its own team)
+        int count = 0;
+        oc::vector<glm::vec3> path;
+        roadSearchBest(consumerIdx, glm::ivec2(0), [&](int index, int steps) -> float
+        {
+            if (count == 2 || index == consumerIdx || index == near.index[0])
+                return -1.0f;
+            const Ref& r = m_frame[index];
+            bool consumersOnly = false;
+            if (r.state->team != team || r.state->blueprint || transportRoleOf(r.type, good) != ETransportRole::Storage
+                || !carrierSendGood(index, good, consumersOnly))
+                return -1.0f;
+            near.index[count] = index;
+            near.steps[count] = steps;
+            return ++count == 2 ? (float)steps : -1.0f; // the second one ends the search
+        }, path);
+    }
+    for (int k = 0; k < 2; ++k)
+        if (near.index[k] >= 0 && near.index[k] != sourceIdx)
+            return near.steps[k] <= maxSteps;
+    return false;
 }
 
 // A producer sends out a full load (or its whole small store); a storage feeds hungry consumers only.
@@ -852,6 +931,7 @@ void StructureSystem::tickCarriers(float deltaSec)
     if (!m_settings.carriers && m_walkers.empty())
         return;
     ProfileScope scope("Carriers", EProfileCategory::Game);
+    ++m_carrierTick; // nearerStorage's answers are this tick's
     const auto removeWalker = [&](size_t k)
     {
         if (m_walkers[k].entity)
@@ -915,22 +995,41 @@ void StructureSystem::tickCarriers(float deltaSec)
     }
     if (!m_settings.carriers)
         return;
-    bool guardsWanted[GameMaxTeams] = {}; // a waiting walker looks for an Armory only while one of its team wants a guard
-    bool crewsWanted[GameMaxTeams] = {};  // ... for a Cannon only while one of its team wants a crew
-    for (int i = 0; i < (int)m_frame.size(); ++i)
-        if (m_frame[i].state->team < GameMaxTeams)
-        {
-            if (armsGuards(m_frame[i].type))
-                guardsWanted[m_frame[i].state->team] |= guardWanted(i, (uint8)m_frame[i].state->team);
-            else if (isGunType(m_frame[i].type))
-                crewsWanted[m_frame[i].state->team] |= crewWanted(i, (uint8)m_frame[i].state->team);
-        }
-
     m_carrierPassTimer -= deltaSec;
     if (m_carrierPassTimer <= 0.0f)
     {
         m_carrierPassTimer = c_passSeconds;
         carrierHousePass();
+    }
+    // WHAT WORK THE TEAM HAS AT ALL, this tick (after the pass: its sendReady / transportReady are the job pick's): a walker searches the road only for a kind of work that some building of
+    // its team offers (a search that can find nothing walks the whole road network).
+    bool guardsWanted[GameMaxTeams] = {}; // an Armory that wants a guard
+    bool crewsWanted[GameMaxTeams] = {};  // a Cannon that wants a crew
+    bool buildWaits[GameMaxTeams] = {};   // a blueprint that needs stone
+    bool repairWaits[GameMaxTeams] = {};  // a damaged structure
+    int jobsOpen[GameMaxTeams] = {};      // buildings that are a walker's job (carrierJobCost >= 0) ...
+    int urgentJobsOpen[GameMaxTeams] = {}; // ... and those of them with a load or a cart waiting (cost 0)
+    int storages[GameMaxTeams][GameStructureComponent::NumStores] = {}; // a cart needs two of the good
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        const Ref& ref = m_frame[i];
+        const uint32 team = ref.state->team;
+        if (team >= GameMaxTeams)
+            continue;
+        if (armsGuards(ref.type))
+            guardsWanted[team] |= guardWanted(i, (uint8)team);
+        else if (isGunType(ref.type))
+            crewsWanted[team] |= crewWanted(i, (uint8)team);
+        buildWaits[team] |= blueprintNeed(ref) > 0.01f;
+        repairWaits[team] |= repairNeed(ref) > 0.25f;
+        if (const float cost = carrierJobCost(i, (uint8)team); cost >= 0.0f)
+        {
+            ++jobsOpen[team];
+            urgentJobsOpen[team] += cost == 0.0f ? 1 : 0;
+        }
+        if (!ref.state->blueprint)
+            for (int good = 1; good <= GoodMunitions; ++good)
+                storages[team][good] += ref.state->capacity[good] > 0.0f && transportRoleOf(ref.type, good) == ETransportRole::Storage ? 1 : 0;
     }
 
     const float loadSize = glm::max(m_settings.carrierLoad, 1.0f);
@@ -985,8 +1084,19 @@ void StructureSystem::tickCarriers(float deltaSec)
         };
         // Other work on this road network, from where the walker stands, by the job pick (carrierJobCost); urgentOnly: a
         // load or a cart that waits for a walker, nothing minor.
+        // Is there a job of the team other than its own (the counts of this tick)? No: no search.
+        const auto otherJobsOpen = [&](bool urgentOnly)
+        {
+            int open = urgentOnly ? urgentJobsOpen[team] : jobsOpen[team];
+            if (job >= 0)
+                if (const float own = carrierJobCost(job, team); urgentOnly ? own == 0.0f : own >= 0.0f)
+                    --open;
+            return open > 0;
+        };
         const auto seekJob = [&](bool urgentOnly)
         {
+            if (!otherJobsOpen(urgentOnly))
+                return false;
             oc::vector<glm::vec3> path;
             const int found = roadSearchBest(-1, hereCell, [&](int index, int steps) -> float
             {
@@ -1005,7 +1115,7 @@ void StructureSystem::tickCarriers(float deltaSec)
         // carrierJobCost. So a cart that empties into a store with loads waiting takes one of them at once.
         const auto pickNext = [&]
         {
-            if (w.dismissed || job < 0 || w.load > 0.01f)
+            if (w.dismissed || job < 0 || w.load > 0.01f || !otherJobsOpen(false)) // (no other job: back to its own)
                 return false;
             const Ref& own = m_frame[job];
             const float ownCost = own.sendReady || own.transportReady ? 0.0f : c_minorJobCells;
@@ -1305,6 +1415,11 @@ void StructureSystem::tickCarriers(float deltaSec)
                 {
                     for (int good = 1; good <= GoodMunitions && w.state == Walker_Waiting; ++good)
                     {
+                        // (transportAmount's own early outs, before the search: a storage of the good with a cart's
+                        // fifth in it, and a second storage of it in the team.)
+                        if (storages[team][good] < 2 || s.capacity[good] <= 0.0f || transportRoleOf(jobRef.type, good) != ETransportRole::Storage
+                            || s.store[good] < glm::max(m_settings.carrierCartLoad, 1.0f) * 0.2f)
+                            continue;
                         oc::vector<glm::vec3> path;
                         const int target = findRoadTarget(job, -1, hereCell, good, false, CarrierWork_Transport, path);
                         if (target < 0 || path.empty())
@@ -1359,6 +1474,8 @@ void StructureSystem::tickCarriers(float deltaSec)
                 {
                     if (w.state != Walker_Waiting || !carrierHoldsStone(job))
                         break;
+                    if (!(work == CarrierWork_Build ? buildWaits[team] : repairWaits[team]))
+                        continue;
                     oc::vector<glm::vec3> path;
                     const int target = findRoadTarget(job, -1, hereCell, 2, false, work, path);
                     if (target >= 0 && !path.empty())
@@ -1399,7 +1516,7 @@ void StructureSystem::tickCarriers(float deltaSec)
         const auto afterWork = [&]
         {
             oc::vector<glm::vec3> path;
-            if (w.load > 0.01f)
+            if (w.load > 0.01f && (w.work == CarrierWork_Build ? buildWaits[team] : repairWaits[team]))
                 if (const int next = findRoadTarget(home, -1, hereCell, 2, false, w.work, path); next >= 0 && !path.empty())
                 {
                     m_frame[next].buildIncoming += w.load; // it keeps its whole load: the next one takes what it needs

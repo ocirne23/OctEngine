@@ -2530,6 +2530,13 @@ void RendererState::registerUboValues(UboBlock& list)
         // the grass and the clutter.
         list.add("snow_depth", [&w] { return w.snowDepth; }, w.snowDepth);
         list.add("snow_invBuryDepth", [&w] { return 1.0f / glm::max(w.buryDepth, 0.01f); }, w.buryDepth);
+        // The crowns' shelter (snowSiteCatch): the blend toward the canopy map's cover, and what full cover stops.
+        list.add("snow_canopyBlend", [&w] { return glm::clamp(w.canopyBlend, 0.0f, 1.0f); }, w.canopyBlend);
+        list.add("snow_canopyShelter", [&w] { return glm::clamp(w.foliageBlock, 0.0f, 1.0f); }, w.foliageBlock);
+        // Near the water (snowGroundDry): the shore band, its edge's wander, the river banks' share.
+        list.add("snow_shoreFade", [&w] { return glm::max(w.shoreFade, 0.0f); }, w.shoreFade);
+        list.add("snow_shoreVariation", [&w] { return glm::clamp(w.shoreVariation, 0.0f, 0.9f); }, w.shoreVariation);
+        list.add("snow_riverBankFade", [&w] { return glm::clamp(w.riverBankFade, 0.0f, 1.0f); }, w.riverBankFade);
         list.add("snow_leafSnow", [&w] { return glm::clamp(w.leafSnow, 0.0f, 1.0f); }, w.leafSnow);
         // The grass's share of the ground's white (grass.fs.glsl: the blades, from the cull's corner values; the terrain
         // FS: the far tier).
@@ -2589,7 +2596,9 @@ void RendererState::registerUboValues(UboBlock& list)
             return glm::uvec4((uint32)address, (uint32)(address >> 32), 0u, 0u);
         }, UboLive);
         list.add("snow_freshGrainM", [&w] { return glm::max(w.freshGrain, 0.03f) * 1e-3f; }, w.freshGrain);
-        list.add("snow_freshAlbedo", [&w] { return SnowPack::surfaceAlbedo(glm::max(w.freshGrain, 0.03f), 0.0f, 0.0f); }, w.freshGrain);
+        list.add("snow_freshAlbedo", [&w] { return SnowPack::surfaceAlbedo(glm::max(w.freshGrain, 0.03f), 0.0f, 0.0f, glm::vec3(0.0f)); }, w.freshGrain);
+        // The grime's absorption at full grime ("Grime strength" / "Grime brownness": snowAlbedo).
+        list.add("snow_grimeAbs", [&w] { return SnowPack::grimeAbsorption(w.grimeStrength, w.grimeBrownness); }, w.grimeStrength, w.grimeBrownness);
         // The fresh pack's transport coefficient (1/m, the wall glow): 3 phi sqrt(B (1 - g) gamma / d) - packing 0.15,
         // absorption enhancement 1.6, asymmetry 0.89.
         list.add("snow_sigmaTr", [&w]
