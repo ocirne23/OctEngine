@@ -1,7 +1,7 @@
 # Linux (clang + libc++ + Ninja) build settings and dependencies. Included from the root CMakeLists.txt only when the
 # compiler is not MSVC; the Windows build never reads this file.
 #
-# Configure inside the flake's dev shell (`nix develop`), which sets the OC_* variables read below:
+# Configure inside the flake's dev shell (`nix develop path:./Linux`), which sets the OC_* variables read below:
 #   cmake -B Build-Linux -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #   cmake --build Build-Linux --target App
 #
@@ -18,7 +18,7 @@ enable_language(C) # box3d is C
 
 foreach(var OC_EASTL_SRC OC_IMGUI_SRC OC_BOX3D_SRC OC_MESHOPTIMIZER_SRC OC_PHONON_LIB OC_ONNXRUNTIME_LIB OC_LIBCXX_MODULES OC_NIX_INCLUDES)
 	if("$ENV{${var}}" STREQUAL "")
-		message(FATAL_ERROR "${var} is not set: configure from inside `nix develop`")
+		message(FATAL_ERROR "${var} is not set: configure from inside `nix develop path:./Linux`")
 	endif()
 	set(${var} "$ENV{${var}}")
 endforeach()
@@ -27,7 +27,7 @@ endforeach()
 # unwrapped scanner does not see the libc++ / glibc include paths that the clang wrapper adds.
 if(NOT "$ENV{OC_CLANG_SCAN_DEPS}" STREQUAL "" AND NOT CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS STREQUAL "$ENV{OC_CLANG_SCAN_DEPS}")
 	message(WARNING "clang-scan-deps is ${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS}, not the flake's $ENV{OC_CLANG_SCAN_DEPS}: "
-		"delete the build folder and configure again from inside `nix develop`")
+		"delete the build folder and configure again from inside `nix develop path:./Linux`")
 endif()
 
 # Searched first: Linux/Include holds the stand-ins for MSVC-only headers (<intrin.h>, ...).
@@ -97,9 +97,12 @@ set(COMPILE_OPTIONS
 	"-Wno-missing-field-initializers"
 	"-Wno-missing-designated-field-initializers"
 )
-# The default (nix-wrapped) linker: the wrapper writes the runpath of every nix library the binary links. A bare
-# -fuse-ld=lld bypasses it and App then cannot find libc++.so at start.
+# lld through its nix wrapper (OC_LLD, from the flake): the wrapper writes the runpath of every nix library the binary
+# links. A bare -fuse-ld=lld bypasses it and App then cannot find libc++.so at start. Without OC_LLD: the default linker.
 set(LINK_OPTIONS "-Wl,--gc-sections" "-pthread")
+if(NOT "$ENV{OC_LLD}" STREQUAL "")
+	list(APPEND LINK_OPTIONS "--ld-path=$ENV{OC_LLD}")
+endif()
 
 # ---- What Code/Core/Private/forceinclude.h gives every Windows TU ----
 # assert with no #include: (void)sizeof in non-Debug, exactly like forceinclude.h; a trap in Debug. A TU that includes
@@ -141,10 +144,9 @@ list(APPEND COMPILE_OPTIONS
 add_library(oc_std STATIC)
 target_sources(oc_std PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${OC_LIBCXX_MODULES}"
 	FILES "${OC_LIBCXX_MODULES}/std.cppm" "${OC_LIBCXX_MODULES}/std.compat.cppm")
-target_include_directories(oc_std SYSTEM PRIVATE "${OC_LIBCXX_MODULES}")
-target_compile_options(oc_std PRIVATE "-march=x86-64-v3" "-fno-math-errno" "-fno-trapping-math" "-fno-signed-zeros"
-	"-freciprocal-math" "-fassociative-math" "-ffp-contract=fast" "-fno-threadsafe-statics" "-Wno-reserved-module-identifier"
-	"-Wno-reserved-user-defined-literal")
+# The engine's own flags: with any other flags CMake builds a second std BMI for the engine targets (oc_std@synth_0).
+target_include_directories(oc_std PRIVATE "${OC_LIBCXX_MODULES}")
+target_compile_options(oc_std PRIVATE ${COMPILE_OPTIONS} ${OC_VENDORED_HEADER_FLAGS})
 set_target_properties(oc_std PROPERTIES FOLDER "_Deps" CXX_SCAN_FOR_MODULES ON)
 
 # ---- Prebuilt-on-Windows libraries, built from their pinned upstream revision ----
@@ -198,7 +200,7 @@ oc_alias(zlibstatic "-lz")
 oc_alias(zstd "-lzstd")
 oc_alias(openxr_loader "-lopenxr_loader")
 oc_alias(phonon "${OC_PHONON_LIB}/libphonon.so")
-oc_alias(onnxruntime "${OC_ONNXRUNTIME_LIB}/libonnxruntime.so") # the GPU (CUDA) binary package, see flake.nix
+oc_alias(onnxruntime "${OC_ONNXRUNTIME_LIB}/libonnxruntime.so") # the GPU (CUDA) binary package, see Linux/flake.nix
 oc_alias(glslang "-lglslang")
 oc_alias(SPIRV "-lSPIRV")
 oc_alias(glslang-default-resource-limits "-lglslang-default-resource-limits")
@@ -213,12 +215,28 @@ foreach(winlib ntdll Winmm Setupapi Cfgmgr32 Version Imm32 Ws2_32 wintrust crypt
 	oc_alias(${winlib})
 endforeach()
 
+# ---- Relink App when the dev shell's libraries change ----
+# The nix wrapper passes the -L / runpath folders of the libraries through the environment (NIX_LDFLAGS), not the command
+# line, so Ninja cannot see a flake change: App would keep the runpath of the old store paths. The stamp is rewritten only
+# when NIX_LDFLAGS changes, and App's link depends on it.
+set(OC_SHELL_STAMP "${CMAKE_BINARY_DIR}/nix-ldflags.stamp")
+add_custom_target(oc_shell_stamp
+	COMMAND sh -c "printf %s \"$NIX_LDFLAGS\" > \"$0.tmp\" && { cmp -s \"$0.tmp\" \"$0\" || mv \"$0.tmp\" \"$0\"; }" "${OC_SHELL_STAMP}"
+	BYPRODUCTS "${OC_SHELL_STAMP}"
+	VERBATIM)
+set_target_properties(oc_shell_stamp PROPERTIES FOLDER "_Deps")
+function(oc_relink_on_shell_change)
+	add_dependencies(App oc_shell_stamp)
+	set_property(TARGET App APPEND PROPERTY LINK_DEPENDS "${OC_SHELL_STAMP}")
+endfunction()
+cmake_language(DEFER CALL oc_relink_on_shell_change) # App is defined after this file
+
 # ---- DLSS: libocngx.so (Linux/Include/ocngx.h) ----
 # Built with the flake's GCC, not the engine's compiler: the NGX SDK's static loader needs libstdc++, which the shim links
 # statically and hides. It lands next to App with the DLSS model, where Streamline.cpp looks for it (the place the Windows
 # build copies the Streamline DLLs to). Without the SDK, App runs without DLSS.
 if("$ENV{OC_NGX_SDK}" STREQUAL "" OR "$ENV{OC_NGX_CXX}" STREQUAL "")
-	message(WARNING "OC_NGX_SDK / OC_NGX_CXX are not set: no DLSS (configure from inside `nix develop`)")
+	message(WARNING "OC_NGX_SDK / OC_NGX_CXX are not set: no DLSS (configure from inside `nix develop path:./Linux`)")
 else()
 	set(OC_NGX_SDK "$ENV{OC_NGX_SDK}")
 	set(OC_NGX_OUT "${CMAKE_BINARY_DIR}/Code/App")
@@ -232,6 +250,7 @@ else()
 			"-I${OC_NGX_SDK}/include" "-I${ROOT_DIR}/Dependencies/Include" "-I${ROOT_DIR}/Linux/Include"
 			"${ROOT_DIR}/Linux/Ngx/ocngx.cpp" "${OC_NGX_SDK}/lib/Linux_x86_64/libnvsdk_ngx.a"
 			-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,--no-undefined -ldl
+			-Wl,-rpath,/run/opengl-driver/lib # the driver's NGX core (libnvidia-ngx.so.1) on NixOS, with or without the dev shell
 			-o "${OC_NGX_OUT}/libocngx.so"
 		COMMAND "${CMAKE_COMMAND}" -E rm -f "${OC_NGX_OUT}/${OC_NGX_MODEL_NAME}"
 		COMMAND "${CMAKE_COMMAND}" -E copy "${OC_NGX_MODEL}" "${OC_NGX_OUT}/${OC_NGX_MODEL_NAME}"

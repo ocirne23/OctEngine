@@ -1,23 +1,88 @@
 # Linux (NixOS)
 
-The engine also builds and runs on Linux: clang 22 + libc++ + CMake/Ninja, all from the repo's `flake.nix`. The
+The engine also builds and runs on Linux: clang 22 + libc++ + CMake/Ninja, all from `Linux/flake.nix`. The
 Windows build does not change: every Linux difference is either in `Linux/` (read only when the compiler is not MSVC),
 under `#ifndef _MSC_VER`, or a macro that is empty on MSVC (`forceinclude.h`).
 
 ## Building
 
 ```sh
-nix develop                     # the dev shell: compiler, libraries, the OC_* variables Linux/Linux.cmake reads
+nix develop path:./Linux        # the dev shell: compiler, libraries, the OC_* variables Linux/Linux.cmake reads
 cmake -B Build-Linux -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build Build-Linux --target App
 Build-Linux/Code/App/App        # from the repo root, like on Windows (FileSystem finds Assets/)
 ```
 
-* `nix develop` on the repo copies the whole tracked tree (several GB, mostly `Dependencies/`) into the nix store on
-  every evaluation. Copy `flake.nix` + `flake.lock` into an empty folder and run `nix develop path:<that folder>` to
-  avoid it; the flake does not use the repo's own files.
+* **Use the `path:` form for the shell.** `path:./Linux` copies only the `Linux/` folder into the store; the shell needs
+  no other file. `./Linux` (no `path:`) is the git form, which copies the repo: see [Packaging](#packaging) for the cost.
+* **Keep the shell as a GC root**: `nix develop path:./Linux --profile .devshell` (the repo root, gitignored). Without a
+  root, `nix-collect-garbage` deletes the libc++ builds of glslang / shaderc / SPIRV-Tools / assimp, and the next shell
+  builds them again from source (they are in no public binary cache). `nix develop ./.devshell` opens the kept shell
+  without evaluating the flake; run the `--profile` command again after a flake change, BEFORE a garbage collection.
+  The root is outside `Build-Linux/` on purpose: deleting the build folder keeps the shell.
 * **Configure inside the dev shell**: `clang-scan-deps` must be the flake's wrapped one (it sees the libc++ include
-  paths); `Linux/Linux.cmake` warns when it is not.
+  paths); `Linux/Linux.cmake` warns when it is not. The shell exports `CMAKE_EXPORT_COMPILE_COMMANDS`, so a NEW build
+  folder gets `compile_commands.json` (an existing one: `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` once).
+* **Two shells**: `default`, and `path:./Linux#build`: the same without the CUDA provider of ONNX Runtime (no 3 GiB of
+  CUDA libraries, which the public binary cache does not have; App builds, the diffusion terrain has no provider).
+* **The shell's `LD_LIBRARY_PATH` is only `/run/opengl-driver/lib`** (the driver's libraries): nix store paths there would
+  also reach every other program started from the shell. App finds the nix libraries through its runpath (`ldd` resolves
+  all of them without the variable), and `libocngx.so` carries `/run/opengl-driver/lib` in its own runpath for the NGX
+  core.
+
+## The flake (`Linux/`)
+
+| File | Holds |
+|---|---|
+| `flake.nix` | The inputs (nixpkgs, the pinned sources), the outputs, the two shells |
+| `nix/common.nix` | What the shells and the package share: compiler, libraries, hardening flags, the `OC_*` variables. One list, so a shell builds what the package builds |
+| `nix/overlay.nix` | `pkgs.octengine`: the libc++ rebuilds, SDL3 without zenity / tray, Steam Audio, ONNX Runtime |
+| `nix/onnxruntime.nix`, `nix/phonon.nix` | The two prebuilt binary packages (`callPackage` style) |
+| `nix/source.nix` | The files the package build reads (see Packaging) |
+| `package.nix` | The engine package |
+
+* **The overlay adds `pkgs.octengine`; it never replaces a nixpkgs name.** Replacing `pkgs.glslang` & co. would rebuild
+  every nixpkgs package that uses them (the Vulkan validation layers, ...) against libc++.
+* **Unfree**: only the CUDA runtime, by name (`allowUnfreePredicate`). A new unfree package fails evaluation until it is
+  added to that list.
+* **The hardening flags**: off are `fortify` (libc++'s `std.cppm` cannot export glibc's fortified printf inlines),
+  `format` (the engine's `printf(text)` logging), `stackprotector` (`/GS-`), and `zerocallusedregs`,
+  `stackclashprotection`, `libcxxhardeningfast`, `pic` (code the MSVC build has none of; App stays a PIE). On:
+  `strictoverflow` (`-fwrapv`, closer to MSVC than undefined overflow), `bindnow`, `relro`, `strictflexarrays1`. A change
+  here rebuilds everything: clang rejects a BMI built with other overflow handling.
+* **Format**: `nix run path:./Linux#formatter.x86_64-linux -- Linux/*.nix Linux/nix/*.nix` (nixfmt). Not `nix fmt`: it
+  takes the flake from the working directory in the git form, with its copy.
+
+## Packaging
+
+```sh
+nix build ./Linux               # the engine with CUDA: result/bin/App, libocngx.so, the DLSS model
+nix build ./Linux#nocuda        # without the CUDA provider
+nix run ./Linux                 # from the repo root: App finds Assets/ by walking up from the working directory
+nix flake check ./Linux         # builds #nocuda and checks the .nix formatting
+```
+
+**The cost: these need the git form, and it copies the repo into the store first.** The package build reads `Code/`,
+`Dependencies/Include`, `Linux/` and two `Assets/` folders, which the `path:` form cannot see. What the copy holds
+depends on the working tree:
+
+| Working tree | Nix copies | Size |
+|---|---|---|
+| Clean (everything committed) | the commit, from git: the Git LFS files arrive as their 134-byte pointers | about 100 MB (measured) |
+| Any uncommitted change, anywhere in the repo | the tracked files of the WORKING TREE, with the real LFS content | about 10.7 GB (the tracked files on disk, mostly `Assets/`), and a NEW copy each time the tree content changes |
+
+So **commit or stash before `nix build ./Linux`**, and work day to day in the dev shell. The copies stay in the store
+until `nix-collect-garbage`. No file the build reads is in LFS, so the pointers do not matter to it.
+
+* **`nix/source.nix` limits what the BUILD depends on** (a change to a texture does not rebuild App), not the copy above.
+* **Iterating on the package without the copy**: the impure form reads only the filtered files (about 70 MB):
+  ```sh
+  nix build --impure --expr 'let f = builtins.getFlake "path:'$PWD'/Linux"; lib = f.inputs.nixpkgs.lib;
+    in f.packages.x86_64-linux.nocuda.override { src = import ./Linux/nix/source.nix { inherit lib; } ./.; }'
+  ```
+* The package builds the `App` target only, `RelWithDebInfo`, with the debug sections stripped (`strip -S`).
+* **CI**: `.github/workflows/linux.yml` runs `nix flake check ./Linux` on a checkout without LFS (the clean-commit case:
+  the small copy). With no binary cache, every run builds the libc++ libraries and SDL3 from source.
 
 ## What `Linux/Linux.cmake` does
 
@@ -31,7 +96,13 @@ Build-Linux/Code/App/App        # from the repo root, like on Windows (FileSyste
 * **`Build-Linux/VendoredInclude`** replaces `Dependencies/Include` on every target: symlinks to every vendored folder
   except the libraries that link from nixpkgs (glslang, shaderc, spirv-tools, assimp, onnxruntime, SDL3, openxr). clang
   drops a `-I` folder that the nix wrapper also passes as `-isystem`, so the nixpkgs headers could never win otherwise.
-* **`import std`**: libc++'s `std.cppm` / `std.compat.cppm` built as an ordinary module target (`oc_std`).
+* **`import std`**: libc++'s `std.cppm` / `std.compat.cppm` built as an ordinary module target (`oc_std`), with the
+  engine's own flags. With any other flags CMake builds a second std BMI for the engine targets (`oc_std@synth_0`).
+* **The linker is lld through its nix wrapper** (`--ld-path=$OC_LLD`). A bare `-fuse-ld=lld` bypasses the wrapper, which
+  writes the runpath of every nix library: App then cannot find `libc++.so`.
+* **App relinks when the shell's libraries change.** The wrapper passes the library folders through `NIX_LDFLAGS`, not
+  the command line, so Ninja cannot see a flake change; `Build-Linux/nix-ldflags.stamp` changes with `NIX_LDFLAGS`, and
+  App's link depends on it. Objects are not recompiled: after a nixpkgs update, build from a clean folder.
 * **forceinclude.h** cannot be `-include`d (clang rejects anything in front of `module;`), so its macros are `-D`s.
 * **The flags**: `/arch:AVX2` = `-march=x86-64-v3`; `/fp:fast` = the fast-math parts WITHOUT finite-math;
   `/Zc:threadSafeInit-` = `-fno-threadsafe-statics`; `/GS-` = `-fno-stack-protector`. No `/GT` and no tlsGuards

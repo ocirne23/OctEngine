@@ -44,7 +44,9 @@ function(apply_compile_settings target)
     set_target_properties(${PROJECT_NAME} PROPERTIES VS_GLOBAL_AllProjectBMIsArePublic "false")
 	set_target_properties(${PROJECT_NAME} PROPERTIES CXX_SCAN_FOR_MODULES true)
 	
-    target_link_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Dependencies/Lib/")
+    if(MSVC) # the Windows .libs; on Linux the folder would only end up in the runpath
+        target_link_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Dependencies/Lib/")
+    endif()
     target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Dependencies/Include/")
 
 	target_compile_features(${target} PRIVATE cxx_std_20)
