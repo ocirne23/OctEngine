@@ -727,8 +727,22 @@ uint64 FileSystem::removeAll(const oc::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
     const IoScope profileScope("FileSystem::removeAll");
+    // A recursive delete runs only on a folder strictly inside the root. An empty path, ".", a path that climbs out with
+    // "..", or an absolute path elsewhere would otherwise delete the root itself (all of Assets/) or any folder on the disk.
+    const auto withoutTrailingSlash = [](std::filesystem::path p)
+    {
+        p = p.lexically_normal();
+        return p.has_filename() ? p : p.parent_path();
+    };
+    const std::filesystem::path target = withoutTrailingSlash(diskPath(path));
+    const std::filesystem::path inRoot = g_rootDir.empty() ? std::filesystem::path() : target.lexically_relative(withoutTrailingSlash(toPath(g_rootDir)));
+    if (path.empty() || inRoot.empty() || inRoot == "." || *inRoot.begin() == "..")
+    {
+        Log::error("FileSystem::removeAll refused '" + path + "': not a folder inside the root");
+        return 0;
+    }
     std::error_code ec;
-    const auto count = std::filesystem::remove_all(diskPath(path), ec);
+    const auto count = std::filesystem::remove_all(target, ec);
     recordOverride(path);
     recordOverriddenDir(path);
     return ec ? 0ull : (uint64)count;
