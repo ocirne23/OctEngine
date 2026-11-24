@@ -1,0 +1,21 @@
+# The Linux build in the nix sandbox: `nix flake check ./Linux` builds the engine without CUDA (checks.build) and checks
+# the formatting of the .nix files. The checkout skips the Git LFS files: the build reads none of them, and Nix then copies
+# the commit (about 100 MB), not the assets. See Docs/Context/Linux/CONTEXT.md (Packaging).
+name: Linux (Nix)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: false
+      - uses: cachix/install-nix-action@v32
+      - name: nix flake check
+        run: nix flake check -L ./Linux

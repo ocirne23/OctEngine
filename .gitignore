@@ -2,6 +2,10 @@
 Build/
 Build-Cooked/
 Build-Linux/
+result
+result-*
+.direnv/
+.devshell*
 Assets/Local
 *.blend1
 Docs/GDD*
