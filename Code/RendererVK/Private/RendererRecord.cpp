@@ -2241,11 +2241,6 @@ void RendererState::recordCommandBuffers()
     Globals::jobSystem.wait(m_gpuCollectCounter);
     m_gpuProfiler.beginRecord(vkCommandBuffer, frameIdx);
     m_gpuProfiler.beginScope(vkCommandBuffer, "GPU Frame");
-    // Pending baked-map uploads (fog terrain cascades, faction map): copied here in the primary (re-recorded every frame),
-    // before every reader, because the destination was sampled by older submissions - the transition needs an execution
-    // dependency on those reads, which the StagingManager's fresh-image upload path doesn't emit.
-    m_terrain.getHeightMap().recordUpload(commandBuffer);
-    m_terrain.getFactionMap().recordUpload(commandBuffer);
     { // Sync for ubo copy
         vk::MemoryBarrier2 memoryBarrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eCopy,

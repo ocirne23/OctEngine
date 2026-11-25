@@ -36,8 +36,8 @@ export namespace RendererVKLayout
 
 
     // Debug line overlay (physics collider wireframes etc.): per-frame vertex capacity of the mapped
-    // line buffer, allocated lazily on first use (16 bytes/vertex). Overflow drops the excess lines.
-    constexpr uint32 MAX_DEBUG_LINE_VERTICES = 2 * 1024 * 1024;
+    // line buffer, allocated lazily on first use (16 bytes/vertex: 4 MB per frame in flight). Overflow drops the excess lines.
+    constexpr uint32 MAX_DEBUG_LINE_VERTICES = 256 * 1024;
 
     // GPU particle system (ParticlePipeline / particle_*.glsl). The particle POOL is persistent GPU
     // state (one copy, not per-frame-in-flight): a dead-index stack plus two alive lists ping-ponged by

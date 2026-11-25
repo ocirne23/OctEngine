@@ -28,13 +28,13 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   AND rock: the climate's permanent snow or the weather's snowpack, whichever is whiter ("Where the snow shows" in
   [Snow.md](Snow.md)). The contract is on `TerrainSplatMaterial` / `TerrainSplatCounts` (TerrainResources.ixx).
 * **THE FACTION MAP** (`Renderer::setFactionMap` / `clearFactionMap`; `TerrainResources::getFactionMap`): the game's
-  faction layer as ONE R8 texture, `FACTION_MAP_RES` (4096) square (16 MB: ONE image + a staging buffer per frame slot),
-  over a world-FIXED square - 0 = fully the enemy's,
+  faction layer as ONE R8 texture, `FACTION_MAP_RES` (4096) square (16 MB: ONE image; uploads go through the shared
+  staging ring), over a world-FIXED square - 0 = fully the enemy's,
   128 = neutral, 255 = fully the players'. A `BakedWorldMap` in its 8-BIT form (`initializeBytes`, ONE image - not the
   terrain-data map's pair: the square is world-fixed, so its new texels a frame before the region goes live change
-  nothing; staging per frame slot and `recordUpload` / `flipIfPending` as the terrain-data map, so a new copy needs no
+  nothing; the staging ring's `uploadImageRegion` and `flipIfPending` as the terrain-data map, so a new copy needs no
   GPU sync and no re-record). **The upload is PARTIAL** (`uploadBytesRect`): the game passes the cell rectangle a sweep
-  changed, and only that rectangle is staged and copied (joined with an upload not yet copied), with the image's
+  changed, and only that rectangle is staged (tightly packed, through the tint curve) and copied, with the image's
   contents kept (the copy's barrier leaves from SHADER_READ_ONLY, not UNDEFINED). A new map (`dirty` null) copies the
   whole image once (`requestFullCopies`). Its "centre" is the square's MIN corner and its size the extent; size 0 = no map
   (`u_terrain_factionOrigin` / `u_terrain_factionInvSize`, live). The land OUTSIDE the square counts as the map's start

@@ -4,6 +4,7 @@ import Core;
 import :Device;
 import :Allocator;
 import :CommandBuffer;
+import :StagingManager;
 
 namespace
 {
@@ -14,6 +15,13 @@ namespace
     constexpr vk::PipelineStageFlags2 SAMPLE_STAGES = vk::PipelineStageFlagBits2::eVertexShader
         | vk::PipelineStageFlagBits2::eTessellationControlShader | vk::PipelineStageFlagBits2::eTessellationEvaluationShader
         | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
+
+    glm::ivec4 joinRect(const glm::ivec4& a, const glm::ivec4& b)
+    {
+        if (a.z < a.x) return b;
+        if (b.z < b.x) return a;
+        return glm::ivec4(oc::min(a.x, b.x), oc::min(a.y, b.y), oc::max(a.z, b.z), oc::max(a.w, b.w));
+    }
 }
 
 BakedWorldMap::~BakedWorldMap()
@@ -53,7 +61,7 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     const uint32 resolution = m_resolution, numLayers = m_numLayers;
     vk::Device vkDevice = Globals::device.getDevice();
     const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLayers };
-    m_fullCopiesLeft = m_numImages;
+    requestFullCopies();
 
     for (uint32 i = 0; i < m_numImages; ++i)
     {
@@ -83,16 +91,6 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     }
     m_sampler.initialize(vk::SamplerAddressMode::eClampToEdge);
 
-    // One host-visible staging buffer per frame slot: upload() writes the slot whose fence beginFrame
-    // just waited, recordUpload() copies it in that frame's primary CB.
-    const vk::DeviceSize bytes = (vk::DeviceSize)numLayers * resolution * resolution * m_texelBytes;
-    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-    {
-        (void)m_staging[i].initialize(bytes, vk::BufferUsageFlagBits2::eTransferSrc,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, debugName, BufferHostAccess::eSequentialWrite);
-        m_stagingMapped[i] = m_staging[i].mapMemory();
-    }
-
     // One-time UNDEFINED -> SHADER_READ_ONLY: the images are statically bound from the first frame but
     // never sampled until the first upload sets the consumers' UBO 1/size flags.
     CommandBuffer init;
@@ -115,136 +113,69 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     (void)Globals::device.graphicsQueueWaitIdle();
 }
 
-void BakedWorldMap::stage(uint32 frameIdx, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
+void BakedWorldMap::stage(const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
 {
-    m_uploadSlot = (int)frameIdx;
     m_pendingCenter = centerXZ;
     m_pendingSizes = worldSizes;
     m_pendingUserParam = userParam;
+    m_flipPending = true; // the copy runs before this frame's primary: the region (and a pair's image) goes live at the next UBO build
 }
 
-void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
+void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
 {
     assert(m_texelBytes == m_channels * sizeof(float) && texels.size() == (size_t)m_numLayers * m_resolution * m_resolution * m_channels);
-    memcpy(m_stagingMapped[frameIdx].data(), texels.data(), texels.size_bytes());
-    m_staging[frameIdx].flushMappedMemory(texels.size_bytes());
-    m_copyRect = glm::ivec4(0, 0, -1, -1); // the whole image
-    stage(frameIdx, centerXZ, worldSizes, userParam);
-}
-
-void BakedWorldMap::uploadBytes(oc::span<const uint8> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
-{
-    assert(m_texelBytes == 1 && texels.size() == (size_t)m_numLayers * m_resolution * m_resolution);
-    memcpy(m_stagingMapped[frameIdx].data(), texels.data(), texels.size_bytes());
-    m_staging[frameIdx].flushMappedMemory(texels.size_bytes());
-    m_copyRect = glm::ivec4(0, 0, -1, -1); // the whole image
-    stage(frameIdx, centerXZ, worldSizes, userParam);
+    const StagingManager::ImageRegion region{
+        .image = m_image[uploadImage()],
+        .layerCount = m_numLayers,
+        .extent = { m_resolution, m_resolution, 1 },
+        .keepContents = false, // a full replace
+        .readStages = SAMPLE_STAGES,
+    };
+    (void)Globals::stagingManager.uploadImageRegion(region, texels.size_bytes(),
+        [&texels](oc::span<uint8> dst) { memcpy(dst.data(), texels.data(), texels.size_bytes()); });
+    stage(centerXZ, worldSizes, userParam);
 }
 
 void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam,
-    uint32 frameIdx, const uint8* lut)
+    const uint8* lut)
 {
     assert(m_texelBytes == 1 && m_numLayers == 1);
     const int last = (int)m_resolution - 1;
     const glm::ivec4 own(oc::clamp(rectIn.x, 0, last), oc::clamp(rectIn.y, 0, last), oc::clamp(rectIn.z, 0, last), oc::clamp(rectIn.w, 0, last));
-    const auto join = [](const glm::ivec4& a, const glm::ivec4& b)
-    {
-        return glm::ivec4(oc::min(a.x, b.x), oc::min(a.y, b.y), oc::max(a.z, b.z), oc::max(a.w, b.w));
-    };
-    glm::ivec4 rect = own;
-    if (m_fullCopiesLeft > 0)
-    {
-        --m_fullCopiesLeft;
-        rect = glm::ivec4(0, 0, last, last);
-    }
-    else
-    {
-        // A PAIR: the image this lands in (the inactive one) missed the last call - join its rect.
-        if (m_numImages == 2 && m_lastRect.z >= m_lastRect.x)
-            rect = join(rect, m_lastRect);
-        // An upload not yet copied (two calls before one present): copy both.
-        if (m_uploadSlot >= 0)
-            rect = m_copyRect.z < m_copyRect.x ? glm::ivec4(0, 0, last, last) : join(rect, m_copyRect);
-    }
-    m_lastRect = own;
-    // The staging buffer has the image's own layout (the copy's bufferRowLength = the resolution): only the rect's rows
-    // are written - every row of a joined rect again, from the WHOLE image.
-    const size_t width = (size_t)(rect.z - rect.x + 1);
-    for (int y = rect.y; y <= rect.w; ++y)
-    {
-        const size_t offset = (size_t)y * m_resolution + (size_t)rect.x;
-        uint8* dst = m_stagingMapped[frameIdx].data() + offset;
-        if (!lut)
-            memcpy(dst, image + offset, width);
-        else
-            for (size_t x = 0; x < width; ++x)
-                dst[x] = lut[image[offset + x]];
-    }
-    m_staging[frameIdx].flushMappedMemory(vk::WholeSize);
-    m_copyRect = rect;
-    stage(frameIdx, centerXZ, worldSizes, userParam);
-}
+    const glm::ivec4 whole(0, 0, last, last);
+    const uint32 dst = uploadImage();
+    const glm::ivec4 rect = m_needsFull[dst] ? whole : joinRect(own, m_missed[dst]);
+    m_needsFull[dst] = false;
+    m_missed[dst] = EMPTY_RECT;
+    // A PAIR: the other image misses this call's texels until its own next upload (unless it is owed a whole copy anyway).
+    if (m_numImages == 2 && !m_needsFull[dst ^ 1u])
+        m_missed[dst ^ 1u] = joinRect(m_missed[dst ^ 1u], own);
 
-void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
-{
-    if (m_uploadSlot < 0)
-        return;
-    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    const vk::Image dst = m_image[m_numImages == 2 ? m_active ^ 1u : 0u];
-    const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, m_numLayers };
-    const bool partial = m_copyRect.z >= m_copyRect.x; // uploadBytesRect: the rest of the image is KEPT
-
-    // The destination was sampled by older submissions (a pair's inactive image the last time it was active; a single
-    // image by the previous frame, perhaps still running) - the transition must execution-depend on those reads
-    // (WRITE_AFTER_READ). Fences order the CPU, not the GPU.
-    vk::ImageMemoryBarrier2 toDst{
-        .srcStageMask = SAMPLE_STAGES,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
-        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        // A full replace: the previous contents don't matter. A partial one keeps them (the image rests in SHADER_READ_ONLY).
-        .oldLayout = partial ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
-        .newLayout = vk::ImageLayout::eTransferDstOptimal,
-        .image = dst,
-        .subresourceRange = allLayers,
+    // The rectangle's rows, tightly packed in the ring (the copy's bufferRowLength 0), read from the WHOLE image.
+    const uint32 width = (uint32)(rect.z - rect.x + 1), height = (uint32)(rect.w - rect.y + 1);
+    const StagingManager::ImageRegion region{
+        .image = m_image[dst],
+        .offset = vk::Offset3D{ rect.x, rect.y, 0 },
+        .extent = vk::Extent3D{ width, height, 1 },
+        .keepContents = rect != whole, // the rest of the image is KEPT
+        .readStages = SAMPLE_STAGES,
     };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toDst });
-
-    vk::BufferImageCopy2 region{
-        .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, m_numLayers },
-        .imageExtent = { m_resolution, m_resolution, 1 },
-    };
-    if (partial)
-    {
-        region.bufferOffset = (vk::DeviceSize)m_copyRect.y * m_resolution + (vk::DeviceSize)m_copyRect.x;
-        region.bufferRowLength = m_resolution;
-        region.imageOffset = vk::Offset3D{ m_copyRect.x, m_copyRect.y, 0 };
-        region.imageExtent = vk::Extent3D{ (uint32)(m_copyRect.z - m_copyRect.x + 1), (uint32)(m_copyRect.w - m_copyRect.y + 1), 1 };
-    }
-    m_copyRect = glm::ivec4(0, 0, -1, -1);
-    const vk::CopyBufferToImageInfo2 copyInfo{
-        .srcBuffer = m_staging[m_uploadSlot].getBuffer(),
-        .dstImage = dst,
-        .dstImageLayout = vk::ImageLayout::eTransferDstOptimal,
-        .regionCount = 1,
-        .pRegions = &region,
-    };
-    cmd.copyBufferToImage2(copyInfo);
-
-    vk::ImageMemoryBarrier2 toSampled{
-        .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
-        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = SAMPLE_STAGES,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-        .oldLayout = vk::ImageLayout::eTransferDstOptimal,
-        .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        .image = dst,
-        .subresourceRange = allLayers,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSampled });
-
-    m_uploadSlot = -1;
-    m_flipPending = true; // the region (and a pair's image) goes live at the next UBO build
+    const uint32 resolution = m_resolution;
+    (void)Globals::stagingManager.uploadImageRegion(region, (vk::DeviceSize)width * height,
+        [image, lut, rect, width, height, resolution](oc::span<uint8> out)
+        {
+            for (uint32 y = 0; y < height; ++y)
+            {
+                const uint8* src = image + (size_t)(rect.y + (int)y) * resolution + (size_t)rect.x;
+                uint8* row = out.data() + (size_t)y * width;
+                if (!lut)
+                    memcpy(row, src, width);
+                else
+                    for (uint32 x = 0; x < width; ++x)
+                        row[x] = lut[src[x]];
+            }
+        });
+    stage(centerXZ, worldSizes, userParam);
 }
 
 void BakedWorldMap::flipIfPending()

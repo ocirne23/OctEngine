@@ -416,7 +416,7 @@ inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCam
 
 inline void Renderer::setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel)
 {
-    m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex());
+    m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel);
 }
 
 inline void Renderer::setFactionMap(const uint8* bytes, int size, const glm::vec2& originXZ, float cellSize, uint8 outsideValue, const glm::ivec4* dirty,
@@ -428,7 +428,7 @@ inline void Renderer::setFactionMap(const uint8* bytes, int size, const glm::vec
     const uint8* lut = m_terrain.factionCurveLut(curve);
     // The user value carried with the flip: the side (-1 .. 1) of the land outside the square, through the same curve.
     m_terrain.getFactionMap().uploadBytesRect(bytes, dirty ? *dirty : glm::ivec4(0, 0, size - 1, size - 1), originXZ, glm::vec2((float)size * cellSize),
-        ((float)lut[outsideValue] - 128.0f) / 127.0f, m_swapChain.getCurrentFrameIndex(), lut);
+        ((float)lut[outsideValue] - 128.0f) / 127.0f, lut);
 }
 
 inline bool Renderer::factionMapCurveChanged(float curve) const

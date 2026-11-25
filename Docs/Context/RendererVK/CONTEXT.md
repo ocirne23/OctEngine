@@ -539,6 +539,10 @@ only the CLAIM (the ring range plus its copy region): `upload*` memcpys into its
 unlock (`copyAndUnlock`), so concurrent uploads copy in parallel (the terrain's chunk uploads fan out
 on it), and a per-buffer writer count makes `updateNoLock` wait for every copy into the buffer before
 its flush and submit (a writer takes no lock to finish, so the wait under the mutex cannot deadlock).
+`uploadImageRegion` hands the claimed range to a callback instead of a memcpy (the caller writes its texels straight into
+the ring) and is the one image path for an image that earlier frames SAMPLED (`BakedWorldMap`: the terrain-data map, the
+faction map): its barrier waits for those reads and for an earlier copy into the image, may keep the contents outside the
+region, and copies array layers and sub-rectangles. `uploadImage` is for a fresh image only (from UNDEFINED, no wait).
 
 > That is why **EVERY graphics-queue call in the engine goes through Device's queue mutex**: submits
 > through `CommandBuffer::submitGraphics`, presents through `SwapChain::present`, idles through

@@ -57,7 +57,7 @@ public:
 
     // ---- The game's FACTION map (Renderer::setFactionMap): R8, world-FIXED, 0 = the enemy's .. 128 neutral .. 255 the players' ----
     // Its "centre" is the grid's MIN corner (world x / z) and its size the extent (m); size 0 = no map.
-    static constexpr uint32 FACTION_MAP_RES = 4096; // 16 MB: the image + a staging buffer per frame slot
+    static constexpr uint32 FACTION_MAP_RES = 4096; // 16 MB: the image (uploads go through the shared staging ring)
     BakedWorldMap& getFactionMap() { return m_factionMap; }
     const BakedWorldMap& getFactionMap() const { return m_factionMap; }
     // THE TINT CURVE's table: byte -> byte, the side's strength (|byte - 128| / 127) raised to `power`, the sign kept

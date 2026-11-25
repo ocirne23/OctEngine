@@ -12,11 +12,6 @@ import :SwapChain;
 
 static constexpr size_t STAGING_BUFFER_SIZE = 100 * 1024 * 1024;
 
-// vkCmdCopyBufferToImage requires bufferOffset to be a multiple of the texel block
-// size; 16 bytes covers every supported (block-)compressed format (max BC block = 16B)
-// and the spec's multiple-of-4 rule.
-static constexpr vk::DeviceSize IMAGE_COPY_OFFSET_ALIGNMENT = 16;
-
 static vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment)
 {
     return (value + alignment - 1) & ~(alignment - 1);
@@ -90,15 +85,70 @@ vk::DeviceSize StagingManager::claimNoLock(vk::DeviceSize dataSize, vk::DeviceSi
 // submitting the buffer before the copy has landed.
 vk::Semaphore StagingManager::copyAndUnlock(std::unique_lock<std::mutex>& lock, vk::DeviceSize offset, vk::DeviceSize dataSize, const void* data)
 {
+    const int buffer = beginWriteAndUnlock(lock);
+    memcpy(m_mappedStagingBuffers[buffer].data() + offset, data, dataSize);
+    return endWrite(buffer);
+}
+
+int StagingManager::beginWriteAndUnlock(std::unique_lock<std::mutex>& lock)
+{
     const int buffer = m_currentBuffer;
-    uint8* dst = m_mappedMemory.data() + offset;
-    const vk::Semaphore semaphore = m_semaphores[buffer];
     m_numWriters[buffer].fetch_add(1, oc::memory_order_relaxed);
     lock.unlock();
-    memcpy(dst, data, dataSize);
+    return buffer;
+}
+
+vk::Semaphore StagingManager::endWrite(int buffer)
+{
     if (m_numWriters[buffer].fetch_sub(1, oc::memory_order_release) == 1)
         m_numWriters[buffer].notify_all();
-    return semaphore;
+    return m_semaphores[buffer];
+}
+
+void StagingManager::recordImageRegionCopies(vk::CommandBuffer cmd)
+{
+    for (const ImageRegionCopy& copy : m_imageRegionCopies)
+    {
+        const ImageRegion& r = copy.region;
+        const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, r.baseLayer, r.layerCount };
+        // WRITE_AFTER_READ on every earlier sample (a barrier's first scope is every command earlier in submission order,
+        // earlier submissions included) and WRITE_AFTER_WRITE on an earlier copy into the same image (this batch or one before).
+        const vk::ImageMemoryBarrier2 toDst{
+            .srcStageMask = r.readStages | vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = r.keepContents ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .image = r.image,
+            .subresourceRange = range,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toDst });
+        const vk::BufferImageCopy2 region{
+            .bufferOffset = copy.bufferOffset,
+            .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, r.baseLayer, r.layerCount },
+            .imageOffset = r.offset,
+            .imageExtent = r.extent,
+        };
+        cmd.copyBufferToImage2(vk::CopyBufferToImageInfo2{
+            .srcBuffer = m_stagingBuffers[m_currentBuffer].getBuffer(),
+            .dstImage = r.image,
+            .dstImageLayout = vk::ImageLayout::eTransferDstOptimal,
+            .regionCount = 1,
+            .pRegions = &region,
+        });
+        const vk::ImageMemoryBarrier2 toSampled{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = r.readStages,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .image = r.image,
+            .subresourceRange = range,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSampled });
+    }
 }
 
 vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
@@ -178,7 +228,8 @@ void StagingManager::flushPending()
 
 vk::Semaphore StagingManager::updateNoLock()
 {
-    if (m_bufferCopyRegions.empty() && m_imageCopyRegions.empty() && m_imageCopyAndMipList.empty() && m_imageMipCopyList.empty())
+    if (m_bufferCopyRegions.empty() && m_imageCopyRegions.empty() && m_imageCopyAndMipList.empty() && m_imageMipCopyList.empty()
+        && m_imageRegionCopies.empty())
     {
         vk::Semaphore semaphore = m_nextUpdateSemaphore;
         m_nextUpdateSemaphore = VK_NULL_HANDLE;
@@ -495,6 +546,8 @@ vk::Semaphore StagingManager::updateNoLock()
         vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &finalTransitionBarrier });
     }
 
+    recordImageRegionCopies(vkCommandBuffer);
+
     commandBuffer.end();
     commandBuffer.submitGraphics(m_fences[m_currentBuffer]);
 
@@ -507,6 +560,7 @@ vk::Semaphore StagingManager::updateNoLock()
     m_imageCopyRegions.clear();
     m_imageCopyAndMipList.clear();
     m_imageMipCopyList.clear();
+    m_imageRegionCopies.clear();
     m_mappedMemory = m_mappedStagingBuffers[m_currentBuffer];
 
     // The caller starts memcpy'ing into this buffer immediately (in upload*()), so it must be idle now: its

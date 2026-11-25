@@ -40,6 +40,33 @@ public:
     // upload of a frame drained the queue on the CPU: graphicsQueueWaitIdle, 11 ms on main in a terrain upload.)
     vk::Semaphore uploadShared(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
     vk::Semaphore uploadImage(vk::Image dstImage, uint32 imageWidth, uint32 imageHeight, vk::DeviceSize dataSize, const void* data, uint32 mipLevel, vk::DeviceSize dstOffset = 0);
+
+    // A copy into an image that earlier submissions SAMPLED and later ones sample again (BakedWorldMap: a map rewritten in
+    // place). Unlike uploadImage, the batch's barrier waits for those reads (WRITE_AFTER_READ) and for an earlier copy into
+    // the same image, and keepContents keeps the texels outside the region (a partial update; else they are discarded).
+    // The image rests in SHADER_READ_ONLY before and after. Mip 0 only.
+    struct ImageRegion
+    {
+        vk::Image image;
+        uint32 baseLayer = 0;
+        uint32 layerCount = 1;
+        vk::Offset3D offset{};
+        vk::Extent3D extent{};
+        bool keepContents = false;
+        vk::PipelineStageFlags2 readStages; // every stage that samples the image
+    };
+    // write(oc::span<uint8>) fills the claimed bytes - the region's texels tightly packed, layer-major - OUTSIDE the
+    // staging mutex (like upload*'s memcpy), so the caller writes straight into the ring, with no copy of its own.
+    template<typename WriteFn>
+    vk::Semaphore uploadImageRegion(const ImageRegion& region, vk::DeviceSize dataSize, WriteFn&& write)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        const vk::DeviceSize offset = claimNoLock(dataSize, IMAGE_COPY_OFFSET_ALIGNMENT);
+        m_imageRegionCopies.push_back(ImageRegionCopy{ region, offset });
+        const int buffer = beginWriteAndUnlock(lock);
+        write(m_mappedStagingBuffers[buffer].subspan((size_t)offset, (size_t)dataSize));
+        return endWrite(buffer);
+    }
     vk::Semaphore uploadImageAndGenerateMipMaps(vk::Image image, uint32 imageWidth, uint32 imageHeight, uint32 numMipLevels, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
     // GPU image->image mip copies (texture streaming residency swaps): src is a retired streamed image
     // whose mips are all eShaderReadOnlyOptimal and which nothing samples after this frame's swap; the
@@ -56,6 +83,15 @@ private:
     vk::Semaphore updateNoLock(); // the body of update(); callers hold m_mutex
     vk::DeviceSize claimNoLock(vk::DeviceSize dataSize, vk::DeviceSize alignment); // the ring range to copy into
     vk::Semaphore copyAndUnlock(std::unique_lock<std::mutex>& lock, vk::DeviceSize offset, vk::DeviceSize dataSize, const void* data);
+    // The claimed range's write, outside the mutex: the writer count keeps updateNoLock from submitting the buffer until
+    // endWrite. Returns the buffer the claim is in.
+    int beginWriteAndUnlock(std::unique_lock<std::mutex>& lock);
+    vk::Semaphore endWrite(int buffer);
+    void recordImageRegionCopies(vk::CommandBuffer cmd); // updateNoLock: m_imageRegionCopies
+
+    // vkCmdCopyBufferToImage requires bufferOffset to be a multiple of the texel block size; 16 bytes covers every
+    // supported (block-)compressed format (max BC block = 16 B) and the spec's multiple-of-4 rule.
+    static constexpr vk::DeviceSize IMAGE_COPY_OFFSET_ALIGNMENT = 16;
 
     SwapChain* m_swapChain = nullptr;
 
@@ -87,6 +123,12 @@ private:
         oc::vector<vk::ImageCopy> regions; // contiguous dst mips starting at dstBaseMip
     };
     oc::vector<ImageMipCopy> m_imageMipCopyList;
+    struct ImageRegionCopy
+    {
+        ImageRegion region;
+        vk::DeviceSize bufferOffset;
+    };
+    oc::vector<ImageRegionCopy> m_imageRegionCopies;
     oc::span<uint8> m_mappedMemory;
 
     std::mutex m_mutex;
