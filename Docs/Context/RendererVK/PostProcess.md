@@ -123,6 +123,9 @@ too: its UBO was built for the old size). A rebuild per frame of the drag would 
   `DlssPipeline`'s swapchain-size output image at (0, 0), then one `copyImage` to the viewport's place (hence
   TRANSFER_DST on the resolved images, and the copy stage in `beginExternalWrite` / `endExternalWrite`). The
   INPUT sub-rects (colour, depth, motion vectors) are fine at any offset.
+* **ONE resolved image under DLSS** (`taaFrameSlots()`: TAA keeps one per frame in flight as its history; DLSS keeps
+  its own). `beginExternalWrite`'s barrier orders the next frame's write after this frame's eye adaptation and composite
+  reads. Turning DLSS on or off re-creates the resolved images in `applyRenderResolution`.
 * **Two more NGX `InvalidParameter` traps** (both from the sl.dlss source): SL describes a Vulkan
   image to NGX as a COLOR subresource unless an `sl::SubresourceRange` is chained to it, so the depth tag
   carries one (`Streamline::Image::aspect`); and SL creates the NGX feature at the optimal render size for the

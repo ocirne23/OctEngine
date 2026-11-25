@@ -199,6 +199,8 @@ protected:
     bool dlssActive() const { return m_dlssMode != Streamline::DlssMode::Off && m_sceneViewCount == 1 && Streamline::dlssAvailable(); }
     bool taaActive() const;
     bool resolveActive() const { return taaActive() || dlssActive(); } // false: the post chain reads the scene colour directly
+    // TAA's resolved images per eye: one per frame in flight (TAA's history), one under DLSS.
+    uint32 taaFrameSlots() const { return dlssActive() ? 1u : RendererVKLayout::NUM_FRAMES_IN_FLIGHT; }
     // The scene renders below the output resolution (a DLSS mode other than DLAA).
     bool upscaling() const { return m_renderScale != glm::vec2(1.0f); }
     // Desktop only (a blur the head did not make is uncomfortable in VR); off = the pass is not recorded at all.

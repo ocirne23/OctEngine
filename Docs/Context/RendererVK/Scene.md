@@ -889,7 +889,8 @@ mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx
     the vertex, tessellation and fragment stages, compute (the far scatter, TAA, DLSS, eye adaptation), copy / blit (the
     VR eye copy) - for compute, clear, copy and colour-output writes; the stage passes' clear from UNDEFINED chains on
     through their colour-output dependency (the dependency arrays cannot carry it: render pass compatibility). A new
-    reader in another stage must join that barrier.
+    reader in another stage must join that barrier. **TAA's resolved image under DLSS** is one copy too
+    (`taaFrameSlots()`; TAA itself keeps two: its history), ordered by its own barrier in `beginExternalWrite`.
   * **The BLAS builds share ONE scratch region** (the largest build's, `AccelerationStructure::recordBuildBlas` and the
     skinned rebuild): they run one after another with an AS-build barrier between each pair, which orders the scratch
     too. A region per build summed the frame's builds (52 MB after the load's large batch, kept by the grow-only buffer).

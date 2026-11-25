@@ -200,7 +200,7 @@ void RendererState::initPipelines()
     m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
     m_treeVolume.initialize(renderExt.width, renderExt.height, sceneRenderPass);
     m_terrain.initialize();
-    m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
+    m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount, taaFrameSlots());
     m_dlssPipeline.initialize(renderExt.width, renderExt.height, ext.width, ext.height);
     m_motionBlurPipeline.initialize(ext.width, ext.height);
     m_bloomPipeline.initialize(ext.width, ext.height);
@@ -400,11 +400,11 @@ void Renderer::recreateWindowSurface(Window& window)
     m_framebuffers.initialize(m_renderPass, m_swapChain);
 
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    m_taaPipeline.recreateImages(ext.width, ext.height);
+    updateRenderExtent(); // first: the TAA slot count follows the applied DLSS mode
+    m_taaPipeline.recreateImages(ext.width, ext.height, taaFrameSlots());
     m_motionBlurPipeline.recreateImages(ext.width, ext.height);
     m_bloomPipeline.recreateImages(ext.width, ext.height);
     m_dlssPipeline.recreateOutputImage(ext.width, ext.height);
-    updateRenderExtent();
     recreateRenderTargets();
     updateRenderRect();
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
@@ -431,11 +431,11 @@ void RendererState::recreateSwapchain()
     m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, Globals::settings.renderer.vsync);
     m_framebuffers.initialize(m_renderPass, m_swapChain);
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    m_taaPipeline.recreateImages(ext.width, ext.height);
+    updateRenderExtent(); // first: the TAA slot count follows the applied DLSS mode
+    m_taaPipeline.recreateImages(ext.width, ext.height, taaFrameSlots());
     m_motionBlurPipeline.recreateImages(ext.width, ext.height);
     m_bloomPipeline.recreateImages(ext.width, ext.height);
     m_dlssPipeline.recreateOutputImage(ext.width, ext.height);
-    updateRenderExtent();
     recreateRenderTargets();
     updateRenderRect();
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
@@ -662,6 +662,11 @@ void RendererState::applyRenderResolution()
     updateRenderExtent();
     if (m_renderExtent != oldExtent)
         recreateRenderTargets();
+    if (m_taaPipeline.getFrameSlots() != taaFrameSlots()) // DLSS on / off: one resolved image or TAA's two
+    {
+        const vk::Extent2D ext = m_swapChain.getLayout().extent;
+        m_taaPipeline.recreateImages(ext.width, ext.height, taaFrameSlots());
+    }
     updateRenderRect();
     if (!dlssActive())
         Streamline::freeDlss(); // a DLSS mode keeps its feature, Off gives the memory back

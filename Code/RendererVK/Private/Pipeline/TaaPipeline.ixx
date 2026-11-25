@@ -12,7 +12,8 @@ import :Layout;
 // Temporal anti-aliasing resolve. A single full-resolution compute pass per frame reprojects last frame's
 // resolved colour (history) into the current frame via the depth buffer + u_prevMvp, clamps it to the local
 // neighbourhood, and blends. The output doubles as the displayed image and next frame's history, so the
-// resolved images are ping-ponged per frame-in-flight (like the RTAO accumulation / GI grid). Images stay in
+// resolved images are ping-ponged per frame-in-flight (like the RTAO accumulation / GI grid); DLSS writes
+// one image instead (frameSlots 1: no history here). Images stay in
 // GENERAL (storage written, then sampled by the composite pass), matching the RTAO convention.
 export class TaaPipeline final
 {
@@ -22,8 +23,11 @@ public:
     TaaPipeline(const TaaPipeline&) = delete;
 
     // viewCount > 1 (VR) keeps a separate resolved image + history per eye (record() takes the eye index).
-    void initialize(uint32 width, uint32 height, uint32 viewCount = 1);
-    void recreateImages(uint32 width, uint32 height);
+    // frameSlots: NUM_FRAMES_IN_FLIGHT for TAA (last frame's image is the history), 1 for DLSS (it keeps its own history,
+    // and the external-write barrier orders the next frame's write after this frame's reads).
+    void initialize(uint32 width, uint32 height, uint32 viewCount, uint32 frameSlots);
+    void recreateImages(uint32 width, uint32 height, uint32 frameSlots);
+    uint32 getFrameSlots() const { return m_frameSlots; }
     void reloadShaders();
 
     struct RecordParams
@@ -61,7 +65,7 @@ public:
 private:
     static constexpr uint32 MAX_VIEWS = 2;
     static constexpr uint32 SLOTS = RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS;
-    static uint32 slot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
+    uint32 slot(uint32 frameIdx, uint32 eye) const { return (frameIdx % m_frameSlots) * MAX_VIEWS + eye; }
 
     struct ImageSet
     {
@@ -77,6 +81,7 @@ private:
     void transitionToGeneral(vk::CommandBuffer cmd, ImageSet& set, uint32 slotIdx, bool forWrite);
 
     uint32 m_viewCount = 1;
+    uint32 m_frameSlots = RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     ComputePipeline m_pipeline;
     oc::array<DescriptorSet, SLOTS> m_sets;
 

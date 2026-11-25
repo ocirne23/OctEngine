@@ -60,7 +60,7 @@ void TaaPipeline::destroyImageSet(ImageSet& set)
 void TaaPipeline::createImageSet(ImageSet& set)
 {
     vk::Device vkDevice = Globals::device.getDevice();
-    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
+    for (uint32 f = 0; f < m_frameSlots; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
     {
         const uint32 i = slot(f, e);
@@ -91,17 +91,19 @@ void TaaPipeline::createImageSet(ImageSet& set)
     }
 }
 
-void TaaPipeline::recreateImages(uint32 width, uint32 height)
+void TaaPipeline::recreateImages(uint32 width, uint32 height, uint32 frameSlots)
 {
+    assert(frameSlots >= 1 && frameSlots <= RendererVKLayout::NUM_FRAMES_IN_FLIGHT);
     destroyImageSet(m_resolved);
     m_width = width;
     m_height = height;
+    m_frameSlots = frameSlots;
     createImageSet(m_resolved);
 
     // One-time UNDEFINED -> GENERAL so a never-yet-written resolved image (sampled as history on the very
     // first frame) is in the layout its descriptor was written with.
     oc::vector<vk::ImageMemoryBarrier2> bars;
-    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
+    for (uint32 f = 0; f < m_frameSlots; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
     {
         const uint32 i = slot(f, e);
@@ -125,15 +127,16 @@ void TaaPipeline::recreateImages(uint32 width, uint32 height)
     (void)Globals::device.graphicsQueueWaitIdle();
 }
 
-void TaaPipeline::initialize(uint32 width, uint32 height, uint32 viewCount)
+void TaaPipeline::initialize(uint32 width, uint32 height, uint32 viewCount, uint32 frameSlots)
 {
     m_viewCount = viewCount;
     ComputePipelineLayout layout; buildLayout(layout); m_pipeline.initialize(layout);
+    // Every frame's descriptor set, whatever frameSlots is: a mode change only re-creates the images.
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
-        m_sets[slot(f, e)].initialize(m_pipeline.getDescriptorSetLayout(), "Taa");
+        m_sets[f * MAX_VIEWS + e].initialize(m_pipeline.getDescriptorSetLayout(), "Taa");
 
-    recreateImages(width, height);
+    recreateImages(width, height, frameSlots);
 
     vk::SamplerCreateInfo samplerInfo{
         .magFilter = vk::Filter::eLinear,
@@ -192,7 +195,7 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
     transitionToGeneral(cmd, m_resolved, cur, true);
 
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
-    DescriptorSet& set = m_sets[cur];
+    DescriptorSet& set = m_sets[frameIdx * MAX_VIEWS + eye];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     const auto sampledDepth = [](vk::Sampler s, vk::ImageView v) { return vk::DescriptorImageInfo{ .sampler = s, .imageView = v, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT }; };
     oc::array<DescriptorSetUpdateInfo, 9> updates{
