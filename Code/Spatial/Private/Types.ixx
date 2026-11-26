@@ -10,8 +10,8 @@ import :Morton;
 
 // The pass generation an entry was last stamped in (1..65534; the pool is swept on wrap).
 export using SpatialStamp = uint16;
-// "Linked, never stamped in this pass" (unlike the spawn-guard 0, which reads as in every pass).
-export constexpr SpatialStamp SpatialStamp_Linked = 0xFFFF;
+// "Indexed, never stamped in this pass" (unlike the spawn-guard 0, which reads as in every pass).
+export constexpr SpatialStamp SpatialStamp_Indexed = 0xFFFF;
 
 // Optional per-cell visibility test, after the frustum test; camera-relative bounds.
 export struct IOcclusionTester

@@ -60,7 +60,7 @@ The pass is **DETACHED from the entity count.** It is:
    distance (see Tiers).
 1. The **always-visited roots** (`m_globalRoots`: Global, or no spatial entry — `World::alwaysVisited`).
 2. **The PENDING roots** (`m_pendingRoots`, `PendingRoot` = entity + the pass it was added in), visited
-   unconditionally every pass until a selection job that could have found them has run — a fresh entry links at
+   unconditionally every pass until a selection job that could have found them has run — a fresh entry is indexed at
    the next commit at the latest, so the job kicked at the end of a LATER pass finds it. A fresh result retires
    every pending root added before its kick pass, plus any it contains anyway (its `UpdateRoot` stamp is current).
    Main claims each remaining pending root in the `VisibleRoot` generation (`stampCurrentOnce`) BEFORE the visible
@@ -85,8 +85,8 @@ Parent-before-child order is untouched: children are still emitted by their pare
 
 **`dist` is the DISTANCE tier** — from the entity's own UpdateTier stamps once the periodic job has placed it
 (`SpatialIndex::hasStamp`; an old generation = the last job saw it outside every ball = 3), else from
-`simLodDistanceTier`, the same tier by direct distance to the focus points and zones (a fresh entity: unlinked on
-its spawn frame, or linked since the last job — the link gives the tier passes the `SpatialStamp_Linked` sentinel,
+`simLodDistanceTier`, the same tier by direct distance to the focus points and zones (a fresh entity: unindexed on
+its spawn frame, or indexed since the last job — indexing gives the tier passes the `SpatialStamp_Indexed` sentinel,
 never a current generation). **The bubble gate, the buoyancy gate and the dormant edge go by `dist` alone.**
 
 > The top-down camera sees the whole tier-1/2 area, so **visibility must never override distance** for those gates;
@@ -125,11 +125,11 @@ A **following** kind makes the entity a candidate for throttling. A **NON-follow
 
 ## Unstamped visits
 
-A fresh entry carries no tier generation: the spawn-guard 0 while unlinked (so `getPassMask` says "every pass" —
-that is what lets a fresh CHILD pass `simLodSelected` on its spawn frame), then the link-time `SpatialStamp_Linked`
+A fresh entry carries no tier generation: the spawn-guard 0 while unindexed (so `getPassMask` says "every pass" —
+that is what lets a fresh CHILD pass `simLodSelected` on its spawn frame), then the index-time `SpatialStamp_Indexed`
 sentinel until the periodic job stamps it. `simLodTiers` treats both as "not placed" and takes the tier from the
 distance, so a fresh entity is scheduled correctly from its first visit — dormant if far, full rate if near — with
-no full-rate grace frames. `simLodSelected` additionally selects a linked-never-stamped child of a NON-Global parent
+no full-rate grace frames. `simLodSelected` additionally selects an indexed-never-stamped child of a NON-Global parent
 (its tier comes from the distance too); a Global root's children need a real stamp, or every rock under the terrain
 root would be visited every frame.
 
@@ -224,7 +224,7 @@ joins it in `World::joinSelection` right before the next frame's spatial kick (t
 mutate the index under a running query; normally a no-op). **The batches therefore kick without waiting on any
 query.** Nothing destroys entities between the pass and that join (the destroy windows sit after the frame's
 joins), so the root walk is safe, and registration is lock-free beside the query (the spatial record pool; a new
-entry links only at the next commit). The job sees positions one commit older than an inline query would; the
+entry is indexed only at the next commit). The job sees positions one commit older than an inline query would; the
 query margin has to cover `selectionIntervalSec` of motion, and roots spawned meanwhile arrive through the pending
 list.
 

@@ -32,7 +32,7 @@ protected:
     template<typename S = SpatialIndex> S& self() { return static_cast<S&>(*this); }
     template<typename S = SpatialIndex> const S& self() const { return static_cast<const S&>(*this); }
 
-    void unregisterEntry(SpatialHandle handle); // neutralized immediately, unlinked at commit (SpatialEntry::reset)
+    void unregisterEntry(SpatialHandle handle); // neutralized immediately, unindexed at commit (SpatialEntry::reset)
 
     // The per-frame visibility pass: commit, then the Main, Near and Shadow stamps. sunDirection points at the sun; viewProjRelCamera is reversed-Z.
     void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection);
@@ -43,7 +43,7 @@ protected:
 
     struct PendingOp
     {
-        enum EType : uint8 { Link, Move, Unlink };
+        enum EType : uint8 { Index, Move, Unindex };
         uint64 newKey;
         glm::vec3 newRelPos;
         float newRadius;
@@ -86,6 +86,7 @@ protected:
 
     // Commit-only bookkeeping (see BlockStore).
     uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
+    void indexEntry(const PendingOp& op, uint8 flags); // the first Index or Move to reach an Unindexed entry
     void insertLane(uint32 idx, const glm::vec3& relPos, float radius);
     void retireLane(uint32 idx);
     void compactCell(uint32 level, CellRecord& rec);
@@ -131,6 +132,58 @@ protected:
                           TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks);
 
     // ---- Storage ----
+    //
+    // A LEVEL is one grid of cubic cells. Level 0 cells are SPATIAL_FINEST_CELL_SIZE (8 m); each level up is 4x larger per axis, so one cell
+    // holds 4x4x4 = 64 cells of the level below (11 levels, a top cell is ~8389 km). One axis of one level-2 cell:
+    //
+    //   level 2  |                             128 m                             |
+    //   level 1  |     32 m      |     32 m      |     32 m      |     32 m      |
+    //   level 0  |8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|8 m|
+    //
+    // An entry lives at exactly ONE level: the smallest whose cell fits its sphere (cellSize >= 2 * radius), in the cell holding its centre, so
+    // it reaches at most half a cell out of it. A unit (radius 0.5 m) is level 0, a 20 m house level 1, a 100 m crag level 2.
+    // A Morton key names a cell: the parent's key is key >> 6, and the low 6 bits pick which of its 64 children it is.
+    //
+    // Per level, a CellMap finds a cell and a BlockStore holds its entries:
+    //
+    //   m_levels[L]  CellMap: Morton key -> CellRecord { childMask, head, count }
+    //                                                               |
+    //                              +--------------------------------+
+    //                              v
+    //   m_blocks[L]  BlockStore:  [CellBlock] --next--> [CellBlock] --next--> UINT32_MAX   (the cell's CHAIN, newest block first)
+    //
+    // childMask: one bit per occupied child cell one level down, so a descent visits only those. count: the entries with a lane in the chain.
+    //
+    // A CellBlock (256 B, alignas 64) is 8 LANES in SIMD layout: lane i is index i of every row, and one lane is one entry.
+    //
+    //                   lane:  0   1   2   3   4   5   6   7
+    //       posX[8]          | x | x | x | x | x | x | x | x |  -+
+    //       posY[8]          | y | y | y | y | y | y | y | y |   |  test8: one 32-byte AVX2 load per row, 8 entries at once;
+    //       posZ[8]          | z | z | z | z | z | z | z | z |   |  positions relative to the cell's min corner
+    //       radius[8]        | r | r | r | - | r | r | - | - |  -+   - = tombstone: a dead lane, or unused past `count`
+    //       layer[8]         | SpatialLayer_* bits per lane  |
+    //       poolIdx[8]       | the entry's m_pool slot  -----+---->  m_pool row: gen, flags, stamps, userData, cellKey, level, storeIdx
+    //       next, count, live, chainBlocks (head block only)                                                                         |
+    //                                                                                                                                |
+    //   storeIdx = block * 8 + lane: the way back from the pool row to the lane (UINT32_MAX while Unindexed) <-----------------------+
+    //
+    // A SpatialEntry (SpatialTypes.ixx) is how an OWNER - an Entity, a terrain chunk, an ocean sector - holds its entry:
+    //
+    //   owner --holds--> SpatialEntry (RAII, move-only)
+    //                      m_handle: SpatialHandle { idx, gen } --idx--> m_pool row --userData--> the owner again (Entity*, Resident*, ...)
+    //
+    //   * registerEntry returns the handle; the entry is Unindexed until the next commit.
+    //   * gen: the row's gen goes up when its slot is freed, so a handle to a freed and reused slot finds nothing (isValidAlive).
+    //   * ~SpatialEntry / reset() unregisters: the lane (if any) is tombstoned at once, and the Unindex op frees the slot at commit.
+    //
+    // The two ways through the storage:
+    //
+    //   owner moves:  owner -> SpatialEntry -> handle.idx -> m_pool row -> storeIdx -> lane                updateEntry writes the lane
+    //   a query:      cell -> chain -> CellBlock -> lane -> poolIdx -> m_pool row -> userData -> owner     the query hands out the userData
+    //
+    // So a LANE is one entry, a CellBlock is 8 entries in a SIMD layout, a CHAIN is all the entries of one cell, a BlockStore is all the chains
+    // of one level, and the CellMap finds a cell's chain by its key. m_pool holds what a handle needs and a query test does not, and a
+    // SpatialEntry is the owner's handle to its m_pool row.
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<BlockStore, Morton::MaxLevels> m_blocks;

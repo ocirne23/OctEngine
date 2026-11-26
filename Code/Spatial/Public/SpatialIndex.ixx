@@ -89,7 +89,7 @@ public:
                                                            bool horizontal, uint32 layerMask);
     // Exact compares, no spawn guard.
     uint32 getPassMaskExact(SpatialHandle handle) const;
-    bool hasStamp(SpatialHandle handle, ESpatialPass pass) const; // a generation was ever written in `pass` (not 0, not SpatialStamp_Linked)
+    bool hasStamp(SpatialHandle handle, ESpatialPass pass) const; // a generation was ever written in `pass` (not 0, not SpatialStamp_Indexed)
     bool isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const;
     void stampCurrent(SpatialHandle handle, ESpatialPass pass);
     bool stampCurrentOnce(SpatialHandle handle, ESpatialPass pass); // stamps current; true when it was not current before (atomic: one job wins)
@@ -149,7 +149,7 @@ inline bool SpatialIndex::hasStamp(SpatialHandle handle, ESpatialPass pass) cons
     if (!m_pool.isValidAlive(handle))
         return false;
     const SpatialStamp stamp = m_pool.stamps[handle.idx].pass[uint32(pass)];
-    return stamp != 0 && stamp != SpatialStamp_Linked;
+    return stamp != 0 && stamp != SpatialStamp_Indexed;
 }
 
 inline bool SpatialIndex::isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const

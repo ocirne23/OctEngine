@@ -186,7 +186,7 @@ lock-free — **unless its `CullMode` says otherwise (below).**
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by the culling config's
   `skinnedRadiusScale`; otherwise a point at the spawn position. **A tree CHILD spawns in its parent's
   space** (its node too, until its first visit places it), so `create` takes its bounds through the
-  ancestors' transforms: the entry is in WORLD space from the start. A child whose entry links before its
+  ancestors' transforms: the entry is in WORLD space from the start. A child whose entry is indexed before its
   first visit needs a real stamp to be visited (a Global root's children, `simLodSelected`), and only an
   entry at the real place gets one.
 * Headless has no render nodes, so every entry there is a point.

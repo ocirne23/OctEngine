@@ -54,26 +54,22 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
 {
     assert(m_initialized && radius >= 0.0f);
     // LOCK-FREE: the slot acquire is lock-free and the pool rows never move (RecordPool), and the slot is
-    // this call's alone until the Link op at commit - no traversal reaches an unlinked slot.
+    // this call's alone until the Index op at commit - no traversal reaches an unindexed slot.
     const uint32 level = entryLevel(radius);
     const uint64 key = Morton::keyAtLevel(Morton::fineKey(pos), level);
     const glm::vec3 rel = glm::vec3(pos - Morton::cellMinWorld(key, level));
     const uint32 idx = m_pool.acquire();
-    m_pool.posX[idx] = rel.x;
-    m_pool.posY[idx] = rel.y;
-    m_pool.posZ[idx] = rel.z;
-    m_pool.radius[idx] = radius;
     m_pool.cellKey[idx] = key;
     m_pool.userData[idx] = userData;
     m_pool.layerMask[idx] = uint8(layerMask);
     m_pool.stamps[idx] = {}; // never stamped: reports visible until the first query, unless NoSpawnGuard
     m_pool.storeIdx[idx] = UINT32_MAX;
     m_pool.level[idx] = uint8(level);
-    m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
+    m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unindexed | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
     const uint32 gen = m_pool.gen[idx];
     // Staged per worker - no shared state.
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
-                                     .idx = idx, .gen = gen, .type = PendingOp::Link, .newLevel = uint8(level) });
+                                     .idx = idx, .gen = gen, .type = PendingOp::Index, .newLevel = uint8(level) });
     return { idx, gen };
 }
 
@@ -84,16 +80,16 @@ void SpatialIndexState::unregisterEntry(SpatialHandle handle)
     if (!m_pool.isValidAlive(handle))
         return;
     const uint32 idx = handle.idx;
-    if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
+    if (!(m_pool.flags[idx] & RecordFlag_Unindexed))
     {
         // tombstone the lane (queries read it lock-free); the counters and the block bookkeeping
-        // wait for the Unlink op at commit (retireLane)
+        // wait for the Unindex op at commit (retireLane)
         const uint32 slot = m_pool.storeIdx[idx];
         m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
     }
     m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
     m_pendingOps.local().push_back({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f,
-                                     .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unlink, .newLevel = 0 });
+                                     .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unindex, .newLevel = 0 });
 }
 
 void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, float radius)
@@ -105,18 +101,9 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
     const uint64 key = Morton::keyAtLevel(Morton::fineKey(pos), level);
     const glm::vec3 rel = glm::vec3(pos - Morton::cellMinWorld(key, level));
     const uint8 flags = m_pool.flags[idx];
-    if (key == m_pool.cellKey[idx] && level == m_pool.level[idx] && !(flags & RecordFlag_PendingMove))
+    if (!(flags & (RecordFlag_PendingMove | RecordFlag_Unindexed)) && key == m_pool.cellKey[idx] && level == m_pool.level[idx])
     {
-        if (flags & RecordFlag_Unlinked)
-        {
-            // No lane yet: the pool rows hold the entry until the Link op inserts from them.
-            m_pool.posX[idx] = rel.x;
-            m_pool.posY[idx] = rel.y;
-            m_pool.posZ[idx] = rel.z;
-            m_pool.radius[idx] = radius;
-            return;
-        }
-        // Same cell, linked: the lane is the only copy.
+        // Same cell, indexed: the lane is the only copy.
         const uint32 slot = m_pool.storeIdx[idx];
         CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
         const uint32 lane = BlockStore::laneOf(slot);
@@ -128,6 +115,7 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
         block.radius[lane] = radius;
         return;
     }
+    // A cell change, or no lane yet (Unindexed): a Move op, applied at commit.
     m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = handle.gen, .type = PendingOp::Move, .newLevel = uint8(level) });
@@ -141,9 +129,10 @@ void SpatialIndex::commitFrame()
     const auto start = Clock::now();
     int cellMoves = 0;
     // Per-slot FIFO is the only ordering guarantee (one visitor per entity per pass keeps a frame's
-    // Moves for one entry in one slot). The lone cross-slot case - Link (the spawning thread) + first Move
-    // (the visiting worker) in the same frame - self-heals: a Move that lands before its Link skips on RecordFlag_Unlinked
-    // and leaves PendingMove set, which forces the next updateEntry to re-queue it.
+    // Moves for one entry in one slot). The Index (the spawning thread) and the first Move (the visiting
+    // worker) may sit in different slots: whichever reaches the Unindexed entry first indexes it from its
+    // own data, and the Index behind a Move skips. Every Move is newer than the Index, so a Move-first
+    // order indexes at the newest position and an Index-first order moves there.
     m_pendingOps.forEach([&](oc::vector<PendingOp>& ops)
     {
     for (const PendingOp& op : ops)
@@ -153,44 +142,31 @@ void SpatialIndex::commitFrame()
         const uint8 opFlags = m_pool.flags[op.idx];
         switch (op.type)
         {
-        case PendingOp::Link:
-            if ((opFlags & (RecordFlag_Alive | RecordFlag_Unlinked)) == (RecordFlag_Alive | RecordFlag_Unlinked))
-            {
-                insertLane(op.idx, glm::vec3(m_pool.posX[op.idx], m_pool.posY[op.idx], m_pool.posZ[op.idx]), m_pool.radius[op.idx]);
-                m_pool.flags[op.idx] = uint8(opFlags & ~RecordFlag_Unlinked);
-                // Counts as visible for the current stamp generation; the next markVisibleSet (which
-                // runs with the entry actually in the index) decides for real. NOT for NoSpawnGuard
-                // entries: with the culling FROZEN no markVisibleSet ever re-decides, so this write
-                // would leak every newly linked (off-screen-streamed) entry into the frozen main set.
-                // RENDER passes only. The SIM LOD tiers are stamped by the World's PERIODIC
-                // selection job: a "current" tier stamp made here would read as a real tier
-                // (tier 0!) for frames, and the spawn-guard 0 as "in every tier" for ever - they
-                // get the LINKED sentinel instead (hasStamp false: the World derives the tier from
-                // the distance until the job stamps it). The root-dedupe passes stay 0: a fresh
-                // root must not read as held.
-                PassStamps& stamps = m_pool.stamps[op.idx];
-                if (!(opFlags & RecordFlag_NoSpawnGuard))
-                    for (uint32 p = 0; p < uint32(ESpatialPass::UpdateTier0); ++p)
-                        stamps.pass[p] = m_visibleQueryId[p];
-                for (uint32 p = uint32(ESpatialPass::UpdateTier0); p <= uint32(ESpatialPass::UpdateTier2); ++p)
-                    stamps.pass[p] = SpatialStamp_Linked;
-            }
+        case PendingOp::Index:
+            if ((opFlags & (RecordFlag_Alive | RecordFlag_Unindexed)) == (RecordFlag_Alive | RecordFlag_Unindexed))
+                indexEntry(op, opFlags);
             break;
         case PendingOp::Move:
-            if ((opFlags & RecordFlag_Alive) && !(opFlags & RecordFlag_Unlinked))
+            if (opFlags & RecordFlag_Alive)
             {
+                const uint8 flags = uint8(opFlags & ~RecordFlag_PendingMove);
+                if (opFlags & RecordFlag_Unindexed)
+                {
+                    indexEntry(op, flags);
+                    break;
+                }
                 retireLane(op.idx);
                 m_pool.cellKey[op.idx] = op.newKey;
                 m_pool.level[op.idx] = op.newLevel;
-                m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
+                m_pool.flags[op.idx] = flags;
                 insertLane(op.idx, op.newRelPos, op.newRadius);
                 ++cellMoves;
             }
             break;
-        case PendingOp::Unlink:
+        case PendingOp::Unindex:
             if (opFlags & RecordFlag_PendingFree)
             {
-                if (!(opFlags & RecordFlag_Unlinked))
+                if (!(opFlags & RecordFlag_Unindexed))
                     retireLane(op.idx); // the lane was tombstoned at unregister; this settles the counters/blocks
                 m_pool.release(op.idx);
             }
@@ -220,6 +196,29 @@ void SpatialIndex::commitFrame()
     m_stats.markVisibleMs = 0.0f; // markVisible* calls accumulate into it after this commit
     m_stats.commitMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
     ++m_frameId;
+}
+
+void SpatialIndexState::indexEntry(const PendingOp& op, uint8 flags)
+{
+    const uint32 idx = op.idx;
+    m_pool.cellKey[idx] = op.newKey;
+    m_pool.level[idx] = op.newLevel;
+    m_pool.flags[idx] = uint8(flags & ~RecordFlag_Unindexed);
+    insertLane(idx, op.newRelPos, op.newRadius);
+    // Counts as visible for the current stamp generation; the next markVisibleSet (which runs with the
+    // entry actually in the index) decides for real. NOT for NoSpawnGuard entries: with the culling FROZEN
+    // no markVisibleSet ever re-decides, so this write would leak every newly indexed (off-screen-streamed)
+    // entry into the frozen main set. RENDER passes only. The SIM LOD tiers are stamped by the World's
+    // PERIODIC selection job: a "current" tier stamp made here would read as a real tier (tier 0!) for
+    // frames, and the spawn-guard 0 as "in every tier" for ever - they get the INDEXED sentinel instead
+    // (hasStamp false: the World derives the tier from the distance until the job stamps it). The
+    // root-dedupe passes stay 0: a fresh root must not read as held.
+    PassStamps& stamps = m_pool.stamps[idx];
+    if (!(flags & RecordFlag_NoSpawnGuard))
+        for (uint32 p = 0; p < uint32(ESpatialPass::UpdateTier0); ++p)
+            stamps.pass[p] = m_visibleQueryId[p];
+    for (uint32 p = uint32(ESpatialPass::UpdateTier0); p <= uint32(ESpatialPass::UpdateTier2); ++p)
+        stamps.pass[p] = SpatialStamp_Indexed;
 }
 
 void SpatialIndexState::insertLane(uint32 idx, const glm::vec3& relPos, float radius)
@@ -307,10 +306,10 @@ void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
     oc::vector<CompactEntry>& live = m_compactScratch;
     live.clear();
     // Keep every lane the pool still OWNS, tombstoned or not: an entry unregistered this frame has
-    // its lane tombstoned already but its Unlink op (retireLane, which settles the counters through
+    // its lane tombstoned already but its Unindex op (retireLane, which settles the counters through
     // storeIdx) may still be queued behind this op - dropping the lane here would strand that slot.
     // Ownership = a live or pending-free record at THIS level whose storeIdx names this lane (a released
-    // slot has flags 0; a recycled one is Unlinked with storeIdx reset). The level test matters: slots
+    // slot has flags 0; a recycled one is Unindexed with storeIdx reset). The level test matters: slots
     // are numbered per level's BlockStore, so a record that moved to another level can land on the
     // same slot number there while its retired lane here still names it.
     for (uint32 cur = rec.head; cur != UINT32_MAX; cur = store.blocks[cur].next)

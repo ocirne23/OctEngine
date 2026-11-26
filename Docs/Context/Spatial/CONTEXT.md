@@ -116,7 +116,11 @@ commitFrame()
 ```
 
 `SpatialEntry` ([SpatialTypes.ixx](../../../Code/Spatial/Public/SpatialTypes.ixx)) is the move-only RAII wrapper: its `reset` (and its
-destructor) is the only unregister - neutralized immediately, unlinked at commit.
+destructor) is the only unregister - neutralized immediately, unindexed at commit.
+
+**Indexed** = the entry has a lane in its cell's block chain, so a query can find it. `registerEntry` gives a slot and a
+handle at once but the entry stays `Unindexed` (`RecordFlag_Unindexed`, no lane, `storeIdx` UINT32_MAX) until the next
+`commitFrame` indexes it: the cell maps and the blocks change only there.
 
 **Queries**, read-only and valid between commits:
 `querySphere` · `queryAABB` · `queryFrustum` · `queryRay` (a **broadphase** — entries whose bounds
@@ -129,7 +133,7 @@ erasure). **Do not wait inside the callback.** Every game/entity probe uses them
 ### `spawnVisible` — the spawn guard
 
 A never-stamped entry counts as visible **in every pass** until its first real stamp, so a fresh
-spawn does not flash invisible during its link + stamp latency.
+spawn does not flash invisible during its index + stamp latency.
 
 **Streamed geometry passes `false`** (`RecordFlag_NoSpawnGuard`). Appearing one frame late is
 invisible for something that did not exist before, while the guard would leak never-stamped
@@ -140,7 +144,7 @@ sectors both pass false.
 
 | Operation | Rule |
 |---|---|
-| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update of a linked entry writes only its block lane (4 stores, two lines; none when nothing changed); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
+| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update of an indexed entry writes only its block lane (4 stores, two lines; none when nothing changed); a cell change, or any update of an Unindexed entry, stages a Move into a `PerWorker` pending list. One visitor per entry. |
 | `registerEntry` / `SpatialEntry::reset` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
 | `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
 | `commitFrame` | Single-threaded, main, outside the pass. |
@@ -154,7 +158,7 @@ pushes on one shared cursor would contend.
 
 `RecordPool` (the per-entry SoA rows) is what makes registration lock-free:
 
-* **Every row is a `Core.VirtualArray`**: `MAX_ENTRIES` (16M) reserved as ADDRESS SPACE at initialize (~1 GB
+* **Every row is a `Core.VirtualArray`**: `MAX_ENTRIES` (16M) reserved as ADDRESS SPACE at initialize (~750 MB
   over all rows, no memory), pages committed as the pool grows (doubling, under a commit mutex - rare). A
   growth never moves a row, so nothing needs to exclude the readers, and a row access stays a plain base +
   index - no page table on the traversal / `getPassMask` paths. The committed memory shows in the Memory
@@ -163,8 +167,8 @@ pushes on one shared cursor would contend.
   ABA), else a CAS bump of the high-water mark that commits FIRST - so `capacity()` (the high-water mark)
   never passes the committed rows, and the stamp wrap sweep can walk `[0, capacity())` while spawns
   register. `release` runs in `commitFrame` only.
-* A registered slot is the registering call's alone until its Link op at commit (no traversal reaches an
-  unlinked slot); an unregister writes only its own rows and lane tombstone.
+* A registered slot is the registering call's alone until its Index op at commit (no traversal reaches an
+  unindexed slot); an unregister writes only its own rows and lane tombstone.
 
 ## Layers
 
@@ -198,7 +202,7 @@ invalidates that pass's previous generation — one consumer per pass by design.
 | `UpdateRoot` / `VisibleRoot` | The World's ROOT-DEDUPE stamps: "this root is in the current periodic selection result" (advances with the selection job) / "already queued from this frame's visible set" (advances every pass). No visibility meaning — read with the exact accessors only. |
 
 **Stamps are 16-bit** (`SpatialStamp`): a generation counts 1..65534, and `advanceStamp` sweeps the
-pass's pool column back to `SpatialStamp_Linked` when it wraps, so a stale value can never read as
+pass's pool column back to `SpatialStamp_Indexed` when it wraps, so a stale value can never read as
 current again. **The 8 pass stamps of an entry sit together** (`RecordPool::stamps`, one 16-byte
 `PassStamps` per entry, not one array per pass): `getPassMask` / `getPassMaskExact` are one
 `__m128i` load compared against the 8 current generations (`m_visibleQueryId`, 16-aligned) with
@@ -207,8 +211,8 @@ one per pass. The pool's other narrow rows: `layerMask` is a byte (4 layer bits,
 `storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
 a reused slot.
 
-**The link-time spawn-guard stamp covers Main, Near and Shadow ONLY.** The tier and root passes are left at
-0 on link: their generations advance with the World's periodic selection, so a "current" stamp made
+**The index-time spawn-guard stamp covers Main, Near and Shadow ONLY.** The tier passes get `SpatialStamp_Indexed`
+and the root passes stay 0 when the entry is indexed: their generations advance with the World's periodic selection, so a "current" stamp made
 here would read as a real tier 0 (or "root already held") for frames.
 
 Read back with `getPassMask` / `isVisible` (both apply the spawn guard), or with the exact-compare
@@ -350,7 +354,7 @@ The accessors that exist purely for the World's selection logic:
 | Accessor | Difference from the normal one |
 |---|---|
 | `getPassMaskExact` | **No spawn guard** — a never-stamped entry reads as in no pass. |
-| `hasStamp` | Whether a real generation was EVER written in a pass (neither the spawn-guard 0 nor `SpatialStamp_Linked`). For the tier passes: "the selection job placed this entry at some point" — the World derives a fresh entry's tier from the distance instead. |
+| `hasStamp` | Whether a real generation was EVER written in a pass (neither the spawn-guard 0 nor `SpatialStamp_Indexed`). For the tier passes: "the selection job placed this entry at some point" — the World derives a fresh entry's tier from the distance instead. |
 | `isStampedCurrent` | Single-entry exact compare. |
 | `stampCurrent` | Single-entry stamp (a pure store, job-safe); the selection job marks the ancestors of every hit with it. |
 | `stampCurrentOnce` | Stamp + "was it not current before" as ONE atomic exchange: of several jobs reaching the same root exactly one gets true. The World's root dedupe. |
@@ -383,7 +387,7 @@ legal.
 
 ## Cell blocks
 
-Every linked entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
+Every indexed entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
 `CellRecord.head`), so the 8-wide AVX2 testers (`test8`) load a block transpose-free and **every
 mutation costs the size of its cell, never the level**. A `CellBlock` is `alignas(64)`, 256 bytes,
 so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets the alignment from
@@ -391,26 +395,28 @@ so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets t
 (`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
 are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
-* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unlinked`). **A linked entry's
-  position and radius live ONLY in its lane.** The pool's `posX/Y/Z` / `radius` rows hold them while
-  the entry is `Unlinked` (registered, no lane yet: a same-cell `updateEntry` before the commit writes
-  them; a cell change is a Move op as usual), and the Link op inserts the lane from them; after the link
-  they are stale and nothing reads them. The pool keeps what a handle needs and a query test does not (`gen`, `flags`,
-  `cellKey`, `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a block's `count` hold a
-  tombstone radius, so `test8` always runs all 8 lanes.
-* **Same-cell update** = compare against the lane, then the lane stores (two cache lines; none when
-  unchanged), from any job. An `Unlinked` entry writes the pool rows instead. **Cell change** = a
-  Move op: at commit `retireLane` the old lane, set the pool's `cellKey` / `level`, `insertLane` the
-  op's position into the new cell's head block (a new head when that is full). `Cell moves` in the
-  stats counts them per commit.
+* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position
+  and radius live ONLY in its lane** — the pool has no such rows. Before the entry is indexed they ride
+  the pending ops: the Index op carries the registration's, and every `updateEntry` of an `Unindexed`
+  entry queues a Move. The pool keeps what a handle needs and a query test does not (`gen`, `flags`, `cellKey`,
+  `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a block's `count` hold a tombstone
+  radius, so `test8` always runs all 8 lanes.
+* **Same-cell update** of an indexed entry = compare against the lane, then the lane stores (two cache
+  lines; none when unchanged), from any job. **Cell change** = a Move op: at commit `retireLane` the
+  old lane, set the pool's `cellKey` / `level`, `insertLane` the op's position into the new cell's head
+  block (a new head when that is full). `Cell moves` in the stats counts them per commit.
+* **Indexing** (`indexEntry`): the FIRST Index or Move op to reach an `Unindexed` entry indexes it from
+  its own data, and an Index behind a Move skips. The Index and the first Move may sit in different
+  `PerWorker` slots (the spawning thread, the visiting worker); every Move is newer than the Index, so
+  either order ends at the newest position.
 * **Tombstones** — a negative radius fails every test in place. `unregisterEntry` writes only the
   lane's tombstone and the pool flags (queries read lock-free); the counters and blocks settle in `retireLane` at
-  commit (the Unlink op, or a Move).
+  commit (the Unindex op, or a Move).
 * **Blocks free as soon as they empty**, so `count == 0` <=> no chain (the sweep relies on it). A
   cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED
   lanes into the kept `m_compactScratch`, refill from the head, free the tail) — at least one block
   freed per pass, so one cell walk per 8 retirements. **Owned** = the record's `level` is this level
-  AND its `storeIdx` names the lane: a tombstoned lane whose Unlink op is still queued this commit is
+  AND its `storeIdx` names the lane: a tombstoned lane whose Unindex op is still queued this commit is
   still owned (dropping it would strand that op's `storeIdx`), and slots are numbered per level, so a
   record that moved levels can hold the same slot number elsewhere. The chain's block count for that
   test lives in the HEAD block (`CellBlock::chainBlocks`, in the alignment padding, so `CellRecord`

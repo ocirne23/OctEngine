@@ -397,10 +397,10 @@ EntityPtr EntityState::create(const EntitySpawnTemplate& tmpl, const Transform& 
     if (spawnsAsMover(entity)) // before the first push: the flag rides every push of the node
         markMoverNodes(entity);
 
-    // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
+    // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry is lock-free). Bounds from
     // the render node when there is one (skinned inflated by the culling config), else a point at
     // the spawn position. A tree CHILD spawns in its parent's space (its node too, until its first visit places it), so
-    // its bounds go through the ancestors' transforms: the entry must be where the entity IS. A child whose entry links
+    // its bounds go through the ancestors' transforms: the entry must be where the entity IS. A child whose entry is indexed
     // before its first visit is selected only by a real stamp (a Global root's children, World::simLodSelected), and an
     // entry at the local position - next to the world origin - never gets one: the child is never visited and never
     // placed (a loaded base whose buildings showed only their root mesh). Headless has no render nodes, so every entry

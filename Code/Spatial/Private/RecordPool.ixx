@@ -16,19 +16,20 @@ static_assert(sizeof(PassStamps) == 16, "getPassMask loads the stamps as one __m
 enum ERecordFlag : uint8
 {
     RecordFlag_Alive        = 1,
-    RecordFlag_Unlinked     = 2,  // registered but not yet linked into its cell (pre-commit)
-    RecordFlag_PendingFree  = 4,  // unregistered, unlink + slot release happen at commit
-    RecordFlag_PendingMove  = 8,  // a queued Move op holds newer data than the in-place SoA fields
+    RecordFlag_Unindexed    = 2,  // registered but not yet in its cell: no lane, no query finds it (pre-commit)
+    RecordFlag_PendingFree  = 4,  // unregistered, unindex + slot release happen at commit
+    RecordFlag_PendingMove  = 8,  // a queued Move op holds newer data than the lane (or indexes the Unindexed entry)
     RecordFlag_NoSpawnGuard = 64, // registerEntry(spawnVisible = false)
 };
 
-// SoA storage for every registered entry, by handle slot. Position and radius are held here only while the entry is Unlinked;
-// once linked, its CellBlock lane is the only copy. Rows are VirtualArrays (reserved up front, never move), so
-// acquire is lock-free: a tagged free stack, else a bump of the high-water mark. release() at commit only.
+// SoA storage for every registered entry, by handle slot: what a handle needs and a query test does not. Position and
+// radius live only in the entry's CellBlock lane (before it is indexed, in its pending Index / Move op). Rows are VirtualArrays
+// (reserved up front, never move), so acquire is lock-free: a tagged free stack, else a bump of the high-water mark.
+// release() at commit only.
 class RecordPool final
 {
 public:
-    static constexpr uint32 MAX_ENTRIES = 1u << 24; // address space only (~1 GB over all rows); commit follows use
+    static constexpr uint32 MAX_ENTRIES = 1u << 24; // address space only (~750 MB over all rows); commit follows use
 
     void initialize(uint32 capacity)
     {
@@ -85,14 +86,12 @@ public:
     uint32 capacity() const { return m_count.load(oc::memory_order_acquire); }
     uint32 numAlive() const { return m_numAlive.load(oc::memory_order_relaxed); }
 
-    VirtualArray<float> posX, posY, posZ; // Unlinked only (stale once linked): relative to the cell's min corner
-    VirtualArray<float> radius;           // Unlinked only (stale once linked); the Link op inserts the lane from these
-    VirtualArray<uint64> cellKey;         // current cell Morton key at `level`
+    VirtualArray<uint64> cellKey;        // current cell Morton key at `level`
     VirtualArray<uint64> userData;
     VirtualArray<uint8> layerMask;        // SpatialLayer_* bits (4 in use; static_assert in Types)
     VirtualArray<uint32> gen;             // handle generation: 32-bit so a stale handle can never match a reused slot
     VirtualArray<PassStamps> stamps;      // stamp generation per pass (see SpatialStamp)
-    VirtualArray<uint32> storeIdx;        // linked: block * 8 + lane in the level's BlockStore; UINT32_MAX while Unlinked
+    VirtualArray<uint32> storeIdx;        // indexed: block * 8 + lane in the level's BlockStore; UINT32_MAX while Unindexed
     VirtualArray<uint8> level;
     VirtualArray<uint8> flags;
 
@@ -103,7 +102,7 @@ private:
     template<typename Fn>
     void forEachRow(Fn&& fn)
     {
-        fn(posX); fn(posY); fn(posZ); fn(radius); fn(cellKey); fn(userData); fn(layerMask);
+        fn(cellKey); fn(userData); fn(layerMask);
         fn(gen); fn(stamps); fn(storeIdx); fn(level); fn(flags);
     }
     // Doubles the committed prefix past `needed`; m_committed is published after every row covers it.

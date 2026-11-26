@@ -911,7 +911,7 @@ static constexpr ESpatialPass g_updateTierPass[3] = { ESpatialPass::UpdateTier0,
 void SpatialIndex::advanceStamp(ESpatialPass pass)
 {
     SpatialStamp& id = m_visibleQueryId[uint32(pass)];
-    if (++id == SpatialStamp_Linked) // the sentinel is never a generation
+    if (++id == SpatialStamp_Indexed) // the sentinel is never a generation
     {
         // WRAP (every 65k stamps of this pass): every stale value in the row would become "current"
         // again ~65k generations later - sweep them to the sentinel (0, the spawn guard, stays 0).
@@ -922,7 +922,7 @@ void SpatialIndex::advanceStamp(ESpatialPass pass)
         const uint32 count = m_pool.capacity();
         for (uint32 idx = 0; idx < count; ++idx)
             if (m_pool.stamps[idx].pass[uint32(pass)] != 0)
-                m_pool.stamps[idx].pass[uint32(pass)] = SpatialStamp_Linked;
+                m_pool.stamps[idx].pass[uint32(pass)] = SpatialStamp_Indexed;
     }
 }
 
