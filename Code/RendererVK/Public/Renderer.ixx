@@ -171,11 +171,12 @@ public:
     // model's true scale. A change re-bakes the UBO values that read it.
     void setTerrainCragScale(float scale);
 
-    // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first: R = terrain height, G = water surface level, B = regional fog
-    // thickness [0,1], A = spare. Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water depth / level read it. Staged
-    // ping-pong: live next frame, no GPU sync and no re-record.
-    void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel);
-    void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // the fog reverts to the flat height base
+    // THE TERRAIN-DATA MAP: TERRAIN_DATA_LAYERS layers of TERRAIN_DATA_RES^2 RGBA16 UNORM texels (Procedural's packTerrainDataGpu: near, far, climate),
+    // with heightDecode = (near lo, near scale, far lo, far scale): a height = lo + unorm * scale. Cascade i covers cascadeWorldSizes[i] m. Read
+    // through terrain_height.inc.glsl. Staged ping-pong: live next frame, no GPU sync and no re-record.
+    void setTerrainDataMap(oc::span<const uint16> texels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel,
+        const glm::vec4& heightDecode);
+    void clearTerrainDataMap() { m_terrain.getHeightMap().clear(); } // the fog reverts to the flat height base
 
     // THE FACTION MAP (the game's faction layer, for the look): size^2 bytes (size = 4096, row-major, z rows of x), 0 = fully the enemy's .. 128 = neutral ..
     // 255 = fully the players', over a world-FIXED square whose min corner is originXZ and whose cells are cellSize m. Staged ping-pong like the terrain-data
@@ -414,9 +415,12 @@ inline void Renderer::setTerrainStitch(float chunkSize, const glm::vec2& drawCam
     m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, lod0Quad);
 }
 
-inline void Renderer::setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel)
+inline void Renderer::setTerrainDataMap(oc::span<const uint16> texels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel,
+    const glm::vec4& heightDecode)
 {
-    m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel);
+    assert(texels.size() == (size_t)RendererVKLayout::TERRAIN_DATA_LAYERS * RendererVKLayout::TERRAIN_DATA_RES * RendererVKLayout::TERRAIN_DATA_RES * 4);
+    m_terrain.getHeightMap().upload(oc::span<const uint8>((const uint8*)texels.data(), texels.size_bytes()), centerXZ, cascadeWorldSizes, seaLevel,
+        heightDecode);
 }
 
 inline void Renderer::setFactionMap(const uint8* bytes, int size, const glm::vec2& originXZ, float cellSize, uint8 outsideValue, const glm::ivec4* dirty,

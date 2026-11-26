@@ -105,7 +105,7 @@ export struct OceanParams
     bool  cameraUnderwater = false; // per frame, from the CPU mirror: the camera is below the live surface.
                                     // Gates the shader's underside path - a back face seen from above is a fold
 
-    // Shore interaction: the baked terrain-data cascades (Renderer::setFogTerrainHeightMap, baked by the
+    // Shore interaction: the baked terrain-data cascades (Renderer::setTerrainDataMap, baked by the
     // terrain streamer) give the water its depth - open water eases to the swash amplitude across an
     // approach band at the shore (oceanSurfaceWeight, ocean_wave.inc.glsl), the swash tongue runs up the
     // beach and flows back, and a surf/foam band forms where the water column vanishes at the waterline.

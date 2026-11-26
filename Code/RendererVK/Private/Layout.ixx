@@ -373,7 +373,7 @@ export namespace RendererVKLayout
     constexpr uint32 GI_VOLUME_SKY_IMAGE = GI_MAX_CASCADES * GI_VOLUME_IMAGES_PER_CASCADE;
     constexpr uint32 GI_VOLUME_MAX_IMAGES = GI_VOLUME_SKY_IMAGE + 1;
     // The cloud feature toggles as BAKED shader defines (buildLayoutPreamble: CLOUDS, CLOUD_SHADOWS,
-    // CLOUD_SELF_SHADOW_MAP, CLOUD_POWDER, CLOUD_DEBUG_MODE), copied from CloudParams by Renderer::syncCloudDefines;
+    // CLOUD_SELF_SHADOW_MAP, CLOUD_POWDER, CLOUD_CHECKERBOARD, CLOUD_DEBUG_MODE), copied from CloudParams by Renderer::syncCloudDefines;
     // a change reloads every shader.
     struct CloudShaderConfig
     {
@@ -382,7 +382,7 @@ export namespace RendererVKLayout
         bool selfShadowFromMap = false;
         bool powder = false; // CLOUD_POWDER: the "Powder" strength is above 0
         bool checkerboard = true; // CLOUD_CHECKERBOARD: the march covers half the pixels per frame (also sizes its dispatch)
-        int debugMode = 0; // CLOUD_DEBUG_MODE: 0 off, 1 step count, 2 density only, 3 history rejection
+        int debugMode = 0; // CLOUD_DEBUG_MODE: 0 off, 1 march cost, 2 density only, 3 history rejection
 
         bool operator==(const CloudShaderConfig&) const = default;
     };
@@ -880,9 +880,11 @@ export namespace RendererVKLayout
     constexpr uint32 AERIAL_LUT_Y = 36;
     constexpr uint32 AERIAL_LUT_Z = 32; // = the shader's workgroup, ONE subgroup (its prefix sum): keep it at the warp size
     constexpr uint32 MAX_FOG_VOLUMES = 256;
-    constexpr uint32 FOG_TERRAIN_RES = 512;     // fog terrain height map resolution per cascade (CPU-baked around
-                                                // the camera; setFogTerrainHeightMap expects CASCADES*RES*RES floats)
-    constexpr uint32 FOG_TERRAIN_CASCADES = 2;  // layer 0 = near/fine, layer 1 = far/coarse (same res, larger range)
+    constexpr uint32 TERRAIN_DATA_RES = 1024;     // terrain-data map resolution per cascade (CPU-baked around the camera)
+    constexpr uint32 TERRAIN_DATA_CASCADES = 2;   // near/fine and far/coarse (same res, larger range)
+    // The GPU image's layers, RGBA16 UNORM (Procedural's packTerrainDataGpu, terrain_height.inc.glsl): near, far, climate.
+    // setTerrainDataMap takes LAYERS*RES*RES*4 uint16: 8 MB per layer, 24 MB per image.
+    constexpr uint32 TERRAIN_DATA_LAYERS = 3;
     constexpr uint32 TERRAIN_WET_RES = 1024;    // terrain wetness clipmap texels per axis (power of two: toroidal
                                                 // slot = lattice & (RES-1)); 2048 m of coverage at the 2 m texel
 

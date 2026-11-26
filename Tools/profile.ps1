@@ -1,8 +1,8 @@
 # Build (optional) + run App.exe unattended + print the profiler text report.
 #
-#   Tools\profile.ps1                         # RelWithDebInfo, dump at frame 600 over the last 256 frames, quit
+#   Tools\profile.ps1                         # RelWithDebInfo, dump at 10 s: the mean over the 5 s before it, quit
 #   Tools\profile.ps1 -Config Debug -NoBuild  # reuse the last build
-#   Tools\profile.ps1 -Game -After 20 -Frames 300 -Show 120
+#   Tools\profile.ps1 -Game -After 20 -Seconds 8 -Show 120
 #   Tools\profile.ps1 -Game -Server -After 15   # THE standard perf run: --game --server, loads Assets/Scenarios/march-64-units.txt at 1 s,
 #                                                # every own unit marches on the enemy Base (-Scenario <path> for another save, -Scenario "" for none)
 #   Tools\profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-wave9.txt" -ScenarioAt 2 -After 30
@@ -15,8 +15,8 @@
 # always overrides "Time/Max FPS=0" so the saved frame cap is not what gets measured.
 param(
     [string]$Config = "RelWithDebInfo",
-    [double]$After = 10,    # dump this many SECONDS into the run (engine time from the loop start; the window is the last -Frames frames)
-    [int]$Frames = 256,     # window: the last N frames before the dump (max 511)
+    [double]$After = 10,    # dump this many SECONDS into the run (engine time from the loop start; the window is the -Seconds before it)
+    [double]$Seconds = 5,   # window: the report is the mean over this many seconds before the dump (what must have settled by After - Seconds)
     [double]$QuitAfter = 0, # seconds; default: After + 0.5
     [string]$Out = "Local/profile.txt",
     [switch]$Game,
@@ -54,7 +54,7 @@ $reportPath = Join-Path (Join-Path $repo "Assets") $Out
 if (Test-Path $reportPath) { Remove-Item $reportPath -Force }
 
 $culture = [System.Globalization.CultureInfo]::InvariantCulture # "10.5", never "10,5" on a Dutch locale
-$argList = @("--profile-after", $After.ToString($culture), "--profile-frames", $Frames, "--profile-out", $Out, "--quit-after", $QuitAfter.ToString($culture))
+$argList = @("--profile-after", $After.ToString($culture), "--profile-seconds", $Seconds.ToString($culture),"--profile-out", $Out, "--quit-after", $QuitAfter.ToString($culture))
 if (-not $VSync) { $argList += "--no-vsync" }
 if ($Fullscreen) { $argList += "--fullscreen" }
 if ($Workers) { $argList += "--profile-workers" }

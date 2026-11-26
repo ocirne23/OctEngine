@@ -200,7 +200,7 @@ int main(int argc, char* argv[])
     GizmoController gizmo;
     Session session(options);
     InputControls controls(gizmo, session.cameraController(), Globals::world);
-    controls.setProfileDump(options.profileOutPath, options.profileOptions);
+    controls.setProfileDump(options.profileOutPath, options.profileOptions, options.profileSeconds);
     session.attachControls(controls);
     session.attachWindow(window); // the co-op mouse look's relative mouse mode
     session.installNetworkCallbacks();
@@ -268,12 +268,21 @@ int main(int argc, char* argv[])
                     Log::warning("--scenario needs --game");
                 return Timer::DONE;
             });
+    // --profile-after: the report is the mean over the last --profile-seconds before it (the profiler's capture, fed by
+    // updateCapture below every frame). A dump earlier than that into the run covers the run so far.
+    oc::optional<Timer> profileCaptureTimer;
     oc::optional<Timer> profileDumpTimer;
     if (options.profileAfterSec > 0.0)
-        profileDumpTimer.emplace(timerDelay(options.profileAfterSec), [&](Timer&) {
-                Globals::profiler.writeReport(options.profileOutPath, options.profileOptions);
+    {
+        profileCaptureTimer.emplace(timerDelay(oc::max(options.profileAfterSec - options.profileSeconds, 0.0)), [&](Timer&) {
+                Globals::profiler.beginCapture(options.profileOptions.perWorkerTrees);
                 return Timer::DONE;
             });
+        profileDumpTimer.emplace(timerDelay(options.profileAfterSec), [&](Timer&) {
+                Globals::profiler.writeCapture(options.profileOutPath, options.profileOptions);
+                return Timer::DONE;
+            });
+    }
     oc::optional<Timer> screenshotTimer;
     if (options.screenshotAfterSec > 0.0 && !headlessServer)
         screenshotTimer.emplace(timerDelay(options.screenshotAfterSec), [&](Timer&) {
@@ -439,6 +448,7 @@ int main(int argc, char* argv[])
 
         mainLoopScope.stop();
         Globals::profiler.endFrame();
+        Globals::profiler.updateCapture(); // a dump's capture, when one runs: adds the frames since its last stretch
         frameCount++;
 
         if (headlessServer)

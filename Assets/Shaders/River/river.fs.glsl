@@ -60,7 +60,7 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, vec3 rayDir, float rayT, inout flo
     if (terrainHeightMapPresent())
     {
         const vec4 td      = terrainDataAt(worldPos.xz);
-        const vec4 climate = terrainClimateNearestAt(worldPos.xz);
+        const vec4 climate = terrainClimateFastAt(worldPos.xz);
         f.altitude    = td.w;
         f.waterLevel  = td.y;
         f.humidity    = climate.w;

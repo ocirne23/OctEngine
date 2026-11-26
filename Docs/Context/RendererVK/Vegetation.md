@@ -195,7 +195,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 300 m, "Range
   "Wind/Fade start (m)" and "Fade end (m)" (100 / 200 m): far blades moving read as grain.
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
   interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
-  height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the BASE chunks within
+  height map (4 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the BASE chunks within
   `groundRange()` + 16 m (the grass's AND the ground clutter's range) to `Renderer::setGrassGround` EVERY frame (coord,
   the chunk's first vertex in the finest drawn quadtree node over it, its cells per side, and the node meshes' row
   stride - UBO `present_groundStride`: a base chunk inside a bigger node is a sub-grid of it); the list lives ONE frame
@@ -695,7 +695,7 @@ Desktop only, on by default from "Far start" 2000 m - the far voxel trees draw t
     faint vertical lines and a moire. A tree the smoothed floor no longer fits moves down into the layer through the
     splat's `shift`.
   * Splat and march both measure from it; a column without a tree falls back to `terrainHeightAt`. **Not the height
-    map**: its far cascade's ~132 m texels put the ground tens of metres off on mountains, and trees fell out of the
+    map**: its far cascade's ~100 m texels put the ground tens of metres off on mountains, and trees fell out of the
     layer. A tree that would reach past the layer's top (a lower tree set the column's floor) is moved down into it,
     as far as its base allows. The march's under-ground break uses the LOWER of floor and map.
   * The march's PRIMARY sample, `densityAtColumns`, filters per column: the 4 columns around the point, each read at

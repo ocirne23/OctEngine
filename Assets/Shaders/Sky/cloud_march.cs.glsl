@@ -35,9 +35,12 @@ layout (push_constant) uniform CloudPC
     uint u_pad;
 };
 
+// The debug views' colour of a share x: blue at 0, green at a half, FULL RED ONLY AT 1 (the step count view: x = steps /
+// "Max steps", so pure red is a ray that used its whole budget).
 vec3 stepHeat(float x)
 {
-    return clamp(vec3(x * 3.0 - 1.0, x < 0.5 ? x * 2.0 : 2.0 - x * 2.0, 1.0 - x * 3.0), 0.0, 1.0);
+    const float s = clamp(x, 0.0, 1.0) * 2.0 - 1.0;
+    return clamp(vec3(s, 1.0 - abs(s), -s), 0.0, 1.0);
 }
 
 void writeEmpty(ivec2 px, float logLimit)
@@ -104,6 +107,14 @@ void main()
     // Re-derived after the march instead of held live across it (registers): the pixel and the limit's log.
     const ivec2 outPx = marchPixel();
     const float outLogLimit = log2(max(limit, 1.0));
+#if CLOUD_DEBUG_MODE == 1
+    // THE MARCH COST VIEW (cloud_raymarch.inc.glsl g_cloudCost), on every marched pixel - a clear ray costs too. The scale
+    // is the user's ("Debug cost at red", u_clouds_debugCostScale = 1 / it), not a march setting's: a setting's cost shows
+    // as a colour change. The default 400 = 130 lit samples with the map's shadow and the sky occlusion.
+    imageStore(u_outColor, outPx, vec4(stepHeat(g_cloudCost * u_clouds_debugCostScale), 0.0));
+    imageStore(u_outDepth, outPx, vec4(0.0, 0.0, outLogLimit, float(r.steps)));
+    return;
+#endif
     if (r.front < 0.0)
     {
         writeEmpty(outPx, outLogLimit);
@@ -111,9 +122,6 @@ void main()
     }
 
     vec4 color = vec4(r.inScatter, r.transmittance);
-#if CLOUD_DEBUG_MODE == 1
-    color = vec4(stepHeat(float(r.steps) / u_clouds_maxSteps), 0.0);
-#endif
     imageStore(u_outColor, outPx, color);
     imageStore(u_outDepth, outPx, vec4(log2(max(r.front, 1.0)), log2(max(r.weighted, 1.0)), outLogLimit, float(r.steps)));
 }

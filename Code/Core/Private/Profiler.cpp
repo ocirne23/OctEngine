@@ -360,48 +360,11 @@ namespace
     }
 }
 
-oc::string Profiler::buildReport(const ProfileReportOptions& options) const
+// What a report is printed from: the aggregate of one or more STRETCHES of frames (one for buildReport; the capture adds
+// a stretch at a time, each short enough for the rings).
+struct ProfileReportState
 {
-    oc::string out;
-    if (m_frameCount < 3)
-    {
-        appendLine(out, "profiler report: fewer than 3 frames recorded");
-        return out;
-    }
-
-    // ---- frame window: the last N completed frames, never across a pause gap or past the mark ring ----
-    const uint64 lastFrame = m_frameCount - 1;
-    uint64 firstFrame = lastFrame + 1 > (uint64)oc::max(options.frames, 1u) ? lastFrame + 1 - oc::max(options.frames, 1u) : 1;
-    firstFrame = oc::max<uint64>(firstFrame, m_frameCount > FRAME_HISTORY - 1 ? m_frameCount - (FRAME_HISTORY - 1) : 1);
-    for (uint64 f = lastFrame; f >= firstFrame; --f)
-        if (isFrameGap(f)) { firstFrame = f + 1; break; }
-    if (firstFrame > lastFrame)
-    {
-        appendLine(out, "profiler report: no complete frames since the last pause");
-        return out;
-    }
-    const uint64 numFrames = lastFrame - firstFrame + 1;
-    const double invFrames = 1.0 / (double)numFrames;
-    const uint64 tMin = getFrameMark(firstFrame - 1);
-    const uint64 tMax = getFrameMark(lastFrame);
-    const double msPerTick = m_msPerTick;
-    const double windowMs = (double)(tMax - tMin) * msPerTick;
-
-    oc::vector<double> frameMs;
-    frameMs.reserve(numFrames);
-    for (uint64 f = firstFrame; f <= lastFrame; ++f)
-        frameMs.push_back((double)(getFrameMark(f) - getFrameMark(f - 1)) * msPerTick);
-    oc::sort(frameMs.begin(), frameMs.end());
-    const auto percentile = [&](double p) { return frameMs[oc::min((size_t)(p * (double)(frameMs.size() - 1) + 0.5), frameMs.size() - 1)]; };
-
-    appendLine(out, "OctEngine profiler report");
-    appendLine(out, "columns: ms/frame = total time in the window / frames; self = minus direct children; calls/fr = segments per frame (a fiber-parked scope counts once per resume)");
-    appendf(out, "frames %llu..%llu (%llu frames), window %.1f ms\n", (unsigned long long)firstFrame, (unsigned long long)lastFrame, (unsigned long long)numFrames, windowMs);
-    appendf(out, "frame ms: avg %.2f  min %.2f  p50 %.2f  p95 %.2f  p99 %.2f  max %.2f   (%.1f fps avg)\n",
-        windowMs * invFrames, frameMs.front(), percentile(0.5), percentile(0.95), percentile(0.99), frameMs.back(), 1000.0 * numFrames / windowMs);
-
-    // ---- snapshot + sort every track ----
-    struct TrackData
+    struct Track
     {
         uint32 idx = 0;
         const char* name = nullptr;
@@ -410,79 +373,187 @@ oc::string Profiler::buildReport(const ProfileReportOptions& options) const
         bool gpu = false;
         double busyMs = 0.0;   // depth-0 scopes, Wait category excluded
         double waitMs = 0.0;   // depth-0 Wait scopes (fence/vsync, frame limit, joins)
-        double coverage = 1.0; // fraction of the window the ring still held (1 = complete)
-        oc::vector<ProfileRecord> records;
+        double coverage = 1.0; // the smallest fraction of a stretch the ring still held (1 = complete)
+        uint64 records = 0;
+        ReportTree tree;       // empty for a worker whose records went into the merged tree
     };
+    bool perWorkerTrees = false;
+    uint64 firstFrame = 0;
+    uint64 lastFrame = 0;
+    uint64 numFrames = 0;
+    double windowMs = 0.0;     // the frames' summed time
+    uint64 nextFrame = 1;      // the capture: the first frame not added yet
+    oc::vector<double> frameMs;
+    oc::vector<Track> tracks;
+    ReportTree mergedWorkers;
+};
+
+Profiler::~Profiler() = default;
+
+// Adds the completed frames [firstFrame, lastFrame] to a report's aggregate: never across a pause gap (the frames before
+// the stretch's last gap are left out) or past the mark ring.
+void Profiler::addReportFrames(ProfileReportState& state, uint64 firstFrame, uint64 lastFrame) const
+{
+    firstFrame = oc::max<uint64>(firstFrame, m_frameCount > FRAME_HISTORY - 1 ? m_frameCount - (FRAME_HISTORY - 1) : 1);
+    for (uint64 f = lastFrame; f >= firstFrame; --f)
+        if (isFrameGap(f)) { firstFrame = f + 1; break; }
+    if (firstFrame > lastFrame)
+        return;
+    const uint64 tMin = getFrameMark(firstFrame - 1);
+    const uint64 tMax = getFrameMark(lastFrame);
+    const double msPerTick = m_msPerTick;
+    if (state.numFrames == 0)
+        state.firstFrame = firstFrame;
+    state.lastFrame = lastFrame;
+    state.numFrames += lastFrame - firstFrame + 1;
+    state.windowMs += (double)(tMax - tMin) * msPerTick;
+    for (uint64 f = firstFrame; f <= lastFrame; ++f)
+        state.frameMs.push_back((double)(getFrameMark(f) - getFrameMark(f - 1)) * msPerTick);
+
+    // ---- snapshot + sort every track, into its tree (the workers: one merged tree unless asked otherwise) ----
+    oc::vector<ProfileRecord> records;
     const uint32 numTracks = getNumTracks();
-    oc::vector<TrackData> tracks;
-    tracks.reserve(numTracks);
     for (uint32 i = 0; i < numTracks; ++i)
     {
         const ProfileTrack& track = getTrack(i);
         if (track.getCursor() == 0)
             continue;
-        TrackData data;
-        data.idx = i;
-        data.name = track.getName();
-        data.sortKey = track.getSortKey();
-        data.worker = data.sortKey >= SORT_KEY_WORKER && data.sortKey < SORT_KEY_BACKGROUND;
-        data.gpu = oc::string_view(data.name) == "GPU";
-        snapshotTrack(i, tMin, tMax, data.records);
-        oc::sort(data.records.begin(), data.records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
+        ProfileReportState::Track* data = nullptr;
+        for (ProfileReportState::Track& known : state.tracks)
+            if (known.idx == i)
+                data = &known;
+        if (data == nullptr)
+        {
+            data = &state.tracks.emplace_back();
+            data->idx = i;
+            data->name = track.getName();
+            data->sortKey = track.getSortKey();
+            data->worker = data->sortKey >= SORT_KEY_WORKER && data->sortKey < SORT_KEY_BACKGROUND;
+            data->gpu = oc::string_view(data->name) == "GPU";
+        }
+        snapshotTrack(i, tMin, tMax, records);
+        oc::sort(records.begin(), records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
             { return a.start != b.start ? a.start < b.start : a.depth < b.depth; });
-        for (const ProfileRecord& record : data.records)
+        for (const ProfileRecord& record : records)
             if (record.depth == 0)
             {
                 const uint64 s = oc::max(record.start, tMin), e = oc::min(record.end, tMax);
                 if (e > s)
-                    ((EProfileCategory)record.category == EProfileCategory::Wait ? data.waitMs : data.busyMs) += (double)(e - s) * msPerTick;
+                    ((EProfileCategory)record.category == EProfileCategory::Wait ? data->waitMs : data->busyMs) += (double)(e - s) * msPerTick;
             }
+        data->records += records.size();
         const uint64 cursor = track.getCursor();
         if (cursor >= track.getCapacity())
         {
             // the writer may be overwriting this slot right now - a diagnostic read, not data
             const uint64 oldestEnd = track.getRecord(cursor - track.getCapacity() + 1).end;
             if (oldestEnd > tMin && tMax > tMin)
-                data.coverage = oldestEnd >= tMax ? 0.0 : (double)(tMax - oldestEnd) / (double)(tMax - tMin);
+                data->coverage = oc::min(data->coverage, oldestEnd >= tMax ? 0.0 : (double)(tMax - oldestEnd) / (double)(tMax - tMin));
         }
-        tracks.push_back(oc::move(data));
+        (data->worker && !state.perWorkerTrees ? state.mergedWorkers : data->tree).accumulate(records, tMin, tMax);
     }
-    oc::sort(tracks.begin(), tracks.end(), [](const TrackData& a, const TrackData& b) { return a.sortKey != b.sortKey ? a.sortKey < b.sortKey : a.idx < b.idx; });
+}
+
+oc::string Profiler::buildReport(const ProfileReportOptions& options) const
+{
+    if (m_frameCount < 3)
+        return "profiler report: fewer than 3 frames recorded\n";
+    // The last N completed frames.
+    ProfileReportState state;
+    state.perWorkerTrees = options.perWorkerTrees;
+    const uint64 lastFrame = m_frameCount - 1;
+    addReportFrames(state, lastFrame + 1 > (uint64)oc::max(options.frames, 1u) ? lastFrame + 1 - oc::max(options.frames, 1u) : 1, lastFrame);
+    return printReport(state, options);
+}
+
+// THE CAPTURE: the frames are added in stretches of CAPTURE_STRETCH (the rings hold more than that at any frame rate the
+// one-shot report works at). The frame an add runs in carries the add's own cost: it is left out.
+void Profiler::beginCapture(bool perWorkerTrees)
+{
+    m_capture = oc::make_unique<ProfileReportState>();
+    m_capture->perWorkerTrees = perWorkerTrees;
+    m_capture->nextFrame = m_frameCount + 1; // the frame in progress is not a whole one of the capture
+}
+
+void Profiler::updateCapture()
+{
+    constexpr uint64 CAPTURE_STRETCH = 192;
+    if (m_capture == nullptr || m_frameCount < m_capture->nextFrame + CAPTURE_STRETCH)
+        return;
+    addReportFrames(*m_capture, m_capture->nextFrame, m_frameCount - 1);
+    m_capture->nextFrame = m_frameCount + 1;
+}
+
+oc::string Profiler::finishCapture(const ProfileReportOptions& options)
+{
+    if (m_capture == nullptr)
+        return buildReport(options);
+    if (m_frameCount > m_capture->nextFrame)
+        addReportFrames(*m_capture, m_capture->nextFrame, m_frameCount - 1);
+    const oc::unique_ptr<ProfileReportState> state = oc::move(m_capture);
+    return printReport(*state, options);
+}
+
+oc::string Profiler::printReport(const ProfileReportState& state, const ProfileReportOptions& options) const
+{
+    oc::string out;
+    if (state.numFrames == 0)
+    {
+        appendLine(out, "profiler report: no complete frames since the last pause");
+        return out;
+    }
+    const uint64 numFrames = state.numFrames;
+    const double invFrames = 1.0 / (double)numFrames;
+    const double msPerTick = m_msPerTick;
+    const double windowMs = state.windowMs;
+
+    oc::vector<double> frameMs = state.frameMs;
+    oc::sort(frameMs.begin(), frameMs.end());
+    const auto percentile = [&](double p) { return frameMs[oc::min((size_t)(p * (double)(frameMs.size() - 1) + 0.5), frameMs.size() - 1)]; };
+
+    appendLine(out, "OctEngine profiler report");
+    appendLine(out, "columns: ms/frame = total time in the window / frames; self = minus direct children; calls/fr = segments per frame (a fiber-parked scope counts once per resume)");
+    appendf(out, "frames %llu..%llu (%llu frames), window %.1f ms\n", (unsigned long long)state.firstFrame, (unsigned long long)state.lastFrame, (unsigned long long)numFrames, windowMs);
+    appendf(out, "frame ms: avg %.2f  min %.2f  p50 %.2f  p95 %.2f  p99 %.2f  max %.2f   (%.1f fps avg)\n",
+        windowMs * invFrames, frameMs.front(), percentile(0.5), percentile(0.95), percentile(0.99), frameMs.back(), 1000.0 * numFrames / windowMs);
+
+    oc::vector<const ProfileReportState::Track*> tracks;
+    tracks.reserve(state.tracks.size());
+    for (const ProfileReportState::Track& track : state.tracks)
+        tracks.push_back(&track);
+    oc::sort(tracks.begin(), tracks.end(), [](const ProfileReportState::Track* a, const ProfileReportState::Track* b)
+        { return a->sortKey != b->sortKey ? a->sortKey < b->sortKey : a->idx < b->idx; });
 
     // ---- thread busy % (depth-0 scopes clipped to the window) ----
     appendLine(out, "");
     appendLine(out, "thread busy (% of window, depth-0 scopes; wait = Wait-category top-level scopes: fence/vsync, frame limit, joins):");
     uint32 numWorkers = 0;
     double workerBusy = 0.0;
-    for (const TrackData& track : tracks)
+    for (const ProfileReportState::Track* trackPtr : tracks)
     {
+        const ProfileReportState::Track& track = *trackPtr;
         if (track.worker) { numWorkers++; workerBusy += track.busyMs; }
-        appendf(out, "  %-16s busy %5.1f%% (%.2f ms/frame)  wait %5.1f%% (%.2f ms/frame)  %u records%s\n", track.name,
+        appendf(out, "  %-16s busy %5.1f%% (%.2f ms/frame)  wait %5.1f%% (%.2f ms/frame)  %llu records%s\n", track.name,
             track.busyMs / windowMs * 100.0, track.busyMs * invFrames, track.waitMs / windowMs * 100.0, track.waitMs * invFrames,
-            (uint32)track.records.size(), track.coverage < 0.999 ? oc::format(", RING LAPPED: covers {:.0f}% of the window", track.coverage * 100.0).c_str() : "");
+            (unsigned long long)track.records, track.coverage < 0.999 ? oc::format(", RING LAPPED: covers {:.0f}% of the window", track.coverage * 100.0).c_str() : "");
     }
     if (numWorkers > 0)
         appendf(out, "  workers average %.1f%% over %u tracks (%.2f worker-ms/frame)\n", workerBusy / (windowMs * numWorkers) * 100.0, numWorkers, workerBusy * invFrames);
 
     // ---- trees: one per track, workers merged unless asked otherwise ----
-    struct TreeEntry { oc::string title; ReportTree tree; bool gpu = false; };
+    struct TreeEntry { oc::string title; const ReportTree* tree = nullptr; bool gpu = false; };
     oc::vector<TreeEntry> trees;
-    trees.reserve(tracks.size() + 1); // never reallocates below, so the merged-workers pointer stays valid
-    ReportTree* mergedWorkers = nullptr;
-    for (TrackData& track : tracks)
+    bool mergedListed = false;
+    for (const ProfileReportState::Track* track : tracks)
     {
-        if (track.worker && !options.perWorkerTrees)
+        if (track->worker && !state.perWorkerTrees)
         {
-            if (mergedWorkers == nullptr)
-            {
-                trees.push_back(TreeEntry{ .title = oc::format("Workers (merged, {} tracks)", numWorkers) });
-                mergedWorkers = &trees.back().tree;
-            }
-            mergedWorkers->accumulate(track.records, tMin, tMax);
+            if (!mergedListed)
+                trees.push_back(TreeEntry{ .title = oc::format("Workers (merged, {} tracks)", numWorkers), .tree = &state.mergedWorkers });
+            mergedListed = true;
             continue;
         }
-        trees.push_back(TreeEntry{ .title = oc::string(track.name), .gpu = track.gpu });
-        trees.back().tree.accumulate(track.records, tMin, tMax);
+        trees.push_back(TreeEntry{ .title = oc::string(track->name), .tree = &track->tree, .gpu = track->gpu });
     }
 
     // ---- global top self time across CPU tracks ----
@@ -494,7 +565,7 @@ oc::string Profiler::buildReport(const ProfileReportOptions& options) const
             if (entry.gpu)
                 continue;
             oc::unordered_set<oc::string_view> seen;
-            collectFlat(entry.tree, index, rows, msPerTick, invFrames, &seen);
+            collectFlat(*entry.tree, index, rows, msPerTick, invFrames, &seen);
         }
         appendLine(out, "");
         appendLine(out, "== top self time, all CPU tracks (ms/frame summed across threads; thr = tracks/trees it ran on) ==");
@@ -507,10 +578,10 @@ oc::string Profiler::buildReport(const ProfileReportOptions& options) const
         appendLine(out, "");
         appendf(out, "== %s ==\n", entry.title.c_str());
         appendLine(out, " ms/frame      self  calls/fr    max ms  tree");
-        printTree(out, entry.tree, 0, 0, msPerTick, invFrames, options);
+        printTree(out, *entry.tree, 0, 0, msPerTick, invFrames, options);
         oc::vector<FlatRow> rows;
         oc::unordered_map<oc::string_view, uint32> index;
-        collectFlat(entry.tree, index, rows, msPerTick, invFrames, nullptr);
+        collectFlat(*entry.tree, index, rows, msPerTick, invFrames, nullptr);
         appendf(out, "-- %s: flat by self --\n", entry.title.c_str());
         printFlat(out, rows, options.flatRows, options.minMsPerFrame, invFrames, false);
     }

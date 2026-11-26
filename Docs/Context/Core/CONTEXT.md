@@ -429,16 +429,23 @@ covered the window.**
 
 ### Triggers
 
-* **Interactive** — key F7, or the panel's "Dump" button; both write `Assets/Local/profile.txt`.
+* **Interactive** — key F7 (the mean over the NEXT `--profile-seconds`, written when they are over), or the panel's
+  "Dump" button (the last 256 frames at once: also of a paused history); both write `Assets/Local/profile.txt`.
+* **THE WINDOW IS SECONDS, NOT FRAMES** (`--profile-seconds`, default 5): one run's numbers are steady. The rings and the
+  frame marks do not hold that long, so the app's dumps use the profiler's CAPTURE (`beginCapture` / `updateCapture` every
+  frame after `endFrame` / `writeCapture`): the report's aggregate (`ProfileReportState`) takes the completed frames a
+  stretch of 192 at a time. The frame an add runs in carries the add's cost: it is left out. `buildReport` (one stretch:
+  the last `ProfileReportOptions::frames`) prints from the same aggregate.
 * **Unattended**:
 
 ```
-App.exe --profile-after <sec> [--profile-frames W] [--profile-out path] [--profile-workers]
+App.exe --profile-after <sec> [--profile-seconds S] [--profile-out path] [--profile-workers]
         [--quit-after <sec>] [--no-vsync] [--tweak "Cat/Name=v"] [--tweaks <file>]
 ```
 
 **TIMES ARE SECONDS of engine time since the loop start** — frame counts would shift with the frame
-rate. `--profile-frames` clamps to 1..`FRAME_HISTORY - 1` (511). `--no-vsync` is the override
+rate. The report covers the `--profile-seconds` (5) BEFORE `--profile-after` (the capture starts that much earlier; a
+dump sooner than that into the run covers the run so far). `--no-vsync` is the override
 `Time/VSync=0`.
 
 Each trigger is a one-shot `Timer` returning `Timer::DONE`, armed before the loop, **so it fires from
@@ -455,7 +462,7 @@ count as FOCUSED — otherwise the "Inactive max FPS" cap is what gets measured.
 ### `Tools/profile.ps1`
 
 ```
-Tools/profile.ps1 [-Config RelWithDebInfo] [-After 10] [-QuitAfter After+0.5] [-Frames 256]
+Tools/profile.ps1 [-Config RelWithDebInfo] [-After 10] [-QuitAfter After+0.5] [-Seconds 5]
                   [-Out Local/profile.txt] [-Game] [-Scenario Scenarios/march-64-units.txt] [-ScenarioAt 1]
                   [-Server] [-Port 27999] [-VSync] [-Fullscreen] [-Workers] [-NoBuild]
                   [-Tweak "..."] [-Tweaks Scenarios/cpu-profile.tweaks]

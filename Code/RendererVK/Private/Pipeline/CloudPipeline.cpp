@@ -76,12 +76,14 @@ namespace
     }
 }
 
-void CloudPipeline::buildNoiseLayout(ComputePipelineLayout& layout, bool is3D)
+// kind: 0 = the 2D textures (RGBA8), 1 = the base (3D, R8), 2 = the detail (3D, RG8): the storage image's format is in
+// the shader (NOISE_3D).
+void CloudPipeline::buildNoiseLayout(ComputePipelineLayout& layout, uint32 kind)
 {
     layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_noise.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    if (is3D)
-        layout.defines.push_back({ "NOISE_3D", "1" });
+    if (kind != 0)
+        layout.defines.push_back({ "NOISE_3D", kind == 1 ? "1" : "2" });
     layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage));
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(NoisePC) });
 }
@@ -272,7 +274,7 @@ void CloudPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
 
-void CloudPipeline::createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D, const char* debugName)
+void CloudPipeline::createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D, vk::Format format, const char* debugName)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     tex.size = size;
@@ -282,7 +284,7 @@ void CloudPipeline::createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D
         ++tex.mipLevels;
     vk::ImageCreateInfo info{
         .imageType = is3D ? vk::ImageType::e3D : vk::ImageType::e2D,
-        .format = NOISE_FORMAT,
+        .format = format,
         .extent = { size, size, is3D ? size : 1u },
         .mipLevels = tex.mipLevels,
         .arrayLayers = 1,
@@ -298,7 +300,7 @@ void CloudPipeline::createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D
     vk::ImageViewCreateInfo viewInfo{
         .image = tex.image,
         .viewType = viewType,
-        .format = NOISE_FORMAT,
+        .format = format,
         .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = tex.mipLevels, .baseArrayLayer = 0, .layerCount = 1 },
     };
     auto viewResult = vkDevice.createImageView(viewInfo);
@@ -327,13 +329,14 @@ void CloudPipeline::destroyNoiseTexture(NoiseTexture& tex)
 void CloudPipeline::generateNoise()
 {
     NoiseTexture* textures[] = { &m_base, &m_detail, &m_weather, &m_curl };
+    const ComputePipeline* pipelines[] = { &m_noiseBasePipeline, &m_noiseDetailPipeline, &m_noise2DPipeline, &m_noise2DPipeline };
     constexpr uint32 modes[] = { 0, 1, 2, 3 };
 
     for (uint32 i = 0; i < 4; ++i)
     {
         DescriptorSet& set = m_noiseSets[i];
         if (!set.getDescriptorSet())
-            set.initialize((textures[i]->is3D ? m_noise3DPipeline : m_noise2DPipeline).getDescriptorSetLayout(), "Clouds.noise");
+            set.initialize(pipelines[i]->getDescriptorSetLayout(), "Clouds.noise");
         vk::DescriptorImageInfo imageInfo = imgInfoGeneral(textures[i]->storageView);
         vk::WriteDescriptorSet write{ .dstSet = set.getDescriptorSet(), .dstBinding = 0, .descriptorCount = 1,
             .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo };
@@ -362,7 +365,7 @@ void CloudPipeline::generateNoise()
     for (uint32 i = 0; i < 4; ++i)
     {
         const NoiseTexture& tex = *textures[i];
-        const ComputePipeline& pipeline = tex.is3D ? m_noise3DPipeline : m_noise2DPipeline;
+        const ComputePipeline& pipeline = *pipelines[i];
         const vk::DescriptorSet vkSet = m_noiseSets[i].getDescriptorSet();
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
@@ -406,6 +409,7 @@ void CloudPipeline::generateNoise()
             cmd.blitImage2(blitInfo);
         }
     }
+
     vk::MemoryBarrier2 toRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eBlit,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
@@ -548,8 +552,9 @@ CloudPipeline::~CloudPipeline()
 void CloudPipeline::initialize(uint32 fullWidth, uint32 fullHeight, vk::RenderPass sceneRenderPass, uint32 viewCount)
 {
     m_viewCount = viewCount;
-    ComputePipelineLayout noise3DLayout;   buildNoiseLayout(noise3DLayout, true);  m_noise3DPipeline.initialize(noise3DLayout);
-    ComputePipelineLayout noise2DLayout;   buildNoiseLayout(noise2DLayout, false); m_noise2DPipeline.initialize(noise2DLayout);
+    ComputePipelineLayout noiseBaseLayout;   buildNoiseLayout(noiseBaseLayout, 1);   m_noiseBasePipeline.initialize(noiseBaseLayout);
+    ComputePipelineLayout noiseDetailLayout; buildNoiseLayout(noiseDetailLayout, 2); m_noiseDetailPipeline.initialize(noiseDetailLayout);
+    ComputePipelineLayout noise2DLayout;     buildNoiseLayout(noise2DLayout, 0);     m_noise2DPipeline.initialize(noise2DLayout);
     ComputePipelineLayout shadowLayout;    buildShadowLayout(shadowLayout);        m_shadowPipeline.initialize(shadowLayout);
     ComputePipelineLayout marchLayout;     buildMarchLayout(marchLayout);          m_marchPipeline.initialize(marchLayout);
     ComputePipelineLayout skyLayout;       buildSkyLayout(skyLayout);              m_skyPipeline.initialize(skyLayout);
@@ -573,10 +578,10 @@ void CloudPipeline::initialize(uint32 fullWidth, uint32 fullHeight, vk::RenderPa
     // hardware clamp gives the level-0 read). Keep both if this sampler changes.
     m_noiseSampler = createSampler(vk::SamplerAddressMode::eRepeat, 1000.0f, "Clouds.noise");
     m_linearSampler = createSampler(vk::SamplerAddressMode::eClampToEdge, 0.0f, "Clouds.linear");
-    createNoiseTexture(m_base, BASE_SIZE, true, "Clouds.base");
-    createNoiseTexture(m_detail, DETAIL_SIZE, true, "Clouds.detail");
-    createNoiseTexture(m_weather, WEATHER_SIZE, false, "Clouds.weather");
-    createNoiseTexture(m_curl, CURL_SIZE, false, "Clouds.curl");
+    createNoiseTexture(m_base, BASE_SIZE, true, vk::Format::eR8Unorm, "Clouds.base");       // cloud_noise.cs.glsl NOISE_3D 1
+    createNoiseTexture(m_detail, DETAIL_SIZE, true, vk::Format::eR8G8Unorm, "Clouds.detail"); // NOISE_3D 2
+    createNoiseTexture(m_weather, WEATHER_SIZE, false, NOISE_FORMAT, "Clouds.weather");
+    createNoiseTexture(m_curl, CURL_SIZE, false, NOISE_FORMAT, "Clouds.curl");
     generateNoise();
     createShadowMap();
     createSkyClouds();
@@ -585,14 +590,16 @@ void CloudPipeline::initialize(uint32 fullWidth, uint32 fullHeight, vk::RenderPa
 
 void CloudPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 {
-    ComputePipelineLayout noise3DLayout;  buildNoiseLayout(noise3DLayout, true);
-    ComputePipelineLayout noise2DLayout;  buildNoiseLayout(noise2DLayout, false);
+    ComputePipelineLayout noiseBaseLayout;   buildNoiseLayout(noiseBaseLayout, 1);
+    ComputePipelineLayout noiseDetailLayout; buildNoiseLayout(noiseDetailLayout, 2);
+    ComputePipelineLayout noise2DLayout;  buildNoiseLayout(noise2DLayout, 0);
     ComputePipelineLayout shadowLayout;   buildShadowLayout(shadowLayout);
     ComputePipelineLayout skyLayout;      buildSkyLayout(skyLayout);
     ComputePipelineLayout marchLayout;    buildMarchLayout(marchLayout);
     ComputePipelineLayout temporalLayout; buildTemporalLayout(temporalLayout);
     GraphicsPipelineLayout applyLayout;   buildApplyLayout(applyLayout);
-    bool ok = m_noise3DPipeline.reloadShaders(noise3DLayout);
+    bool ok = m_noiseBasePipeline.reloadShaders(noiseBaseLayout);
+    ok = m_noiseDetailPipeline.reloadShaders(noiseDetailLayout) && ok;
     ok = m_noise2DPipeline.reloadShaders(noise2DLayout) && ok;
     ok = m_shadowPipeline.reloadShaders(shadowLayout) && ok;
     ok = m_skyPipeline.reloadShaders(skyLayout) && ok;

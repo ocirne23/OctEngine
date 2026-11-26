@@ -830,7 +830,6 @@ namespace Procedural
 	{
 		m_wanted.clear();
 		m_wantedList.clear();
-		m_wantedHalfExtent = 0.0f;
 		const Ring& ring = m_ring;
 		const float chunkSize = (float)m_settings.chunkSize;
 		const auto visit = [&](auto&& self, glm::ivec2 coord, uint32 lod) -> void
@@ -847,9 +846,6 @@ namespace Procedural
 			const uint64 key = chunkKey(coord, lod);
 			m_wanted.insert(key);
 			m_wantedList.push_back(key);
-			const int span = 1 << lod;
-			const glm::ivec2 lo = coord * span - ring.camChunk, hi = lo + span;
-			m_wantedHalfExtent = glm::max(m_wantedHalfExtent, (float)glm::max(glm::max(-lo.x, hi.x), glm::max(-lo.y, hi.y)) * chunkSize);
 		};
 		const glm::ivec2 rootLo((ring.camChunk.x - ring.R) >> ring.maxLod, (ring.camChunk.y - ring.R) >> ring.maxLod);
 		const glm::ivec2 rootHi((ring.camChunk.x + ring.R) >> ring.maxLod, (ring.camChunk.y + ring.R) >> ring.maxLod);
@@ -1094,23 +1090,28 @@ namespace Procedural
 		}
 	}
 
-	// Shared terrain-data map: FOG_TERRAIN_CASCADES camera-centered snapshots (HeightMapBaker, sampled
+	// Shared terrain-data map: TERRAIN_DATA_CASCADES camera-centered snapshots (HeightMapBaker, sampled
 	// from the SAME sampler the chunks render from) - a near cascade over m_settings.terrainMapRange meters at
 	// fine texels and a far cascade over m_settings.terrainMapFarRange at the same resolution (coarse texels are
 	// fine at those distances, so long-range data costs no extra memory). Per texel: height, water level,
-	// packed fog|falloff|temp|hum, macro altitude. Consumers: the volumetric fog's terrain follow + regional
-	// thickness, the ocean's shore-map fallback, and the TERRAIN pipeline's coloring. (The renderer-side
-	// API keeps the historical "FogTerrainHeightMap" name - fog was its first consumer.)
-	void TerrainStreamer::updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange)
+	// packed fog|flow|temp|hum, macro altitude (the CPU copy; the GPU gets the bake's compact block, packTerrainDataGpu).
+	// Consumers: the volumetric fog's terrain follow + regional thickness, the ocean's shore-map fallback, and the
+	// TERRAIN pipeline's coloring.
+	void TerrainStreamer::updateTerrainDataMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange)
 	{
-        ProfileScope profileScope("updateFogHeightMap", EProfileCategory::Procedural);
+        ProfileScope profileScope("updateTerrainDataMap", EProfileCategory::Procedural);
 
 		const bool active = m_settings.terrainMapEnabled && maps != nullptr;
 		HeightMapBaker::Baked baked;
 		const WaterReach* reach = m_settings.waterReachEnabled ? &m_settings.waterReach : nullptr;
+		// The far range a WHOLE number of near ranges (same texel count): a far texel is then a whole number of near texels,
+		// so the shared centre - snapped to the far lattice (HeightMapBaker) - lands on the near lattice too, and BOTH cascades
+		// re-sample the same world points bake after bake.
+		const float nearRange = glm::max(m_settings.terrainMapRange, 256.0f);
+		farRange = std::ceil(glm::max(farRange, nearRange) / nearRange) * nearRange;
 		if (m_terrainMapBaker.update(baked, active, maps, glm::vec2(camera.position.x, camera.position.z),
-			glm::vec2(glm::max(m_settings.terrainMapRange, 256.0f), farRange),
-			RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, // RGBA: height, water level, fog|flow|temp|hum, altitude
+			glm::vec2(nearRange, farRange),
+			RendererVKLayout::TERRAIN_DATA_RES, RendererVKLayout::TERRAIN_DATA_CASCADES, 4, // RGBA: height, water level, fog|flow|temp|hum, altitude
 			reach, activeFlowField()))
 		{
 			// Decode what actually went into the packed climate channel, per cascade, exactly as
@@ -1118,9 +1119,9 @@ namespace Procedural
 			// wrong sampler, a wrong pack and a wrong upload all look identical from the shader.
 			if (m_settings.terrainMapDebugLog)
 			{
-				const uint32 res = RendererVKLayout::FOG_TERRAIN_RES;
+				const uint32 res = RendererVKLayout::TERRAIN_DATA_RES;
 				const size_t perCascade = (size_t)res * res * 4;
-				for (uint32 c = 0; c < RendererVKLayout::FOG_TERRAIN_CASCADES; c++)
+				for (uint32 c = 0; c < RendererVKLayout::TERRAIN_DATA_CASCADES; c++)
 				{
 					float tMin = FLT_MAX, tMax = -FLT_MAX, hMin = FLT_MAX, hMax = -FLT_MAX;
 					float yMin = FLT_MAX, yMax = -FLT_MAX, aMin = FLT_MAX, aMax = -FLT_MAX;
@@ -1141,17 +1142,18 @@ namespace Procedural
 					                      yMin, yMax, aMin, aMax, tMin, tMax, hMin, hMax));
 				}
 			}
-			renderer.setFogTerrainHeightMap(baked.texels, baked.center, baked.ranges, maps->seaLevel());
+			static_assert(TERRAIN_GPU_LAYERS == RendererVKLayout::TERRAIN_DATA_LAYERS, "the bake's GPU block and the renderer's image");
+			renderer.setTerrainDataMap(baked.gpuTexels, baked.center, baked.ranges, maps->seaLevel(), baked.gpuDecode);
 			// Keep the shipped texels as the CPU copy (activeTerrainData): the ocean samples them for
 			// buoyancy and wind steering. A NEW object per bake - consumers' shared_ptrs stay coherent.
 			m_terrainMapData = oc::make_shared<const BakedTerrainData>(BakedTerrainData{
 				oc::move(baked.texels), baked.center, baked.ranges,
-				RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES });
+				RendererVKLayout::TERRAIN_DATA_RES, RendererVKLayout::TERRAIN_DATA_CASCADES });
 			m_terrainMapUploaded = true;
 		}
 		if (!active && m_terrainMapUploaded)
 		{
-			renderer.clearFogTerrainHeightMap(); // fog reverts to the flat base; ocean/coloring lose their data
+			renderer.clearTerrainDataMap(); // fog reverts to the flat base; ocean/coloring lose their data
 			m_terrainMapUploaded = false;
 			m_terrainMapData = nullptr;
 		}
@@ -1179,7 +1181,7 @@ namespace Procedural
 		}
 
 		// Polls/drops the in-flight terrain-data bake and clears the renderer-side map once (active=false).
-		updateFogHeightMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
+		updateTerrainDataMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
 		renderer.setTerrainParams(0.0f, m_settings.seaLevel);   // no mesh up: disables the ocean land cull
 		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
 		renderer.setCameraTemperature(std::numeric_limits<float>::quiet_NaN());
@@ -1550,12 +1552,16 @@ namespace Procedural
 
 		// The far cascade must cover the whole resident mesh, else terrain past its edge reads clamp-to-edge
 		// (frozen altitude/temperature -> distant inland looks uniformly cold/snowy, ignoring the inland
-		// rise). The wanted nodes reach m_wantedHalfExtent past the camera's chunk (a far node can stick out of the ring
-		// by up to its own size); the map is a centered square of side = range, so range must be at least twice that
-		// (+ a chunk: the camera stands anywhere in its chunk). Keep the tweak as a floor.
-		const float meshHalfExtent = glm::max(m_wantedHalfExtent, (float)R * chunkSize) + chunkSize;
+		// rise). The map is a centered square of side = range, so range must be at least twice the mesh's reach.
+		// THE REACH IS THE BOUND FOR THESE SETTINGS, NOT THIS FRAME'S WANTED SET: a leaf touching the ring (edge distance
+		// <= R, so its LOD <= ringLodAt(R)) sticks out past the ring by up to its own span, and how far it does changes with
+		// every chunk the camera crosses. A range that followed the wanted set changed every second in fast flight - each
+		// change a new far texel size and lattice, so every bake re-sampled the far climate at new points and the distant
+		// biome borders shifted. (+ a chunk: the camera stands anywhere in its chunk.) Keep the tweak as a floor.
+		const uint32 edgeLod = ringLodAt((float)R, fullRes, lodStep, maxLod);
+		const float meshHalfExtent = ((float)R + (float)(1u << edgeLod) + 1.0f) * chunkSize;
 		const float farRange = glm::max(m_settings.terrainMapFarRange, 2.0f * meshHalfExtent);
-		updateFogHeightMap(renderer, camera, maps, farRange);
+		updateTerrainDataMap(renderer, camera, maps, farRange);
 
 		// --- Request every wanted leaf neither resident nor in flight (when the ring moved, or a request ended without a
 		// resident). The queue is an unordered POOL, not a queue: the worker rescans it on every dequeue and takes the

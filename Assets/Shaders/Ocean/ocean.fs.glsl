@@ -92,7 +92,7 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, vec3 rayDir, float rayT, inout flo
         f.waterLevel = td.y;
         // NEAREST climate texel (the terrain VS bilinears): through water at a ray-cone LOD the texel grid never shows,
         // and it is one decode instead of four.
-        const vec4 climate = terrainClimateNearestAt(worldPos.xz);
+        const vec4 climate = terrainClimateFastAt(worldPos.xz);
         f.humidity = climate.w;
         f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }

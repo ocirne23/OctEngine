@@ -37,6 +37,7 @@ export struct LaunchOptions
     bool sandbox = false;
 
     double profileAfterSec = 0.0;
+    double profileSeconds = 5.0; // the dump's window (--profile-after and F7): the mean over this many seconds (Profiler's capture)
     double quitAfterSec = 0.0;
     double screenshotAfterSec = 0.0;
     oc::string screenshotOutPath = "Local/screenshot.png";
@@ -60,7 +61,7 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
     {
         const oc::string_view arg = argv[i];
         if (arg == "--profile-after" && i + 1 < argc)     o.profileAfterSec = oc::max(std::atof(argv[++i]), 0.01);
-        else if (arg == "--profile-frames" && i + 1 < argc) o.profileOptions.frames = (uint32)glm::clamp(std::atoi(argv[++i]), 1, (int)Profiler::FRAME_HISTORY - 1);
+        else if (arg == "--profile-seconds" && i + 1 < argc) o.profileSeconds = glm::clamp(std::atof(argv[++i]), 0.1, 600.0);
         else if (arg == "--profile-out" && i + 1 < argc)  o.profileOutPath = argv[++i];
         else if (arg == "--profile-workers")              o.profileOptions.perWorkerTrees = true;
         else if (arg == "--quit-after" && i + 1 < argc)   o.quitAfterSec = oc::max(std::atof(argv[++i]), 0.01);
@@ -278,7 +279,7 @@ public:
             }
             const glm::vec3 dir = m_options.cameraStart ? m_options.cameraStart->second : COOP_START_DIR;
             m_game->setWorldAnchor(m_worldSeeded ? glm::vec3(0.0f, 30.0f, 0.0f) : start, dir);
-            // The game's coarse ground: the terrain-data bake's CPU copy (8 m texels, kilometres around the camera) - for
+            // The game's coarse ground: the terrain-data bake's CPU copy (4 m texels, kilometres around the camera) - for
             // the places its ground ray finds no collider (a wave's spawn site, the units of the far tick).
             m_game->setGroundSource([](float x, float z, float fallback)
                 {

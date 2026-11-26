@@ -343,7 +343,7 @@ void ProfilerPanel::drawToolbar()
             Log::error("Profile report: could not write " + path);
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Write a text report of the last 256 frames to Assets/Local/profile.txt (F7 does the same)");
+        ImGui::SetTooltip("Write a text report of the last 256 frames to Assets/Local/profile.txt (F7: the mean over the next 5 s)");
     // Layout: the two fps readouts sit right after Pause (the numbers you actually watch), then the
     // frame identity, then the auto-pause controls last - they are a setting, not a live number.
     const double frameMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();
@@ -631,81 +631,145 @@ void ProfilerPanel::drawTimeline()
     ImGui::EndChild();
 }
 
+void ProfilerPanel::accumulateStats(const oc::vector<ProfileRecord>& records, uint64 windowStart, uint64 windowEnd,
+    oc::unordered_map<const char*, uint32>& rowByName)
+{
+    const double msPerTick = Globals::profiler.getMsPerTick();
+    const uint32 numRecords = (uint32)records.size();
+    m_childSumScratch.assign(numRecords, 0);
+    int32 lastAtDepth[kMaxStatDepth];
+    for (uint32 i = 0; i < kMaxStatDepth; ++i)
+        lastAtDepth[i] = -1;
+
+    for (uint32 i = 0; i < numRecords; ++i)
+    {
+        const ProfileRecord& record = records[i];
+        const uint32 depth = oc::min((uint32)record.depth, kMaxStatDepth - 1);
+        if (depth > 0 && lastAtDepth[depth - 1] >= 0)
+        {
+            const ProfileRecord& parent = records[lastAtDepth[depth - 1]];
+            if (parent.start <= record.start && parent.end >= record.end)
+                m_childSumScratch[lastAtDepth[depth - 1]] += record.end - record.start;
+        }
+        lastAtDepth[depth] = (int32)i;
+    }
+    for (uint32 i = 0; i < numRecords; ++i)
+    {
+        const ProfileRecord& record = records[i];
+        if (record.end < windowStart || record.start > windowEnd)
+            continue; // the snapshot covers the zoomed VIEW; stats aggregate exactly the frame window
+        uint32 rowIdx;
+        auto it = rowByName.find(record.name);
+        if (it != rowByName.end())
+            rowIdx = it->second;
+        else
+        {
+            // same text from a different TU is a different literal pointer: merge by content
+            rowIdx = UINT32_MAX;
+            for (uint32 r = 0; r < (uint32)m_statsRows.size(); ++r)
+                if (strCompare(m_statsRows[r].name, record.name) == 0) { rowIdx = r; break; }
+            if (rowIdx == UINT32_MAX)
+            {
+                rowIdx = (uint32)m_statsRows.size();
+                m_statsRows.push_back(StatsRow{ .name = record.name, .category = record.category });
+            }
+            rowByName[record.name] = rowIdx;
+        }
+        StatsRow& row = m_statsRows[rowIdx];
+        const uint64 duration = record.end - record.start;
+        const uint64 childSum = oc::min(m_childSumScratch[i], duration);
+        row.calls++;
+        row.totalMs += (double)duration * msPerTick;
+        row.selfMs += (double)(duration - childSum) * msPerTick;
+    }
+}
+
 // The Stats tab's data pass (prepare side, no ImGui): per-name totals over the displayed window,
-// live smoothing, and the name filter. The options it reads (track/name filter, Smooth) are what
+// the smoothing, and the name filter. The options it reads (track/name filter, Smooth) are what
 // the table drew last frame.
+// SMOOTH over a window of m_smoothSec: live, an exponential moving average with a time constant of
+// half the window, by each frame's own length; paused, the per-frame MEAN of the frames in the window
+// up to the shown one (a snapshot of its own over that longer window - cached, so it is built once
+// per shown frame, track filter and window).
 void ProfilerPanel::aggregateStats()
 {
     ProfileScope scope("Profiler stats aggregate", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
     const double msPerTick = profiler.getMsPerTick();
 
-    // ---- aggregate the displayed window ----
-    m_statsRows.clear();
-    oc::unordered_map<const char*, uint32> rowByName;
-    for (int t = 0; t < (int)m_tracks.size(); ++t)
+    if (m_paused && m_smooth)
     {
-        if (m_trackFilter >= 0 && m_trackFilter != t)
-            continue;
-        const oc::vector<ProfileRecord>& records = m_tracks[t].records; // sorted by (start, depth)
-        const uint32 numRecords = (uint32)records.size();
-        m_childSumScratch.assign(numRecords, 0);
-        int32 lastAtDepth[kMaxStatDepth];
-        for (uint32 i = 0; i < kMaxStatDepth; ++i)
-            lastAtDepth[i] = -1;
+        if (m_pausedMeanFrame != m_displayedFrame || m_pausedMeanTrackFilter != m_trackFilter || m_pausedMeanSec != m_smoothSec)
+        {
+            // The frames back from the shown one until they span the window: within the frame history,
+            // and never across a pause-gap pseudo-frame (its window spans the paused stretch).
+            const uint64 frameCount = profiler.getFrameCount();
+            const double windowMs = (double)m_smoothSec * 1000.0;
+            uint64 first = m_displayedFrame;
+            uint32 frames = 1;
+            double spanMs = (double)(profiler.getFrameMark(first) - profiler.getFrameMark(first - 1)) * msPerTick;
+            while (spanMs < windowMs && first > 2 && frameCount - (first - 1) < Profiler::FRAME_HISTORY - 1
+                && !profiler.isFrameGap(first - 1))
+            {
+                --first;
+                ++frames;
+                spanMs += (double)(profiler.getFrameMark(first) - profiler.getFrameMark(first - 1)) * msPerTick;
+            }
+            const uint64 windowStart = profiler.getFrameMark(first - 1);
+            const uint64 windowEnd = profiler.getFrameMark(m_displayedFrame);
 
-        for (uint32 i = 0; i < numRecords; ++i)
-        {
-            const ProfileRecord& record = records[i];
-            const uint32 depth = oc::min((uint32)record.depth, kMaxStatDepth - 1);
-            if (depth > 0 && lastAtDepth[depth - 1] >= 0)
+            m_statsRows.clear();
+            oc::unordered_map<const char*, uint32> rowByName;
+            bool complete = true;
+            for (int t = 0; t < (int)m_tracks.size(); ++t)
             {
-                const ProfileRecord& parent = records[lastAtDepth[depth - 1]];
-                if (parent.start <= record.start && parent.end >= record.end)
-                    m_childSumScratch[lastAtDepth[depth - 1]] += record.end - record.start;
+                if (m_trackFilter >= 0 && m_trackFilter != t)
+                    continue;
+                // Chronological order (children after their parent at equal start), as snapshotTracks sorts.
+                m_statsRecordScratch.clear();
+                complete = profiler.snapshotTrack(m_tracks[t].trackIdx, windowStart, windowEnd, m_statsRecordScratch) && complete;
+                oc::sort(m_statsRecordScratch.begin(), m_statsRecordScratch.end(), [](const ProfileRecord& a, const ProfileRecord& b)
+                    { return a.start != b.start ? a.start < b.start : a.depth < b.depth; });
+                accumulateStats(m_statsRecordScratch, windowStart, windowEnd, rowByName);
             }
-            lastAtDepth[depth] = (int32)i;
-        }
-        for (uint32 i = 0; i < numRecords; ++i)
-        {
-            const ProfileRecord& record = records[i];
-            if (record.end < m_windowStart || record.start > m_windowEnd)
-                continue; // the snapshot covers the zoomed VIEW; stats aggregate exactly the frame window
-            uint32 rowIdx;
-            auto it = rowByName.find(record.name);
-            if (it != rowByName.end())
-                rowIdx = it->second;
-            else
+            const double invFrames = 1.0 / (double)frames;
+            for (StatsRow& row : m_statsRows)
             {
-                // same text from a different TU is a different literal pointer: merge by content
-                rowIdx = UINT32_MAX;
-                for (uint32 r = 0; r < (uint32)m_statsRows.size(); ++r)
-                    if (strCompare(m_statsRows[r].name, record.name) == 0) { rowIdx = r; break; }
-                if (rowIdx == UINT32_MAX)
-                {
-                    rowIdx = (uint32)m_statsRows.size();
-                    m_statsRows.push_back(StatsRow{ .name = record.name, .category = record.category });
-                }
-                rowByName[record.name] = rowIdx;
+                row.totalMs *= invFrames;
+                row.selfMs *= invFrames;
+                row.calls = (uint32)((double)row.calls * invFrames + 0.5);
             }
-            StatsRow& row = m_statsRows[rowIdx];
-            const uint64 duration = record.end - record.start;
-            const uint64 childSum = oc::min(m_childSumScratch[i], duration);
-            row.calls++;
-            row.totalMs += (double)duration * msPerTick;
-            row.selfMs += (double)(duration - childSum) * msPerTick;
+            m_pausedMeanRows = m_statsRows;
+            m_pausedMeanFrame = complete ? m_displayedFrame : UINT64_MAX; // a lapped ring: build again next frame
+            m_pausedMeanTrackFilter = m_trackFilter;
+            m_pausedMeanSec = m_smoothSec;
+            m_pausedMeanFrameCount = frames;
         }
+        else
+            m_statsRows = m_pausedMeanRows;
+    }
+    else
+    {
+        m_pausedMeanFrame = UINT64_MAX; // live: the next pause builds a fresh mean
+        m_statsRows.clear();
+        oc::unordered_map<const char*, uint32> rowByName;
+        for (int t = 0; t < (int)m_tracks.size(); ++t)
+            if (m_trackFilter < 0 || m_trackFilter == t)
+                accumulateStats(m_tracks[t].records, m_windowStart, m_windowEnd, rowByName); // sorted by (start, depth)
     }
 
-    // ---- smoothing (live only) ----
+    // ---- smoothing (live) ----
     if (!m_paused && m_smooth)
     {
         const uint64 frame = m_displayedFrame;
+        // A time constant of half the window (the paused mean's mean age), by this frame's own length.
+        const double frameSec = (double)(m_windowEnd - m_windowStart) * msPerTick * 0.001;
+        const double frameAlpha = 1.0 - std::exp(-frameSec / (0.5 * (double)m_smoothSec));
         for (StatsRow& row : m_statsRows)
         {
             SmoothedRow& smoothed = m_smoothed[row.name];
             // reset the average after not being seen for a while (scope disappeared / renamed)
-            const double alpha = (frame - smoothed.lastFrame > 30) ? 1.0 : 0.1;
+            const double alpha = (frame - smoothed.lastFrame > 30) ? 1.0 : frameAlpha;
             smoothed.totalMs += (row.totalMs - smoothed.totalMs) * alpha;
             smoothed.selfMs += (row.selfMs - smoothed.selfMs) * alpha;
             smoothed.calls += ((double)row.calls - smoothed.calls) * alpha;
@@ -762,14 +826,28 @@ void ProfilerPanel::drawStatsTable()
     ImGui::SameLine();
     ImGui::Checkbox("Smooth", &m_smooth);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Exponential moving average over frames while live (paused shows exact values)");
+    {
+        if (m_paused && m_smooth)
+            ImGui::SetTooltip("Paused: the mean of the %u frames in the window up to the shown one. Live: a moving average over about the same time", m_pausedMeanFrameCount);
+        else
+            ImGui::SetTooltip("Live: a moving average over about the window. Paused: the mean of the frames in the window up to the shown one");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::BeginDisabled(!m_smooth);
+    ImGui::SliderFloat("##smoothSec", &m_smoothSec, 0.05f, 5.0f, "%.2f s", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("The smoothing window (s)");
 
     // ---- table ----
     constexpr ImGuiTableFlags tableFlags = ImGuiTableFlags_Sortable | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
         | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
     if (!ImGui::BeginTable("##profilerStats", 7, tableFlags))
         return;
-    ImGui::TableSetupScrollFreeze(0, 1);
+    // With a name filter, a TOTAL row of every match sits under the header, frozen with it.
+    const bool showTotal = m_nameFilter[0] != 0 && !m_statsRows.empty();
+    ImGui::TableSetupScrollFreeze(0, showTotal ? 2 : 1);
     ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthStretch, 1.2f);
     ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_WidthStretch, 0.8f);
@@ -801,6 +879,40 @@ void ProfilerPanel::drawStatsTable()
     }
 
     char textBuf[64];
+    if (showTotal)
+    {
+        uint32 calls = 0;
+        double totalMs = 0.0, selfMs = 0.0;
+        for (const StatsRow& row : m_statsRows)
+        {
+            calls += row.calls;
+            totalMs += row.totalMs;
+            selfMs += row.selfMs;
+        }
+        ImGui::TableNextRow();
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImGuiCol_TableHeaderBg));
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Dummy(ImVec2(11.0f, 0.0f));
+        ImGui::SameLine();
+        ImGui::Text("Total (%u matches)", (uint32)m_statsRows.size());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The sum of the matching rows. Total counts a match inside another match twice; Self does not.");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("-");
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("%u", calls);
+        ImGui::TableSetColumnIndex(3);
+        formatTime(textBuf, sizeof(textBuf), totalMs);
+        ImGui::TextUnformatted(textBuf);
+        ImGui::TableSetColumnIndex(4);
+        formatTime(textBuf, sizeof(textBuf), selfMs);
+        ImGui::TextUnformatted(textBuf);
+        ImGui::TableSetColumnIndex(5);
+        formatTime(textBuf, sizeof(textBuf), calls > 0 ? totalMs / calls : 0.0);
+        ImGui::TextUnformatted(textBuf);
+        ImGui::TableSetColumnIndex(6);
+        ImGui::Text("%.1f%%", windowMs > 0.0 ? totalMs / windowMs * 100.0 : 0.0);
+    }
     for (const StatsRow& row : m_statsRows)
     {
         ImGui::TableNextRow();

@@ -106,8 +106,8 @@ export namespace Procedural
 		// heights around it (so it regenerates chunks) - the ocean floats on this rather than owning a
 		// second copy. Valid even while terrain is disabled, so the ocean can still run on its own.
 		float seaLevel() const { return m_settings.seaLevel; }
-		// CPU copy of the ACTIVE baked terrain-data map (the same texels setFogTerrainHeightMap shipped
-		// to the GPU) - the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
+		// CPU copy of the ACTIVE baked terrain-data map (the same bake setTerrainDataMap shipped to the GPU,
+		// in its fp32 form with the flow bits) - the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
 		// consumers holding the old shared_ptr keep a coherent snapshot.
 		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
@@ -233,9 +233,9 @@ export namespace Procedural
 		void updateTerrainTextures(Renderer& renderer);
 		void registerTerrainTextures(Renderer& renderer); // one-shot, from updateTerrainTextures
 		oc::shared_ptr<const ITerrainSampler> currentMaps();
-		// Bakes/refreshes the fog terrain height map around the camera (Renderer::setFogTerrainHeightMap);
+		// Bakes/refreshes the terrain-data map around the camera (Renderer::setTerrainDataMap);
 		// maps == nullptr means "no terrain" and clears the map. See the .cpp for the bake scheme.
-		void updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange);
+		void updateTerrainDataMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange);
 
 		// --- The "Terrain*" tweaks (Settings.Terrain; source of truth: the generator/ChunkParams are built from these) ---
 		TerrainSettings& m_settings = Globals::settings.terrain;
@@ -335,7 +335,6 @@ export namespace Procedural
 		Ring                                m_ring;
 		oc::unordered_set<uint64>           m_wanted;
 		oc::vector<uint64>                  m_wantedList;
-		float                               m_wantedHalfExtent = 0.0f; // m: the farthest wanted node edge from the camera chunk
 		bool                                m_wantedDirty = true;      // a request finished without a resident: re-request
 		void rebuildWanted();
 		bool insideBounds(glm::ivec2 coord, uint32 lod, float chunkSize) const; // the generated bounds (setGeneratedBounds)

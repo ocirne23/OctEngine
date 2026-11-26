@@ -49,6 +49,9 @@ private:
     void selectFrame(uint64 frameIdx);
     void snapshotTracks();
     void aggregateStats(); // fills m_statsRows for the displayed window (prepare side)
+    // Adds one track's records inside [windowStart, windowEnd] to m_statsRows (records sorted by (start, depth)).
+    void accumulateStats(const oc::vector<ProfileRecord>& records, uint64 windowStart, uint64 windowEnd,
+        oc::unordered_map<const char*, uint32>& rowByName);
     void drawToolbar();
     void drawFrameGraph();
     void drawTimeline();
@@ -92,8 +95,18 @@ private:
     bool m_smooth = true;
     char m_nameFilter[96] = {};
     oc::unordered_map<const char*, SmoothedRow> m_smoothed;
+    // THE SMOOTHING WINDOW (s): paused, the per-frame MEAN over the frames of that window up to the shown one; live, an EMA
+    // with a time constant of half of it (the same mean age), by each frame's own length - so it is the same at any rate.
+    float m_smoothSec = 0.33f;
+    // The paused mean needs its own snapshot of that longer window: built once per shown frame + track filter + window, cached.
+    oc::vector<StatsRow> m_pausedMeanRows;          // before the name filter
+    uint64 m_pausedMeanFrame = UINT64_MAX;          // the shown frame it was built for (UINT64_MAX = none)
+    int m_pausedMeanTrackFilter = -2;
+    float m_pausedMeanSec = -1.0f;
+    uint32 m_pausedMeanFrameCount = 0;              // frames it averages (fewer at the history's start or a pause gap)
 
     // scratch (persistent to avoid per-frame allocation)
     oc::vector<StatsRow> m_statsRows;
     oc::vector<uint64> m_childSumScratch;
+    oc::vector<ProfileRecord> m_statsRecordScratch; // the paused mean's per-track snapshot
 };

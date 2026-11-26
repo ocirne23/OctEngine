@@ -172,7 +172,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 
 	// THE FLOW: water on a slope runs DOWNHILL, so the inland ripples (the finest cascade's slope tap and the detail
 	// tap) travel that way. Direction: +N.xz of the smooth mesh normal (a normal leans toward the downhill side),
-	// exact per pixel (the map's flow angles are 8 m nearest texels). Speed: "Film flow speed" x sqrt(tan slope),
+	// exact per pixel (the map's flow angles are 4 m nearest texels). Speed: "Film flow speed" x sqrt(tan slope),
 	// gated by "Film flow min slope (deg)" so pools on flats lie still (a tan^2 curve also slowed moderate slopes).
 	// Off the shore only: the shore band carries the ocean's own waves. A two-phase flow map: each tap twice, offset
 	// by a sawtooth half a cycle apart, crossfaded by a triangle so neither phase's reset shows. Only the velocity x

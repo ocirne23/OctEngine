@@ -175,7 +175,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
             k = falloff;
             if (wRegion > 0.001) // regional fields, as vol_scatter applies them per froxel
             {
-                const vec4 climate = terrainClimateNearestAt(u_viewPos.xz + dir.xz * midT);
+                const vec4 climate = terrainClimateFastAt(u_viewPos.xz + dir.xz * midT);
                 dens *= mix(1.0, climate.x, wRegion);
                 k *= mix(1.0, fogFalloffFromTemperature(terrainTemperatureAt(climate, 0.5 * (gPrev.y + gNext.y))), wRegion);
             }

@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import Core.Log;
 import :Device;
 import :Allocator;
 import :CommandBuffer;
@@ -35,30 +36,18 @@ BakedWorldMap::~BakedWorldMap()
     }
 }
 
-void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 channels, bool pair, const char* debugName)
-{
-    assert(channels == 1 || channels == 2 || channels == 4); // no 3: RGB32F isn't a sampled-image format on most GPUs
-    m_resolution = resolution;
-    m_numLayers = numLayers;
-    m_channels = channels;
-    m_texelBytes = channels * (uint32)sizeof(float);
-    m_numImages = pair ? 2u : 1u;
-    create(channels == 4 ? vk::Format::eR32G32B32A32Sfloat : channels == 2 ? vk::Format::eR32G32Sfloat : vk::Format::eR32Sfloat, debugName);
-}
-
-void BakedWorldMap::initializeBytes(uint32 resolution, uint32 numLayers, bool pair, const char* debugName)
+void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, vk::Format format, uint32 texelBytes, bool pair, const char* debugName)
 {
     m_resolution = resolution;
     m_numLayers = numLayers;
-    m_channels = 1;
-    m_texelBytes = 1;
+    m_texelBytes = texelBytes;
     m_numImages = pair ? 2u : 1u;
-    create(vk::Format::eR8Unorm, debugName);
-}
+    // Every consumer samples these with linear filtering (RGBA16 UNORM is optional in Vulkan, present on every desktop GPU).
+    constexpr vk::FormatFeatureFlags needed = vk::FormatFeatureFlagBits::eSampledImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear
+        | vk::FormatFeatureFlagBits::eTransferDst;
+    if ((Globals::device.getPhysicalDevice().getFormatProperties(format).optimalTilingFeatures & needed) != needed)
+        Log::error(oc::format("BakedWorldMap {}: the GPU cannot sample its format with linear filtering", debugName));
 
-void BakedWorldMap::create(vk::Format format, const char* debugName)
-{
-    const uint32 resolution = m_resolution, numLayers = m_numLayers;
     vk::Device vkDevice = Globals::device.getDevice();
     const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLayers };
     requestFullCopies();
@@ -113,17 +102,18 @@ void BakedWorldMap::create(vk::Format format, const char* debugName)
     (void)Globals::device.graphicsQueueWaitIdle();
 }
 
-void BakedWorldMap::stage(const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
+void BakedWorldMap::stage(const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, const glm::vec4& decode)
 {
     m_pendingCenter = centerXZ;
     m_pendingSizes = worldSizes;
     m_pendingUserParam = userParam;
+    m_pendingDecode = decode;
     m_flipPending = true; // the copy runs before this frame's primary: the region (and a pair's image) goes live at the next UBO build
 }
 
-void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam)
+void BakedWorldMap::upload(oc::span<const uint8> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, const glm::vec4& decode)
 {
-    assert(m_texelBytes == m_channels * sizeof(float) && texels.size() == (size_t)m_numLayers * m_resolution * m_resolution * m_channels);
+    assert(texels.size() == (size_t)m_numLayers * m_resolution * m_resolution * m_texelBytes);
     const StagingManager::ImageRegion region{
         .image = m_image[uploadImage()],
         .layerCount = m_numLayers,
@@ -133,7 +123,7 @@ void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& center
     };
     (void)Globals::stagingManager.uploadImageRegion(region, texels.size_bytes(),
         [&texels](oc::span<uint8> dst) { memcpy(dst.data(), texels.data(), texels.size_bytes()); });
-    stage(centerXZ, worldSizes, userParam);
+    stage(centerXZ, worldSizes, userParam, decode);
 }
 
 void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam,
@@ -175,7 +165,7 @@ void BakedWorldMap::uploadBytesRect(const uint8* image, const glm::ivec4& rectIn
                         row[x] = lut[src[x]];
             }
         });
-    stage(centerXZ, worldSizes, userParam);
+    stage(centerXZ, worldSizes, userParam, glm::vec4(0.0f));
 }
 
 void BakedWorldMap::flipIfPending()
@@ -190,5 +180,6 @@ void BakedWorldMap::flipIfPending()
     m_center = m_pendingCenter;
     m_worldSizes = m_pendingSizes;
     m_userParam = m_pendingUserParam;
+    m_decode = m_pendingDecode;
     m_flipPending = false;
 }

@@ -34,6 +34,8 @@ variant (`sky.fs.glsl`) draws NO clouds.
   (weather.r - 0.5) x "Coverage variation", the variation faded in over the first `CLOUD_VARIATION_RAMP` (0.25)
   of the base coverage. With a constant spread the weather map's peaks stayed clouds at coverage 0. The upper
   layer ramps on its own effective coverage (upper x main).
+  * **"Coverage floor"** (0 = off; `u_clouds_coverageFloor`): a column under it is CLEAR, the rest is rescaled to 0..1 -
+    no thin puffs over the low-coverage areas.
 * **"COVERAGE" IS THE USER'S, ALWAYS** ("Sky/Clouds/Coverage"): nothing writes the tweak. The renderer draws
   `CloudParams::coverageNow(sky)` (RendererUbo `cloudCoverage`): the coverage + THE DAY VARIATION ("Sky/Clouds/Day
   variation", all live; `dayCoverage`) - "Low sun coverage" (0.15) with the sun at the horizon, gone at "Low sun span
@@ -209,7 +211,15 @@ variant (`sky.fs.glsl`) draws NO clouds.
   **A new noise lookup must use an integer
   multiple of these frequencies**, or it seams when the origin wraps.
 * **The noise textures are generated on the GPU** (`cloud_noise.cs.glsl`) at initialize and on every
-  shader reload, with a blit mip chain: base 128³, detail 32³, weather 512², curl 128², all RGBA8.
+  shader reload, with a blit mip chain: base 128³ R8, detail 32³ RG8, weather 512² and curl 128² RGBA8 (one generator
+  pipeline per storage format: `NOISE_3D` 1 / 2 / none).
+  * **THE 3D TEXTURES HOLD FINISHED VALUES**: the base is the base SHAPE itself (the Perlin-Worley remapped by its low
+    Worley fBm, as 2 x shape - 1), the detail its erosion fBm (r) and the near octave's two coarse octaves (g). The
+    density reads them at every march step: against the four RGBA8 channels + the remap per sample, the view march fell
+    15 % from the ground and 2 % level inside the layer (0.41 -> 0.35 ms, 0.65 -> 0.64).
+  * **KEEP THE BASE REMAP'S FORM** (`cloudLayerShape`: the shape decoded, then `cloudRemap` against the coverage
+    threshold). Folded into one expression, `cloud_march` compiled to 64 registers instead of 72 with more shared
+    memory (3840 -> 6400 B) and ran 10 to 30 % SLOWER: a lower register count is not the measure here, the time is.
 
 ### The passes
 
@@ -219,18 +229,27 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
 * **March** (`cloud_march.cs.glsl`; the loop is `cloudRaymarch` in `cloud_raymarch.inc.glsl`, shared with the
   sky clouds): up to the FARTHEST scene surface of the pixel's 2x2 block.
   * **Step schedule:** steps are `max(near step, g * t)`, and **g is SOLVED PER RAY** so the ray takes
-    **"Steps per ray"** (capped at 75 % of "Max steps") over its shell span `[tStart, tEnd]` (a fixed-point solve
+    **"Steps per ray"** (130: with the step filter below the noise is read at the step's own scale, so 130 looks as 180
+    did - mean image difference 0.1 % - for 13 to 17 % less march time; capped at 75 % of "Max steps") over its shell
+    span `[tStart, tEnd]` (a fixed-point solve
     of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`): short steps near the camera, faster
     growth far away. A fixed growth made the quality follow the layer's top / bottom RATIO. **The near step
     scales with the span:** `clamp(span / target, "Min step (m)", "Near step (m)")`, so a short span (up
-    through a thin layer) still takes `target` steps. **With the upper layer on, the solve span is the MAIN
+    through a thin layer) still takes `target` steps. **THE NEAR RAMP ("Near step growth", 0.1):** a ray that starts
+    INSIDE the shell takes steps of that share of the distance, from "Min step" up to the near step - with the full
+    near step (90 m) at the camera a wisp a few metres wide got one jittered sample or none: speckles on every near
+    cloud edge. A ray that enters the shell far out is past the ramp. **With the upper layer on, the solve span is the MAIN
     band's** (`sStart` / `sEnd`): over the union shell the target was spread over the gap and the upper band.
     The upper layer takes its steps on top at the same growth; a ray that misses the main band solves over the
     shell. The uniform floor (distance left / steps left) is only a safety net: as the rule it made a long ray's
     EVERY step long (a grainy band at the camera's altitude).
   * **Empty-space skipping:** in clear air it takes 3x steps (`CLOUD_COARSE_MULT`) that test only the cheap
     shape (weather + base); the detail only erodes that shape, so a zero there is a zero of the full density. A
-    hit backs up and marches finely; `CLOUD_COARSE_AFTER` (4) empty fine steps return it to coarse. **Past
+    hit backs up and marches finely; `CLOUD_COARSE_AFTER` (4) empty fine steps return it to coarse. Tried a skip structure that
+    trims the ray's segments to the stretches that can hold cloud before the march (a 3D distance grid of the cheap shape
+    with mips, a polar top grid, 2D coverage distance fields, a test inside the loop): dropped, no time gain in any view -
+    the coarse steps are as long as the clear distances such a structure finds, and a nearly clear sky costs 0.135 ms in
+    all. **Past
     "Detail distance (km)"** the detail fetches are skipped (the weight fades over the last 20 %; `cloudDensity`
     takes a detail WEIGHT) and the view samples erode by the detail's MEAN instead (`CLOUD_DETAIL_MEAN_ERODE` 0.5; a
     weight up to `CLOUD_DETAIL_FETCH_MIN` = the mean alone, as `d * x - y` from `u_clouds_meanErosion`, multiplied out
@@ -329,13 +348,42 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     around the camera AND clouds tens of km out; at the weighted distance the near cloud's light was dimmed by
     the far cloud's air - a dark band at the camera's altitude.
   * Output: in-scatter + transmittance, and log2 distances (first hit, transmittance-weighted, march limit).
+* **THE NOISE** (the step jitter's grain; worst inside the clouds and level through the layer, where thin cloud lies at
+  many distances and the history test below fails per pixel). Four parts, each a "Quality" tweak; together + 3 to 4 % of
+  the march (0.373 / 0.359 ms from the ground, 0.537 / 0.521 inside the layer):
+  * the near ramp (above);
+  * **"Step filter (mips)"** (-2; -8 = off): the base and detail noise are read at the mip of the FINE step's own length
+    + this, where that is coarser than the pixel's footprint (`u_clouds_stepLodBias`). A long ray's far steps are
+    hundreds of metres: at the pixel's mip each jittered sample was a random draw of the noise. The coarse test reads
+    the same mip as the fine samples.
+  * **"Lattice jitter"** (`cloudJitter`): a lattice over the pixels that is STRATIFIED OVER THE TEMPORAL PASS'S
+    NEIGHBOURHOOD, + the golden ratio per frame. Checkerboard: in the marched parity's diagonal axes u = (x + y) / 2,
+    v = (x - y) / 2 the offset is (u + 2 v) / 5 - a pixel and its 4 diagonals are the 5 fifths of the step, a fill
+    pixel's 4 sides are 4 of them. Else (x + 3 y) / 9: a pixel's 3 x 3 are the 9 ninths. Off = a per-pixel hash (white
+    noise: a mean of 5 only halves it). Tried: the R2 lattice (0.7549 x + 0.5698 y) - nearly constant along (3, -4):
+    diagonal stripes on every thin edge.
+  * **"Spatial filter"** (0.5; the temporal pass): each marched pixel blends toward the mean of itself and its matching
+    neighbours (the ones of its clamp range) before the history blend, and a pixel whose history is REJECTED takes the
+    mean whole - with its raw value it was one jittered sample between settled ones. With the lattice the mean is a
+    5-sample stratified integral of the step, the same set of offsets for every pixel: no pattern is left.
+  * The sky-map clouds keep the plain schedule and the hash (`CLOUD_RAYMARCH_PLAIN_STEPS`, `cloudJitterHash`): they
+    have no spatial mean, and the new code cost that pass 64 -> 72 registers.
+* **THE MARCH'S TIME** (1440p, coverage 0.2, sun at 13 h, 5 s means): 0.30 ms from the ground, 0.47 level inside the
+  layer. About 70 % is the density samples, 30 % the lighting (the self-shadow from the map; the sun march under a 20
+  degree sun adds ~0.15 ms). All detail fetches together are 9 - 14 % ("Detail distance" 0.5 km against 12).
+  Tried: no detail fetch in dense cores or behind a nearly opaque ray - no gain (a ray is opaque a few samples into
+  a core, so few samples lie there).
+  Tried: a COLUMN MAP - a 2D map around the camera in the clouds' frame with each column's coverage (macro and far
+  coverage in it), type, top and lift for both layers, rebuilt a band per frame; one fetch in the view march for the
+  weather, macro and lift lookups and their arithmetic. Slower at 2048² (53 m texels: + 7 to 17 % march time, + 0.026 ms
+  to build) and no faster at 512² with only the map's path compiled in: those lookups are cheap already (the weather's
+  coarse mips are tiny and stay in the texture cache), and a fetch from a larger map costs more.
 * **Temporal** (`cloud_temporal.cs.glsl`): reprojects the weighted cloud distance minus this frame's
   wind displacement, rejects a history whose cloud distance lies OUTSIDE the neighbourhood's range of
   this frame's distances (padded 0.2 in log2), clamps its colour to the neighbourhood ("Quality/Temporal
   blend"). **Not a per-pixel distance test:** a ray flat through the layer passes clouds at very different
   distances, so its one weighted distance jumps with the step jitter every frame - a per-pixel test rejects the
-  history exactly where the raw march is noisiest. The march jitter is a per-pixel hash + golden-ratio step
-  (grain, not lines, where history is missing). The history is the OTHER frame slot's accumulation; all images
+  history exactly where the raw march is noisiest. The history is the OTHER frame slot's accumulation; all images
   are cleared to "no cloud" at creation, so there is no history-valid flag. **Silhouette rules** (each fixed a
   cloud- or sky-coloured outline around objects against clouds):
   * **The history's march LIMIT must match this frame's** (`LIMIT_MATCH`, 0.15 in log2): the bilinear
@@ -582,5 +630,11 @@ humidity haze and the multiple-scattering light: "The atmosphere" in [Lighting.m
 * **Register rules:** **the march applies its four light colours AFTER the loop** (the in-scatter is linear in
   them, so the loop sums three scalar weights), and **the fog apply folds the cloud part before the scene's
   fog** (4 live values across the second `fogTo`, not 8). Each saved 8 registers. The cloud lookup adds nothing
-  to the lit, terrain, ocean, fog scatter, GI trace, particle and decal shaders.
-* **Debug mode** ("Sky/Clouds/Quality/Debug mode"): step count heat, density only, history rejection.
+  to the lit, terrain, ocean, fog scatter, GI trace, particle and decal shaders. **The march's weights TELESCOPE:**
+  sum(absorbed) = sum(T_before x (1 - stepT)) = 1 - T, so the weighted distance and the air's mean divide by
+  1 - T (before the `CLOUD_T_END` remap) instead of a sum of their own.
+* **Debug mode** ("Sky/Clouds/Quality/Debug mode"): MARCH COST (every marched pixel; the ray's work in cheap density
+  samples - a clear-air test 1, a fine sample 1.5, a lit sample + 1 for the sky occlusion and + 0.5 for the map's shadow
+  or the sun march's steps - on a scale of its own ("Debug cost at red", 400: blue 0, green half of it, full red at it;
+  lower it to spread a narrow range), so a march setting's cost shows as a colour change; `CLOUD_COST` in cloud_raymarch.inc.glsl, compiled out of the other modes), density only and history
+  rejection.

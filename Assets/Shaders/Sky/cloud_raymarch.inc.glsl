@@ -7,14 +7,34 @@
 
 const float CLOUD_LOG2E = 1.44269504089; // exp(x) = exp2(x * CLOUD_LOG2E), folded into per-ray values: exp's own multiply leaves the loops
 
-// The step jitter: a per-pixel hash, advanced by the golden ratio each frame (R1: well spread per pixel).
-// Where the history is missing it shows as grain, not as the diagonal lines of interleaved-gradient noise.
-float cloudJitter(ivec2 p)
+// The step jitter, advanced by the golden ratio each frame (R1: well spread per pixel).
+// "Lattice jitter" (u_clouds_jitterLattice): a lattice over the pixels that is STRATIFIED OVER THE TEMPORAL PASS'S
+// NEIGHBOURHOOD (cloud_temporal.cs.glsl's spatial mean), so that mean takes the jitter's noise out in ONE frame and leaves
+// no pattern: every pixel's neighbourhood holds the same set of offsets.
+//  - CLOUD_CHECKERBOARD: the marched pixels are one parity; in their diagonal axes u = (x + y) / 2, v = (x - y) / 2 the
+//    offset is (u + 2 v) / 5: a pixel and its 4 diagonals are the 5 fifths of the step, a fill pixel's 4 sides are 4 of them.
+//  - else (x + 3 y) / 9: a pixel's 3 x 3 are the 9 ninths.
+// Tried: the R2 lattice (0.7549 x + 0.5698 y) - nearly constant along (3, -4): diagonal stripes on every thin cloud edge.
+// Off (and the sky-map clouds, which have no spatial mean: cloudJitterHash): a per-pixel hash - white noise, which a mean
+// of 5 only halves.
+float cloudJitterHash(ivec2 p)
 {
     uint h = uint(p.x) * 1597334673u ^ uint(p.y) * 3812015801u;
     h = (h ^ (h >> 16u)) * 0x7feb352du;
     h ^= h >> 15u;
     return fract(float(h) * (1.0 / 4294967296.0) + float(u_frameIndex & 1023u) * 0.61803398875);
+}
+
+float cloudJitter(ivec2 p)
+{
+    if (u_clouds_jitterLattice < 0.5)
+        return cloudJitterHash(p);
+#ifdef CLOUD_CHECKERBOARD
+    const float cell = float(((p.x + p.y) >> 1) + 2 * ((p.x - p.y) >> 1)) * 0.2;
+#else
+    const float cell = float(p.x + 3 * p.y) * (1.0 / 9.0);
+#endif
+    return fract(cell + float(u_frameIndex & 1023u) * 0.61803398875);
 }
 
 // Optical depth toward the sun from a camera-relative point at altitude sampleAlt:
@@ -176,6 +196,17 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
          + multi;
 }
 
+
+// THE MARCH COST VIEW (CLOUD_DEBUG_MODE 1): the ray's work in CHEAP DENSITY SAMPLES (weather + base: what a clear-air test
+// costs) - a clear-air test 1, a fine sample 1.5 (its detail fetches), and per lit sample the sky occlusion's sample (1)
+// and the sun's shadow: 0.5 from the shadow map, else the sun march's steps. Compiled out of every other mode.
+#if defined(CLOUD_DEBUG_MODE) && CLOUD_DEBUG_MODE == 1
+#define CLOUD_COST(x) g_cloudCost += (x)
+float g_cloudCost = 0.0;
+#else
+#define CLOUD_COST(x)
+#endif
+
 struct CloudMarchResult
 {
     vec3 inScatter;      // incl. the aerial perspective in front of the cloud
@@ -313,8 +344,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const float kAir2 = dot(atmosTau(atmosSegmentOD(origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0), dir, tEnd)), vec3(CLOUD_LOG2E / 3.0)) / tEnd;
     float airSum = 0.0; // sum(absorbed * exp(-kAir * t))
 
+    // The weights TELESCOPE: sum(absorbed) = sum(T_before x (1 - stepT)) = 1 - T, so there is no sum of its own (a register).
     float tSum = 0.0;
-    float wSum = 0.0;
     for (int s = 0; s < 2; ++s)
     {
         const vec2 seg = s == 0 ? seg0 : seg1;
@@ -323,9 +354,22 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
         int emptyRun = 0;
         while (t < seg.y && r.steps < maxSteps && r.transmittance > CLOUD_T_END)
         {
+            // THE NEAR RAMP ("Near step growth"): a ray that starts INSIDE the shell takes steps of that share of the distance
+            // (from "Min step") until they reach the near step - with the full near step at the camera, a wisp a few
+            // metres wide in front of it got one jittered sample or none: speckles. A ray that enters the shell far out
+            // is past the ramp.
             // The uniform floor (distance left / steps left) is only the safety net for a budget the back-ups used up:
             // as the rule it made every step of a long ray long.
+            // "Step filter": the noise mips follow the FINE step's length where that is coarser than the pixel's footprint
+            // (a long ray's far steps are hundreds of metres: at the pixel's mip each jittered sample was a random draw
+            // of the noise - grain the history cannot settle). The coarse test reads the same mip as the fine samples.
+            // Both are the VIEW march's (CLOUD_RAYMARCH_PLAIN_STEPS: the sky-map clouds keep the plain schedule).
+#ifdef CLOUD_RAYMARCH_PLAIN_STEPS
             float dt = max(nearStep, t * growth);
+#else
+            float dt = max(min(nearStep, max(u_clouds_minStep, t * u_clouds_nearStepGrowth)), t * growth);
+            const float lodStep = log2(dt);
+#endif
             dt = max(dt, (seg.y - t) / float(max(maxSteps - r.steps, 1)));
             if (coarse)
                 dt *= CLOUD_COARSE_MULT;
@@ -339,9 +383,14 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             const float alt = cloudAltitude(rel, camAlt);
             const vec2 nxz = rel.xz + noiseOffset;
             const float logDist = log2(ts);
+#ifdef CLOUD_RAYMARCH_PLAIN_STEPS
             const float lodBase = logDist + lodBaseBias; // < 0 is fine: the noise sampler's minLod is 0 (CloudPipeline.cpp)
+#else
+            const float lodBase = max(logDist + lodBaseBias, lodStep + u_clouds_stepLodBias.x);
+#endif
             if (coarse)
             {
+                CLOUD_COST(1.0);
                 if (cloudDensity(nxz, alt, ts, 0.0, lodBase, 0.0) > 0.0) // detail 0: no erosion (bounds the full shape), no fetch
                 {
                     coarse = false; // back up: this interval is marched again, finely
@@ -353,7 +402,12 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             }
 
             t += dt;
+            CLOUD_COST(1.5);
+#ifdef CLOUD_RAYMARCH_PLAIN_STEPS
             const float lodDetail = logDist + lodDetailBias;
+#else
+            const float lodDetail = max(logDist + lodDetailBias, lodStep + u_clouds_stepLodBias.y);
+#endif
             // Past "Detail distance": the fetch threshold's half - the detail's mean erosion, no fetches (clouds.inc.glsl).
             const float detailWeight = clamp(5.0 - 5.0 * ts * detailInvDist, 0.5 * CLOUD_DETAIL_FETCH_MIN, 1.0);
             const float dens = cloudDensity(nxz, alt, ts, detailWeight, lodBase, lodDetail);
@@ -398,6 +452,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 else
                     od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, alt, L, lodBase, lodDetail,
                         detailWeight > CLOUD_DETAIL_FETCH_MIN ? detailWeight : 0.0, odCut), map.x, map.y); // the sun: no mean erosion
+                CLOUD_COST((map.y >= 1.0 ? 0.5 : u_clouds_lightSteps + 0.5) + (u_clouds_aoRate > 0.0 ? 1.0 : 0.0));
                 const float od2 = od * CLOUD_LOG2E; // the three exp as exp2: one multiply instead of three
                 const float msSum = ms * exp2(-od2 * ms) + msTailScale * exp2(-od2 * msTailExt);
                 const float sunTerm = phase0 * exp2(-od2) + isotropic * (msStrength * msSum);
@@ -429,12 +484,12 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             if (r.front < 0.0)
                 r.front = ts;
             tSum += ts * absorbed;
-            wSum += absorbed;
             airSum += absorbed * exp2(-kAir2 * ts);
             r.transmittance *= stepT;
         }
     }
 
+    const float wSum = 1.0 - r.transmittance; // the telescoped sum(absorbed), before the remap below
     // The early out leaves up to CLOUD_T_END, and the composite passes scene x transmittance: 2 % of the SUN DISC still
     // shone through any cloud. Remapped so the early-out level is fully opaque (continuous; 1 stays 1).
     r.transmittance = clamp((r.transmittance - CLOUD_T_END) * (1.0 / (1.0 - CLOUD_T_END)), 0.0, 1.0);

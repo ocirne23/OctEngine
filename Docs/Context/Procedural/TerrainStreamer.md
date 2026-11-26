@@ -190,23 +190,42 @@ Handed out, never duplicated:
 
 ### The terrain-data map
 
-Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainHeightMap` - a PAIR of images
+Baked around the camera and shipped to the GPU through `Renderer::setTerrainDataMap` - a PAIR of images
 (RendererVK `BakedWorldMap`): the bake is copied into the inactive one and goes live, with its new centre, at the next
 frame's UBO (built in the begin-frame job, before the upload). Tried: ONE image - every re-centre showed one frame of the
 new texels under the old centre (a flicker of the biome borders).
 
-**Two cascades, RGBA32F, cascade-major** (`BakedTerrainData`; the layout matches
-`terrain_height.inc.glsl`). "Data map range (m)" (4096) near, "Data map far range (m)" (8192) far, same texel count
-(512²). The far range is a FLOOR: it is raised to cover the mesh ring (~66 km at the defaults: ~130 m texels).
+**Two cascades**, "Data map range (m)" (4096) near, "Data map far range (m)" (8192) far, same texel count (1024²,
+`TERRAIN_DATA_RES`). The far range is a FLOOR: it is raised to cover the mesh ring, and then rounded up to a whole number
+of near ranges (102.4 km at the defaults: 4 m near and 100 m far texels). **The bake job writes TWO forms:**
 
-> **THE TWO CASCADES ARE TWO DIFFERENT SURFACES.** The near one is the mesh's own field (Full detail, 8 m texels). The
+* **The CPU copy** (`BakedTerrainData`, 32 MB): RGBA32F, cascade-major - the ocean's buoyancy and wind votes,
+  `surfaceHeightAt`, the game's ground. Its channels are in the table below.
+* **The GPU block** (`packTerrainDataGpu`, `HeightMapBaker.ixx`; `terrain_height.inc.glsl` mirrors it): RGBA16 UNORM,
+  THREE layers - near (height, water level, fog thickness, macro altitude), far (the same), climate (near sea-level
+  temperature + humidity, far temperature + humidity). 24 MB per image, 48 MB for the pair, a 24 MB claim in the staging
+  ring per bake. **The heights and the altitude map through the cascade's OWN range** (min .. max of the bake; the
+  decode `(near lo, near scale, far lo, far scale)` rides the flip into `u_terrain_mapDecode`), so 16 bits are ~3 cm
+  steps near and ~15 cm far. Every channel is a plain number: the hardware filters all of them (one climate fetch per
+  cascade, where the bit-cast pack took four `texelFetch`es). **The flow bits are not in it**: no shader reads them.
+  Tried as fp16 instead of a range: fp16 has 2 m steps at 2-4 km of altitude, and the snow's and the wetness's 1 m
+  gradients read that as slope noise on exactly the mountains where the snow lies.
+
+> **THE FAR RANGE IS THE RING'S BOUND FOR THE SETTINGS, NEVER THIS FRAME'S WANTED SET** (`(R + 2^ringLodAt(R) + 1)` chunks
+> each way). A leaf touching the ring sticks out past it by up to its own span (64 chunks at Max LOD 6), and how far
+> changes with every chunk the camera crosses. A range that followed the wanted set changed about every second in fast
+> flight: each change gave a new far texel size and lattice, so the far climate was re-sampled at new points and every
+> distant biome border shifted. **The far texel is a whole number of near texels**, so the shared centre (snapped to
+> the far lattice) is on the near lattice too: a re-bake re-samples the same world points in BOTH cascades.
+
+> **THE TWO CASCADES ARE TWO DIFFERENT SURFACES.** The near one is the mesh's own field (Full detail, 4 m texels). The
 > far one is the generator's COARSE stage (one coarse pixel = 256 x "Meters per pixel" = 1.28 km at the defaults): no
 > shoreline, river or peak of the mesh is in it. It serves what is km-scale (the fog, the climate, the far sun march,
 > the waves' depth). **A consumer that needs the DRAWN ground scales its use by `terrainNearWeight`**
 > (`terrain_height.inc.glsl`): the ocean's edge fade and land cull, the lakes' edge fade. The near cascade's edge is
 > 700 m to 2.7 km from the camera (the map re-centres after a drift of range / 4).
 
-| Channel | Contents |
+| CPU channel | Contents |
 |---|---|
 | R | terrain height (world Y) |
 | G | water surface level |
@@ -298,7 +317,7 @@ existing gate does the rest. The terrain shader's beach overlay keys on the same
 * **A real shelving bay is kept wet by the RADIUS**: its apron is too shallow to seed itself, but it
   sits close to water that does. A radius shorter than the apron makes the sea retreat off it.
 * **LAKES are never touched** — a lake's surface already differs from sea level.
-* **On a COARSE cascade** (the far one, and both in the quick pass) the texels are ~130 m, so with the 4 m radius every
+* **On a COARSE cascade** (the far one, and both in the quick pass) the texels are ~100 m, so with the 4 m radius every
   texel that is not a seed (coarse depth under "Ocean swash depth") takes the full drop. This agrees with the near
   rule on a gentle shelf, which the near rule also drains past radius + feather of deep water; it is wrong only where
   the coarse stage's "deep water" line is off the mesh's (up to a coarse pixel, 256 x "Meters per pixel").

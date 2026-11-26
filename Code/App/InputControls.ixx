@@ -30,6 +30,8 @@ private:
 
     oc::string profileDumpPath = "Local/profile.txt"; // F7 target (main's --profile-out overrides)
     ProfileReportOptions profileDumpOptions;
+    double profileDumpSeconds = 5.0;  // F7: the report is the mean over this long FROM the key press (the profiler's capture)
+    double profileDumpAtSec = -1.0;   // Globals::time's elapsed seconds at which a running F7 capture is written (< 0: none)
 
     IGizmo& gizmo; // owned by the UI; only the mode hotkeys touch it from here
     FreeFlyCameraController& cameraController;
@@ -131,7 +133,12 @@ public:
     // GPU-read-back applied force (opposing bubbles pressing on it) feeds back as a physics impulse.
     // Call after world.update (body poses synced), before forceSystem.update pushes emitter state.
     void setGameMode(bool enabled) { gameMode = enabled; }
-    void setProfileDump(const oc::string& path, const ProfileReportOptions& options) { profileDumpPath = path; profileDumpOptions = options; } // what F7 writes
+    void setProfileDump(const oc::string& path, const ProfileReportOptions& options, double seconds) // what F7 writes
+    {
+        profileDumpPath = path;
+        profileDumpOptions = options;
+        profileDumpSeconds = seconds;
+    }
 
     // Esc edge since the last poll (set by the key listener in EVERY mode; main routes it into the
     // game's cancel chain or the ESCAPE MENU).
@@ -156,6 +163,11 @@ public:
     void update(float deltaSec)
     {
         ProfileScope profileScope("Input controls", EProfileCategory::App);
+        if (profileDumpAtSec >= 0.0 && Globals::time.getElapsedSec() >= profileDumpAtSec)
+        {
+            profileDumpAtSec = -1.0;
+            Globals::profiler.writeCapture(profileDumpPath, profileDumpOptions);
+        }
         if (gameMode)
             return; // the Game library drives the player; no testbed force balls
         if (playerControl)
@@ -492,7 +504,12 @@ public:
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F6 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
 			Globals::scriptHost.reloadCurrentScript(); // F6: recompile + hot-reload the script the Script panel is editing
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F7 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
-            Globals::profiler.writeReport(profileDumpPath, profileDumpOptions); // F7: text report of the last frames (same as --profile-after)
+        {
+            // F7: the text report (as --profile-after), the mean over the NEXT profileDumpSeconds: update() writes it.
+            Globals::profiler.beginCapture(profileDumpOptions.perWorkerTrees);
+            profileDumpAtSec = Globals::time.getElapsedSec() + profileDumpSeconds;
+            Log::info(oc::format("Profiler: capturing {:.1f} s for {}", profileDumpSeconds, profileDumpPath));
+        }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_PAUSE && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
             Globals::time.setPaused(!Globals::time.isPaused()); // Pause/Break: freeze all simulation (also the "Time/Paused" tweak; see Time::setPaused)
         if (gameMode)

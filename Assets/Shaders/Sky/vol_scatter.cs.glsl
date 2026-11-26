@@ -270,7 +270,7 @@ void main()
             // Regional climate, eased in by Region strength: x = fog thickness, and the height-falloff multiplier
             // derived from the temperature at the GROUND (td.x), not the sea-level baseline .z: a mountain valley must
             // not get the coast's falloff.
-            const vec4 climate = terrainClimateNearestAt(worldPos.xz);
+            const vec4 climate = terrainClimateFastAt(worldPos.xz);
             regionMul = mix(1.0, climate.x, u_fog_regionStrength);
             const float groundTemp = terrainTemperatureAt(climate, td.x);
             heightFalloff *= mix(1.0, fogFalloffFromTemperature(groundTemp), u_fog_regionStrength);

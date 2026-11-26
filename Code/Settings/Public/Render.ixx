@@ -178,6 +178,9 @@ export struct CloudParams
         return coverageOverride >= 0.0f ? glm::min(coverageOverride, 1.0f) : dayCoverage(sky);
     }
     float coverageVariation = 2.0f;  // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
+    // COVERAGE FLOOR: a column whose coverage is under it is CLEAR, the rest is rescaled to 0..1. 0 = off. It removes the thin
+    // puffs over the low-coverage areas (sharper cloud fields).
+    float coverageFloor = 0.0f;
     // MACRO COVERAGE: the weather map's coverage read over a much larger period, added to every column's coverage (both
     // layers; faded in like the variation): whole regions clear or overcast, instead of one even scatter everywhere.
     float macroSizeKm = 100.0f;       // the macro field's period (km): its clear / overcast regions are about a sixth of it
@@ -323,7 +326,12 @@ export struct CloudParams
     float nearStep = 90.0f;           // step length at the camera (m); a MAXIMUM: a ray with a shorter path through
                                        // the shell uses span / "Steps per ray", so it still takes its full step count
     float minStep = 3.0f;              // the floor of that per-ray near step (m): finer steps only re-read the same noise
-    int   stepsPerRay = 180;          // view march steps over a ray's shell span: each ray solves its step growth to take
+    // NOISE (the step jitter's grain, worst inside the clouds and along the layer):
+    float nearStepGrowth = 0.1f;       // a ray that starts inside the shell takes steps of this x the distance (from "Min step") up to the near step (0 = the near step at once)
+    float stepFilter = -2.0f;          // mips: the noise is read at the mip of the step's own length + this, where that is coarser than the pixel's (-8 = off; 0 = softest)
+    float spatialFilter = 0.5f;        // 0..1: the temporal pass blends each marched pixel toward its neighbours' mean (a rejected history takes the mean whole)
+    bool  jitterLattice = true;        // the step jitter as a lattice over the pixels (neighbours' samples spread over the step: the mean settles in one frame); off = a per-pixel hash
+    int   stepsPerRay = 130;          // view march steps over a ray's shell span: each ray solves its step growth to take
                                        // this many, so the quality through the layer holds whatever its top / bottom
     int   lightSteps = 4;              // sun march steps per dense sample
     float lightFirstStep = 25.0f;      // m: the sun march's first step; the steps grow GEOMETRICALLY to the reach, so a small
@@ -341,7 +349,8 @@ export struct CloudParams
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
     bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
-    int   debugMode = 0;               // 0 off, 1 step count, 2 density only, 3 history rejection
+    float debugCostAtRed = 400.0f;     // the march cost view: the cost (cheap density samples) drawn full red; lower = red sooner
+    int   debugMode = 0;               // 0 off, 1 march cost, 2 density only, 3 history rejection
 };
 
 // Sun shadow cascade distribution (raster path; RT sun shadows ignore these) - the TweakPanel's
@@ -372,7 +381,7 @@ export struct ShadowParams
                                 // inside maxDistance on purpose: inside the overlap both terms see the
                                 // same ridge, so the handover has nothing to show.
     float terrainMarchBias = 150.0f;   // first sample distance up the sun ray (m). THE self-shadow knob:
-                                // the map's texels are 8 m near / 132 m far and carry none of the sub-
+                                // the map's texels are 4 m near / 100 m far and carry none of the sub-
                                 // texel relief that is actually rendered, so a surface point sits on a
                                 // heightfield coarser than itself. Too small = acne on lit slopes.
     // Debug overlay, BAKED as the SHADOW_DEBUG define into the lit fragment variants (a change reloads
@@ -740,7 +749,7 @@ export struct FogParams
     float heightBase = 0.0f;       // world height where the global fog is densest
     float heightFalloff = 0.25f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
-                                   // terrain height map, see Renderer::setFogTerrainHeightMap): 0.01 = near flat fog,
+                                   // terrain height map, see Renderer::setTerrainDataMap): 0.01 = near flat fog,
                                    // 1 = fog hugs the terrain at constant depth; in between it reaches higher
                                    // on mountainsides but still clears the peaks
     glm::vec3 albedo = glm::vec3(0.839f, 0.961f, 1.0f); // #D6F5FF

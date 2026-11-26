@@ -1461,6 +1461,8 @@ void RendererState::registerUboValues(UboBlock& list)
             }, c.erosion);
         list.add("clouds_curl", c.curl);
         list.add("clouds_coverageVariation", [&] { return c.coverageVariation; }, UboLive);
+        // x = the floor, y = 1 / (1 - floor): clouds.inc.glsl cloudColumnCoverage.
+        list.add("clouds_coverageFloor", [&] { const float f = glm::clamp(c.coverageFloor, 0.0f, 0.9f); return glm::vec2(f, 1.0f / (1.0f - f)); }, UboLive);
         // Far coverage: x (start m, 1 / (end - start) m, the far scale); clouds.inc.glsl cloudFarCoverage.
         list.add("clouds_farCoverage", [&] {
             const float start = c.farCoverageStartKm * 1000.0f;
@@ -1478,6 +1480,17 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clouds_baseSharpness", [&] { return glm::clamp(c.baseSharpness, 0.0f, 1.0f); }, c.baseSharpness);
         list.add("clouds_towerCoreLink", [&] { return glm::clamp(c.towerCoreLink, 0.0f, 1.0f); }, c.towerCoreLink);
         list.add("clouds_minStep", [&] { return glm::max(c.minStep, 0.25f); }, c.minStep);
+        // The near ramp's rate (cloud_raymarch.inc.glsl); 0 = off: past any distance at once.
+        list.add("clouds_nearStepGrowth", [&] { return c.nearStepGrowth > 0.0f ? c.nearStepGrowth : 1e9f; }, c.nearStepGrowth);
+        // "Step filter": added to log2(step length, m) for the base (x) and the detail (y) noise's mip.
+        list.add("clouds_stepLodBias", [&]
+            {
+                const float filter = glm::clamp(c.stepFilter, -8.0f, 0.0f);
+                return glm::vec2(std::log2((float)(128.0 / cloudBasePeriod(c))), std::log2((float)(32.0 / cloudDetailPeriod(c)))) + filter; // CLOUD_BASE_RES, CLOUD_DETAIL_RES
+            }, c.stepFilter, c.weatherSizeKm, c.baseRepeats, c.detailRepeats);
+        list.add("clouds_spatialFilter", [&] { return glm::clamp(c.spatialFilter, 0.0f, 1.0f); }, c.spatialFilter);
+        list.add("clouds_debugCostScale", [&] { return 1.0f / glm::max(c.debugCostAtRed, 1.0f); }, UboLive); // the march cost view
+        list.add("clouds_jitterLattice", [&] { return c.jitterLattice ? 1.0f : 0.0f; }, c.jitterLattice);
         list.add("clouds_aerialStrength", [&] { return glm::max(c.aerialStrength, 0.01f); }, c.aerialStrength); // the tweak min
         list.add("clouds_aerialDimming", [&] { return glm::max(c.aerialDimming, 0.0f); }, c.aerialDimming);
         list.add("clouds_aerialFade", [&] { return glm::max(c.aerialFade, 0.0f); }, c.aerialFade);
@@ -1859,6 +1872,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("terrain_mapInvNearSize", [this] { const float s = m_terrain.getHeightMap().getWorldSizes().x; return s > 1.0f ? 1.0f / s : 0.0f; }, UboLive);
         list.add("terrain_mapInvFarSize", [this] { const float s = m_terrain.getHeightMap().getWorldSizes().y; return s > 1.0f ? 1.0f / s : 0.0f; }, UboLive);
         list.add("terrain_mapSeaLevel", [this] { return m_terrain.getHeightMap().getUserParam(); }, UboLive);
+        // The map's height decode, live with its region: (near lo, near scale, far lo, far scale), height = lo + unorm * scale.
+        list.add("terrain_mapDecode", [this] { return m_terrain.getHeightMap().getDecode(); }, UboLive);
         // THE FACTION MAP (terrain_faction.inc.glsl): its min corner (world x / z), 1 / its extent (0 = no map), and the
         // look - the gain on the side, and per side the tint's two colours (factionTint below).
         list.add("terrain_factionOrigin", [this] { return m_terrain.getFactionMap().getCenter(); }, UboLive);

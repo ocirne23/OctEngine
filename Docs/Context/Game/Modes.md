@@ -77,7 +77,7 @@ away as the players' land grows. With the layer off it is the plain ring at the 
 a disc of at most half the nearest distance, 1 m over the terrain, and march to the NEAREST own building that can be
 attacked (`waveTargetFrom`: a flying ship's are out of reach; none → the ground under the ship), 6 m short of it. **THE GROUND FAR
 FROM THE PLAYERS** has three parts: `groundY` takes the collider's exact height where a ray hits, else the COARSE
-GROUND (`GameMatch::setGroundSource`: the App's terrain height from the terrain-data bake, 8 m texels, kilometres
+GROUND (`GameMatch::setGroundSource`: the App's terrain height from the terrain-data bake, 4 m texels, kilometres
 around the camera), else the Base's height; the far tick keeps a far unit `farLift` over that coarse ground (Units.md);
 and the terrain collider reaches as far from each physics focus as the SIM LOD keeps a body live (the App passes its
 outer radius + the query margin to `TerrainCollider::update`), so a unit that goes live always has a tile under it.

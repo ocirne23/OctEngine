@@ -25,6 +25,9 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 1, rgba16f) uniform image2DArray u_outSkyClouds;
 layout (binding = 2) uniform sampler2DArray u_skyMap; // LAST frame's bake: its clear layer is the ambient
 
+// The plain step schedule: no near ramp, no step filter (the view march's noise fixes - here they cost 64 -> 72 registers,
+// and this pass marches from the ground at a few texels per frame into a long history).
+#define CLOUD_RAYMARCH_PLAIN_STEPS 1
 #include "cloud_raymarch.inc.glsl"
 
 const int SKY_CLOUD_STEPS = 64;
@@ -76,7 +79,7 @@ void main()
     cloudShellIntervals(cloudAltitude(origin, camAlt), cloudRayB(origin, dir, camAlt), u_clouds_maxDistance, seg0, seg1);
 
     // One texel spans PI / height radians: the mip level from that footprint.
-    const CloudMarchResult r = cloudRaymarch(origin, dir, seg0, seg1, SKY_CLOUD_STEPS, cloudJitter(xy + layer * 7919), PI / float(size.y), false);
+    const CloudMarchResult r = cloudRaymarch(origin, dir, seg0, seg1, SKY_CLOUD_STEPS, cloudJitterHash(xy + layer * 7919), PI / float(size.y), false);
     const vec4 history = imageLoad(u_outSkyClouds, texel);
     imageStore(u_outSkyClouds, texel, mix(vec4(r.inScatter, r.transmittance), history, layer == 1 ? u_clouds_giSkyHistory : u_clouds_skyHistory));
 }

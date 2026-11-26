@@ -5,9 +5,9 @@ import :VK;
 import :Allocator;
 import :Sampler;
 
-// A CPU-baked world-region snapshot on the GPU: an R32F / RG32F / RGBA32F or R8 image (2D, or a 2D array with one layer
-// per cascade). Used for the fog terrain data cascades (RGBA: height, water level, packed climate, macro altitude, around
-// the camera: a PAIR) and the game's faction map (R8, fixed in the world: ONE image).
+// A CPU-baked world-region snapshot on the GPU: an image of any sampled format (2D, or a 2D array). Used for the
+// terrain-data map (RGBA16 UNORM, 3 layers: near, far, climate; around the camera: a PAIR) and the game's faction map
+// (R8, fixed in the world: ONE image).
 //
 // Flow (all cheap: no GPU sync, no command-buffer re-record). The frame's UBO is built in the BEGIN-FRAME job
 // (RendererState::beginFrame), before the game tick and the procedural update stage their uploads - so an upload's
@@ -31,11 +31,9 @@ public:
     ~BakedWorldMap();
     BakedWorldMap(const BakedWorldMap&) = delete;
 
-    // channels: 1 = R32F, 2 = RG32F, 4 = RGBA32F (interleaved floats per texel in upload()). pair: see above.
-    void initialize(uint32 resolution, uint32 numLayers, uint32 channels, bool pair, const char* debugName);
-    // The 8-BIT form: ONE R8 unorm channel, world-FIXED maps included (the faction map) - uploadBytesRect() feeds it.
-    void initializeBytes(uint32 resolution, uint32 numLayers, bool pair, const char* debugName);
-    // A PARTIAL upload of the 8-bit form (one layer): `image` is the WHOLE image (resolution^2 bytes), rect the texels
+    // format: any format the GPU can sample with linear filtering; texelBytes its size per texel. pair: see above.
+    void initialize(uint32 resolution, uint32 numLayers, vk::Format format, uint32 texelBytes, bool pair, const char* debugName);
+    // A PARTIAL upload of an R8 map (one layer, texelBytes 1): `image` is the WHOLE image (resolution^2 bytes), rect the texels
     // that changed since the last call (x0, y0, x1, y1, inclusive). Only that rectangle is staged (tightly packed) and
     // copied - for a pair joined with what the destination image missed while the other one was written. The first call
     // after initialize / requestFullCopies copies the whole image (each image once).
@@ -44,9 +42,10 @@ public:
     void uploadBytesRect(const uint8* image, const glm::ivec4& rect, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam,
         const uint8* lut = nullptr);
 
-    // worldSizes = world meters covered per layer; userParam = one baked value carried with the flip
-    // (the fog map's terrain sea level). texels are layer-major, resolution^2 * channels floats each.
-    void upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam);
+    // A whole-image upload. worldSizes = world meters covered (per cascade); userParam and decode = baked values carried
+    // with the flip (the terrain-data map's sea level and its per-cascade height ranges). texels are layer-major,
+    // resolution^2 * texelBytes each.
+    void upload(oc::span<const uint8> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, const glm::vec4& decode);
     // The next uploadBytesRect calls copy the whole image again (a new map).
     void requestFullCopies() { m_needsFull = { true, true }; m_missed = { EMPTY_RECT, EMPTY_RECT }; }
     void flipIfPending(); // the UBO build: the last upload's region (and a pair's image) goes live
@@ -60,18 +59,17 @@ public:
     glm::vec2 getCenter() const { return m_center; }
     glm::vec2 getWorldSizes() const { return m_worldSizes; } // .x == 0 = no map
     float getUserParam() const { return m_userParam; }
+    glm::vec4 getDecode() const { return m_decode; }
 
 private:
     static constexpr glm::ivec4 EMPTY_RECT{ 0, 0, -1, -1 }; // x1 < x0
 
     uint32 m_resolution = 0;
     uint32 m_numLayers = 0;
-    uint32 m_channels = 1;
-    uint32 m_texelBytes = sizeof(float); // per texel: channels x 4 (float), or 1 (the 8-bit form)
-    uint32 m_numImages = 2;              // 2 = a pair, 1 = a single image
-    void create(vk::Format format, const char* debugName);
+    uint32 m_texelBytes = 1;
+    uint32 m_numImages = 2; // 2 = a pair, 1 = a single image
     uint32 uploadImage() const { return m_numImages == 2 ? m_active ^ 1u : 0u; } // where an upload lands
-    void stage(const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam); // an upload's region, live at the flip
+    void stage(const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, const glm::vec4& decode); // live at the flip
 
     vk::Image m_image[2]{};
     VmaAllocation m_memory[2]{};
@@ -88,7 +86,9 @@ private:
     glm::vec2 m_center = glm::vec2(0.0f);     // LIVE region (UBO writers read these)
     glm::vec2 m_worldSizes = glm::vec2(0.0f);
     float m_userParam = 0.0f;
+    glm::vec4 m_decode = glm::vec4(0.0f);
     glm::vec2 m_pendingCenter = glm::vec2(0.0f); // region of the staged (not yet flipped) map
     glm::vec2 m_pendingSizes = glm::vec2(0.0f);
     float m_pendingUserParam = 0.0f;
+    glm::vec4 m_pendingDecode = glm::vec4(0.0f);
 };

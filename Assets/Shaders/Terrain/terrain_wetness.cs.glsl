@@ -140,7 +140,7 @@ void main()
 
         // Slope drain on the ACCUMULATION side: the terrain FS's drain factor (wetness^(1 + slope * drain)) divides
         // the wet-in and rain rates, so a cliff takes that much longer to soak. The slope is the map's height
-        // gradient (8 m texels: cliffs and steep banks, not ledges). Only paid where something is accumulating.
+        // gradient (4 m texels: cliffs and steep banks, not ledges). Only paid where something is accumulating.
         if (target > 0.0 || rain > 0.0)
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field

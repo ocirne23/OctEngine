@@ -6,7 +6,7 @@
 // and shrinks it into the ground over the grow band below that. One rule thins by density AND by distance, so a blade
 // fades out by shrinking, never by popping.
 // Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices (two triangles per
-// cell, as TerrainGenerator.cpp splits them) - the baked height map (8 m texels) is far too coarse.
+// cell, as TerrainGenerator.cpp splits them) - the baked height map (4 m texels) is far too coarse.
 // Needs shared.inc.glsl and the includer's `in_terrainVertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
 // GRASS_NOISE_SAMPLER: the terrain noise texture (its A channel is the value noise's lattice); default its slot of the
 // includer's u_textures[] - the grass cull and the near-shadow casters (no bindless array) bind it alone.

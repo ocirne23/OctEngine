@@ -2,6 +2,7 @@
 
 import Core;
 import Core.glm;
+import :VK;
 import :Layout;
 import :RenderParams;
 import :BakedWorldMap;
@@ -49,10 +50,11 @@ export class TerrainResources final
 public:
     void initialize()
     {
-        // RGBA: terrain height, water level, packed climate, macro altitude. A PAIR: its region moves with the camera.
-        m_heightMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, true, "FogTerrainHeight");
+        // RGBA16 UNORM, 3 layers (near, far, climate: terrain_height.inc.glsl). A PAIR: its region moves with the camera.
+        m_heightMap.initialize(RendererVKLayout::TERRAIN_DATA_RES, RendererVKLayout::TERRAIN_DATA_LAYERS, vk::Format::eR16G16B16A16Unorm,
+            4 * sizeof(uint16), true, "TerrainData");
         // ONE image: world-fixed, its region never changes (BakedWorldMap).
-        m_factionMap.initializeBytes(FACTION_MAP_RES, 1, false, "FactionMap");
+        m_factionMap.initialize(FACTION_MAP_RES, 1, vk::Format::eR8Unorm, 1, false, "FactionMap");
     }
 
     // ---- The game's FACTION map (Renderer::setFactionMap): R8, world-FIXED, 0 = the enemy's .. 128 neutral .. 255 the players' ----

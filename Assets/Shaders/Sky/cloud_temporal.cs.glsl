@@ -52,7 +52,16 @@ const float LIMIT_MATCH = 0.15;
 #define u_width pc_width
 #define u_height pc_height
 #define u_historyWeight 0.0 // the far trees keep no history: this pass only reconstructs (half res, the pixel skip)
+#define TT_SPATIAL 0.0      // ... and no spatial mean
+#define TT_REJECTED_MEAN false
 #else
+// THE SPATIAL MEAN (the clouds): a marched pixel's value and its matching neighbours' (the same ones as its clamp range).
+// "Spatial filter" blends the current value toward it before the history blend, and a pixel whose history is REJECTED
+// takes it whole: with its raw value, a rejected pixel was one jittered sample between settled ones - speckles on every
+// near cloud edge (thin cloud at many distances: the history test fails per pixel). With the lattice jitter
+// (cloud_raymarch.inc.glsl cloudJitter) the pixel and its neighbours are the step's equal parts: their mean is settled.
+#define TT_SPATIAL u_clouds_spatialFilter
+#define TT_REJECTED_MEAN true
 layout (push_constant) uniform CloudPC
 {
     uint u_viewIndex;
@@ -96,6 +105,8 @@ void main()
     vec4 cur;
     vec4 curDepth;
     vec4 lo, hi;
+    vec4 meanSum = vec4(0.0); // the matching neighbours' sum and count (the spatial mean; a fill pixel's value is one already)
+    float meanCount = 0.0;
     // The neighbourhood's range of weighted cloud distance (log2), for the history test.
     float dLo = 1e30, dHi = -1e30;
     // A checkerboard fill pixel whose limit matches NO side neighbour (a thin occluder or a gap in one, e.g. a leaf
@@ -120,6 +131,8 @@ void main()
             hi = max(hi, n);
             dLo = min(dLo, d.y);
             dHi = max(dHi, d.y);
+            meanSum += n;
+            meanCount += 1.0;
         }
     }
     else if (TT_CHECKER)
@@ -208,8 +221,13 @@ void main()
             hi = max(hi, n);
             dLo = min(dLo, d.y);
             dHi = max(dHi, d.y);
+            meanSum += n;
+            meanCount += 1.0;
         }
     }
+    // Equal weights: with the lattice jitter the pixel and its neighbours are the step's equal parts.
+    const vec4 curMean = (meanSum + cur) / (meanCount + 1.0);
+    cur = mix(cur, curMean, TT_SPATIAL);
 
     const vec3 dir = normalize(viewRelFromDepth(uvJ, 1.0));
     const float tCloud = exp2(curDepth.y);
@@ -225,7 +243,7 @@ void main()
     const vec2 prevVp = (prevUv - u_viewportRect.xy) * u_viewportInvSize;
     bool valid = clipW > 0.0 && all(greaterThanEqual(prevVp, vec2(0.0))) && all(lessThanEqual(prevVp, vec2(1.0)));
 
-    vec4 result = cur;
+    vec4 result = TT_REJECTED_MEAN ? curMean : cur;
     if (valid)
     {
         vec4 hist = textureLod(u_histColor, prevUv, 0.0);

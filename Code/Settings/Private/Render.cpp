@@ -9,7 +9,7 @@ namespace
     constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX", "AgX Punchy" };
     constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size", "Terrain march steps" };
     constexpr oc::string_view s_lightGridDebugNames[] = { "Off", "Grids", "Light count heat", "Light ranges" };
-    constexpr oc::string_view s_cloudDebugNames[] ={ "Off", "Step count", "Density only", "History rejection" };
+    constexpr oc::string_view s_cloudDebugNames[] ={ "Off", "March cost", "Density only", "History rejection" };
     constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame", "1/64 per frame", "1/256 per frame" };
     constexpr oc::string_view s_dlssModeNames[] = { "Off", "DLAA", "Quality", "Balanced", "Performance", "Ultra Performance" };
     constexpr oc::string_view s_dlssPresetNames[] = { "Default", "J", "K", "L", "M" };
@@ -347,6 +347,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Day variation", "Low sun span (deg)", &s.lowSunCoverageSpanDeg, 0.1f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Day variation", "Drift", &s.dayCoverageVariation, 0.0f, 0.5f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds", "Coverage floor", &s.coverageFloor, 0.0f, 0.9f, 0.005f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro size (km)", &s.macroSizeKm, 10.0f, 1000.0f, 1.0f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Macro variation", &s.macroVariation, 0.0f, 3.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds/Far coverage", "Scale", &s.farCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
@@ -453,6 +454,10 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Quality", "Max distance (km)", &s.maxDistanceKm, 1.0f, 400.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near step (m)", &s.nearStep, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Min step (m)", &s.minStep, 0.25f, 50.0f, 0.25f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Near step growth", &s.nearStepGrowth, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Step filter (mips)", &s.stepFilter, -8.0f, 0.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Spatial filter", &s.spatialFilter, 0.0f, 1.0f, 0.01f);
+    Tweak::boolean("Sky/Clouds/Quality", "Lattice jitter", &s.jitterLattice);
     Tweak::intVar("Sky/Clouds/Quality", "Steps per ray", &s.stepsPerRay, 16, 1024);
     Tweak::intVar("Sky/Clouds/Quality", "Light steps", &s.lightSteps, 1, 16);
     Tweak::floatVar("Sky/Clouds/Quality", "Light first step (m)", &s.lightFirstStep, 0.0f, 500.0f, 1.0f);
@@ -466,6 +471,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Quality", "Detail distance (km)", &s.detailDistanceKm, 0.5f, 400.0f, 0.1f);
     Tweak::boolean("Sky/Clouds/Quality", "Checkerboard", &s.checkerboard); // CLOUD_CHECKERBOARD
     Tweak::enumVar("Sky/Clouds/Quality", "Debug mode", &s.debugMode, s_cloudDebugNames); // CLOUD_DEBUG_MODE
+    Tweak::floatVar("Sky/Clouds/Quality", "Debug cost at red", &s.debugCostAtRed, 10.0f, 1000.0f, 5.0f, {}, ETweakFlags::Runtime);
 }
 
 void Settings::registerRT(RTParams& s)

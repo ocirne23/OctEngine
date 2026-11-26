@@ -641,8 +641,8 @@ the sand, so the two can never disagree.
 * **The FLOW** ("Film flow speed (m/s)" `u_terrainWater_flowSpeed`, "Film flow min slope (deg)"
   `u_terrainWater_flowSlopeHalfTan` / `flowSlopeTan`, "Film flow cycle (s)" `flowCycle`; `terrainFilmSurface`): the
   inland ripples run DOWNHILL.
-  * Direction: `+N.xz` of the smooth mesh normal (a normal leans toward the DOWNHILL side), exact per pixel. Not the
-    terrain-data map's flow bits (`terrainFlowEncAt`): 8-bit angles on ~8 m NEAREST texels, which would step.
+  * Direction: `+N.xz` of the smooth mesh normal (a normal leans toward the DOWNHILL side), exact per pixel. The bake's
+    flow bits are CPU-only (not in the GPU block), and their 8-bit angles on 4 m texels would step anyway.
   * Speed: the tweak (at 45 degrees) x sqrt(tan slope), x a slope GATE: none below half of "Film flow min slope",
     full from it (smoothstep on tan; default 8 degrees), so pools and flats lie still. sqrt(tan) alone moved gentle
     beaches too much; a tan^2 curve stilled them but slowed the moderate slopes with them. Off the shore only

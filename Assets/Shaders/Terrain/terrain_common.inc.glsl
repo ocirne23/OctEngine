@@ -56,7 +56,7 @@ void terrainWetness(vec3 coverN, TerrainFields fields, float groundBelow, out fl
 	wet = float16_t(terrainWetnessAt(in_pos.xz));
 
 	// Slope drain: steep ground dries faster. The stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster
-	// decay, per pixel on the exact mesh normal (the map's 8 m texels cannot see a cliff). k = 1 + slope * drain.
+	// decay, per pixel on the exact mesh normal (the map's 4 m texels cannot see a cliff). k = 1 + slope * drain.
 	const float16_t slope = one - float16_t(clamp(coverN.y, 0.0, 1.0));
 	wet = pow(wet, one + slope * float16_t(u_terrainWater_slopeDrain));
 }

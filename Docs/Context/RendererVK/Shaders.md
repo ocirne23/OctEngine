@@ -372,7 +372,8 @@ tree_volume_splat 37..56/0, tree_voxel_far 33/0 (the shadow list 35/0), the main
 cull 46/0, the shadow cull 39/0, grass FS 56/32 (the far rings' simple variant 56/16), grass VS 56/0 (53 before the blades' snow: the same 8-register allocation granule; the near casters 44/0), grass cull 48/0, clutter / flower FS
 64/16, flower VS 70/0 (textured 72/0: 68 before the flowers' snow, the same allocation granule), terrain ground FS 64/48 (64/32 before the snow's shore fade and canopy shelter: its own terrainLayers carries both), tessellated ground 72/32 (64/64 with the snow state and
 the wet-snow reflection out: the driver trades), its TCS 46/0 and TES 47/0, film 64/32, ocean 96/64, river FS 96/48, rock
-64/16 (its VS 34/0), the snow caps FS 64/0 and VS 48/0, snow_cap_prepare 48/0, snow_deform 40/0, terrain_wetness 38/0,
+64/16 (its VS 34/0), the snow caps FS 64/0 and VS 48/0, snow_cap_prepare 47/0, snow_deform 40/0, terrain_wetness 36/0, the terrain VS 30/0 (tessellated 30/0), the film VS 33/0,
+the clutter VS 30/0,
 sky.fs 56, aerial_lut 52, particle_sim 56, particle VS 56, rtao 54/0, vol_scatter 56/0,
 vol_apply FS 64/16, cloud_march 72/0, cloud_sky 64/0, cloud_shadow 38/0 (54/0 with the
 vortex on), cloud_temporal 48/0, gi_sky_map 56/0, gi_probe_trace 128/0, gi_volume_bake 55/0, clutter_cull 80/0,

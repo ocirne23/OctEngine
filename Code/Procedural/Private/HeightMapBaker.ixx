@@ -39,7 +39,7 @@ export namespace Procedural
 	// ocean in world metres. A per-point generator query cannot do this - it would have to search its own
 	// field per sample - and the coarse detail level has no fine elevation to search at all.
 	//
-	// The FAR cascade cannot answer it to the radius's precision: it is the generator's coarse stage on ~130 m
+	// The FAR cascade cannot answer it to the radius's precision: it is the generator's coarse stage on ~100 m
 	// texels, so every far texel that is not a seed (coarse depth under swashDepth) takes the full drop. That
 	// agrees with the near rule on a gentle shelf (the near rule drains it past radius + feather of deep water
 	// too) and is wrong only where the coarse "deep water" line is off the mesh's. Tried and dropped: a wider
@@ -355,6 +355,47 @@ export namespace Procedural
 			}
 	}
 
+	// THE GPU BLOCK of the terrain-data map (terrain_height.inc.glsl mirrors it; RendererVKLayout::TERRAIN_DATA_LAYERS):
+	// TERRAIN_GPU_LAYERS layers of res^2 RGBA16 UNORM texels, written by the bake job next to the CPU copy.
+	//   layer c (0 = near, 1 = far): terrain height, water level, fog thickness, macro altitude. The two heights and the
+	//                                altitude map through the cascade's own range: value = lo + unorm * scale (the decode
+	//                                rides the UBO, so a bake spends all 16 bits on the heights it holds: ~3 cm near, ~15 cm far).
+	//   layer 2 (climate):           near sea-level temperature (temperatureTo01), near humidity, far temperature, far humidity.
+	// Every channel is a plain number, so the GPU filters all of them in hardware - no bit-cast packing, no manual bilinear.
+	// The flow bits stay CPU-side only (no shader reads them).
+	inline constexpr uint32 TERRAIN_GPU_LAYERS = 3;
+
+	// Fills one cascade's part of the GPU block from its finished CPU texels (height [0], water [1], altitude [3]; after the
+	// reach and flow passes) and its sampled points (fog, temperature, humidity at full precision). Returns (lo, scale).
+	inline glm::vec2 packTerrainDataGpu(const float* texels, const TerrainPoint* points, uint32 res, uint32 cascade, uint16* gpu)
+	{
+		const size_t n = (size_t)res * res;
+		float lo = FLT_MAX, hi = -FLT_MAX;
+		for (size_t i = 0; i < n; ++i)
+		{
+			const float* t = texels + i * 4;
+			lo = glm::min(lo, glm::min(t[0], glm::min(t[1], t[3])));
+			hi = glm::max(hi, glm::max(t[0], glm::max(t[1], t[3])));
+		}
+		const float scale = glm::max(hi - lo, 1e-3f);
+		const float inv = 1.0f / scale;
+		const auto q = [](float v) { return (uint16)(glm::clamp(v, 0.0f, 1.0f) * 65535.0f + 0.5f); };
+		uint16* layer = gpu + (size_t)cascade * n * 4;
+		uint16* climate = gpu + (size_t)2 * n * 4 + (size_t)cascade * 2;
+		for (size_t i = 0; i < n; ++i)
+		{
+			const float* t = texels + i * 4;
+			const TerrainPoint& p = points[i];
+			layer[i * 4 + 0] = q((t[0] - lo) * inv);
+			layer[i * 4 + 1] = q((t[1] - lo) * inv);
+			layer[i * 4 + 2] = q(p.fogThickness);
+			layer[i * 4 + 3] = q((t[3] - lo) * inv);
+			climate[i * 4 + 0] = q(temperatureTo01(p.temperatureSeaLevel));
+			climate[i * 4 + 1] = q(p.humidity);
+		}
+		return glm::vec2(lo, scale);
+	}
+
 	// Async single-bake driver for camera-centered terrain height snapshots: res^2 floats of raw surface
 	// height (world Y, m) per cascade, cascade-major, sampled from any ITerrainSampler. The terrain
 	// streamer bakes the shared terrain-data map through this and ships the result to a renderer-side
@@ -383,6 +424,10 @@ export namespace Procedural
 		struct Baked
 		{
 			oc::vector<float> texels;
+			// The GPU block (packTerrainDataGpu) - only for the terrain-data layout (4 channels, 2 cascades), else empty - and
+			// its decode: (near lo, near scale, far lo, far scale).
+			oc::vector<uint16> gpuTexels;
+			glm::vec4 gpuDecode = glm::vec4(0.0f);
 			glm::vec2 center = glm::vec2(0.0f);
 			glm::vec2 ranges = glm::vec2(0.0f); // world size per cascade (y = x when single-cascade)
 		};
@@ -418,6 +463,8 @@ export namespace Procedural
 				if (active && !cancelled)
 				{
 					out.texels = oc::move(texels);
+					out.gpuTexels = oc::move(m_bake->gpuResult);
+					out.gpuDecode = m_bake->gpuDecode;
 					out.center = m_pending.center;
 					out.ranges = m_pending.ranges;
 					m_active = m_pending;
@@ -514,6 +561,9 @@ export namespace Procedural
 				const FlowField flow = bake->in.flow;
 				oc::vector<float> heights((size_t)numCascades * res * res * channels);
 				oc::vector<TerrainPoint> points; // reused across cascades
+				const bool gpuBlock = channels == 4 && numCascades == 2;
+				oc::vector<uint16> gpu(gpuBlock ? (size_t)TERRAIN_GPU_LAYERS * res * res * 4 : 0);
+				glm::vec4 gpuDecode(0.0f);
 				for (uint32 c = 0; c < numCascades; ++c)
 				{
 					float* dst = heights.data() + (size_t)c * res * res * channels;
@@ -600,8 +650,17 @@ export namespace Procedural
 					// instead of at a coast the ocean never reaches them from.
 					if (applyFlow)
 						applyFlowField(dst, res, channels, texelSize, maps->seaLevel(), flow);
+					// The GPU block last: its water level is the reach pass's, and the points still hold this cascade.
+					if (gpuBlock)
+					{
+						const glm::vec2 decode = packTerrainDataGpu(dst, points.data(), res, c, gpu.data());
+						gpuDecode[(int)c * 2] = decode.x;
+						gpuDecode[(int)c * 2 + 1] = decode.y;
+					}
 				}
 				bake->result = oc::move(heights);
+				bake->gpuResult = oc::move(gpu);
+				bake->gpuDecode = gpuDecode;
 			}, { "HeightMapBaker::update", EProfileCategory::Procedural }, EJobPriority::Low, &m_bakeCounter);
 			return shipped;
 		}
@@ -638,6 +697,8 @@ export namespace Procedural
 			uint32 res = 0, numCascades = 0, channels = 0;
 			oc::atomic<bool> cancel{ false };
 			oc::vector<float> result;
+			oc::vector<uint16> gpuResult; // see Baked::gpuTexels
+			glm::vec4 gpuDecode = glm::vec4(0.0f);
 		};
 		oc::shared_ptr<BakeJob> m_bake;
 		JobCounter m_bakeCounter;

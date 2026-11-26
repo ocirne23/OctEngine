@@ -98,7 +98,7 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
   past its runs), fading to 0 over "Lake shore (px)", so "Vegetation clear" keeps trees out of the lakes' edges.
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
   consumers should always prefer it.** For V3 it is the difference between a shared-cache lock per
-  point and one per tile: *a terrain-data cascade is 512² texels resolving to a couple of dozen tiles,
+  point and one per tile: *a terrain-data cascade is 1024² texels resolving to a couple of dozen tiles,
   so a point-at-a-time loop meant a quarter-million lock/unlock pairs contending with the mesh
   worker.*
 * Single-field accessors exist too (`sampleHeight`, `sampleWaterHeight`, `sampleHeightAndWater`,

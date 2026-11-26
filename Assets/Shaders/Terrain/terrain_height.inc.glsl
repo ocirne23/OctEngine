@@ -1,22 +1,21 @@
-// Camera-centered terrain data cascades (CPU-baked by TerrainStreamer, setFogTerrainHeightMap): an RGBA32F 2D array,
-// layer 0 = near/fine, layer 1 = far/coarse (same resolution over a much larger range), one shared world center:
-//   R = raw terrain surface height (world Y, m)                                                - bilinear-safe
-//   G = water surface level (world Y, m; sea level over open ocean, higher over lakes/rivers)  - bilinear-safe
-//   B = PACKED 4x8 bits BIT-CAST into the float (NaN patterns possible: floatBitsToUint only, never float arithmetic
-//       or hardware filtering on the raw value):
-//         bits 0-7   fog thickness [0,1]
-//         bits 8-15  water FLOW direction: 0 = none, 1..255 = angle/2pi in XZ (toward land at the coast, downhill
-//                    elsewhere - HeightMapBaker's applyFlowField). Angles wrap: NEAREST texel only (terrainFlowEncAt).
-//         bits 16-23 SEA-LEVEL temperature, CELSIUS over [-25, +50] (terrainTemperatureAt)
-//         bits 24-31 humidity [0,1]
-//       Read via terrainClimateAt (manual bilinear of decoded texels) / terrainClimateNearestAt.
-//   A = MACRO ALTITUDE (m above sea level): splits "mountain" (height far above it) from "high flatland"; bilinear-safe
+// Camera-centered terrain data cascades (CPU-baked by TerrainStreamer, Renderer::setTerrainDataMap): an RGBA16 UNORM 2D
+// array of THREE layers (Procedural's packTerrainDataGpu), one shared world center, every channel a plain number
+// (hardware bilinear everywhere):
+//   layer 0 = the NEAR cascade, layer 1 = the FAR cascade (same resolution over a much larger range):
+//     R = raw terrain surface height (world Y, m)
+//     G = water surface level (world Y, m; sea level over open ocean, sunk where no ocean reaches)
+//     B = regional fog thickness [0,1]
+//     A = MACRO ALTITUDE (m above sea level): splits "mountain" (height far above it) from "high flatland"
+//     R, G and A map through the cascade's own range: m = lo + unorm * scale (u_terrain_mapDecode: near .xy, far .zw).
+//   layer 2 = the CLIMATE of both cascades at their own texel grids: near (.x sea-level temperature 0..1 over
+//     [-25, +50] C, .y humidity), far (.z temperature, .w humidity). Read via terrainClimateAt / terrainClimateFastAt.
+// The bake's flow directions are not on the GPU (no shader reads them; the CPU copy keeps them).
 // Consumers: the fog (vol_scatter.cs.glsl), the ocean's depth / water level (ocean_wave.inc.glsl), and the long-range sun
 // shadow march below (shared by the fog and every lit surface).
 // Layer 0 is the mesh's own field (Full detail); layer 1 is the generator's COARSE stage (terrainNearWeight).
 //
 // UBO (requires ubo.inc.glsl): u_terrain_mapCentre = world center XZ, mapInvNearSize = 1 / near cascade size (0 = no
-// map), mapInvFarSize = 1 / far cascade size (0 = near only). The includer defines TERRAIN_HEIGHT_BINDING.
+// map), mapInvFarSize = 1 / far cascade size (0 = near only), mapDecode. The includer defines TERRAIN_HEIGHT_BINDING.
 
 #ifndef TERRAIN_HEIGHT_INC_GLSL
 #define TERRAIN_HEIGHT_INC_GLSL
@@ -25,19 +24,33 @@ layout (binding = TERRAIN_HEIGHT_BINDING) uniform sampler2DArray u_terrainHeight
 
 bool terrainHeightMapPresent() { return u_terrain_mapInvNearSize > 0.0; }
 
-// The full texel at worldXZ; fades to the far cascade over the near map's outer band (no seam). Beyond the far
-// cascade, clamp-to-edge extends the edge values. Only meaningful while terrainHeightMapPresent().
+// The near cascade's share at near-map uv: 1 inside, 0 past its outer band (0.42 .. 0.48 of the map from its centre).
+float terrainNearBlend(vec2 uv0)
+{
+    const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
+    return u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+}
+
+// One cascade's texel, decoded: x = height, y = water level, z = fog thickness, w = macro altitude.
+vec4 terrainDataLayer(vec2 uv, float layer, vec2 decode)
+{
+    const vec4 v = textureLod(u_terrainHeight, vec3(uv, layer), 0.0);
+    return vec4(decode.x + v.xy * decode.y, v.z, decode.x + v.w * decode.y);
+}
+
+// The full texel at worldXZ (x = height, y = water level, z = fog thickness, w = macro altitude); fades to the far
+// cascade over the near map's outer band (no seam). Beyond the far cascade, clamp-to-edge extends the edge values. Only
+// meaningful while terrainHeightMapPresent().
 vec4 terrainDataAt(vec2 worldXZ)
 {
     const vec2 rel = worldXZ - u_terrain_mapCentre;
     const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
-    const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const float nearW = u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+    const float nearW = terrainNearBlend(uv0);
     vec4 d = vec4(0.0);
     if (nearW < 1.0)
-        d = textureLod(u_terrainHeight, vec3(rel * u_terrain_mapInvFarSize + 0.5, 1.0), 0.0);
+        d = terrainDataLayer(rel * u_terrain_mapInvFarSize + 0.5, 1.0, u_terrain_mapDecode.zw);
     if (nearW > 0.0)
-        d = mix(d, textureLod(u_terrainHeight, vec3(uv0, 0.0), 0.0), nearW);
+        d = mix(d, terrainDataLayer(uv0, 0.0, u_terrain_mapDecode.xy), nearW);
     return d;
 }
 
@@ -59,7 +72,7 @@ float terrainNearWeight(vec2 worldXZ)
 // the widening spacing matches it: a cone trace. Deterministic (no jitter: far shadows hold still under camera motion),
 // and an occluder missed in a late gap degrades into a softer edge rather than popping.
 //   startT = first sample distance (m). On a SURFACE receiver this is the self-shadow bias: it must clear the map's
-//            texel size (8 m near / 132 m far) and the sub-texel relief the map does not carry.
+//            texel size (4 m near / 100 m far at the defaults) and the sub-texel relief the map does not carry.
 //   spread = penumbra growth per metre. Floor it well above the true sun disc (~0.005): the softness stops the map's
 //            texels resolving as stair-steps.
 float terrainSunVisibility(vec3 pos, vec3 sunDir, float startT, int steps, float spread, float bias)
@@ -86,83 +99,52 @@ float fogFalloffFromTemperature(float celsius)
     return 1.8 - 1.2 * clamp((celsius + 10.0) * (1.0 / 40.0), 0.0, 1.0); // [0.6, 1.8]
 }
 
-// One decoded climate texel from the packed B channel: x = fog thickness [0,1], y = UNUSED (the flow direction must
-// never pass through the bilinear below: terrainFlowEncAt), z = SEA-LEVEL temperature (C), w = humidity [0,1].
-// .z is a baseline, not a sample: evaluate it with terrainTemperatureAt at the height you shade. The two cascades bake
-// different heights for the same spot (the far one a 7.68 km average, which cannot know a peak exists).
-vec4 terrainClimateTexel(ivec2 t, int layer, ivec2 res)
-{
-    const uint packed = floatBitsToUint(texelFetch(u_terrainHeight, ivec3(clamp(t, ivec2(0), res - 1), layer), 0).z);
-    return vec4(float(packed & 255u) * (1.0 / 255.0),
-                0.0, // bits 8-15 free
-                float((packed >> 16) & 255u) * (75.0 / 255.0) - 25.0,
-                float((packed >> 24) & 255u) * (1.0 / 255.0));
-}
-
-// Temperature (C) at a world height, from a decoded climate texel: THE way to read temperature out of this map. Every
-// consumer passes the height IT shades, so the two cascades cannot disagree. The rate is the generator's own
-// (u_terrain_lapseRate, C per WORLD metre), not baked per texel. Clamped at sea level: the generator does not warm
-// the seabed.
+// Temperature (C) at a world height, from a climate vec4 (terrainClimateAt: .z = the SEA-LEVEL baseline): THE way to read
+// temperature out of this map. Every consumer passes the height IT shades, so the two cascades cannot disagree (they bake
+// different heights for the same spot: the far one a coarse average, which cannot know a peak exists). The rate is the
+// generator's own (u_terrain_lapseRate, C per WORLD metre), not baked per texel. Clamped at sea level: the generator does
+// not warm the seabed.
 float terrainTemperatureAt(vec4 climate, float worldY)
 {
     return climate.z + u_terrain_lapseRate * max(worldY - u_terrain_seaLevel, 0.0);
 }
 
-// Manual bilinear of one cascade's climate: hardware filtering would blend the PACKED bits into garbage.
-vec4 terrainClimateBilinear(vec2 uv, int layer, ivec2 res)
+// A climate vec4 from (fog thickness, temperature 0..1, humidity): x = fog thickness [0,1], y = unused, z = SEA-LEVEL
+// temperature (C, evaluate with terrainTemperatureAt), w = humidity [0,1].
+vec4 terrainClimateDecode(float fog, vec2 tempHum)
 {
-    const vec2 st = uv * vec2(res) - 0.5;
-    const vec2 f = fract(st);
-    const ivec2 b = ivec2(floor(st));
-    const vec4 c00 = terrainClimateTexel(b, layer, res);
-    const vec4 c10 = terrainClimateTexel(b + ivec2(1, 0), layer, res);
-    const vec4 c01 = terrainClimateTexel(b + ivec2(0, 1), layer, res);
-    const vec4 c11 = terrainClimateTexel(b + ivec2(1, 1), layer, res);
-    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return vec4(fog, 0.0, tempHum.x * 75.0 - 25.0, tempHum.y);
 }
 
-// Climate fields at worldXZ, SMOOTH: manual bilinear + the same near/far cascade blend as terrainDataAt (raw texels
-// show as pixels at climate borders).
+// Climate fields at worldXZ, SMOOTH: bilinear + the same near/far cascade blend as terrainDataAt. One climate-layer fetch
+// per cascade; the fog thickness rides the cascade's data layer (a consumer that ignores .x pays no fetch for it).
 vec4 terrainClimateAt(vec2 worldXZ)
 {
     const vec2 rel = worldXZ - u_terrain_mapCentre;
-    const ivec2 res = textureSize(u_terrainHeight, 0).xy;
     const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
-    const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const float nearW = u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
-    vec4 c = vec4(0.0);
+    const float nearW = terrainNearBlend(uv0);
+    vec3 c = vec3(0.0); // fog, temperature 0..1, humidity
     if (nearW < 1.0)
-        c = terrainClimateBilinear(rel * u_terrain_mapInvFarSize + 0.5, 1, res);
+    {
+        const vec2 uv = rel * u_terrain_mapInvFarSize + 0.5;
+        c = vec3(textureLod(u_terrainHeight, vec3(uv, 1.0), 0.0).z, textureLod(u_terrainHeight, vec3(uv, 2.0), 0.0).zw);
+    }
     if (nearW > 0.0)
-        c = mix(c, terrainClimateBilinear(uv0, 0, res), nearW);
-    return c;
+        c = mix(c, vec3(textureLod(u_terrainHeight, vec3(uv0, 0.0), 0.0).z, textureLod(u_terrainHeight, vec3(uv0, 2.0), 0.0).xy), nearW);
+    return terrainClimateDecode(c.x, c.yz);
 }
 
-// Raw 8-bit flow direction at worldXZ (0 = none, 1..255 = angle/2pi). NEAREST texel, near cascade preferred: encoded
-// angles wrap, so no form of bilinear may ever touch them.
-uint terrainFlowEncAt(vec2 worldXZ)
+// The cheap variant for the froxel fog and the water: ONE cascade (the far one past 0.45 of the near map), no blend.
+// Regional fog and the climate are km-scale, and the fog grid samples this a million times a frame.
+vec4 terrainClimateFastAt(vec2 worldXZ)
 {
     const vec2 rel = worldXZ - u_terrain_mapCentre;
     const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
     const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
     const bool useFar = u_terrain_mapInvFarSize > 0.0 && edge > 0.45;
     const vec2 uv = useFar ? rel * u_terrain_mapInvFarSize + 0.5 : uv0;
-    const ivec2 res = textureSize(u_terrainHeight, 0).xy;
-    const ivec2 t = clamp(ivec2(uv * vec2(res)), ivec2(0), res - 1);
-    return (floatBitsToUint(texelFetch(u_terrainHeight, ivec3(t, useFar ? 1 : 0), 0).z) >> 8) & 255u;
-}
-
-// Cheap nearest-texel variant for the froxel fog: regional fog is km-scale, and the grid samples this a million times
-// a frame.
-vec4 terrainClimateNearestAt(vec2 worldXZ)
-{
-    const vec2 rel = worldXZ - u_terrain_mapCentre;
-    const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
-    const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const bool useFar = u_terrain_mapInvFarSize > 0.0 && edge > 0.45;
-    const vec2 uv = useFar ? rel * u_terrain_mapInvFarSize + 0.5 : uv0;
-    const ivec2 res = textureSize(u_terrainHeight, 0).xy;
-    return terrainClimateTexel(ivec2(uv * vec2(res)), useFar ? 1 : 0, res);
+    const vec4 k = textureLod(u_terrainHeight, vec3(uv, 2.0), 0.0);
+    return terrainClimateDecode(textureLod(u_terrainHeight, vec3(uv, useFar ? 1.0 : 0.0), 0.0).z, useFar ? k.zw : k.xy);
 }
 
 #endif

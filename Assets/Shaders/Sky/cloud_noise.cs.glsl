@@ -3,12 +3,18 @@
 // Generates the cloud noise textures (CloudPipeline::generateNoise, at initialize and on a shader reload; the channel
 // layout is in clouds.inc.glsl). Every field TILES: the Worley feature points and the Perlin gradients are hashed from
 // the lattice cell wrapped by the period, so the textures repeat under REPEAT addressing.
-// NOISE_3D: binding 0 is a 3D image (modes 0 base, 1 detail); else a 2D image (modes 2 weather, 3 curl).
+// NOISE_3D: binding 0 is a 3D image (1 = the base, R8, mode 0; 2 = the detail, RG8, mode 1); else a 2D image (RGBA8, modes
+// 2 weather, 3 curl).
+// THE 3D TEXTURES HOLD FINISHED VALUES, one channel per use: the density samples them at every march step, and a texel of
+// 1 or 2 bytes is a quarter / half of the memory an RGBA8 lookup pulls through the cache (the base at its fine mips is
+// megabytes).
 
 layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-#ifdef NOISE_3D
-layout (binding = 0, rgba8) uniform writeonly image3D u_out;
+#if defined(NOISE_3D) && NOISE_3D == 2
+layout (binding = 0, rg8) uniform writeonly image3D u_out;
+#elif defined(NOISE_3D)
+layout (binding = 0, r8) uniform writeonly image3D u_out;
 #else
 layout (binding = 0, rgba8) uniform writeonly image2D u_out;
 #endif
@@ -101,11 +107,20 @@ void main()
         const float wf = worleyFbm(uvw, 4, 11);
         const float p = perlinFbm(uvw, 4, 5, 3);
         const float pw = wf + p * (1.0 - wf);
-        result = vec4(pw, wf, worleyFbm(uvw, 8, 21), worleyFbm(uvw, 16, 31));
+        // THE BASE SHAPE: the Perlin-Worley remapped by the low Worley fBm (4 / 8 / 16 cells), (pw - f + 1) / (2 - f). It
+        // lands in [0.5, 1] (a little under 0.5 where the first octave is 0 and the others 1: clamped - the coverage
+        // threshold reaches under 0.5 only at full coverage with a shelf). Stored as 2 x - 1: the whole byte's range.
+        const float lowFbm = wf * 0.625 + worleyFbm(uvw, 8, 21) * 0.25 + worleyFbm(uvw, 16, 31) * 0.125;
+        const float baseShape = (pw - lowFbm + 1.0) / (2.0 - lowFbm);
+        result = vec4(clamp(baseShape * 2.0 - 1.0, 0.0, 1.0), 0.0, 0.0, 1.0);
     }
     else
     {
-        result = vec4(worleyFbm(uvw, 2, 41), worleyFbm(uvw, 4, 51), worleyFbm(uvw, 8, 61), 1.0);
+        // THE DETAIL: r = the Worley fBm at 2 / 4 / 8 cells (the erosion), g = its two coarse octaves alone (the near
+        // octave reads the texture again at CLOUD_NEAR_DETAIL_MULT x the frequency).
+        const float w2 = worleyFbm(uvw, 2, 41);
+        const float w4 = worleyFbm(uvw, 4, 51);
+        result = vec4(w2 * 0.625 + w4 * 0.25 + worleyFbm(uvw, 8, 61) * 0.125, w2 * 0.7 + w4 * 0.3, 0.0, 1.0);
     }
     imageStore(u_out, ivec3(id), result);
 #else

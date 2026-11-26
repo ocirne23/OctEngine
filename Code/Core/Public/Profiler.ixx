@@ -183,6 +183,8 @@ export struct ProfileReportOptions
 // calibrate against QPC) and millisecond conversions stay accurate. Recording is ALWAYS on (a
 // compile-time #ifdef kill switch is the plan, not a runtime toggle); the UI panel does its own
 // pause/snapshot on top. All read APIs (snapshot, frame marks, conversions) are main-thread.
+struct ProfileReportState; // a report's aggregate (Profiler.cpp)
+
 export class Profiler final
 {
 public:
@@ -193,6 +195,7 @@ public:
     // constructing (main) thread as "Main" and calibrates the clock, so ProfileScopes and
     // memory-tracked allocations inside other globals' static initializers already work.
     Profiler();
+    ~Profiler();
 
     void endFrame();   // once per frame from the main loop: frame mark + clock re-anchor
 
@@ -286,8 +289,25 @@ public:
         return m_reportWriter ? m_reportWriter(path, buildReport(options)) : false;
     }
 
+    // THE CAPTURE: the same report over a stretch LONGER than the rings and the frame marks hold (the app's dumps: the
+    // mean over seconds, so one run's numbers are steady). beginCapture starts it; updateCapture (main thread, once per
+    // frame after endFrame) adds the completed frames a stretch at a time; finishCapture / writeCapture add the rest and
+    // give the report (with no capture begun: buildReport). The frame an add runs in carries the add's cost and is left
+    // out, as is everything before a pause.
+    void beginCapture(bool perWorkerTrees = false);
+    bool isCapturing() const { return m_capture != nullptr; }
+    void updateCapture();
+    oc::string finishCapture(const ProfileReportOptions& options = {});
+    bool writeCapture(const oc::string& path, const ProfileReportOptions& options = {})
+    {
+        return m_reportWriter ? m_reportWriter(path, finishCapture(options)) : false;
+    }
+
 private:
     ReportWriterFn m_reportWriter;
+    oc::unique_ptr<ProfileReportState> m_capture;
+    void addReportFrames(ProfileReportState& state, uint64_t firstFrame, uint64_t lastFrame) const;
+    oc::string printReport(const ProfileReportState& state, const ProfileReportOptions& options) const;
 
     void initialize();
     // bindThread: makes the track the calling thread's (t_profileTrack) BEFORE its ring allocates.

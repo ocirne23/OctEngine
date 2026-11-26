@@ -189,7 +189,7 @@ See [Procedural](Context/Procedural/CONTEXT.md), [RendererVK Terrain](Context/Re
 See [Procedural Trees](Context/Procedural/Trees.md),
 far-tree volume in [RendererVK Vegetation](Context/RendererVK/Vegetation.md).
 
-* W5: profile and tune `R_near`, density and `FOG_TERRAIN_RES`; measure / amortise the far rebake
+* W5: profile and tune `R_near`, density and `TERRAIN_DATA_RES`; measure / amortise the far rebake
   (double-buffer, splat 1/N chunks per frame).
 * W4 wind tuning (fades, amplitudes) and a RelWithDebInfo profile.
 * Far volume "not yet": per-tree species colour (not last writer), half res, the analytic tail (P7),
@@ -243,8 +243,15 @@ See [Procedural Rocks](Context/Procedural/Rocks.md).
 ## Clouds
 
 * RTX 2000 presets, a cirrus layer, weather coupling.
-* A column skip map for the march (low-res max coverage / top per weather texel): jump empty columns without the base
-  fetch of the coarse test. Measure the coarse steps' share of the march first.
+* Cloud march speed (the time's breakdown: "THE MARCH'S TIME" in Clouds.md). Not tried yet: bake the off features
+  out as defines (vortex, eye light, flashes, the sun march while the map serves) - measure the TIME, not the registers;
+  far clouds as a slowly updated panorama; a shorter "Detail distance" (the detail fetches are 9 - 14 %, a look trade
+  past its range).
+* The clouds' sun march runs under a 20 degree sun (and with "Self-shadow from map" off): + ~0.15 ms. First test:
+  "Light steps" 2 at a low sun (no code). A camera-centred 3D volume of the optical depth toward the sun could replace the sun march, but it was
+  checked and set aside: about 0.15 ms at a low sun only, and it helps no other user (the shadow map is finer for the
+  world, the fog and the air term lie under the layer, the far march would blur at its cell size).
+* Cloud noise: the fixes are tested on still cameras only (the speckles at near thin edges). Check them in flight.
 * An aerial-perspective LUT.
 * Dark band on the lit side of far clouds with a small step budget (workaround: 600 `Max steps`).
 * The sun aureole is not in the cloud-shadowed sky-SH correction.

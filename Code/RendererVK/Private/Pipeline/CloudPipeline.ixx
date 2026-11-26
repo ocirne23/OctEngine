@@ -132,7 +132,7 @@ private:
         vk::ImageView view;
     };
 
-    void buildNoiseLayout(ComputePipelineLayout& layout, bool is3D);
+    void buildNoiseLayout(ComputePipelineLayout& layout, uint32 kind);
     void buildShadowLayout(ComputePipelineLayout& layout);
     void buildSkyLayout(ComputePipelineLayout& layout);
     void createShadowMap();
@@ -140,7 +140,7 @@ private:
     void buildMarchLayout(ComputePipelineLayout& layout);
     void buildTemporalLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
-    void createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D, const char* debugName);
+    void createNoiseTexture(NoiseTexture& tex, uint32 size, bool is3D, vk::Format format, const char* debugName);
     void destroyNoiseTexture(NoiseTexture& tex);
     void generateNoise();
     void createImageSet(ImageSet& set, const char* debugName);
@@ -151,7 +151,8 @@ private:
     uint32 m_width = 0; // half-res
     uint32 m_height = 0;
 
-    ComputePipeline m_noise3DPipeline;
+    ComputePipeline m_noiseBasePipeline;   // one generator per storage format (cloud_noise.cs.glsl NOISE_3D)
+    ComputePipeline m_noiseDetailPipeline;
     ComputePipeline m_noise2DPipeline;
     ComputePipeline m_shadowPipeline;
     ComputePipeline m_marchPipeline;
