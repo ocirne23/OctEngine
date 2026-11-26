@@ -92,7 +92,6 @@ void SpatialIndexState::unregisterEntry(SpatialHandle handle)
         m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
     }
     m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
-    m_pool.radius[idx] = -1e30f; // getRadius reads the pool copy; the lane above is what queries test
     m_pendingOps.local().push_back({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f,
                                      .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unlink, .newLevel = 0 });
 }
@@ -108,24 +107,25 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
     const uint8 flags = m_pool.flags[idx];
     if (key == m_pool.cellKey[idx] && level == m_pool.level[idx] && !(flags & RecordFlag_PendingMove))
     {
-        if (rel.x == m_pool.posX[idx] && rel.y == m_pool.posY[idx] && rel.z == m_pool.posZ[idx] && radius == m_pool.radius[idx])
-            return; // untouched
-        // Same cell: in place, the pool copy and the lane queries read (no lane yet while Unlinked:
-        // the Link op inserts from the pool copy).
-        m_pool.posX[idx] = rel.x;
-        m_pool.posY[idx] = rel.y;
-        m_pool.posZ[idx] = rel.z;
-        m_pool.radius[idx] = radius;
-        if (!(flags & RecordFlag_Unlinked))
+        if (flags & RecordFlag_Unlinked)
         {
-            const uint32 slot = m_pool.storeIdx[idx];
-            CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
-            const uint32 lane = BlockStore::laneOf(slot);
-            block.posX[lane] = rel.x;
-            block.posY[lane] = rel.y;
-            block.posZ[lane] = rel.z;
-            block.radius[lane] = radius;
+            // No lane yet: the pool rows hold the entry until the Link op inserts from them.
+            m_pool.posX[idx] = rel.x;
+            m_pool.posY[idx] = rel.y;
+            m_pool.posZ[idx] = rel.z;
+            m_pool.radius[idx] = radius;
+            return;
         }
+        // Same cell, linked: the lane is the only copy.
+        const uint32 slot = m_pool.storeIdx[idx];
+        CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
+        const uint32 lane = BlockStore::laneOf(slot);
+        if (rel.x == block.posX[lane] && rel.y == block.posY[lane] && rel.z == block.posZ[lane] && radius == block.radius[lane])
+            return; // untouched: no store into a line the queries read
+        block.posX[lane] = rel.x;
+        block.posY[lane] = rel.y;
+        block.posZ[lane] = rel.z;
+        block.radius[lane] = radius;
         return;
     }
     m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
@@ -141,8 +141,8 @@ void SpatialIndex::commitFrame()
     const auto start = Clock::now();
     int cellMoves = 0;
     // Per-slot FIFO is the only ordering guarantee (one visitor per entity per pass keeps a frame's
-    // Moves for one entry in one slot). The lone cross-slot case - Link (main) + first Move (worker)
-    // in the same frame - self-heals: a Move that lands before its Link skips on RecordFlag_Unlinked
+    // Moves for one entry in one slot). The lone cross-slot case - Link (the spawning thread) + first Move
+    // (the visiting worker) in the same frame - self-heals: a Move that lands before its Link skips on RecordFlag_Unlinked
     // and leaves PendingMove set, which forces the next updateEntry to re-queue it.
     m_pendingOps.forEach([&](oc::vector<PendingOp>& ops)
     {
@@ -156,7 +156,7 @@ void SpatialIndex::commitFrame()
         case PendingOp::Link:
             if ((opFlags & (RecordFlag_Alive | RecordFlag_Unlinked)) == (RecordFlag_Alive | RecordFlag_Unlinked))
             {
-                insertLane(op.idx);
+                insertLane(op.idx, glm::vec3(m_pool.posX[op.idx], m_pool.posY[op.idx], m_pool.posZ[op.idx]), m_pool.radius[op.idx]);
                 m_pool.flags[op.idx] = uint8(opFlags & ~RecordFlag_Unlinked);
                 // Counts as visible for the current stamp generation; the next markVisibleSet (which
                 // runs with the entry actually in the index) decides for real. NOT for NoSpawnGuard
@@ -181,13 +181,9 @@ void SpatialIndex::commitFrame()
             {
                 retireLane(op.idx);
                 m_pool.cellKey[op.idx] = op.newKey;
-                m_pool.posX[op.idx] = op.newRelPos.x;
-                m_pool.posY[op.idx] = op.newRelPos.y;
-                m_pool.posZ[op.idx] = op.newRelPos.z;
-                m_pool.radius[op.idx] = op.newRadius;
                 m_pool.level[op.idx] = op.newLevel;
                 m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
-                insertLane(op.idx);
+                insertLane(op.idx, op.newRelPos, op.newRadius);
                 ++cellMoves;
             }
             break;
@@ -226,13 +222,12 @@ void SpatialIndex::commitFrame()
     ++m_frameId;
 }
 
-void SpatialIndexState::insertLane(uint32 idx)
+void SpatialIndexState::insertLane(uint32 idx, const glm::vec3& relPos, float radius)
 {
     const uint32 level = m_pool.level[idx];
     const uint64 key = m_pool.cellKey[idx];
     CellRecord& rec = m_levels[level].getOrCreate(key);
-    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx],
-                                                  m_pool.radius[idx], m_pool.layerMask[idx], idx);
+    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, relPos.x, relPos.y, relPos.z, radius, m_pool.layerMask[idx], idx);
     ++rec.count;
     ++m_levelEntityCount[level];
     setOccupancyBits(level, key);

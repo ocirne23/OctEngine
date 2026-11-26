@@ -22,8 +22,8 @@ enum ERecordFlag : uint8
     RecordFlag_NoSpawnGuard = 64, // registerEntry(spawnVisible = false)
 };
 
-// SoA storage for every registered entry; the authoritative copy (queries read the CellBlock lane).
-// Positions are cell-relative floats. Rows are VirtualArrays (reserved up front, never move), so
+// SoA storage for every registered entry, by handle slot. Position and radius are held here only while the entry is Unlinked;
+// once linked, its CellBlock lane is the only copy. Rows are VirtualArrays (reserved up front, never move), so
 // acquire is lock-free: a tagged free stack, else a bump of the high-water mark. release() at commit only.
 class RecordPool final
 {
@@ -85,8 +85,8 @@ public:
     uint32 capacity() const { return m_count.load(oc::memory_order_acquire); }
     uint32 numAlive() const { return m_numAlive.load(oc::memory_order_relaxed); }
 
-    VirtualArray<float> posX, posY, posZ; // relative to the owning cell's min corner
-    VirtualArray<float> radius;           // negative = neutralized (pending free), fails every test
+    VirtualArray<float> posX, posY, posZ; // Unlinked only (stale once linked): relative to the cell's min corner
+    VirtualArray<float> radius;           // Unlinked only (stale once linked); the Link op inserts the lane from these
     VirtualArray<uint64> cellKey;         // current cell Morton key at `level`
     VirtualArray<uint64> userData;
     VirtualArray<uint8> layerMask;        // SpatialLayer_* bits (4 in use; static_assert in Types)

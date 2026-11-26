@@ -140,7 +140,7 @@ sectors both pass false.
 
 | Operation | Rule |
 |---|---|
-| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's pool slots and its block lane (~8 stores, two lines); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
+| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update of a linked entry writes only its block lane (4 stores, two lines; none when nothing changed); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
 | `registerEntry` / `SpatialEntry::reset` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
 | `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
 | `commitFrame` | Single-threaded, main, outside the pass. |
@@ -323,8 +323,8 @@ a `RootOnly` root registers one entry over its whole subtree and the subtree reg
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when the entity has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by `skinnedRadiusScale`; otherwise
-  a point at the spawn position. For a tree CHILD that is its LOCAL position — the entry links at the
-  next commit, and the child's first visit re-places it in world space before any query can see it.
+  a point at the spawn position. A tree CHILD's bounds go through its ancestors' transforms, so its
+  entry is in WORLD space from the start (see Entity integration in the Entity CONTEXT).
 * Headless has no render nodes, so every entry there is a point.
 * `updateSelf` refreshes it every visit, and the render gate reads its pass mask.
 * Update pushes per-pass masks: Main-visible entities push `PASS_ALL`, Near-only push
@@ -391,16 +391,20 @@ so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets t
 (`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
 are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
-* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unlinked`). The pool keeps the
-  authoritative copy (`getPosition`, the same-cell compare in `updateEntry`, the Link op inserts
-  from it); the lane carries the copy queries read. Unused lanes past a block's `count` hold a
+* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unlinked`). **A linked entry's
+  position and radius live ONLY in its lane.** The pool's `posX/Y/Z` / `radius` rows hold them while
+  the entry is `Unlinked` (registered, no lane yet: a same-cell `updateEntry` before the commit writes
+  them; a cell change is a Move op as usual), and the Link op inserts the lane from them; after the link
+  they are stale and nothing reads them. The pool keeps what a handle needs and a query test does not (`gen`, `flags`,
+  `cellKey`, `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a block's `count` hold a
   tombstone radius, so `test8` always runs all 8 lanes.
-* **Same-cell update** = the pool stores plus the lane stores (two cache lines), from any job.
-  **Cell change** = a Move op: at commit `retireLane` the old lane, update the pool, `insertLane`
-  into the new cell's head block (a new head when that is full). `Cell moves` in the stats counts
-  them per commit.
+* **Same-cell update** = compare against the lane, then the lane stores (two cache lines; none when
+  unchanged), from any job. An `Unlinked` entry writes the pool rows instead. **Cell change** = a
+  Move op: at commit `retireLane` the old lane, set the pool's `cellKey` / `level`, `insertLane` the
+  op's position into the new cell's head block (a new head when that is full). `Cell moves` in the
+  stats counts them per commit.
 * **Tombstones** — a negative radius fails every test in place. `unregisterEntry` writes only the
-  lane's tombstone (queries read lock-free); the counters and blocks settle in `retireLane` at
+  lane's tombstone and the pool flags (queries read lock-free); the counters and blocks settle in `retireLane` at
   commit (the Unlink op, or a Move).
 * **Blocks free as soon as they empty**, so `count == 0` <=> no chain (the sweep relies on it). A
   cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED

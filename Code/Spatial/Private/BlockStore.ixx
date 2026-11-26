@@ -9,7 +9,7 @@ struct alignas(64) CellBlock
     static constexpr uint32 Lanes = 8;
     static constexpr float Tombstone = -1e30f;
 
-    float posX[Lanes], posY[Lanes], posZ[Lanes]; // cell-relative, like the pool
+    float posX[Lanes], posY[Lanes], posZ[Lanes]; // cell-relative; a linked entry's only copy
     float radius[Lanes];                          // negative = tombstone or unused lane
     uint32 layer[Lanes];
     uint32 poolIdx[Lanes];                        // owning RecordPool slot (visibility stamps, userData)

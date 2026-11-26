@@ -86,7 +86,7 @@ protected:
 
     // Commit-only bookkeeping (see BlockStore).
     uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
-    void insertLane(uint32 idx);
+    void insertLane(uint32 idx, const glm::vec3& relPos, float radius);
     void retireLane(uint32 idx);
     void compactCell(uint32 level, CellRecord& rec);
     void setOccupancyBits(uint32 level, uint64 key);
