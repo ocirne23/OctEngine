@@ -12,6 +12,11 @@
 #define OC_FWD_ATTACH_BEGIN
 #define OC_FWD_ATTACH_END
 
+// Inlining control for hot paths: OC_NOINLINE keeps a cold branch's register needs out of its caller's prologue,
+// OC_FORCEINLINE overrides the inliner where it says no (clang spellings in Linux/Linux.cmake).
+#define OC_NOINLINE __declspec(noinline)
+#define OC_FORCEINLINE __forceinline
+
 #ifdef NDEBUG
     #undef assert
     #define assert(expression) ((void)sizeof(expression))

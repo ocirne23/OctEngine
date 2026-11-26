@@ -44,7 +44,8 @@ export namespace Morton
         return { quantizeAxis(pos.x), quantizeAxis(pos.y), quantizeAxis(pos.z) };
     }
 
-    inline uint64 encode(const CellCoord& c)
+    // encode and levelForRadius are force-inlined: updateEntry (the per-entity hot path) must not call out.
+    OC_FORCEINLINE uint64 encode(const CellCoord& c)
     {
         return oc::pdep(c.x, xMask) | oc::pdep(c.y, yMask) | oc::pdep(c.z, zMask);
     }
@@ -76,11 +77,12 @@ export namespace Morton
     }
 
     // Smallest level whose cell size fits the bounding sphere (cellSize >= 2*radius), so an entity
-    // extends at most half a cell beyond its own and queries only need half-a-cell loose bounds.
-    inline uint32 levelForRadius(float radius)
+    // extends at most half a cell beyond its own and queries only need half-a-cell loose bounds. Through int64: AVX2 has no
+    // unsigned double -> int conversion (MSVC emits a 2^63 test and two branches). q - (q != 0) maps 0 and 1 to 0 with no branch.
+    OC_FORCEINLINE uint32 levelForRadius(float radius)
     {
-        const uint64 q = uint64(glm::ceil(double(radius) * (2.0 * InvFineCellSize)));
-        const uint32 level = q <= 1 ? 0u : uint32(oc::bitWidth(q - 1) + 1) / 2u;
+        const uint64 q = uint64(int64(glm::ceil(double(radius) * (2.0 * InvFineCellSize))));
+        const uint32 level = uint32(oc::bitWidth(q - uint64(q != 0)) + 1) / 2u;
         return level < MaxLevels ? level : MaxLevels - 1;
     }
 }

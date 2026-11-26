@@ -822,7 +822,7 @@ void SpatialIndexState::markVisibleSet(ESpatialPass pass, const Frustum& frustum
     const uint32 passIdx = uint32(pass);
     self().advanceStamp(pass);
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
-    PassStamps* stamps = m_pool.stamps.data();
+    PassStamps* stamps = m_pool.stamps;
     TraverseStats stats;
     uint32 collectAny = 0;
     if (pass == ESpatialPass::Main)
@@ -895,7 +895,7 @@ void SpatialIndexState::markVisibleSphere(ESpatialPass pass, const glm::dvec3& c
     const uint32 passIdx = uint32(pass);
     self().advanceStamp(pass);
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
-    PassStamps* stamps = m_pool.stamps.data();
+    PassStamps* stamps = m_pool.stamps;
     const auto stamp = [stamps, passIdx, stampId](uint32 idx, const glm::vec3&, uint32) { stamps[idx].pass[passIdx] = stampId; };
     TraverseStats stats;
     traverseParallel(SphereTester{ radius }, center, layerMask, stats, stamp, [](uint32) {});

@@ -158,11 +158,14 @@ pushes on one shared cursor would contend.
 
 `RecordPool` (the per-entry SoA rows) is what makes registration lock-free:
 
-* **Every row is a `Core.VirtualArray`**: `MAX_ENTRIES` (16M) reserved as ADDRESS SPACE at initialize (~750 MB
+* **Every row is a `Core.VirtualArray`**: `MAX_ENTRIES` (16M) reserved as ADDRESS SPACE at initialize (~740 MB
   over all rows, no memory), pages committed as the pool grows (doubling, under a commit mutex - rare). A
   growth never moves a row, so nothing needs to exclude the readers, and a row access stays a plain base +
   index - no page table on the traversal / `getPassMask` paths. The committed memory shows in the Memory
   panel as "Spatial record pool" (VirtualArray reports its commits to the tracker).
+* **The row base pointers sit together in ONE cache line** (`RecordPool::cellKey` ... `flags`: raw pointers set at
+  initialize; the `VirtualArray`s are private). A VirtualArray is ~640 B, mostly its commit-step table, so read through
+  the arrays every row of one `updateEntry` was a different line.
 * **Slots** come from a tagged lock-free free stack (the head's high 32 bits bump on every push and pop:
   ABA), else a CAS bump of the high-water mark that commits FIRST - so `capacity()` (the high-water mark)
   never passes the committed rows, and the stamp wrap sweep can walk `[0, capacity())` while spawns
@@ -207,8 +210,7 @@ current again. **The 8 pass stamps of an entry sit together** (`RecordPool::stam
 `PassStamps` per entry, not one array per pass): `getPassMask` / `getPassMaskExact` are one
 `__m128i` load compared against the 8 current generations (`m_visibleQueryId`, 16-aligned) with
 `_mm_cmpeq_epi16`, the spawn guard one more compare against 0 — one cache line per call instead of
-one per pass. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
-`storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
+one per pass. The pool's other rows: `storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
 a reused slot.
 
 **The index-time spawn-guard stamp covers Main, Near and Shadow ONLY.** The tier passes get `SpatialStamp_Indexed`
@@ -231,8 +233,8 @@ variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` i
 2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial traverse chunk"` spans
    show on the worker tracks. High because the render gate waits on these stamps.
 
-Every emit gets the lane's layer mask (`(idx, pos, layers)`), so a consumer never reads the pool's
-`layerMask` row per hit. A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
+Every emit gets the lane's layer mask (`(idx, pos, layers)`), the only copy of it (the pool has no
+layer row). A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
 before any emit with `chunk < n`, so a caller can keep an owner-sliced list per chunk (slot 0 = the
 serial expansion, `1 + ` the chunk's first frontier index = the fan-out). A caller outside the
 kick/join window (`queryUpdateTiers`) needs no lock either: registrations never move the pool rows
@@ -395,20 +397,30 @@ so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets t
 (`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
 are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
-* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position
-  and radius live ONLY in its lane** — the pool has no such rows. Before the entry is indexed they ride
-  the pending ops: the Index op carries the registration's, and every `updateEntry` of an `Unindexed`
-  entry queues a Move. The pool keeps what a handle needs and a query test does not (`gen`, `flags`, `cellKey`,
-  `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a block's `count` hold a tombstone
-  radius, so `test8` always runs all 8 lanes.
+* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position,
+  radius and layer mask live ONLY in its lane** — the pool has no such rows. Before the entry is indexed
+  they ride the pending ops: the Index op carries the registration's (layer mask included), and every
+  `updateEntry` of an `Unindexed` entry queues a Move. The pool keeps what a handle needs and a query test
+  does not (`gen`, `flags`, `cellKey`, `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a
+  block's `count` hold a tombstone radius, so `test8` always runs all 8 lanes.
 * **Same-cell update** of an indexed entry = compare against the lane, then the lane stores (two cache
-  lines; none when unchanged), from any job. **Cell change** = a Move op: at commit `retireLane` the
-  old lane, set the pool's `cellKey` / `level`, `insertLane` the op's position into the new cell's head
+  lines; none when unchanged), from any job. Its code path has no call: the body (`updateEntryAt`) and the
+  key math are `OC_FORCEINLINE`, and the cold parts are `OC_NOINLINE` (`updateEntryTop` for a top-level
+  entry, clamped and maybe oversize; `queueOp`, the op push and its vector growth), so their register needs
+  do not land in `updateEntry`'s prologue. The key and the cell-relative position come from `locate`,
+  x / y / z 4-wide: the lattice offset added in double (no integer offset, no constant held in a register),
+  one floor, one clamp with memory bounds, one convert; the cell min is the fine coordinate with its low
+  `2 * level` bits cleared (one `vpand`); only the key's `pdep` encode is per axis. The lane compare and
+  stores stay scalar: tried one 4-wide `cmpneq` + `movmsk`, dropped because gathering the lane's four rows
+  (32 bytes apart) and splitting the result for the stores cost more instructions than it saved.
+* **Cell change** = a Move op: at commit `retireLane` the old lane (it returns the lane's layer mask), set
+  the pool's `cellKey` / `level`, `insertLane` the op's position with that mask into the new cell's head
   block (a new head when that is full). `Cell moves` in the stats counts them per commit.
-* **Indexing** (`indexEntry`): the FIRST Index or Move op to reach an `Unindexed` entry indexes it from
-  its own data, and an Index behind a Move skips. The Index and the first Move may sit in different
-  `PerWorker` slots (the spawning thread, the visiting worker); every Move is newer than the Index, so
-  either order ends at the newest position.
+* **Indexing** (`indexEntry`): `commitFrame` walks the ops ONCE. The Index (the spawning thread) and the
+  first Move of the same entry (the visiting worker) may sit in different `PerWorker` slots, so a Move that
+  finds its entry still `Unindexed` goes to `m_deferredMoves` (in order) and is replayed after the walk, once
+  every Index has run. Every Move is newer than the Index, so the last Move's position wins. Tried two
+  passes (every Index first), dropped because they walk every op twice for a rare case.
 * **Tombstones** — a negative radius fails every test in place. `unregisterEntry` writes only the
   lane's tombstone and the pool flags (queries read lock-free); the counters and blocks settle in `retireLane` at
   commit (the Unindex op, or a Move).

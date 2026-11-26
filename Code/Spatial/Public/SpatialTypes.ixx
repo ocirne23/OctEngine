@@ -47,7 +47,7 @@ export constexpr uint32 SpatialLayer_Render = 1u << 0;  // entities with a Rende
 export constexpr uint32 SpatialLayer_Stress = 1u << 1;  // synthetic stress-test entries
 export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // terrain chunks + ocean sectors: userData is never an Entity*
 export constexpr uint32 SpatialLayer_Entity = 1u << 3;  // every non-global entity (userData = Entity*)
-static_assert((SpatialLayer_Render | SpatialLayer_Stress | SpatialLayer_Terrain | SpatialLayer_Entity) < 256, "RecordPool stores the layer mask in a byte");
+static_assert((SpatialLayer_Render | SpatialLayer_Stress | SpatialLayer_Terrain | SpatialLayer_Entity) < 256, "a pending Index op carries the layer mask in a byte");
 
 // SpatialLayer_Terrain userData bit (above the user-mode address range): set on ocean sectors.
 export constexpr uint64 SpatialTerrainTag_Ocean = 1ull << 63;

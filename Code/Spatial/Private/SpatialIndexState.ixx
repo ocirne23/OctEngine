@@ -51,6 +51,7 @@ protected:
         uint32 gen;
         EType type;
         uint8 newLevel;
+        uint8 layerMask; // Index only: the lane's SpatialLayer_* bits (the pool keeps none; a Move takes them from the old lane)
     };
     struct EmptyCandidate
     {
@@ -84,11 +85,83 @@ protected:
     }
     static uint32 passBits(__m128i lanes) { return uint32(_mm_movemask_epi8(_mm_packs_epi16(lanes, _mm_setzero_si128()))); }
 
-    // Commit-only bookkeeping (see BlockStore).
-    uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
-    void indexEntry(const PendingOp& op, uint8 flags); // the first Index or Move to reach an Unindexed entry
-    void insertLane(uint32 idx, const glm::vec3& relPos, float radius);
-    void retireLane(uint32 idx);
+    // ---- Register / update ---- updateEntry's same-cell path has no call: the body and the key math are force-inlined, the cold
+    // parts (the top level, the op push) out of line, so their register needs stay out of its prologue.
+
+    // levelForRadius clamped to the level count; the top level (clamped, maybe oversize: tracks the radius) is out of line.
+    OC_FORCEINLINE uint32 entryLevel(float radius)
+    {
+        const uint32 level = Morton::levelForRadius(radius);
+        if (level + 1 < m_numLevels) [[likely]]
+            return level;
+        return entryLevelTop(radius);
+    }
+    uint32 entryLevelTop(float radius);
+    void queueOp(const PendingOp& op);
+
+    // pos -> its cell key at `level` (returned) and its position relative to that cell's min corner (`rel`: x, y, z, 0), all three
+    // axes 4-wide. The lattice offset is added in double, so floor(lattice / cell) is the fine coordinate and no integer offset or
+    // constant has to stay in a register; the cell min is the fine coordinate with its low 2 * level bits cleared. pos + 2^23 m rounds
+    // at ~2e-9 m: a position that close to a cell boundary may land in the neighbour cell, which the half-cell loose bounds cover.
+    static OC_FORCEINLINE uint64 locate(const glm::dvec3& pos, uint32 level, __m128& rel)
+    {
+        const __m256d p = _mm256_insertf128_pd(_mm256_castpd128_pd256(_mm_loadu_pd(&pos.x)), _mm_load_sd(&pos.z), 1); // x, y, z, 0
+        const __m256d lattice = _mm256_add_pd(p, _mm256_set1_pd(double(Morton::FineOffset) * Morton::FineCellSize));
+        const __m256d cell = _mm256_floor_pd(_mm256_mul_pd(lattice, _mm256_set1_pd(Morton::InvFineCellSize)));
+        assert(_mm256_movemask_pd(_mm256_or_pd(_mm256_cmp_pd(cell, _mm256_setzero_pd(), _CMP_LT_OQ),
+                                               _mm256_cmp_pd(cell, _mm256_set1_pd(double(Morton::FineCoordMax)), _CMP_GT_OQ))) == 0
+               && "outside the +/-8389km world bound (see SPATIAL_FINEST_CELL_SIZE)");
+        // max(x, 0) returns its 2nd operand for a NaN: a NaN position clamps to 0, like an out-of-range one.
+        const __m128i fine = _mm256_cvttpd_epi32(_mm256_min_pd(_mm256_max_pd(cell, _mm256_setzero_pd()),
+                                                               _mm256_set1_pd(double(Morton::FineCoordMax))));
+        const uint64 key = Morton::keyAtLevel(Morton::encode({ uint32(_mm_cvtsi128_si32(fine)), uint32(_mm_extract_epi32(fine, 1)),
+                                                               uint32(_mm_extract_epi32(fine, 2)) }), level);
+        const __m128i cellMin = _mm_and_si128(fine, _mm_set1_epi32(int32(~((1u << (2 * level)) - 1u))));
+        rel = _mm256_cvtpd_ps(_mm256_fnmadd_pd(_mm256_cvtepi32_pd(cellMin), _mm256_set1_pd(Morton::FineCellSize), lattice));
+        return key;
+    }
+    static OC_FORCEINLINE glm::vec3 toVec3(__m128 v)
+    {
+        return { _mm_cvtss_f32(v), _mm_cvtss_f32(_mm_movehdup_ps(v)), _mm_cvtss_f32(_mm_movehl_ps(v, v)) };
+    }
+
+    // updateEntry after the handle check, at a known level: inlined into updateEntry (every level below the top) and into the
+    // out-of-line updateEntryTop.
+    OC_FORCEINLINE void updateEntryAt(SpatialHandle handle, const glm::dvec3& pos, float radius, uint32 level)
+    {
+        const uint32 idx = handle.idx;
+        __m128 rel4;
+        const uint64 key = locate(pos, level, rel4);
+        // Scalar from here: a 4-wide compare would first gather the lane's four rows (32 bytes apart) and split the result again for
+        // the stores, which costs more than four compares with memory operands.
+        const glm::vec3 rel = toVec3(rel4);
+        const uint8 flags = m_pool.flags[idx];
+        if (!(flags & (RecordFlag_PendingMove | RecordFlag_Unindexed)) && key == m_pool.cellKey[idx] && level == m_pool.level[idx])
+        {
+            // Same cell, indexed: the lane is the only copy.
+            const uint32 slot = m_pool.storeIdx[idx];
+            CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
+            const uint32 lane = BlockStore::laneOf(slot);
+            if (rel.x == block.posX[lane] && rel.y == block.posY[lane] && rel.z == block.posZ[lane] && radius == block.radius[lane])
+                return; // untouched: no store into a line the queries read
+            block.posX[lane] = rel.x;
+            block.posY[lane] = rel.y;
+            block.posZ[lane] = rel.z;
+            block.radius[lane] = radius;
+            return;
+        }
+        // A cell change, or no lane yet (Unindexed): a Move op, applied at commit.
+        m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
+        queueOp({ .newKey = key, .newRelPos = rel, .newRadius = radius, .idx = idx, .gen = handle.gen, .type = PendingOp::Move,
+                  .newLevel = uint8(level) });
+    }
+    void updateEntryTop(SpatialHandle handle, const glm::dvec3& pos, float radius);
+
+    // ---- Commit bookkeeping (see BlockStore) ----
+
+    void indexEntry(const PendingOp& op); // an Index op: the lane and the spawn-guard stamps
+    void insertLane(uint32 idx, const glm::vec3& relPos, float radius, uint32 layerMask);
+    uint32 retireLane(uint32 idx);        // returns the lane's layer mask (a Move re-inserts it)
     void compactCell(uint32 level, CellRecord& rec);
     void setOccupancyBits(uint32 level, uint64 key);
     void sweepEmptyCells();
@@ -197,6 +270,7 @@ protected:
 
     // PerWorker on purpose: pushed from any job with no chunk identity, unbounded volume.
     PerWorker<oc::vector<PendingOp>> m_pendingOps;
+    oc::vector<PendingOp> m_deferredMoves; // commit scratch: Moves that reached their entry before its Index op
     oc::vector<EmptyCandidate> m_emptyCandidates;
     oc::vector<CompactEntry> m_compactScratch;
 

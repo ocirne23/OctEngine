@@ -137,6 +137,8 @@ list(APPEND COMPILE_OPTIONS
 	"-DOC_FWD_ATTACH=extern \"C++\""
 	"-DOC_FWD_ATTACH_BEGIN=extern \"C++\" {"
 	"-DOC_FWD_ATTACH_END=}"
+	"-DOC_NOINLINE=__attribute__((noinline))"
+	"-DOC_FORCEINLINE=inline __attribute__((always_inline))"
 	"-Doffsetof(type,member)=__builtin_offsetof(type,member)"
 	"$<IF:$<CONFIG:Debug>,-Dassert(e)=((e) ? (void)0 : __builtin_debugtrap()),-Dassert=(void)sizeof>")
 

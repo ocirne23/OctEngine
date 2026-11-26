@@ -137,6 +137,8 @@ clang warns about an ANGLED include in a module purview.
   `export OC_FWD_ATTACH class X`, and its out-of-class member definitions sit between `OC_FWD_ATTACH_BEGIN` /
   `OC_FWD_ATTACH_END`. The same holds for a class another module befriends (`ScriptEventManager`) and for the friend /
   forward declarations of these types inside partitions. MSVC accepts a mismatch here; clang rejects it.
+* **Inlining control is `OC_NOINLINE` / `OC_FORCEINLINE`**, never `__declspec(noinline)` / `__forceinline`:
+  forceinclude.h defines them for MSVC, `Linux/Linux.cmake` as the clang attributes.
 * **Visible, not just reachable**: clang wants the import of every module whose names a file spells
   (`import Core.Transform;` where `Transform` is named), and an `export` on the first declaration of a name that is
   exported later.
