@@ -29,7 +29,7 @@ export namespace RendererVKLayout
     constexpr uint32 INITIAL_UNIQUE_MESHES = 2 * 1024; // MESH_MATERIAL_INDEX_LIMIT: the uint16 mesh index's whole range
     constexpr uint32 INITIAL_UNIQUE_MATERIALS = 8;
     constexpr uint32 INITIAL_INSTANCE_OFFSETS = 64;
-    constexpr uint32 INITIAL_INSTANCE_DATA = 1024 * 1024; // the world's load does not grow it
+    constexpr uint32 INITIAL_INSTANCE_DATA = 256 * 1024; // the world's load does not grow it
     constexpr uint32 INITIAL_TEXTURES = 64; // TextureManager grows this, clamped to the device limit
     constexpr size_t INITIAL_LIGHT_GRID_BUFFER_SIZE = 10 * 1024 * 1024;
 	constexpr size_t INITIAL_LIGHT_TABLE_NUM_ENTRIES = 4096; // power of 2 (doubling preserves this); 4x the CPU build's initial 1024-grid claim capacity, so a normal scene never grows
