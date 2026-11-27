@@ -3,7 +3,9 @@ export module Spatial:CellMap;
 import Core;
 import :Morton;
 
-// One record per occupied cell of one level: open addressing, linear probing, backward-shift deletion.
+// One record per occupied cell of one level: open addressing, linear probing, backward-shift deletion. A slot holds the key next to
+// its record (32 bytes, two per cache line, never split), so a hit reads one line. Fibonacci hashing: one multiply, the top bits.
+// Grows at half full: a miss (the direct cell path probes empty cells) stays ~2.5 slots, a hit ~1.5.
 
 struct CellRecord
 {
@@ -12,15 +14,21 @@ struct CellRecord
     uint32 count = 0;          // entries owning a lane here (blocks free as soon as they empty, so 0 <=> no chain)
 };
 
+struct alignas(32) CellSlot
+{
+    uint64 key = Morton::InvalidKey;
+    CellRecord rec;
+};
+static_assert(sizeof(CellSlot) == 32);
+
 class CellMap final
 {
 public:
 
     void initialize(uint32 capacity)
     {
-        m_capacity = oc::bitCeil(capacity < 64 ? 64u : capacity);
-        m_keys.assign(m_capacity, Morton::InvalidKey);
-        m_records.assign(m_capacity, CellRecord());
+        setCapacity(oc::bitCeil(capacity < 64 ? 64u : capacity));
+        m_slots.assign(m_capacity, CellSlot());
         m_size = 0;
     }
 
@@ -31,32 +39,44 @@ public:
         const uint32 mask = m_capacity - 1;
         for (uint32 slot = homeSlot(key);; slot = (slot + 1) & mask)
         {
-            if (m_keys[slot] == key)
-                return &m_records[slot];
-            if (m_keys[slot] == Morton::InvalidKey)
+            CellSlot& s = m_slots[slot];
+            if (s.key == key)
+                return &s.rec;
+            if (s.key == Morton::InvalidKey)
                 return nullptr;
         }
     }
 
     const CellRecord* find(uint64 key) const { return const_cast<CellMap*>(this)->find(key); }
 
-    CellRecord& getOrCreate(uint64 key) // growth invalidates previously returned pointers
+    CellRecord& getOrCreate(uint64 key, bool& created) // growth invalidates previously returned pointers
     {
-        if (m_size * 10 >= m_capacity * 7)
+        if (m_size * 2 >= m_capacity)
             grow();
         const uint32 mask = m_capacity - 1;
         for (uint32 slot = homeSlot(key);; slot = (slot + 1) & mask)
         {
-            if (m_keys[slot] == key)
-                return m_records[slot];
-            if (m_keys[slot] == Morton::InvalidKey)
+            CellSlot& s = m_slots[slot];
+            if (s.key == key)
             {
-                m_keys[slot] = key;
-                m_records[slot] = CellRecord();
+                created = false;
+                return s.rec;
+            }
+            if (s.key == Morton::InvalidKey)
+            {
+                s.key = key;
+                s.rec = CellRecord();
                 ++m_size;
-                return m_records[slot];
+                created = true;
+                return s.rec;
             }
         }
+    }
+
+    CellRecord& getOrCreate(uint64 key)
+    {
+        bool created;
+        return getOrCreate(key, created);
     }
 
     void erase(uint64 key)
@@ -65,9 +85,9 @@ public:
         uint32 slot = homeSlot(key);
         while (true)
         {
-            if (m_keys[slot] == key)
+            if (m_slots[slot].key == key)
                 break;
-            if (m_keys[slot] == Morton::InvalidKey)
+            if (m_slots[slot].key == Morton::InvalidKey)
                 return;
             slot = (slot + 1) & mask;
         }
@@ -75,71 +95,64 @@ public:
         while (true) // backward-shift: pull later probe-chain entries into the hole
         {
             slot = (slot + 1) & mask;
-            if (m_keys[slot] == Morton::InvalidKey)
+            if (m_slots[slot].key == Morton::InvalidKey)
                 break;
-            const uint32 home = homeSlot(m_keys[slot]);
+            const uint32 home = homeSlot(m_slots[slot].key);
             if (((slot - home) & mask) >= ((slot - hole) & mask))
             {
-                m_keys[hole] = m_keys[slot];
-                m_records[hole] = m_records[slot];
+                m_slots[hole] = m_slots[slot];
                 hole = slot;
             }
         }
-        m_keys[hole] = Morton::InvalidKey;
-        m_records[hole] = CellRecord();
+        m_slots[hole] = CellSlot();
         --m_size;
     }
 
     template <typename Func>
     void forEachCell(Func&& func) const // func(uint64 key, const CellRecord&)
     {
-        for (uint32 slot = 0; slot < m_capacity; ++slot)
-            if (m_keys[slot] != Morton::InvalidKey)
-                func(m_keys[slot], m_records[slot]);
+        for (const CellSlot& s : m_slots)
+            if (s.key != Morton::InvalidKey)
+                func(s.key, s.rec);
     }
 
     template <typename Func>
     void forEachCellMutable(Func&& func) // func(uint64 key, CellRecord&); must not insert/erase
     {
-        for (uint32 slot = 0; slot < m_capacity; ++slot)
-            if (m_keys[slot] != Morton::InvalidKey)
-                func(m_keys[slot], m_records[slot]);
+        for (CellSlot& s : m_slots)
+            if (s.key != Morton::InvalidKey)
+                func(s.key, s.rec);
     }
 
 private:
 
-    static uint64 hashKey(uint64 x) // splitmix64 finalizer
-    {
-        x ^= x >> 30; x *= 0xbf58'476d'1ce4'e5b9ull;
-        x ^= x >> 27; x *= 0x94d0'49bb'1331'11ebull;
-        return x ^ (x >> 31);
-    }
+    uint32 homeSlot(uint64 key) const { return uint32((key * 0x9E37'79B9'7F4A'7C15ull) >> m_shift); }
 
-    uint32 homeSlot(uint64 key) const { return uint32(hashKey(key)) & (m_capacity - 1); }
+    void setCapacity(uint32 capacity)
+    {
+        m_capacity = capacity;
+        m_shift = 64u - uint32(oc::tzcnt(uint64(capacity)));
+    }
 
     void grow()
     {
-        oc::vector<uint64> oldKeys = oc::move(m_keys);
-        oc::vector<CellRecord> oldRecords = oc::move(m_records);
-        const uint32 oldCapacity = m_capacity;
-        m_capacity *= 2;
-        m_keys.assign(m_capacity, Morton::InvalidKey);
-        m_records.assign(m_capacity, CellRecord());
+        oc::vector<CellSlot> old = oc::move(m_slots);
+        setCapacity(m_capacity * 2);
+        m_slots.assign(m_capacity, CellSlot());
         const uint32 mask = m_capacity - 1;
-        for (uint32 i = 0; i < oldCapacity; ++i)
+        for (const CellSlot& s : old)
         {
-            if (oldKeys[i] == Morton::InvalidKey)
+            if (s.key == Morton::InvalidKey)
                 continue;
-            uint32 slot = homeSlot(oldKeys[i]);
-            while (m_keys[slot] != Morton::InvalidKey)
+            uint32 slot = homeSlot(s.key);
+            while (m_slots[slot].key != Morton::InvalidKey)
                 slot = (slot + 1) & mask;
-            m_keys[slot] = oldKeys[i];
-            m_records[slot] = oldRecords[i];
+            m_slots[slot] = s;
         }
     }
 
-    oc::vector<uint64> m_keys;
-    oc::vector<CellRecord> m_records;
+    oc::vector<CellSlot> m_slots;
     uint32 m_capacity = 0;
+    uint32 m_shift = 64;
     uint32 m_size = 0;
 };

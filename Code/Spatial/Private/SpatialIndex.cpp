@@ -118,8 +118,8 @@ void SpatialIndex::commitFrame()
     ProfileScope profileScope("Spatial commit", EProfileCategory::Spatial);
 
     assert(m_initialized);
-    const auto start = Clock::now();
-    int cellMoves = 0;
+    [[maybe_unused]] const auto start = SpatialStatsEnabled ? Clock::now() : Clock::time_point();
+    [[maybe_unused]] int cellMoves = 0;
     // One pass over the staged ops, FIFO within a slot (one visitor per entity per pass keeps a frame's Moves for one entry in one
     // slot). The Index (the spawning thread) and the first Move of the same entry (the visiting worker) may sit in different slots:
     // a Move that finds its entry still Unindexed is deferred, in order, and replayed once every Index has run. Every Move is newer
@@ -131,7 +131,8 @@ void SpatialIndex::commitFrame()
         m_pool.level[op.idx] = op.newLevel;
         m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
         insertLane(op.idx, op.newRelPos, op.newRadius, layerMask);
-        ++cellMoves;
+        if constexpr (SpatialStatsEnabled)
+            ++cellMoves;
     };
     m_pendingOps.forEach([&](oc::vector<PendingOp>& ops)
     {
@@ -175,24 +176,27 @@ void SpatialIndex::commitFrame()
     m_deferredMoves.clear();
     sweepEmptyCells();
 
-    m_stats.numEntries = int(m_pool.numAlive());
-    m_stats.cellMoves = cellMoves;
-    int totalCells = 0;
-    int totalBlocks = 0;
-    for (uint32 i = 0; i < m_numLevels; ++i)
+    if constexpr (SpatialStatsEnabled)
     {
-        m_stats.perLevelCells[i] = int(m_levels[i].size());
-        m_stats.perLevelEntities[i] = int(m_levelEntityCount[i]);
-        totalCells += int(m_levels[i].size());
-        totalBlocks += int(m_blocks[i].numBlocksInUse);
+        m_stats.numEntries = int(m_pool.numAlive());
+        m_stats.cellMoves = cellMoves;
+        int totalCells = 0;
+        int totalBlocks = 0;
+        for (uint32 i = 0; i < m_numLevels; ++i)
+        {
+            m_stats.perLevelCells[i] = int(m_levels[i].size());
+            m_stats.perLevelEntities[i] = int(m_levelEntityCount[i]);
+            totalCells += int(m_levels[i].size());
+            totalBlocks += int(m_blocks[i].numBlocksInUse);
+        }
+        m_stats.numCells = totalCells;
+        m_stats.numBlocks = totalBlocks;
+        m_stats.cellsTested = 0;
+        m_stats.cellsFullyInside = 0;
+        m_stats.entityTests = 0;
+        m_stats.markVisibleMs = 0.0f; // markVisible* calls accumulate into it after this commit
+        m_stats.commitMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
     }
-    m_stats.numCells = totalCells;
-    m_stats.numBlocks = totalBlocks;
-    m_stats.cellsTested = 0;
-    m_stats.cellsFullyInside = 0;
-    m_stats.entityTests = 0;
-    m_stats.markVisibleMs = 0.0f; // markVisible* calls accumulate into it after this commit
-    m_stats.commitMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
     ++m_frameId;
 }
 
@@ -224,11 +228,13 @@ void SpatialIndexState::insertLane(uint32 idx, const glm::vec3& relPos, float ra
 {
     const uint32 level = m_pool.level[idx];
     const uint64 key = m_pool.cellKey[idx];
-    CellRecord& rec = m_levels[level].getOrCreate(key);
-    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, relPos.x, relPos.y, relPos.z, radius, layerMask, idx);
+    bool created;
+    CellRecord& rec = m_levels[level].getOrCreate(key, created);
+    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, relPos.x, relPos.y, relPos.z, radius, layerMask, m_pool.userData[idx], idx);
     ++rec.count;
     ++m_levelEntityCount[level];
-    setOccupancyBits(level, key);
+    if (created) // a cell in the map has its parent bit set: setOccupancyBits sets it, only the sweep clears it (with the cell)
+        setOccupancyBits(level, key);
 }
 
 void SpatialIndexState::setOccupancyBits(uint32 level, uint64 key)
@@ -321,7 +327,7 @@ void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
             const uint32 idx = block.poolIdx[lane];
             if ((m_pool.flags[idx] & (RecordFlag_Alive | RecordFlag_PendingFree)) && m_pool.level[idx] == level
                 && m_pool.storeIdx[idx] == BlockStore::slotOf(cur, lane))
-                live.push_back({ block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane], block.layer[lane], idx });
+                live.push_back({ block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane], block.userData[lane], idx, block.layer[lane] });
         }
     }
     assert(uint32(live.size()) == rec.count);
@@ -338,6 +344,7 @@ void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
             const CompactEntry& e = live[i];
             block.posX[lane] = e.x; block.posY[lane] = e.y; block.posZ[lane] = e.z;
             block.radius[lane] = e.radius;
+            block.userData[lane] = e.userData;
             block.layer[lane] = e.layer;
             block.poolIdx[lane] = e.poolIdx;
             m_pool.storeIdx[e.poolIdx] = BlockStore::slotOf(cur, lane);

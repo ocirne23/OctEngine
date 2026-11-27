@@ -14,6 +14,9 @@ target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings Threading)
 # Override here if a world needs a different extent or density: 8m cells span +/-8389km.
 # target_compile_definitions(${PROJECT_NAME} PRIVATE SPATIAL_FINEST_CELL_SIZE=8.0)
 
+# Spatial/Stats (the counters on the traversal's hot paths) are filled only with this set.
+# target_compile_definitions(${PROJECT_NAME} PRIVATE SPATIAL_STATS=1)
+
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 
 apply_compile_settings(${PROJECT_NAME})

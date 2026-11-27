@@ -3,7 +3,8 @@ export module Spatial:BlockStore;
 import Core;
 
 // Per-level storage of the indexed entries: 8-wide SoA blocks chained per cell (see "Cell blocks" in
-// Spatial CONTEXT.md). 256 bytes, cache-line aligned: no 32-byte lane row splits a line.
+// Spatial CONTEXT.md). 256 bytes, cache-line aligned: no 32-byte lane row splits a line. Lines: posX + posY | posZ + radius | userData |
+// poolIdx + layer + the header.
 struct alignas(64) CellBlock
 {
     static constexpr uint32 Lanes = 8;
@@ -11,8 +12,9 @@ struct alignas(64) CellBlock
 
     float posX[Lanes], posY[Lanes], posZ[Lanes]; // cell-relative; an indexed entry's only copy
     float radius[Lanes];                          // negative = tombstone or unused lane
-    uint32 layer[Lanes];
-    uint32 poolIdx[Lanes];                        // owning RecordPool slot (visibility stamps, userData)
+    uint64 userData[Lanes];                       // a copy of the pool row (it never changes): a query hit reads no pool row
+    uint32 poolIdx[Lanes];                        // owning RecordPool slot (visibility stamps, gen)
+    uint8 layer[Lanes];                           // SpatialLayer_* bits (all below 256, see SpatialTypes.ixx)
     uint32 next;                                  // next block in the cell's chain, UINT32_MAX = end
     uint32 count;                                 // lanes handed out (owned + retired)
     uint32 live;                                  // lanes the pool still owns
@@ -65,7 +67,7 @@ struct BlockStore
 
     // Appends into the chain at `head` (a new head block when the head is full or absent) and
     // returns the slot; `head` is updated in place.
-    uint32 insert(uint32& head, float x, float y, float z, float r, uint32 layerMask, uint32 poolIdx)
+    uint32 insert(uint32& head, float x, float y, float z, float r, uint32 layerMask, uint64 userData, uint32 poolIdx)
     {
         if (head == UINT32_MAX || blocks[head].count == CellBlock::Lanes)
         {
@@ -77,7 +79,8 @@ struct BlockStore
         const uint32 lane = block.count++;
         block.posX[lane] = x; block.posY[lane] = y; block.posZ[lane] = z;
         block.radius[lane] = r;
-        block.layer[lane] = layerMask;
+        block.userData[lane] = userData;
+        block.layer[lane] = uint8(layerMask);
         block.poolIdx[lane] = poolIdx;
         ++block.live;
         return slotOf(head, lane);

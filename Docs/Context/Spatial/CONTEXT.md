@@ -25,7 +25,7 @@ using-declaration: MSVC keeps the base's protected access on a nested enum named
 ## The one call the App makes
 
 `SpatialIndex::update(camera, frustum, viewProjRelCamera, sunDirection)`
-([Query.cpp:960](../../../Code/Spatial/Private/Query.cpp#L960)) is the whole per-frame spatial step, and it runs **as the
+([Query.cpp:1167](../../../Code/Spatial/Private/Query.cpp#L1167)) is the whole per-frame spatial step, and it runs **as the
 High job "Spatial cull"**:
 
 ```cpp
@@ -41,10 +41,10 @@ In order, `update` does:
    plane, so terrain and entities stream to exactly the view distance rather than a fixed cap.
 3. Returns early if the mode is `Off` or `freeze` is set.
 4. **Occlusion raster**, when the CPU occlusion buffer is enabled.
-5. **The Main stamp** — the margin-inflated camera frustum over `SpatialLayer_Render |
-   SpatialLayer_Terrain` (it also fills the visible-set hand-over lists).
+5. **The Main and Shadow stamps, in ONE traversal** — Main: the margin-inflated camera frustum over `SpatialLayer_Render |
+   SpatialLayer_Terrain` (it also fills the visible-set hand-over lists). Shadow: that frustum swept toward the sun, over
+   `SpatialLayer_Render` (see "The Shadow pass").
 6. **The Near stamp** — a camera ball over `SpatialLayer_Render` only, behind requery hysteresis.
-7. **The Shadow stamp** — the inflated frustum swept toward the sun, over `SpatialLayer_Render`.
 
 The SIM LOD tier stamps are NOT made here — see "The SIM LOD tiers are NOT stamped by the cull job".
 
@@ -85,8 +85,14 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   same, so the finer of the two won.
 * **BMI2 Morton keys** (`Spatial:Morton`): `pdep` / `pext`. A level-L key is the fine key `>> 6*L`, a
   parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
+* **`CellMap`** (one per level): open addressing, linear probing, backward-shift deletion. A slot is the key next to its
+  `CellRecord` (32 bytes, two per cache line, never split), so a hit reads ONE line; the home slot is a Fibonacci hash (one
+  multiply, the top bits). It grows at half full, so a miss - the direct cell path probes empty cells - stays ~2.5 slots.
 * **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
-  never visit empty space.
+  never visit empty space. **A cell in the map always has its bit set in its parent**: `setOccupancyBits` sets it (and
+  walks up through every ancestor it creates), and only `sweepEmptyCells` clears it, in the same step as it erases the
+  cell. So `insertLane` walks up only when `getOrCreate` created the cell; a lane into a cell already in the map (a
+  cell waiting for the sweep included) skips the parent probe.
 * **Children are classified 8 at a time BEFORE their hash probe** (`forEachChild`, testers with
   `classify8`: sphere and frustum). The batch centers come from the parent's float min plus the
   4×4×4 grid offset (`g_childOffsets`), tested with a box inflated by a bound on the float rounding,
@@ -223,7 +229,7 @@ variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` i
 ### Multithreaded traversal
 
 `markVisibleSet`, `markVisibleSphere` and `queryUpdateTiers` run `traverseParallel`
-([Query.cpp:629](../../../Code/Spatial/Private/Query.cpp#L629)):
+([Query.cpp:784](../../../Code/Spatial/Private/Query.cpp#L784)):
 
 1. The top level is a handful of huge cells, so a **serial frontier expansion** splits the tree until
    it holds `numWorkers * 4` independent subtree roots — **4× over-partitioned so the shared
@@ -233,8 +239,10 @@ variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` i
 2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial traverse chunk"` spans
    show on the worker tracks. High because the render gate waits on these stamps.
 
-Every emit gets the lane's layer mask (`(idx, pos, layers)`), the only copy of it (the pool has no
-layer row). A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
+Every emit gets the hit's lane, `(block, lane, cellMin, passes)`, and reads only what it needs from it: the userData
+(queries), the pool slot (stamps), the layer byte (the collect lists), the position relative to the reference (`cellMin` + the
+lane's position: `queryNearest`, the tiers). `passes` is bit 0 for a one-pass tester; the Main + Shadow tester sets bit 0 for
+Main and bit 1 for Shadow. A chunk-aware emit `(block, lane, cellMin, passes, chunk)` gets `prepareChunks(n)`
 before any emit with `chunk < n`, so a caller can keep an owner-sliced list per chunk (slot 0 = the
 serial expansion, `1 + ` the chunk's first frontier index = the fan-out). A caller outside the
 kick/join window (`queryUpdateTiers`) needs no lock either: registrations never move the pool rows
@@ -260,7 +268,7 @@ stamp lambda appends every hit carrying one of that slot's layers to the slot's 
 per-chunk list (list 0 for the serial expansion, 1 + the chunk's first frontier index for the
 fan-out), merged once inside the job. A slot collects either **`ECollect::Handles`**
 (`visibleHandles(slot)`) or **`ECollect::UserData`** (`visibleUserData(slot)`: the value is read from
-the pool IN THE JOB and zeros are dropped, so the consumer's walk touches no pool row at all — but it
+the lane IN THE JOB and zeros are dropped, so neither the job nor the consumer's walk touches a pool row for it — but it
 gets a value, not a live check, and must tolerate an entry that changed or died since the stamp).
 **Two collect slots** (`NumVisibleCollectSlots`):
 * slot 0 — the World's (`SpatialLayer_Entity`, Handles, the default arguments): entities die in the
@@ -286,7 +294,7 @@ how the streamer and the ocean push their on-screen geometry without walking it 
 The Near ball barely changes frame to frame, so it is inflated by `nearSlack` (16 m) and requeried
 only once the camera has moved that far — **or every 30 frames**, which keeps off-screen MOVERS from
 staying unstamped: they can enter the ball without the camera moving
-([Query.cpp:1002](../../../Code/Spatial/Private/Query.cpp#L1002)).
+([Query.cpp:1231](../../../Code/Spatial/Private/Query.cpp#L1231)).
 
 Terrain rides the Main stamp but **skips the Near ball**: main-culled terrain keeps its shadow and GI
 passes unconditionally.
@@ -299,13 +307,19 @@ stamps a third render pass every frame: **the inflated Main frustum swept toward
 horizontal plane by `shadowReach`** — the Minkowski sum with that segment, which keeps the face
 normals and moves only the planes facing against the sweep (by reach × −(n·s)). The sun direction
 rides in `CullView::sunDirection` (the renderer fills it in `setFrameView`); a near-vertical sun skips
-the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow`-only entries push
-`PASS_SHADOW` alone (Entity.cpp); Near-only still pushes `PASS_SHADOW | PASS_GI`.
+the sweep (and the pass: its stamps stay as they were). No occlusion test: a caster hidden behind a wall still casts.
+`Shadow`-only entries push `PASS_SHADOW` alone (Entity.cpp); Near-only still pushes `PASS_SHADOW | PASS_GI`.
+
+**The swept frustum CONTAINS the Main one** (same planes, some moved out, a longer band), so both stamp in ONE traversal
+(`DualFrustumTester`, `markVisibleSet` with a shadow frustum): one descent, one hash probe and one classify per cell instead of
+two. Its active mask holds both: bits 0–6 Main, bit 7 "Main ruled out" (outside Main, or occluded - the subtree still runs for
+Shadow), bits 8–14 Shadow; outside Shadow is outside both. A plane the sweep did not move gives both passes the same answer,
+so `test8` and `classify8` test it once. Occlusion prunes Main only.
 
 ### Culling config (`Spatial/Culling` tweaks)
 
 All Spatial tweaks are `SpatialSettings` = `Globals::settings.spatial` (`Settings.Spatial`, registered in
-`Code/Settings`): `culling`, `stats` (the readouts the index writes), `occlusion`, `stress`. `Spatial:SpatialTypes`
+`Code/Settings`): `culling`, `stats` (the readouts the index writes, `SPATIAL_STATS` builds only - see Stats), `occlusion`, `stress`. `Spatial:SpatialTypes`
 re-exports `Settings.Spatial`, so `ESpatialCullMode` / `SpatialCullingConfig` / `SpatialStats` reach every
 importer of Spatial. The index binds `m_culling` / `m_stats` as references to them.
 
@@ -381,7 +395,7 @@ the block mip keeps the FARTHEST depth, and any near-plane crossing reports visi
 
 > The renderer's projection is REVERSED-Z, so `update` flips the z row back to standard orientation
 > (`z' = w - z`) before handing the matrix to the rasterizer — for the rasterizer ONLY
-> ([Query.cpp:979](../../../Code/Spatial/Private/Query.cpp#L979)).
+> ([Query.cpp:1190](../../../Code/Spatial/Private/Query.cpp#L1190)).
 
 `addOccluder` / `removeOccluder` take a mutex: they run concurrently from spawn jobs
 (PhysicsComponent spawn and resume), while `render()` runs in the cull window where no spawn is
@@ -397,12 +411,15 @@ so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets t
 (`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
 are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
-* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position,
+* **Layout.** Four lines: `posX` + `posY` | `posZ` + `radius` | `userData` | `poolIdx` + `layer` (one byte per lane: every
+  layer bit is below 256) + the header. `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position,
   radius and layer mask live ONLY in its lane** — the pool has no such rows. Before the entry is indexed
   they ride the pending ops: the Index op carries the registration's (layer mask included), and every
-  `updateEntry` of an `Unindexed` entry queues a Move. The pool keeps what a handle needs and a query test
-  does not (`gen`, `flags`, `cellKey`, `level`, `storeIdx`, `userData`, the stamps). Unused lanes past a
-  block's `count` hold a tombstone radius, so `test8` always runs all 8 lanes.
+  `updateEntry` of an `Unindexed` entry queues a Move. **The lane also holds a COPY of the userData** (the pool row is
+  written once, at registration, so the copy cannot go stale; `insertLane` reads it from the pool): a query hit and the
+  UserData collect read no pool row. The pool keeps what a handle needs (`gen`, `flags`, `cellKey`, `level`, `storeIdx`,
+  `userData`) and the stamps. Unused lanes past a block's `count` hold a tombstone radius, so `test8` always runs all 8 lanes.
+  The layer test is one 8-byte `and` + `cmpeq_epi8` + `movemask`, ANDed into the hit mask.
 * **Same-cell update** of an indexed entry = compare against the lane, then the lane stores (two cache
   lines; none when unchanged), from any job. Its code path has no call: the body (`updateEntryAt`) and the
   key math are `OC_FORCEINLINE`, and the cold parts are `OC_NOINLINE` (`updateEntryTop` for a top-level
@@ -436,6 +453,12 @@ are the same lane, the difference is only whether `updateEntry` writes it this f
   assert re-walks the chain to check it.
 * Sphere, AABB and frustum testers test blocks 8-wide; the ray tester goes lane by lane. Stats:
   `Blocks` (entries / blocks = the lane fill) and `Cell moves`.
+
+## Stats
+
+**Spatial/Stats is filled only in a build with `SPATIAL_STATS=1`** (`SpatialStatsEnabled` in `Types.ixx`; the commented
+line in `Code/Spatial/CMakeLists.txt` sets it). Otherwise every counter, the per-level loop at commit and the `Clock` reads
+compile out (`if constexpr`), and the rows read 0: the counters sat on the traversal's hottest paths.
 
 ## Stress harness
 

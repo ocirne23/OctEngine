@@ -34,11 +34,13 @@ protected:
 
     void unregisterEntry(SpatialHandle handle); // neutralized immediately, unindexed at commit (SpatialEntry::reset)
 
-    // The per-frame visibility pass: commit, then the Main, Near and Shadow stamps. sunDirection points at the sun; viewProjRelCamera is reversed-Z.
+    // The per-frame visibility pass: commit, then the Main + Shadow stamps (one traversal), then Near. sunDirection points at the sun;
+    // viewProjRelCamera is reversed-Z.
     void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection);
-    // Each mark call starts a new stamp generation for that pass.
-    void markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
-                        uint32 layerMask, IOcclusionTester* occlusion = nullptr);
+    // Each mark call starts a new stamp generation for its passes. markVisibleSet stamps Main (and fills the collect lists); with a
+    // shadowFrustum (which must contain mainFrustum) it stamps Shadow in the same traversal.
+    void markVisibleSet(const Frustum& mainFrustum, const glm::dvec3& cameraPos, float mainMaxDist, uint32 mainLayers, IOcclusionTester* occlusion,
+                        const Frustum* shadowFrustum, float shadowMaxDist, uint32 shadowLayers);
     void markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask);
 
     struct PendingOp
@@ -58,14 +60,15 @@ protected:
         uint64 key;
         uint32 level;
     };
-    struct CompactEntry { float x, y, z, radius; uint32 layer, poolIdx; };
-    // Per-traversal counters, merged into m_stats once at the end (traversals run concurrently).
+    struct CompactEntry { float x, y, z, radius; uint64 userData; uint32 poolIdx; uint8 layer; };
+    // Per-traversal counters, merged into m_stats once at the end (traversals run concurrently). Counted only when SpatialStatsEnabled.
     struct TraverseStats
     {
         int cellsTested = 0;
         int cellsFullyInside = 0;
         int entityTests = 0;
         int emitted = 0;
+        int emittedShadow = 0; // the second pass of a two-pass tester (Main + Shadow)
     };
     // A subtree root for the parallel fan-out, already classified (active 0 = fully inside).
     struct FrontierCell
@@ -192,17 +195,23 @@ protected:
                       const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const ChildFunc& onChild) const;
 
-    // emit(poolIdx, posRelRef, layerMask) per entry of the cell, 8 lanes at a time.
+    // emit(block, lane, cellMin, passes) per hit of the cell, 8 lanes at a time: the emit reads what it needs from the lane (userData,
+    // poolIdx, layer; the position relative to refPos is cellMin + the lane's pos). passes: bit 0 = the tester's first pass, bit 1 =
+    // its second (a two-pass tester; a one-pass one always passes 1).
     template <typename Tester, typename EmitFunc>
     void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
                          const CellRecord& rec, uint32 level, uint32 active,
                          TraverseStats& stats, const EmitFunc& emit) const;
 
-    // Serial frontier expansion, then a parallelFor over the roots. emit must be thread-safe; a chunk-aware emit gets prepareChunks(n) first. Uses
-    // m_frontier: one call at a time.
+    // Serial frontier expansion, then a parallelFor over the roots. emit must be thread-safe; a chunk-aware emit (one more uint32 chunk
+    // argument) gets prepareChunks(n) first. Uses m_frontier: one call at a time.
     template <typename Tester, typename EmitFunc, typename PrepareFunc>
     void traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                           TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks);
+
+    // markVisibleSet's traversal: the Main (+ Shadow) stamps, and with `collect` the hand-over lists of the Main hits.
+    template <typename Tester>
+    void stampFrustum(const Tester& tester, const glm::dvec3& cameraPos, uint32 layerMask, bool collect, TraverseStats& stats);
 
     // ---- Storage ----
     //
@@ -219,7 +228,7 @@ protected:
     //
     // Per level, a CellMap finds a cell and a BlockStore holds its entries:
     //
-    //   m_levels[L]  CellMap: Morton key -> CellRecord { childMask, head, count }
+    //   m_levels[L]  CellMap: Morton key -> CellRecord { childMask, head, count }   (the key sits next to its record: one line per hit)
     //                                                               |
     //                              +--------------------------------+
     //                              v
@@ -234,8 +243,9 @@ protected:
     //       posY[8]          | y | y | y | y | y | y | y | y |   |  test8: one 32-byte AVX2 load per row, 8 entries at once;
     //       posZ[8]          | z | z | z | z | z | z | z | z |   |  positions relative to the cell's min corner
     //       radius[8]        | r | r | r | - | r | r | - | - |  -+   - = tombstone: a dead lane, or unused past `count`
-    //       layer[8]         | SpatialLayer_* bits per lane  |
+    //       userData[8]      | a copy of the pool row's userData (it never changes): what a query hands out
     //       poolIdx[8]       | the entry's m_pool slot  -----+---->  m_pool row: gen, flags, stamps, userData, cellKey, level, storeIdx
+    //       layer[8]         | SpatialLayer_* bits per lane, one byte each                                                       |
     //       next, count, live, chainBlocks (head block only)                                                                         |
     //                                                                                                                                |
     //   storeIdx = block * 8 + lane: the way back from the pool row to the lane (UINT32_MAX while Unindexed) <-----------------------+
@@ -251,12 +261,13 @@ protected:
     //
     // The two ways through the storage:
     //
-    //   owner moves:  owner -> SpatialEntry -> handle.idx -> m_pool row -> storeIdx -> lane                updateEntry writes the lane
-    //   a query:      cell -> chain -> CellBlock -> lane -> poolIdx -> m_pool row -> userData -> owner     the query hands out the userData
+    //   owner moves:  owner -> SpatialEntry -> handle.idx -> m_pool row -> storeIdx -> lane      updateEntry writes the lane
+    //   a query:      cell -> chain -> CellBlock -> lane -> userData -> owner                    the query hands out the lane's userData
+    //   a stamp:      cell -> chain -> CellBlock -> lane -> poolIdx -> m_pool row (stamps)       the visibility passes
     //
     // So a LANE is one entry, a CellBlock is 8 entries in a SIMD layout, a CHAIN is all the entries of one cell, a BlockStore is all the chains
-    // of one level, and the CellMap finds a cell's chain by its key. m_pool holds what a handle needs and a query test does not, and a
-    // SpatialEntry is the owner's handle to its m_pool row.
+    // of one level, and the CellMap finds a cell's chain by its key. m_pool holds what a handle needs (and the stamps), and a SpatialEntry is
+    // the owner's handle to its m_pool row.
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<BlockStore, Morton::MaxLevels> m_blocks;

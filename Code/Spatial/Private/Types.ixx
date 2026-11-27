@@ -6,7 +6,13 @@ import Core.Frustum;
 export import :SpatialTypes; // the public value types, for every internal partition
 import :Morton;
 
-// The library's internal types: the stamps, the occlusion test interface and the frustum helpers.
+// The library's internal types: the stats switch, the stamps, the occlusion test interface and the frustum helpers.
+
+// Spatial/Stats (SpatialStats) is filled only in a build with SPATIAL_STATS=1: the counters sit on the traversal's hottest paths.
+#ifndef SPATIAL_STATS
+#define SPATIAL_STATS 0
+#endif
+export constexpr bool SpatialStatsEnabled = SPATIAL_STATS != 0;
 
 // The pass generation an entry was last stamped in (1..65534; the pool is swept on wrap).
 export using SpatialStamp = uint16;
