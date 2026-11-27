@@ -467,7 +467,15 @@ settled entry and a moving one are the same lane, the difference is only whether
   stores cost more instructions than it saved.
 * **Cell change** = a Move op (32 bytes: the key, the `LaneCode`, the slot): at commit `retireLane` the old lane (it returns
   the lane's layer mask), set the pool's `cellKey` / `level`, `insertLane` the op's lane code with that mask into the new cell's head
-  block (a new head when that is full). `Cell moves` in the stats counts them per commit.
+  block (a new head when that is full). **The Move's path has no call**, like `updateEntry`'s: `applyMove` and the fast paths of
+  `retireLane` / `insertLane` are `OC_FORCEINLINE` in the state header, and so are `CellMap::getOrCreate` and
+  `BlockStore::insert` (MSVC kept both as calls); `insertLane` takes the new level and key from the caller instead of re-reading
+  the pool row it just stored. The rare parts are `OC_NOINLINE` (`retireCell`: a cell's last
+  lane; `unlinkBlock`: a block's last lane; `compactCell`; `setOccupancyBits` for a new cell; `CellMap::grow`;
+  `BlockStore::allocBlock`). `applyMove` copies the op's fields first and the per-slot loop is a member (`commitOps`), not a
+  lambda: MSVC has no type-based alias analysis, so every store into a pool row made it reload `op`'s fields and the closure's
+  `this`. `retireCell` stays a normal branch, not a cold hint: a lone unit leaving its cell empties it. `Cell moves` in the
+  stats counts the Moves per commit.
 * **Indexing** (`indexEntry`): `commitFrame` walks the ops ONCE. The Index (the spawning thread) and the
   first Move of the same entry (the visiting worker) may sit in different `PerWorker` slots, so a Move that
   finds its entry still `Unindexed` goes to `m_deferredMoves` (in order) and is replayed after the walk, once

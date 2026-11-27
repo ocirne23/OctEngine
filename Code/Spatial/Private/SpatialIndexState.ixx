@@ -174,11 +174,75 @@ protected:
     }
     void updateEntryTop(SpatialHandle handle, const glm::dvec3& pos, float radius);
 
-    // ---- Commit bookkeeping (see BlockStore) ----
+    // ---- Commit bookkeeping (see BlockStore) ---- A Move's path has no call: applyMove and the fast paths of retireLane / insertLane
+    // are force-inlined (a few loads and stores each), the rare parts out of line (a cell's last lane, a block's last lane, the
+    // compaction, a new cell's occupancy bits; CellMap::grow and BlockStore::allocBlock too).
 
+    void commitOps(oc::vector<PendingOp>& ops, int& cellMoves); // one PerWorker slot's ops (commitFrame)
     void indexEntry(const PendingOp& op); // an Index op: the lane and the spawn-guard stamps
-    void insertLane(uint32 idx, const LaneCode& code, uint32 layerMask);
-    uint32 retireLane(uint32 idx);        // returns the lane's layer mask (a Move re-inserts it)
+
+    // A Move op (its entry indexed): retire the old lane, re-key the pool row, insert the new lane with the old lane's layers. The op's
+    // fields are copied first: a store into a pool row may alias `op` as far as the compiler knows, so it would reload them each time.
+    OC_FORCEINLINE void applyMove(const PendingOp& op)
+    {
+        const uint32 idx = op.idx;
+        const uint64 newKey = op.newKey;
+        const LaneCode code = op.newCode;
+        const uint8 newLevel = op.newLevel;
+        const uint32 layerMask = retireLane(idx);
+        m_pool.cellKey[idx] = newKey;
+        m_pool.level[idx] = newLevel;
+        m_pool.flags[idx] = uint8(m_pool.flags[idx] & ~RecordFlag_PendingMove);
+        insertLane(idx, newLevel, newKey, code, layerMask);
+    }
+
+    // level / key: the pool row's (the caller just stored them; passed on, so the hash does not wait on a store-forwarded reload).
+    OC_FORCEINLINE void insertLane(uint32 idx, uint32 level, uint64 key, const LaneCode& code, uint32 layerMask)
+    {
+        bool created;
+        CellRecord& rec = m_levels[level].getOrCreate(key, created);
+        m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, code, layerMask, m_pool.userData[idx], idx);
+        ++rec.count;
+        ++m_levelEntityCount[level];
+        if (created) // a cell in the map has its parent bit set: setOccupancyBits sets it, only the sweep clears it (with the cell)
+            setOccupancyBits(level, key);
+    }
+
+    // Returns the lane's layer mask (a Move re-inserts it). Idempotent over unregisterEntry's early tombstone.
+    OC_FORCEINLINE uint32 retireLane(uint32 idx)
+    {
+        const uint32 level = m_pool.level[idx];
+        BlockStore& store = m_blocks[level];
+        const uint32 slot = m_pool.storeIdx[idx];
+        const uint32 b = BlockStore::blockOf(slot);
+        CellBlock& block = store.blocks[b];
+        const uint32 lane = BlockStore::laneOf(slot);
+        const uint32 layerMask = block.layer[lane];
+        block.radius[lane] = CellBlock::Tombstone;
+        m_pool.storeIdx[idx] = UINT32_MAX;
+        --block.live;
+        --m_levelEntityCount[level];
+        const uint64 key = m_pool.cellKey[idx];
+        CellRecord* rec = m_levels[level].find(key);
+        assert(rec && rec->count);
+        if (--rec->count == 0)
+        {
+            retireCell(level, key, *rec);
+            return layerMask;
+        }
+        if (block.live == 0)
+            unlinkBlock(store, *rec, b);
+        // compact once the dead lanes would fill a whole block (frees at least one block per pass, so the cost stays one cell walk
+        // per 8 retirements)
+        const uint32 numBlocks = store.blocks[rec->head].chainBlocks;
+        assert(numBlocks == [&]() { uint32 n = 0; for (uint32 cur = rec->head; cur != UINT32_MAX; cur = store.blocks[cur].next) ++n; return n; }());
+        if (numBlocks >= 2 && numBlocks * CellBlock::Lanes - rec->count >= CellBlock::Lanes)
+            compactCell(level, *rec);
+        return layerMask;
+    }
+
+    void retireCell(uint32 level, uint64 key, CellRecord& rec);   // its last lane went: free the chain, let the sweep judge the cell
+    void unlinkBlock(BlockStore& store, CellRecord& rec, uint32 b); // an emptied block out of a chain that keeps others
     void compactCell(uint32 level, CellRecord& rec);
     void setOccupancyBits(uint32 level, uint64 key);
     void sweepEmptyCells();

@@ -85,7 +85,7 @@ struct BlockStore
         _mm_prefetch(p + 64, _MM_HINT_T0);
     }
 
-    uint32 allocBlock(uint32 next)
+    OC_NOINLINE uint32 allocBlock(uint32 next) // one per 8 inserts at most: kept out of insert's callers
     {
         uint32 b;
         if (freeHead != UINT32_MAX)
@@ -119,8 +119,8 @@ struct BlockStore
     }
 
     // Appends into the chain at `head` (a new head block when the head is full or absent) and
-    // returns the slot; `head` is updated in place.
-    uint32 insert(uint32& head, const LaneCode& code, uint32 layerMask, uint64 userData, uint32 poolIdx)
+    // returns the slot; `head` is updated in place. Force-inlined: the commit's Move path has no call (allocBlock is out of line).
+    OC_FORCEINLINE uint32 insert(uint32& head, const LaneCode& code, uint32 layerMask, uint64 userData, uint32 poolIdx)
     {
         if (head == UINT32_MAX || blocks[head].count == CellBlock::Lanes)
         {

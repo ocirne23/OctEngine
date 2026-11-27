@@ -123,54 +123,14 @@ void SpatialIndex::commitFrame()
     // slot). The Index (the spawning thread) and the first Move of the same entry (the visiting worker) may sit in different slots:
     // a Move that finds its entry still Unindexed is deferred, in order, and replayed once every Index has run. Every Move is newer
     // than the Index, so the last Move's position wins.
-    const auto applyMove = [&](const PendingOp& op)
-    {
-        const uint32 layerMask = retireLane(op.idx);
-        m_pool.cellKey[op.idx] = op.newKey;
-        m_pool.level[op.idx] = op.newLevel;
-        m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
-        insertLane(op.idx, op.newCode, layerMask);
-        if constexpr (SpatialStatsEnabled)
-            ++cellMoves;
-    };
-    m_pendingOps.forEach([&](oc::vector<PendingOp>& ops)
-    {
-    for (const PendingOp& op : ops)
-    {
-        if (op.idx >= m_pool.capacity() || m_pool.gen[op.idx] != op.gen)
-            continue;
-        const uint8 opFlags = m_pool.flags[op.idx];
-        switch (op.type)
-        {
-        case PendingOp::Index:
-            if ((opFlags & (RecordFlag_Alive | RecordFlag_Unindexed)) == (RecordFlag_Alive | RecordFlag_Unindexed))
-                indexEntry(op);
-            break;
-        case PendingOp::Move:
-            if (!(opFlags & RecordFlag_Alive))
-                break;
-            if (opFlags & RecordFlag_Unindexed)
-                m_deferredMoves.push_back(op);
-            else
-                applyMove(op);
-            break;
-        case PendingOp::Unindex:
-            if (opFlags & RecordFlag_PendingFree)
-            {
-                if (!(opFlags & RecordFlag_Unindexed))
-                    retireLane(op.idx); // the lane was tombstoned at unregister; this settles the counters/blocks
-                m_pool.release(op.idx);
-            }
-            break;
-        }
-    }
-    ops.clear();
-    });
+    m_pendingOps.forEach([&](oc::vector<PendingOp>& ops) { commitOps(ops, cellMoves); });
     for (const PendingOp& op : m_deferredMoves)
         if (m_pool.gen[op.idx] == op.gen && (m_pool.flags[op.idx] & RecordFlag_Alive))
         {
             assert(!(m_pool.flags[op.idx] & RecordFlag_Unindexed) && "every live entry's Index op ran in the loop");
             applyMove(op);
+            if constexpr (SpatialStatsEnabled)
+                ++cellMoves;
         }
     m_deferredMoves.clear();
     sweepEmptyCells();
@@ -199,6 +159,47 @@ void SpatialIndex::commitFrame()
     ++m_frameId;
 }
 
+// One PerWorker slot's ops, in order. A member (not commitFrame's lambda): `this` stays a register, not a closure field that every
+// store into a pool row would make the compiler reload.
+void SpatialIndexState::commitOps(oc::vector<PendingOp>& ops, [[maybe_unused]] int& cellMoves)
+{
+    for (const PendingOp& op : ops)
+    {
+        const uint32 idx = op.idx;
+        if (idx >= m_pool.capacity() || m_pool.gen[idx] != op.gen)
+            continue;
+        const uint8 opFlags = m_pool.flags[idx];
+        switch (op.type)
+        {
+        case PendingOp::Index:
+            if ((opFlags & (RecordFlag_Alive | RecordFlag_Unindexed)) == (RecordFlag_Alive | RecordFlag_Unindexed))
+                indexEntry(op);
+            break;
+        case PendingOp::Move:
+            if (!(opFlags & RecordFlag_Alive))
+                break;
+            if (opFlags & RecordFlag_Unindexed)
+                m_deferredMoves.push_back(op);
+            else
+            {
+                applyMove(op);
+                if constexpr (SpatialStatsEnabled)
+                    ++cellMoves;
+            }
+            break;
+        case PendingOp::Unindex:
+            if (opFlags & RecordFlag_PendingFree)
+            {
+                if (!(opFlags & RecordFlag_Unindexed))
+                    retireLane(idx); // the lane was tombstoned at unregister; this settles the counters/blocks
+                m_pool.release(idx);
+            }
+            break;
+        }
+    }
+    ops.clear();
+}
+
 void SpatialIndexState::indexEntry(const PendingOp& op)
 {
     const uint32 idx = op.idx;
@@ -206,7 +207,7 @@ void SpatialIndexState::indexEntry(const PendingOp& op)
     m_pool.cellKey[idx] = op.newKey;
     m_pool.level[idx] = op.newLevel;
     m_pool.flags[idx] = uint8(flags & ~RecordFlag_Unindexed);
-    insertLane(idx, op.newCode, op.layerMask);
+    insertLane(idx, op.newLevel, op.newKey, op.newCode, op.layerMask);
     // Counts as visible for the current stamp generation; the next markVisibleSet (which runs with the
     // entry actually in the index) decides for real. NOT for NoSpawnGuard entries: with the culling FROZEN
     // no markVisibleSet ever re-decides, so this write would leak every newly indexed (off-screen-streamed)
@@ -223,20 +224,7 @@ void SpatialIndexState::indexEntry(const PendingOp& op)
         stamps.pass[p] = SpatialStamp_Indexed;
 }
 
-void SpatialIndexState::insertLane(uint32 idx, const LaneCode& code, uint32 layerMask)
-{
-    const uint32 level = m_pool.level[idx];
-    const uint64 key = m_pool.cellKey[idx];
-    bool created;
-    CellRecord& rec = m_levels[level].getOrCreate(key, created);
-    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, code, layerMask, m_pool.userData[idx], idx);
-    ++rec.count;
-    ++m_levelEntityCount[level];
-    if (created) // a cell in the map has its parent bit set: setOccupancyBits sets it, only the sweep clears it (with the cell)
-        setOccupancyBits(level, key);
-}
-
-void SpatialIndexState::setOccupancyBits(uint32 level, uint64 key)
+OC_NOINLINE void SpatialIndexState::setOccupancyBits(uint32 level, uint64 key)
 {
     // walk up the ancestors, stopping at the first already-set bit (each bit is set once per cell lifetime)
     for (uint32 lev = level + 1; lev < m_numLevels; ++lev)
@@ -250,63 +238,41 @@ void SpatialIndexState::setOccupancyBits(uint32 level, uint64 key)
     }
 }
 
-uint32 SpatialIndexState::retireLane(uint32 idx)
+OC_NOINLINE void SpatialIndexState::retireCell(uint32 level, uint64 key, CellRecord& rec)
 {
-    const uint32 level = m_pool.level[idx];
     BlockStore& store = m_blocks[level];
-    const uint32 slot = m_pool.storeIdx[idx];
-    const uint32 b = BlockStore::blockOf(slot);
-    CellBlock& block = store.blocks[b];
-    const uint32 layerMask = block.layer[BlockStore::laneOf(slot)];
-    block.radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone; // idempotent over unregisterEntry's early tombstone
-    m_pool.storeIdx[idx] = UINT32_MAX;
-    --block.live;
-    --m_levelEntityCount[level];
-    CellRecord* rec = m_levels[level].find(m_pool.cellKey[idx]);
-    assert(rec && rec->count);
-    --rec->count;
-    if (rec->count == 0)
+    for (uint32 cur = rec.head; cur != UINT32_MAX;)
     {
-        // the whole chain is dead: free it, and let the sweep judge the cell
-        for (uint32 cur = rec->head; cur != UINT32_MAX;)
-        {
-            const uint32 next = store.blocks[cur].next;
-            store.freeBlock(cur);
-            cur = next;
-        }
-        rec->head = UINT32_MAX;
-        if (rec->childMask == 0)
-            m_emptyCandidates.push_back({ m_pool.cellKey[idx], level });
-        return layerMask;
+        const uint32 next = store.blocks[cur].next;
+        store.freeBlock(cur);
+        cur = next;
     }
-    if (block.live == 0)
-    {
-        // unlink the emptied block from the cell's chain (rec->count > 0, so another block remains)
-        if (rec->head == b)
-        {
-            rec->head = block.next;
-            store.blocks[rec->head].chainBlocks = block.chainBlocks - 1;
-        }
-        else
-        {
-            uint32 prev = rec->head;
-            while (store.blocks[prev].next != b)
-                prev = store.blocks[prev].next;
-            store.blocks[prev].next = block.next;
-            --store.blocks[rec->head].chainBlocks;
-        }
-        store.freeBlock(b);
-    }
-    // compact once the dead lanes would fill a whole block (frees at least one block per pass, so
-    // the cost stays one cell walk per 8 retirements)
-    const uint32 numBlocks = store.blocks[rec->head].chainBlocks;
-    assert(numBlocks == [&]() { uint32 n = 0; for (uint32 cur = rec->head; cur != UINT32_MAX; cur = store.blocks[cur].next) ++n; return n; }());
-    if (numBlocks >= 2 && numBlocks * CellBlock::Lanes - rec->count >= CellBlock::Lanes)
-        compactCell(level, *rec);
-    return layerMask;
+    rec.head = UINT32_MAX;
+    if (rec.childMask == 0)
+        m_emptyCandidates.push_back({ key, level });
 }
 
-void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
+OC_NOINLINE void SpatialIndexState::unlinkBlock(BlockStore& store, CellRecord& rec, uint32 b)
+{
+    // rec.count > 0, so another block remains
+    CellBlock& block = store.blocks[b];
+    if (rec.head == b)
+    {
+        rec.head = block.next;
+        store.blocks[rec.head].chainBlocks = block.chainBlocks - 1;
+    }
+    else
+    {
+        uint32 prev = rec.head;
+        while (store.blocks[prev].next != b)
+            prev = store.blocks[prev].next;
+        store.blocks[prev].next = block.next;
+        --store.blocks[rec.head].chainBlocks;
+    }
+    store.freeBlock(b);
+}
+
+OC_NOINLINE void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
 {
     BlockStore& store = m_blocks[level];
     oc::vector<CompactEntry>& live = m_compactScratch;

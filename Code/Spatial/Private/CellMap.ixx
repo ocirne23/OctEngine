@@ -56,7 +56,8 @@ public:
     // The key's home slot into L1: issued for several keys before their finds, the misses overlap.
     void prefetch(uint64 key) const { _mm_prefetch(reinterpret_cast<const char*>(&m_slots[homeSlot(key)]), _MM_HINT_T0); }
 
-    CellRecord& getOrCreate(uint64 key, bool& created) // growth invalidates previously returned pointers
+    // Growth invalidates previously returned pointers. Force-inlined: the commit's Move path has no call (grow is out of line).
+    OC_FORCEINLINE CellRecord& getOrCreate(uint64 key, bool& created)
     {
         if (m_size * 2 >= m_capacity)
             grow();
@@ -141,7 +142,7 @@ private:
         m_shift = 64u - uint32(oc::tzcnt(uint64(capacity)));
     }
 
-    void grow()
+    OC_NOINLINE void grow() // rare: kept out of every getOrCreate caller
     {
         oc::vector<CellSlot> old = oc::move(m_slots);
         setCapacity(m_capacity * 2);
