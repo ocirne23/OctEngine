@@ -33,8 +33,7 @@ public:
 
     // ---- The frame ----
 
-    // The per-frame visibility pass (commit, then the Main, Near and Shadow stamps) as the High "Spatial cull" job. An invalid view skips the frame. The
-    // index must stay quiescent between kick and join.
+    // The per-frame visibility pass (commit, then the Main, Near and Shadow stamps) as the High "Spatial cull" job. An invalid view skips the frame. The index must stay quiescent between kick and join.
     void kickUpdateJob(const CullView& view);
     void joinUpdateJob();
     const SpatialCullingConfig& getCullingConfig() const { return m_culling; }
@@ -43,10 +42,8 @@ public:
 
     uint32 querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const;
     uint32 queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const;
-    uint32 queryFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
-                        oc::vector<uint64>& outUserData, IOcclusionTester* occlusion = nullptr) const;
-    uint32 queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask,
-                    oc::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
+    uint32 queryFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask, oc::vector<uint64>& outUserData, IOcclusionTester* occlusion = nullptr) const;
+    uint32 queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask, oc::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
     uint64 queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData = 0) const;
 
     // emit(userData) per hit, straight out of the traversal (no result buffer): the form to use from job code. Never wait inside emit.
@@ -55,8 +52,7 @@ public:
     template<typename Func>
     void forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit, uint32 skipStampedIn = 0) const;
     template<typename Func>
-    void forEachInFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
-                          Func&& emit, IOcclusionTester* occlusion = nullptr) const;
+    void forEachInFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask, Func&& emit, IOcclusionTester* occlusion = nullptr) const;
 
     // ---- Visibility stamps ----
 
@@ -86,8 +82,7 @@ public:
     void advanceUpdateTiers(); // the three tiers + UpdateRoot
     // One traversal of the ball, each hit emitted and stamped in every tier whose radius it is inside (tierRadius <= 0: not stamped). One call at a time;
     // hits per traversal chunk, valid until the next call.
-    const oc::vector<oc::vector<uint64>>& queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3],
-                                                           bool horizontal, uint32 layerMask);
+    const oc::vector<oc::vector<uint64>>& queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3], bool horizontal, uint32 layerMask);
     // Exact compares, no spawn guard.
     uint32 getPassMaskExact(SpatialHandle handle) const;
     bool hasStamp(SpatialHandle handle, ESpatialPass pass) const; // a generation was ever written in `pass` (not 0, not SpatialStamp_Indexed)
