@@ -109,9 +109,15 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   at level 0. Past `DirectCellLimit` (96) cells over all levels the query descends from the top
   instead. Same loose bounds, so the result set is identical either way. **Built for the gameplay
   case: many small-radius queries per frame.**
-* The API takes `dvec3`; per-entry data is SoA with **cell-relative float positions**, and query math
-  is reference-relative float — exact at planet scale. Frustums rebase to camera-relative in double
-  (`rebaseFrustum`) so the planes stay exact.
+* The API takes `dvec3`; per-entry data is SoA with **cell-relative fixed-point positions** (see Cell blocks), and the tests
+  are reference-relative float — exact at planet scale. Frustums rebase to camera-relative in double (`rebaseFrustum`) so
+  the planes stay exact. **Nothing hands out a position**: a hit is its userData (the owner keeps its own position); a lane
+  position is decoded only where a query needs a distance (`queryNearest`, the tiers).
+* **Cell corners are integer.** A traversal splits its reference into `TraversalRef`: the fine lattice cell holding it plus
+  the float offset inside it. A cell carries its min corner on the fine lattice (`__m128i`); a child's is the parent's plus
+  its grid offset shifted by `2 * childLevel` (one `vpaddd`), with no Morton decode below the top level. The corner
+  relative to the reference is `(minFine - ref.fine) * FineCellSize - ref.frac` (`relMin`): two corners inside the world
+  differ by < 2^22 fine cells, so the integer subtract and the scale are exact and the FMA is the only rounding.
 
 ## `Globals::spatialIndex` API
 
@@ -150,7 +156,7 @@ sectors both pass false.
 
 | Operation | Rule |
 |---|---|
-| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update of an indexed entry writes only its block lane (4 stores, two lines; none when nothing changed); a cell change, or any update of an Unindexed entry, stages a Move into a `PerWorker` pending list. One visitor per entry. |
+| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update of an indexed entry writes only its block lane (4 stores, one line; none when nothing changed); a cell change, or any update of an Unindexed entry, stages a Move into a `PerWorker` pending list. One visitor per entry. |
 | `registerEntry` / `SpatialEntry::reset` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
 | `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
 | `commitFrame` | Single-threaded, main, outside the pass. |
@@ -239,10 +245,10 @@ variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` i
 2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial traverse chunk"` spans
    show on the worker tracks. High because the render gate waits on these stamps.
 
-Every emit gets the hit's lane, `(block, lane, cellMin, passes)`, and reads only what it needs from it: the userData
-(queries), the pool slot (stamps), the layer byte (the collect lists), the position relative to the reference (`cellMin` + the
-lane's position: `queryNearest`, the tiers). `passes` is bit 0 for a one-pass tester; the Main + Shadow tester sets bit 0 for
-Main and bit 1 for Shadow. A chunk-aware emit `(block, lane, cellMin, passes, chunk)` gets `prepareChunks(n)`
+Every emit gets the hit's lane, `(block, lane, decode, passes)`, and reads only what it needs from it: the userData
+(queries), the pool slot (stamps), the layer byte (the collect lists), the position relative to the reference
+(`lanePos(decode, ...)`: `queryNearest`, the tiers). `passes` is bit 0 for a one-pass tester; the Main + Shadow tester sets bit 0 for
+Main and bit 1 for Shadow. A chunk-aware emit `(block, lane, decode, passes, chunk)` gets `prepareChunks(n)`
 before any emit with `chunk < n`, so a caller can keep an owner-sliced list per chunk (slot 0 = the
 serial expansion, `1 + ` the chunk's first frontier index = the fan-out). A caller outside the
 kick/join window (`queryUpdateTiers`) needs no lock either: registrations never move the pool rows
@@ -405,14 +411,23 @@ legal.
 
 Every indexed entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
 `CellRecord.head`), so the 8-wide AVX2 testers (`test8`) load a block transpose-free and **every
-mutation costs the size of its cell, never the level**. A `CellBlock` is `alignas(64)`, 256 bytes,
-so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets the alignment from
-`oc::allocator<T>` — see Core). The fully-inside emit masks live lanes with one AVX2 compare
-(`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
-are the same lane, the difference is only whether `updateEntry` writes it this frame.
+mutation costs the size of its cell, never the level**. A `CellBlock` is `alignas(64)`, 192 bytes (the `oc::vector` holding
+them gets the alignment from `oc::allocator<T>` — see Core). The fully-inside emit masks live lanes with one movemask of the
+radius row (`liveLanes`: the sign bits are its odd bits, `pext`). There is no separate dynamic list and no static tier: a
+settled entry and a moving one are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
-* **Layout.** Four lines: `posX` + `posY` | `posZ` + `radius` | `userData` | `poolIdx` + `layer` (one byte per lane: every
-  layer bit is below 256) + the header. `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position,
+* **The lane encoding** (`g_laneScales`, BlockStore): fixed point per level. A position is `uint16` quanta of
+  `cellSize / 65536` from the cell's min corner and decodes to the quantum's centre; with 8 m fine cells the quantum is
+  `2^(2L - 13)` m (0.12 mm at level 0, 0.5 mm at level 1, 128 m at level 10), so the scale is a power of two and `locate`'s
+  truncation is the exact floor. The decode error (half a quantum per axis) is below the float error of the tests once the
+  reference is more than ~1 km away. A radius is `int16` quanta of twice that, rounded UP; below the top level the level
+  rule keeps it <= `cellSize / 2` = 16384 quanta. The top level saturates at `LaneRadiusMax`, and a saturated lane tests
+  with the largest clamped-oversize radius (`m_topLevelMaxRadius`) instead. A negative radius is the tombstone.
+  `loadLanes` decodes a block: `vpmovzxwd` / `vpmovsxwd`, `vcvtdq2ps`, one FMA per axis (about 9 µops more than float
+  lanes) — the price of the geometry of all 8 lanes fitting ONE cache line.
+* **Layout.** Three lines: the geometry (`posX`, `posY`, `posZ`, `radius`) | `poolIdx` + `layer` (one byte per lane: every
+  layer bit is below 256) + the header | `userData`. So `test8` reads two lines (the geometry, and the layer + `next`), a
+  stamp the second, a query hit the third. `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unindexed`). **An entry's position,
   radius and layer mask live ONLY in its lane** — the pool has no such rows. Before the entry is indexed
   they ride the pending ops: the Index op carries the registration's (layer mask included), and every
   `updateEntry` of an `Unindexed` entry queues a Move. **The lane also holds a COPY of the userData** (the pool row is
@@ -420,18 +435,19 @@ are the same lane, the difference is only whether `updateEntry` writes it this f
   UserData collect read no pool row. The pool keeps what a handle needs (`gen`, `flags`, `cellKey`, `level`, `storeIdx`,
   `userData`) and the stamps. Unused lanes past a block's `count` hold a tombstone radius, so `test8` always runs all 8 lanes.
   The layer test is one 8-byte `and` + `cmpeq_epi8` + `movemask`, ANDed into the hit mask.
-* **Same-cell update** of an indexed entry = compare against the lane, then the lane stores (two cache
-  lines; none when unchanged), from any job. Its code path has no call: the body (`updateEntryAt`) and the
-  key math are `OC_FORCEINLINE`, and the cold parts are `OC_NOINLINE` (`updateEntryTop` for a top-level
-  entry, clamped and maybe oversize; `queueOp`, the op push and its vector growth), so their register needs
-  do not land in `updateEntry`'s prologue. The key and the cell-relative position come from `locate`,
-  x / y / z 4-wide: the lattice offset added in double (no integer offset, no constant held in a register),
-  one floor, one clamp with memory bounds, one convert; the cell min is the fine coordinate with its low
-  `2 * level` bits cleared (one `vpand`); only the key's `pdep` encode is per axis. The lane compare and
-  stores stay scalar: tried one 4-wide `cmpneq` + `movmsk`, dropped because gathering the lane's four rows
-  (32 bytes apart) and splitting the result for the stores cost more instructions than it saved.
-* **Cell change** = a Move op: at commit `retireLane` the old lane (it returns the lane's layer mask), set
-  the pool's `cellKey` / `level`, `insertLane` the op's position with that mask into the new cell's head
+* **Same-cell update** of an indexed entry = compare the encoded lane against the lane, then the lane stores (ONE cache
+  line, the geometry; none when unchanged, which includes a move below a quantum), from any job. Its code path has no call:
+  the body (`updateEntryAt`) and the key math are `OC_FORCEINLINE`, and the cold parts are `OC_NOINLINE` (`updateEntryTop`
+  for a top-level entry, clamped and maybe oversize; `queueOp`, the op push and its vector growth), so their register needs
+  do not land in `updateEntry`'s prologue. The key and the lane position come from `locate`, x / y / z 4-wide: the lattice
+  offset added in double (no integer offset, no constant held in a register), one floor, one clamp with memory bounds, one
+  convert; the cell min is the fine coordinate with its low `2 * level` bits cleared (one `vpand`); the quanta are
+  `(lattice - cellMin) * scale` truncated and packed to `uint16` (`packus`, one `movq`); only the key's `pdep` encode is per
+  axis. `quantizeRadius` rounds the radius up (`roundss`). The lane compare and stores stay scalar: tried one 4-wide
+  `cmpneq` + `movmsk` (with float lanes), dropped because gathering the lane's four rows and splitting the result for the
+  stores cost more instructions than it saved.
+* **Cell change** = a Move op (32 bytes: the key, the `LaneCode`, the slot): at commit `retireLane` the old lane (it returns
+  the lane's layer mask), set the pool's `cellKey` / `level`, `insertLane` the op's lane code with that mask into the new cell's head
   block (a new head when that is full). `Cell moves` in the stats counts them per commit.
 * **Indexing** (`indexEntry`): `commitFrame` walks the ops ONCE. The Index (the spawning thread) and the
   first Move of the same entry (the visiting worker) may sit in different `PerWorker` slots, so a Move that

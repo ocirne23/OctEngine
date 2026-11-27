@@ -20,6 +20,15 @@ export class SpatialIndex; // declared before their friend lines / self()
 export class SpatialEntry;
 export class SpatialStressTest;
 
+// A traversal's reference position: the fine lattice cell holding it and its offset inside that cell (x, y, z, 0 each). A cell's min
+// relative to it is (cellMinFine - fine) * FineCellSize - frac: an exact integer subtract, an exact scale, one rounding (relMin).
+struct TraversalRef
+{
+    __m128i fine; // not clamped to the world bound: a query volume may reach past it
+    __m128 frac;
+    glm::dvec3 pos;
+};
+
 // Everything of SpatialIndex but its public API (SpatialIndex.ixx): the storage, the commit, the traversals, the stamps, the cull job and the hand-over
 // lists. A helper reaches the API through self().
 export class SpatialIndexState
@@ -47,20 +56,20 @@ protected:
     {
         enum EType : uint8 { Index, Move, Unindex };
         uint64 newKey;
-        glm::vec3 newRelPos;
-        float newRadius;
+        LaneCode newCode; // the lane encoding at newLevel (BlockStore)
         uint32 idx;
         uint32 gen;
         EType type;
         uint8 newLevel;
         uint8 layerMask; // Index only: the lane's SpatialLayer_* bits (the pool keeps none; a Move takes them from the old lane)
     };
+    static_assert(sizeof(PendingOp) == 32);
     struct EmptyCandidate
     {
         uint64 key;
         uint32 level;
     };
-    struct CompactEntry { float x, y, z, radius; uint64 userData; uint32 poolIdx; uint8 layer; };
+    struct CompactEntry { LaneCode code; uint64 userData; uint32 poolIdx; uint8 layer; };
     // Per-traversal counters, merged into m_stats once at the end (traversals run concurrently). Counted only when SpatialStatsEnabled.
     struct TraverseStats
     {
@@ -73,9 +82,10 @@ protected:
     // A subtree root for the parallel fan-out, already classified (active 0 = fully inside).
     struct FrontierCell
     {
+        __m128i minFine;       // the cell's min corner on the fine lattice (x, y, z, 0)
         uint64 key;
         const CellRecord* rec; // stable: the cell maps only mutate in commitFrame
-        glm::vec3 cellMin;     // relative to the traversal's refPos
+        glm::vec3 cellMin;     // relative to the traversal's reference position
         uint32 level;
         uint32 active;
     };
@@ -102,11 +112,12 @@ protected:
     uint32 entryLevelTop(float radius);
     void queueOp(const PendingOp& op);
 
-    // pos -> its cell key at `level` (returned) and its position relative to that cell's min corner (`rel`: x, y, z, 0), all three
-    // axes 4-wide. The lattice offset is added in double, so floor(lattice / cell) is the fine coordinate and no integer offset or
-    // constant has to stay in a register; the cell min is the fine coordinate with its low 2 * level bits cleared. pos + 2^23 m rounds
-    // at ~2e-9 m: a position that close to a cell boundary may land in the neighbour cell, which the half-cell loose bounds cover.
-    static OC_FORCEINLINE uint64 locate(const glm::dvec3& pos, uint32 level, __m128& rel)
+    // pos -> its cell key at `level` (returned) and its lane position in that cell (`code` x, y, z; the radius is not touched), all
+    // three axes 4-wide. The lattice offset is added in double, so floor(lattice / cell) is the fine coordinate and no integer offset
+    // or constant has to stay in a register; the cell min is the fine coordinate with its low 2 * level bits cleared. pos + 2^23 m
+    // rounds at ~2e-9 m: a position that close to a cell boundary may land in the neighbour cell, which the half-cell loose bounds
+    // cover. lattice - cellMin is exact and the quantum scale a power of two (8 m fine cells), so the truncation is the exact floor.
+    static OC_FORCEINLINE uint64 locate(const glm::dvec3& pos, uint32 level, LaneCode& code)
     {
         const __m256d p = _mm256_insertf128_pd(_mm256_castpd128_pd256(_mm_loadu_pd(&pos.x)), _mm_load_sd(&pos.z), 1); // x, y, z, 0
         const __m256d lattice = _mm256_add_pd(p, _mm256_set1_pd(double(Morton::FineOffset) * Morton::FineCellSize));
@@ -120,12 +131,19 @@ protected:
         const uint64 key = Morton::keyAtLevel(Morton::encode({ uint32(_mm_cvtsi128_si32(fine)), uint32(_mm_extract_epi32(fine, 1)),
                                                                uint32(_mm_extract_epi32(fine, 2)) }), level);
         const __m128i cellMin = _mm_and_si128(fine, _mm_set1_epi32(int32(~((1u << (2 * level)) - 1u))));
-        rel = _mm256_cvtpd_ps(_mm256_fnmadd_pd(_mm256_cvtepi32_pd(cellMin), _mm256_set1_pd(Morton::FineCellSize), lattice));
+        const __m256d rel = _mm256_fnmadd_pd(_mm256_cvtepi32_pd(cellMin), _mm256_set1_pd(Morton::FineCellSize), lattice);
+        const __m128i quanta = _mm256_cvttpd_epi32(_mm256_mul_pd(rel, _mm256_set1_pd(g_laneScales.level[level].posScale)));
+        const uint64 packed = uint64(_mm_cvtsi128_si64(_mm_packus_epi32(quanta, quanta))); // saturated to 0..65535: x, y, z, 0
+        code.x = uint16(packed);
+        code.y = uint16(packed >> 16);
+        code.z = uint16(packed >> 32);
         return key;
     }
-    static OC_FORCEINLINE glm::vec3 toVec3(__m128 v)
+    // The lane radius: rounded up, saturated at LaneRadiusMax (a NaN saturates too: minss returns its 2nd operand).
+    static OC_FORCEINLINE int16 quantizeRadius(float radius, uint32 level)
     {
-        return { _mm_cvtss_f32(v), _mm_cvtss_f32(_mm_movehdup_ps(v)), _mm_cvtss_f32(_mm_movehl_ps(v, v)) };
+        const __m128 scaled = _mm_min_ss(_mm_set_ss(radius * g_laneScales.level[level].radiusScale), _mm_set_ss(float(LaneRadiusMax)));
+        return int16(_mm_cvtss_si32(_mm_round_ss(scaled, scaled, _MM_FROUND_TO_POS_INF | _MM_FROUND_NO_EXC)));
     }
 
     // updateEntry after the handle check, at a known level: inlined into updateEntry (every level below the top) and into the
@@ -133,37 +151,34 @@ protected:
     OC_FORCEINLINE void updateEntryAt(SpatialHandle handle, const glm::dvec3& pos, float radius, uint32 level)
     {
         const uint32 idx = handle.idx;
-        __m128 rel4;
-        const uint64 key = locate(pos, level, rel4);
-        // Scalar from here: a 4-wide compare would first gather the lane's four rows (32 bytes apart) and split the result again for
-        // the stores, which costs more than four compares with memory operands.
-        const glm::vec3 rel = toVec3(rel4);
+        LaneCode code;
+        const uint64 key = locate(pos, level, code);
+        code.radius = quantizeRadius(radius, level);
         const uint8 flags = m_pool.flags[idx];
         if (!(flags & (RecordFlag_PendingMove | RecordFlag_Unindexed)) && key == m_pool.cellKey[idx] && level == m_pool.level[idx])
         {
-            // Same cell, indexed: the lane is the only copy.
+            // Same cell, indexed: the lane is the only copy. Its four rows share the block's first cache line.
             const uint32 slot = m_pool.storeIdx[idx];
             CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
             const uint32 lane = BlockStore::laneOf(slot);
-            if (rel.x == block.posX[lane] && rel.y == block.posY[lane] && rel.z == block.posZ[lane] && radius == block.radius[lane])
-                return; // untouched: no store into a line the queries read
-            block.posX[lane] = rel.x;
-            block.posY[lane] = rel.y;
-            block.posZ[lane] = rel.z;
-            block.radius[lane] = radius;
+            if (code.x == block.posX[lane] && code.y == block.posY[lane] && code.z == block.posZ[lane] && code.radius == block.radius[lane])
+                return; // untouched (no move past a quantum): no store into a line the queries read
+            block.posX[lane] = code.x;
+            block.posY[lane] = code.y;
+            block.posZ[lane] = code.z;
+            block.radius[lane] = code.radius;
             return;
         }
         // A cell change, or no lane yet (Unindexed): a Move op, applied at commit.
         m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
-        queueOp({ .newKey = key, .newRelPos = rel, .newRadius = radius, .idx = idx, .gen = handle.gen, .type = PendingOp::Move,
-                  .newLevel = uint8(level) });
+        queueOp({ .newKey = key, .newCode = code, .idx = idx, .gen = handle.gen, .type = PendingOp::Move, .newLevel = uint8(level) });
     }
     void updateEntryTop(SpatialHandle handle, const glm::dvec3& pos, float radius);
 
     // ---- Commit bookkeeping (see BlockStore) ----
 
     void indexEntry(const PendingOp& op); // an Index op: the lane and the spawn-guard stamps
-    void insertLane(uint32 idx, const glm::vec3& relPos, float radius, uint32 layerMask);
+    void insertLane(uint32 idx, const LaneCode& code, uint32 layerMask);
     uint32 retireLane(uint32 idx);        // returns the lane's layer mask (a Move re-inserts it)
     void compactCell(uint32 level, CellRecord& rec);
     void setOccupancyBits(uint32 level, uint64 key);
@@ -178,10 +193,11 @@ protected:
     template <typename Tester, typename EmitFunc>
     void traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const;
 
-    // A cell that passed its test: emits its entries, then recurses into the children that pass.
+    // A cell that passed its test: emits its entries, then recurses into the children that pass. minFine: the cell's min corner on the
+    // fine lattice; cellMin: the same corner relative to the reference.
     template <typename Tester, typename EmitFunc>
-    void traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                      uint64 key, uint32 level, const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
+    void traverseCell(const Tester& tester, const TraversalRef& ref, uint32 layerMask,
+                      uint64 key, uint32 level, const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const EmitFunc& emit) const;
 
     // Returns the cell's new active mask, or UINT32_MAX when it is culled.
@@ -189,15 +205,15 @@ protected:
     uint32 testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
                     uint32 active, TraverseStats& stats) const;
 
-    // onChild(childKey, childRecord, childMin, childActive) for each child that passes.
+    // onChild(childKey, childRecord, childMinFine, childMin, childActive) for each child that passes.
     template <typename Tester, typename ChildFunc>
-    void forEachChild(const Tester& tester, const glm::dvec3& refPos, uint64 key, uint32 level,
-                      const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
+    void forEachChild(const Tester& tester, const TraversalRef& ref, uint64 key, uint32 level,
+                      const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const ChildFunc& onChild) const;
 
-    // emit(block, lane, cellMin, passes) per hit of the cell, 8 lanes at a time: the emit reads what it needs from the lane (userData,
-    // poolIdx, layer; the position relative to refPos is cellMin + the lane's pos). passes: bit 0 = the tester's first pass, bit 1 =
-    // its second (a two-pass tester; a one-pass one always passes 1).
+    // emit(block, lane, decode, passes) per hit of the cell, 8 lanes at a time: the emit reads what it needs from the lane (userData,
+    // poolIdx, layer; `decode` turns the lane's position and radius into metres relative to the reference, for the emits that need a
+    // distance). passes: bit 0 = the tester's first pass, bit 1 = its second (a two-pass tester; a one-pass one always passes 1).
     template <typename Tester, typename EmitFunc>
     void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
                          const CellRecord& rec, uint32 level, uint32 active,
@@ -236,19 +252,19 @@ protected:
     //
     // childMask: one bit per occupied child cell one level down, so a descent visits only those. count: the entries with a lane in the chain.
     //
-    // A CellBlock (256 B, alignas 64) is 8 LANES in SIMD layout: lane i is index i of every row, and one lane is one entry.
+    // A CellBlock (192 B, three cache lines) is 8 LANES in SIMD layout: lane i is index i of every row, and one lane is one entry.
     //
     //                   lane:  0   1   2   3   4   5   6   7
-    //       posX[8]          | x | x | x | x | x | x | x | x |  -+
-    //       posY[8]          | y | y | y | y | y | y | y | y |   |  test8: one 32-byte AVX2 load per row, 8 entries at once;
-    //       posZ[8]          | z | z | z | z | z | z | z | z |   |  positions relative to the cell's min corner
-    //       radius[8]        | r | r | r | - | r | r | - | - |  -+   - = tombstone: a dead lane, or unused past `count`
-    //       userData[8]      | a copy of the pool row's userData (it never changes): what a query hands out
-    //       poolIdx[8]       | the entry's m_pool slot  -----+---->  m_pool row: gen, flags, stamps, userData, cellKey, level, storeIdx
-    //       layer[8]         | SpatialLayer_* bits per lane, one byte each                                                       |
-    //       next, count, live, chainBlocks (head block only)                                                                         |
-    //                                                                                                                                |
-    //   storeIdx = block * 8 + lane: the way back from the pool row to the lane (UINT32_MAX while Unindexed) <-----------------------+
+    //  line 0  posX[8]       | x | x | x | x | x | x | x | x |  -+
+    //          posY[8]       | y | y | y | y | y | y | y | y |   |  test8: one 16-byte load per row, 8 entries at once; fixed point (the
+    //          posZ[8]       | z | z | z | z | z | z | z | z |   |  lane encoding, BlockStore): uint16 quanta of cellSize / 65536 from the
+    //          radius[8]     | r | r | r | - | r | r | - | - |  -+  cell's min corner, the radius int16. - = tombstone (negative)
+    //  line 1  poolIdx[8]    | the entry's m_pool slot  -----+---->  m_pool row: gen, flags, stamps, userData, cellKey, level, storeIdx
+    //          layer[8]      | SpatialLayer_* bits per lane, one byte each                                                       |
+    //          next, count, live, chainBlocks (head block only)                                                                  |
+    //  line 2  userData[8]   | a copy of the pool row's userData (it never changes): what a query hands out                      |
+    //                                                                                                                            |
+    //   storeIdx = block * 8 + lane: the way back from the pool row to the lane (UINT32_MAX while Unindexed) <-------------------+
     //
     // A SpatialEntry (SpatialTypes.ixx) is how an OWNER - an Entity, a terrain chunk, an ocean sector - holds its entry:
     //

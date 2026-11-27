@@ -63,9 +63,9 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
     // LOCK-FREE: the slot acquire is lock-free and the pool rows never move (RecordPool), and the slot is
     // this call's alone until the Index op at commit - no traversal reaches an unindexed slot.
     const uint32 level = entryLevel(radius);
-    __m128 rel4;
-    const uint64 key = locate(pos, level, rel4);
-    const glm::vec3 rel = toVec3(rel4);
+    LaneCode code;
+    const uint64 key = locate(pos, level, code);
+    code.radius = quantizeRadius(radius, level);
     const uint32 idx = m_pool.acquire();
     m_pool.cellKey[idx] = key;
     m_pool.userData[idx] = userData;
@@ -74,7 +74,7 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
     m_pool.level[idx] = uint8(level);
     m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unindexed | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
     const uint32 gen = m_pool.gen[idx];
-    queueOp({ .newKey = key, .newRelPos = rel, .newRadius = radius, .idx = idx, .gen = gen, .type = PendingOp::Index, .newLevel = uint8(level),
+    queueOp({ .newKey = key, .newCode = code, .idx = idx, .gen = gen, .type = PendingOp::Index, .newLevel = uint8(level),
               .layerMask = uint8(layerMask) });
     return { idx, gen };
 }
@@ -94,8 +94,7 @@ void SpatialIndexState::unregisterEntry(SpatialHandle handle)
         m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
     }
     m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
-    queueOp({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f, .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unindex,
-              .newLevel = 0 });
+    queueOp({ .newKey = 0, .newCode = {}, .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unindex, .newLevel = 0 });
 }
 
 void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, float radius)
@@ -130,7 +129,7 @@ void SpatialIndex::commitFrame()
         m_pool.cellKey[op.idx] = op.newKey;
         m_pool.level[op.idx] = op.newLevel;
         m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
-        insertLane(op.idx, op.newRelPos, op.newRadius, layerMask);
+        insertLane(op.idx, op.newCode, layerMask);
         if constexpr (SpatialStatsEnabled)
             ++cellMoves;
     };
@@ -207,7 +206,7 @@ void SpatialIndexState::indexEntry(const PendingOp& op)
     m_pool.cellKey[idx] = op.newKey;
     m_pool.level[idx] = op.newLevel;
     m_pool.flags[idx] = uint8(flags & ~RecordFlag_Unindexed);
-    insertLane(idx, op.newRelPos, op.newRadius, op.layerMask);
+    insertLane(idx, op.newCode, op.layerMask);
     // Counts as visible for the current stamp generation; the next markVisibleSet (which runs with the
     // entry actually in the index) decides for real. NOT for NoSpawnGuard entries: with the culling FROZEN
     // no markVisibleSet ever re-decides, so this write would leak every newly indexed (off-screen-streamed)
@@ -224,13 +223,13 @@ void SpatialIndexState::indexEntry(const PendingOp& op)
         stamps.pass[p] = SpatialStamp_Indexed;
 }
 
-void SpatialIndexState::insertLane(uint32 idx, const glm::vec3& relPos, float radius, uint32 layerMask)
+void SpatialIndexState::insertLane(uint32 idx, const LaneCode& code, uint32 layerMask)
 {
     const uint32 level = m_pool.level[idx];
     const uint64 key = m_pool.cellKey[idx];
     bool created;
     CellRecord& rec = m_levels[level].getOrCreate(key, created);
-    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, relPos.x, relPos.y, relPos.z, radius, layerMask, m_pool.userData[idx], idx);
+    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, code, layerMask, m_pool.userData[idx], idx);
     ++rec.count;
     ++m_levelEntityCount[level];
     if (created) // a cell in the map has its parent bit set: setOccupancyBits sets it, only the sweep clears it (with the cell)
@@ -327,7 +326,7 @@ void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
             const uint32 idx = block.poolIdx[lane];
             if ((m_pool.flags[idx] & (RecordFlag_Alive | RecordFlag_PendingFree)) && m_pool.level[idx] == level
                 && m_pool.storeIdx[idx] == BlockStore::slotOf(cur, lane))
-                live.push_back({ block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane], block.userData[lane], idx, block.layer[lane] });
+                live.push_back({ { block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane] }, block.userData[lane], idx, block.layer[lane] });
         }
     }
     assert(uint32(live.size()) == rec.count);
@@ -342,8 +341,8 @@ void SpatialIndexState::compactCell(uint32 level, CellRecord& rec)
         for (uint32 lane = 0; lane < n; ++lane, ++i)
         {
             const CompactEntry& e = live[i];
-            block.posX[lane] = e.x; block.posY[lane] = e.y; block.posZ[lane] = e.z;
-            block.radius[lane] = e.radius;
+            block.posX[lane] = e.code.x; block.posY[lane] = e.code.y; block.posZ[lane] = e.code.z;
+            block.radius[lane] = e.code.radius;
             block.userData[lane] = e.userData;
             block.layer[lane] = e.layer;
             block.poolIdx[lane] = e.poolIdx;

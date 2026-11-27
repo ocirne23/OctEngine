@@ -20,8 +20,8 @@ import :OcclusionState;
 // Shared hierarchical traversal: descend the per-level grids top-down through the occupancy
 // masks, classifying each cell's loose bounds (inflated by half a cell - entities extend at most
 // that far beyond their cell) as outside / intersecting / fully inside. Fully-inside subtrees
-// append their entries without further per-entity tests. All bounds math is float relative to a
-// double reference position, so tests stay exact at planet-scale coordinates.
+// append their entries without further per-entity tests. A cell's corner is integer on the fine
+// lattice; the tests are float relative to the reference (TraversalRef), exact at planet scale.
 
 namespace
 {
@@ -37,28 +37,90 @@ namespace
         alignas(32) float cz[8];
     };
 
-    // Child bit (the low 6 Morton bits: x0 y0 z0 x1 y1 z1) -> its 4x4x4 grid coordinate.
+    // Child bit (the low 6 Morton bits: x0 y0 z0 x1 y1 z1) -> its 4x4x4 grid coordinate, as floats (the classify8 batch) and as an
+    // integer x, y, z, 0 (the child's fine min corner: the parent's plus this shifted by 2 * childLevel).
     struct ChildOffsets
     {
         float x[64], y[64], z[64];
+        alignas(16) int32 cell[64][4];
     };
     constexpr ChildOffsets makeChildOffsets()
     {
         ChildOffsets o{};
         for (uint32 b = 0; b < 64; ++b)
         {
-            o.x[b] = float((b & 1) | ((b >> 2) & 2));
-            o.y[b] = float(((b >> 1) & 1) | ((b >> 3) & 2));
-            o.z[b] = float(((b >> 2) & 1) | ((b >> 4) & 2));
+            const int32 x = int32((b & 1) | ((b >> 2) & 2));
+            const int32 y = int32(((b >> 1) & 1) | ((b >> 3) & 2));
+            const int32 z = int32(((b >> 2) & 1) | ((b >> 4) & 2));
+            o.x[b] = float(x);
+            o.y[b] = float(y);
+            o.z[b] = float(z);
+            o.cell[b][0] = x;
+            o.cell[b][1] = y;
+            o.cell[b][2] = z;
         }
         return o;
     }
     constexpr ChildOffsets g_childOffsets = makeChildOffsets();
 
-    // Lanes holding an entry (not tombstoned, not unused past the block's count).
-    uint32 liveLanes(const float* pr)
+    glm::vec3 toVec3(__m128 v)
     {
-        return uint32(_mm256_movemask_ps(_mm256_cmp_ps(_mm256_load_ps(pr), _mm256_setzero_ps(), _CMP_GE_OQ)));
+        return { _mm_cvtss_f32(v), _mm_cvtss_f32(_mm_movehdup_ps(v)), _mm_cvtss_f32(_mm_movehl_ps(v, v)) };
+    }
+
+    TraversalRef makeRef(const glm::dvec3& pos)
+    {
+        const __m256d p = _mm256_insertf128_pd(_mm256_castpd128_pd256(_mm_loadu_pd(&pos.x)), _mm_load_sd(&pos.z), 1); // x, y, z, 0
+        const __m256d lattice = _mm256_add_pd(p, _mm256_set1_pd(double(Morton::FineOffset) * Morton::FineCellSize));
+        const __m256d cell = _mm256_floor_pd(_mm256_mul_pd(lattice, _mm256_set1_pd(Morton::InvFineCellSize)));
+        return { _mm256_cvttpd_epi32(cell), _mm256_cvtpd_ps(_mm256_fnmadd_pd(cell, _mm256_set1_pd(Morton::FineCellSize), lattice)), pos };
+    }
+
+    // A fine-lattice corner relative to the reference, in metres. Two corners inside the world differ by < 2^22 fine cells, so the
+    // integer difference is exact in float and the scale is too: the FMA is the only rounding.
+    glm::vec3 relMin(const TraversalRef& ref, __m128i minFine)
+    {
+        return toVec3(_mm_fmsub_ps(_mm_cvtepi32_ps(_mm_sub_epi32(minFine, ref.fine)), _mm_set1_ps(float(Morton::FineCellSize)), ref.frac));
+    }
+
+    // A cell's min corner on the fine lattice from its key (the top level only: below it, children add their offset).
+    __m128i minFineOf(uint64 key, uint32 level)
+    {
+        const Morton::CellCoord c = Morton::decode(key);
+        return _mm_sll_epi32(_mm_set_epi32(0, int32(c.z), int32(c.y), int32(c.x)), _mm_cvtsi32_si128(int32(2 * level)));
+    }
+
+    // Turns a cell's lanes into metres relative to the reference (the lane encoding: BlockStore).
+    struct LaneDecode
+    {
+        glm::vec3 base;       // the cell's min + half a position quantum: a lane decodes to its quantum's centre
+        float posQuantum;
+        float radiusQuantum;
+        float oversizeRadius; // the top level only (else 0): a saturated radius tests as the largest clamped-oversize one
+    };
+
+    LaneDecode makeLaneDecode(const glm::vec3& cellMin, uint32 level, float oversizeRadius)
+    {
+        const LaneScale& s = g_laneScales.level[level];
+        return { cellMin + glm::vec3(0.5f * s.posQuantum), s.posQuantum, s.radiusQuantum, oversizeRadius };
+    }
+
+    glm::vec3 lanePos(const LaneDecode& d, const CellBlock& block, uint32 lane)
+    {
+        return d.base + glm::vec3(float(block.posX[lane]), float(block.posY[lane]), float(block.posZ[lane])) * d.posQuantum;
+    }
+
+    float laneRadius(const LaneDecode& d, const CellBlock& block, uint32 lane)
+    {
+        const int16 r = block.radius[lane];
+        return d.oversizeRadius > 0.0f && r == LaneRadiusMax ? d.oversizeRadius : float(r) * d.radiusQuantum;
+    }
+
+    // Lanes holding an entry (not tombstoned, not unused past the block's count): the sign bit of each int16 radius is an odd
+    // movemask bit.
+    uint32 liveLanes(const CellBlock& block)
+    {
+        return ~oc::pext(uint32(_mm_movemask_epi8(_mm_load_si128(reinterpret_cast<const __m128i*>(block.radius)))), 0xAAAAu) & 0xFFu;
     }
 
     // Lanes whose layer byte carries one of the layers.
@@ -74,20 +136,29 @@ namespace
             laneActive[oc::tzcnt(laneBits)] |= bit;
     }
 
-    // A block's 8 lane centers relative to the traversal's reference position, and their radii.
+    // A block's 8 lane centers relative to the reference, and their radii (negative: a tombstone or an unused lane), in metres. All
+    // four rows are the block's first cache line.
     struct BlockLanes
     {
         __m256 x, y, z, r;
     };
-    BlockLanes loadLanes(const glm::vec3& cellMin, const CellBlock& block)
+    BlockLanes loadLanes(const LaneDecode& d, const CellBlock& block)
     {
-        return { _mm256_add_ps(_mm256_load_ps(block.posX), _mm256_set1_ps(cellMin.x)),
-                 _mm256_add_ps(_mm256_load_ps(block.posY), _mm256_set1_ps(cellMin.y)),
-                 _mm256_add_ps(_mm256_load_ps(block.posZ), _mm256_set1_ps(cellMin.z)),
-                 _mm256_load_ps(block.radius) };
+        const __m256 q = _mm256_set1_ps(d.posQuantum);
+        const auto axis = [&](const uint16* row, float base)
+        {
+            const __m256i quanta = _mm256_cvtepu16_epi32(_mm_load_si128(reinterpret_cast<const __m128i*>(row)));
+            return _mm256_fmadd_ps(_mm256_cvtepi32_ps(quanta), q, _mm256_set1_ps(base));
+        };
+        const __m256i radius = _mm256_cvtepi16_epi32(_mm_load_si128(reinterpret_cast<const __m128i*>(block.radius)));
+        __m256 r = _mm256_mul_ps(_mm256_cvtepi32_ps(radius), _mm256_set1_ps(d.radiusQuantum));
+        if (d.oversizeRadius > 0.0f)
+            r = _mm256_blendv_ps(r, _mm256_set1_ps(d.oversizeRadius),
+                                 _mm256_castsi256_ps(_mm256_cmpeq_epi32(radius, _mm256_set1_epi32(LaneRadiusMax))));
+        return { axis(block.posX, d.base.x), axis(block.posY, d.base.y), axis(block.posZ, d.base.z), r };
     }
 
-    struct SphereTester // query volume centered on refPos
+    struct SphereTester // query volume centered on the reference
     {
         static constexpr uint32 AllActive = 1;
         static constexpr uint32 Passes = 1;
@@ -131,18 +202,17 @@ namespace
 
         // 8 spheres at once; mostly pays for mid-size radii (gameplay queries, queryNearest rings)
         // where partially-covered cells dominate - huge balls take the fully-inside wholesale path.
-        uint32 test8(const glm::vec3& cellMin, const CellBlock& block, uint32 layerMask, uint32) const
+        uint32 test8(const LaneDecode& d, const CellBlock& block, uint32 layerMask, uint32) const
         {
-            const BlockLanes l = loadLanes(cellMin, block);
+            const BlockLanes l = loadLanes(d, block);
             const __m256 d2 = _mm256_fmadd_ps(l.x, l.x, _mm256_fmadd_ps(l.y, l.y, _mm256_mul_ps(l.z, l.z)));
             const __m256 rr = _mm256_add_ps(_mm256_set1_ps(radius), l.r);
-            const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(l.r, _mm256_setzero_ps(), _CMP_GE_OQ), // tombstones fail
-                                            _mm256_cmp_ps(d2, _mm256_mul_ps(rr, rr), _CMP_LE_OQ));
-            return uint32(_mm256_movemask_ps(ok)) & layerLanes(block.layer, layerMask);
+            const uint32 inside = uint32(_mm256_movemask_ps(_mm256_cmp_ps(d2, _mm256_mul_ps(rr, rr), _CMP_LE_OQ)));
+            return inside & liveLanes(block) & layerLanes(block.layer, layerMask);
         }
     };
 
-    struct AABBTester // box centered on refPos
+    struct AABBTester // box centered on the reference
     {
         static constexpr uint32 AllActive = 1;
         static constexpr uint32 Passes = 1;
@@ -160,18 +230,17 @@ namespace
         glm::vec3 boundHalf() const { return half; }
 
         // 8 sphere-vs-box tests at once (squared distance from the box to each sphere center).
-        uint32 test8(const glm::vec3& cellMin, const CellBlock& block, uint32 layerMask, uint32) const
+        uint32 test8(const LaneDecode& d, const CellBlock& block, uint32 layerMask, uint32) const
         {
             const __m256 zero = _mm256_setzero_ps();
             const __m256 signMask = _mm256_set1_ps(-0.0f);
-            const BlockLanes l = loadLanes(cellMin, block);
+            const BlockLanes l = loadLanes(d, block);
             const __m256 cx = _mm256_max_ps(_mm256_sub_ps(_mm256_andnot_ps(signMask, l.x), _mm256_set1_ps(half.x)), zero);
             const __m256 cy = _mm256_max_ps(_mm256_sub_ps(_mm256_andnot_ps(signMask, l.y), _mm256_set1_ps(half.y)), zero);
             const __m256 cz = _mm256_max_ps(_mm256_sub_ps(_mm256_andnot_ps(signMask, l.z), _mm256_set1_ps(half.z)), zero);
             const __m256 d2 = _mm256_fmadd_ps(cx, cx, _mm256_fmadd_ps(cy, cy, _mm256_mul_ps(cz, cz)));
-            const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(l.r, zero, _CMP_GE_OQ), // tombstones fail
-                                            _mm256_cmp_ps(d2, _mm256_mul_ps(l.r, l.r), _CMP_LE_OQ));
-            return uint32(_mm256_movemask_ps(ok)) & layerLanes(block.layer, layerMask);
+            const uint32 inside = uint32(_mm256_movemask_ps(_mm256_cmp_ps(d2, _mm256_mul_ps(l.r, l.r), _CMP_LE_OQ)));
+            return inside & liveLanes(block) & layerLanes(block.layer, layerMask);
         }
     };
 
@@ -283,7 +352,7 @@ namespace
         }
     };
 
-    struct FrustumTester // frustum + distance band, both camera-relative (refPos = camera)
+    struct FrustumTester // frustum + distance band, both camera-relative (the reference = the camera)
     {
         static constexpr uint32 AllActive = FrustumVolume::AllActive;
         static constexpr uint32 Passes = 1;
@@ -317,11 +386,10 @@ namespace
 
         // 8 spheres at once against the ACTIVE planes and band (the cell is inside the rest); lanes
         // with negative radius (tombstones) or non-matching layers drop out. Returns an 8-bit hit mask.
-        uint32 test8(const glm::vec3& cellMin, const CellBlock& block, uint32 layerMask, uint32 active) const
+        uint32 test8(const LaneDecode& d, const CellBlock& block, uint32 layerMask, uint32 active) const
         {
-            const BlockLanes l = loadLanes(cellMin, block);
-            const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(l.r, _mm256_setzero_ps(), _CMP_GE_OQ), volume.test8(l, active));
-            return uint32(_mm256_movemask_ps(ok)) & layerLanes(block.layer, layerMask);
+            const BlockLanes l = loadLanes(d, block);
+            return uint32(_mm256_movemask_ps(volume.test8(l, active))) & liveLanes(block) & layerLanes(block.layer, layerMask);
         }
     };
 
@@ -402,19 +470,19 @@ namespace
         // active == 0: the cell is fully inside both.
         uint32 insideHits(const CellBlock& block) const
         {
-            const uint32 live = liveLanes(block.radius);
+            const uint32 live = liveLanes(block);
             return (live & layerLanes(block.layer, mainLayers)) | ((live & layerLanes(block.layer, shadowLayers)) << ShadowShift);
         }
 
-        uint32 test8(const glm::vec3& cellMin, const CellBlock& block, uint32, uint32 active) const
+        uint32 test8(const LaneDecode& d, const CellBlock& block, uint32, uint32 active) const
         {
             const uint32 shadowActive = active >> ShadowShift;
             const bool mainIn = !(active & MainOut);
             const uint32 mainActive = mainIn ? active & MainBits : 0u;
-            const uint32 live = liveLanes(block.radius);
+            const uint32 live = liveLanes(block);
             if ((shadowActive | mainActive) == 0) // Main ruled out, the cell fully inside Shadow
                 return (live & layerLanes(block.layer, shadowLayers)) << ShadowShift;
-            const BlockLanes l = loadLanes(cellMin, block);
+            const BlockLanes l = loadLanes(d, block);
             const __m256 both = shadow.test8(l, (shadowActive | mainActive) & shared); // the shared planes, once for both
             const uint32 shadowHits = uint32(_mm256_movemask_ps(_mm256_and_ps(both, shadow.test8(l, shadowActive & ~shared))))
                                     & live & layerLanes(block.layer, shadowLayers);
@@ -426,7 +494,7 @@ namespace
         }
     };
 
-    struct RayTester // segment [0, maxDist] along dir from refPos; cells are never fully inside
+    struct RayTester // segment [0, maxDist] along dir from the reference; cells are never fully inside
     {
         static constexpr uint32 AllActive = 1;
         static constexpr uint32 Passes = 1;
@@ -475,9 +543,9 @@ namespace
     };
 
     template <typename Tester>
-    concept HasTest8 = requires(const Tester& t, const glm::vec3& v, const CellBlock& b, uint32 m)
+    concept HasTest8 = requires(const Tester& t, const LaneDecode& d, const CellBlock& b, uint32 m)
     {
-        t.test8(v, b, m, m);
+        t.test8(d, b, m, m);
     };
 
     template <typename Tester>
@@ -528,19 +596,26 @@ uint32 SpatialIndexState::testCell(const Tester& tester, const glm::vec3& cellMi
 }
 
 template <typename Tester, typename ChildFunc>
-void SpatialIndexState::forEachChild(const Tester& tester, const glm::dvec3& refPos, uint64 key, uint32 level,
-                                const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
+void SpatialIndexState::forEachChild(const Tester& tester, const TraversalRef& ref, uint64 key, uint32 level,
+                                const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                                 TraverseStats& stats, const ChildFunc& onChild) const
 {
     const uint32 childLevel = level - 1; // never the top level: its loose bound is the plain half cell
     const CellMap& cells = m_levels[childLevel];
     const float childSize = float(Morton::cellSize(childLevel));
     const float childHalf = childSize * 0.5f;
+    const __m128i childShift = _mm_cvtsi32_si128(int32(2 * childLevel));
+    // The child's corner: the parent's plus its grid offset on the fine lattice (integer, exact).
+    const auto childCorner = [&](uint32 bit, __m128i& childMinFine)
+    {
+        childMinFine = _mm_add_epi32(minFine, _mm_sll_epi32(_mm_load_si128(reinterpret_cast<const __m128i*>(g_childOffsets.cell[bit])), childShift));
+        return relMin(ref, childMinFine);
+    };
     uint64 childMask = rec.childMask;
     if constexpr (HasClassify8<Tester>)
     {
-        // Survivors only get the hash probe and the exact (double) min corner. The batch centers are
-        // the parent's float min plus the grid offset - a few float roundings off the exact ones, so
+        // Survivors only get the hash probe and the exact min corner. The batch centers are the
+        // parent's float min plus the grid offset - a few float roundings off the exact ones, so
         // the batch tests a box inflated by a bound on that error: still conservative both ways
         // (outside and fully inside are only claimed when the exact box is too).
         const auto visit = [&](uint32 bit, uint32 childActive)
@@ -549,10 +624,11 @@ void SpatialIndexState::forEachChild(const Tester& tester, const glm::dvec3& ref
             const CellRecord* child = cells.find(childKey);
             if (!child)
                 return;
-            const glm::vec3 childMin = glm::vec3(Morton::cellMinWorld(childKey, childLevel) - refPos);
+            __m128i childMinFine;
+            const glm::vec3 childMin = childCorner(bit, childMinFine);
             childActive = tester.acceptCell(childMin + glm::vec3(childHalf), glm::vec3(childSize), childActive);
             if (childActive != ClassifyOutside)
-                onChild(childKey, *child, childMin, childActive);
+                onChild(childKey, *child, childMinFine, childMin, childActive);
         };
         if (active == 0)
         {
@@ -599,14 +675,16 @@ void SpatialIndexState::forEachChild(const Tester& tester, const glm::dvec3& ref
     {
         for (; childMask; childMask &= childMask - 1)
         {
-            const uint64 childKey = (key << 6) | uint32(oc::tzcnt(childMask));
+            const uint32 bit = uint32(oc::tzcnt(childMask));
+            const uint64 childKey = (key << 6) | bit;
             const CellRecord* child = cells.find(childKey);
             if (!child)
                 continue;
-            const glm::vec3 childMin = glm::vec3(Morton::cellMinWorld(childKey, childLevel) - refPos);
+            __m128i childMinFine;
+            const glm::vec3 childMin = childCorner(bit, childMinFine);
             const uint32 childActive = testCell(tester, childMin, childHalf, childLevel, active, stats);
             if (childActive != ClassifyOutside)
-                onChild(childKey, *child, childMin, childActive);
+                onChild(childKey, *child, childMinFine, childMin, childActive);
         }
     }
 }
@@ -617,6 +695,7 @@ void SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& c
                                    [[maybe_unused]] TraverseStats& stats, const EmitFunc& emit) const
 {
     const BlockStore& store = m_blocks[level];
+    const LaneDecode decode = makeLaneDecode(cellMin, level, level == m_numLevels - 1 ? m_topLevelMaxRadius.load(oc::memory_order_relaxed) : 0.0f);
     for (uint32 b = rec.head; b != UINT32_MAX;)
     {
         const CellBlock& block = store.blocks[b];
@@ -627,24 +706,24 @@ void SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& c
             if constexpr (HasInsideHits<Tester>)
                 hits = tester.insideHits(block);
             else
-                hits = liveLanes(block.radius) & layerLanes(block.layer, layerMask);
+                hits = liveLanes(block) & layerLanes(block.layer, layerMask);
         }
         else if constexpr (HasTest8<Tester>)
         {
             // all 8 lanes: the unused ones carry a tombstone radius and drop out of the mask
             if constexpr (SpatialStatsEnabled)
                 stats.entityTests += int(block.count);
-            hits = tester.test8(cellMin, block, layerMask, active);
+            hits = tester.test8(decode, block, layerMask, active);
         }
         else
         {
             hits = 0;
-            for (uint32 live = liveLanes(block.radius) & layerLanes(block.layer, layerMask); live; live &= live - 1)
+            for (uint32 live = liveLanes(block) & layerLanes(block.layer, layerMask); live; live &= live - 1)
             {
                 const uint32 lane = uint32(oc::tzcnt(live));
                 if constexpr (SpatialStatsEnabled)
                     ++stats.entityTests;
-                if (tester.testEntity(cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]), block.radius[lane]))
+                if (tester.testEntity(lanePos(decode, block, lane), laneRadius(decode, block, lane)))
                     hits |= 1u << lane;
             }
         }
@@ -656,7 +735,7 @@ void SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& c
         if constexpr (Tester::Passes == 1)
         {
             for (; hits; hits &= hits - 1)
-                emit(block, uint32(oc::tzcnt(hits)), cellMin, 1u);
+                emit(block, uint32(oc::tzcnt(hits)), decode, 1u);
         }
         else
         {
@@ -664,24 +743,24 @@ void SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& c
             for (uint32 any = (hits | (hits >> 8)) & 0xFFu; any; any &= any - 1)
             {
                 const uint32 lane = uint32(oc::tzcnt(any));
-                emit(block, lane, cellMin, ((hits >> lane) & 1u) | ((hits >> (lane + 7)) & 2u));
+                emit(block, lane, decode, ((hits >> lane) & 1u) | ((hits >> (lane + 7)) & 2u));
             }
         }
     }
 }
 
 template <typename Tester, typename EmitFunc>
-void SpatialIndexState::traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                                uint64 key, uint32 level, const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
+void SpatialIndexState::traverseCell(const Tester& tester, const TraversalRef& ref, uint32 layerMask,
+                                uint64 key, uint32 level, const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                                 TraverseStats& stats, const EmitFunc& emit) const
 {
     emitCellEntries(tester, cellMin, layerMask, rec, level, active, stats, emit);
     if (level == 0)
         return;
-    forEachChild(tester, refPos, key, level, rec, cellMin, active, stats,
-        [&](uint64 childKey, const CellRecord& child, const glm::vec3& childMin, uint32 childActive)
+    forEachChild(tester, ref, key, level, rec, minFine, cellMin, active, stats,
+        [&](uint64 childKey, const CellRecord& child, const __m128i& childMinFine, const glm::vec3& childMin, uint32 childActive)
     {
-        traverseCell(tester, refPos, layerMask, childKey, level - 1, child, childMin, childActive, stats, emit);
+        traverseCell(tester, ref, layerMask, childKey, level - 1, child, childMinFine, childMin, childActive, stats, emit);
     });
 }
 
@@ -691,6 +770,7 @@ void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos,
     // Local counters merged once at the end: traversals run concurrently (script queries on worker
     // threads), so per-test increments on the shared stats would race on the hottest path.
     TraverseStats stats;
+    const TraversalRef ref = makeRef(refPos);
     const uint32 top = m_numLevels - 1;
     bool direct = false;
     if constexpr (HasBound<Tester>)
@@ -742,11 +822,7 @@ void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos,
                             const CellRecord* rec = cells.find(key);
                             if (!rec || rec->count == 0)
                                 continue;
-                            const glm::dvec3 cellMinWorld = glm::dvec3(
-                                double(int64(x << shift) - Morton::FineOffset),
-                                double(int64(y << shift) - Morton::FineOffset),
-                                double(int64(z << shift) - Morton::FineOffset)) * Morton::FineCellSize; // Morton::cellMinWorld without the decode
-                            const glm::vec3 cellMin = glm::vec3(cellMinWorld - refPos);
+                            const glm::vec3 cellMin = relMin(ref, _mm_set_epi32(0, int32(z << shift), int32(y << shift), int32(x << shift)));
                             const uint32 active = testCell(tester, cellMin, halfCell, level, Tester::AllActive, stats);
                             if (active != ClassifyOutside)
                                 emitCellEntries(tester, cellMin, layerMask, *rec, level, active, stats, emit);
@@ -759,10 +835,11 @@ void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos,
         const float topHalf = float(Morton::cellSize(top) * 0.5);
         m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
         {
-            const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, top) - refPos);
+            const __m128i minFine = minFineOf(key, top);
+            const glm::vec3 cellMin = relMin(ref, minFine);
             const uint32 active = testCell(tester, cellMin, topHalf, top, Tester::AllActive, stats);
             if (active != ClassifyOutside)
-                traverseCell(tester, refPos, layerMask, key, top, rec, cellMin, active, stats, emit);
+                traverseCell(tester, ref, layerMask, key, top, rec, minFine, cellMin, active, stats, emit);
         });
     }
     if constexpr (SpatialStatsEnabled)
@@ -784,16 +861,17 @@ template <typename Tester, typename EmitFunc, typename PrepareFunc>
 void SpatialIndexState::traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                                     TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks)
 {
+    const TraversalRef ref = makeRef(refPos);
     const uint32 top = m_numLevels - 1;
     const float topHalf = float(Morton::cellSize(top) * 0.5);
 
-    constexpr bool ChunkAware = std::is_invocable_v<EmitFunc, const CellBlock&, uint32, const glm::vec3&, uint32, uint32>;
-    const auto serialEmit = [&](const CellBlock& block, uint32 lane, const glm::vec3& cellMin, uint32 passes)
+    constexpr bool ChunkAware = std::is_invocable_v<EmitFunc, const CellBlock&, uint32, const LaneDecode&, uint32, uint32>;
+    const auto serialEmit = [&](const CellBlock& block, uint32 lane, const LaneDecode& decode, uint32 passes)
     {
         if constexpr (ChunkAware)
-            emit(block, lane, cellMin, passes, 0u);
+            emit(block, lane, decode, passes, 0u);
         else
-            emit(block, lane, cellMin, passes);
+            emit(block, lane, decode, passes);
     };
     prepareChunks(1u); // slot 0 exists before the expansion emits
     // 4x over-partitioned so the shared parallelFor cursor can rebalance around expensive roots
@@ -804,10 +882,11 @@ void SpatialIndexState::traverseParallel(const Tester& tester, const glm::dvec3&
     m_frontier.clear();
     m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
     {
-        const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, top) - refPos);
+        const __m128i minFine = minFineOf(key, top);
+        const glm::vec3 cellMin = relMin(ref, minFine);
         const uint32 active = testCell(tester, cellMin, topHalf, top, Tester::AllActive, stats);
         if (active != ClassifyOutside)
-            m_frontier.push_back(FrontierCell{ key, &rec, cellMin, top, active });
+            m_frontier.push_back(FrontierCell{ minFine, key, &rec, cellMin, top, active });
     });
     while (!m_frontier.empty() && uint32(m_frontier.size()) < target)
     {
@@ -818,10 +897,10 @@ void SpatialIndexState::traverseParallel(const Tester& tester, const glm::dvec3&
             emitCellEntries(tester, fc.cellMin, layerMask, *fc.rec, fc.level, fc.active, stats, serialEmit);
             if (fc.level == 0)
                 continue; // no children: fully consumed by the expansion
-            forEachChild(tester, refPos, fc.key, fc.level, *fc.rec, fc.cellMin, fc.active, stats,
-                [&](uint64 childKey, const CellRecord& child, const glm::vec3& childMin, uint32 childActive)
+            forEachChild(tester, ref, fc.key, fc.level, *fc.rec, fc.minFine, fc.cellMin, fc.active, stats,
+                [&](uint64 childKey, const CellRecord& child, const __m128i& childMinFine, const glm::vec3& childMin, uint32 childActive)
             {
-                m_frontierNext.push_back(FrontierCell{ childKey, &child, childMin, fc.level - 1, childActive });
+                m_frontierNext.push_back(FrontierCell{ childMinFine, childKey, &child, childMin, fc.level - 1, childActive });
                 anySplit = true;
             });
         }
@@ -841,17 +920,17 @@ void SpatialIndexState::traverseParallel(const Tester& tester, const glm::dvec3&
         [&](uint32 begin, uint32 end)
     {
         TraverseStats local;
-        const auto chunkEmit = [&](const CellBlock& block, uint32 lane, const glm::vec3& cellMin, uint32 passes)
+        const auto chunkEmit = [&](const CellBlock& block, uint32 lane, const LaneDecode& decode, uint32 passes)
         {
             if constexpr (ChunkAware)
-                emit(block, lane, cellMin, passes, begin + 1);
+                emit(block, lane, decode, passes, begin + 1);
             else
-                emit(block, lane, cellMin, passes);
+                emit(block, lane, decode, passes);
         };
         for (uint32 i = begin; i < end; ++i)
         {
             const FrontierCell& fc = m_frontier[i];
-            traverseCell(tester, refPos, layerMask, fc.key, fc.level, *fc.rec, fc.cellMin, fc.active, local, chunkEmit);
+            traverseCell(tester, ref, layerMask, fc.key, fc.level, *fc.rec, fc.minFine, fc.cellMin, fc.active, local, chunkEmit);
         }
         if constexpr (SpatialStatsEnabled)
         {
@@ -879,7 +958,7 @@ uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 
     // No lock: a concurrent registration (parallel entity spawning; a spawner's script OnSpawn queries while
     // another registers) never moves the pool rows (RecordPool) and the cell maps change only at commit.
     traverse(SphereTester{ radius }, center, layerMask,
-        [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { outUserData.push_back(block.userData[lane]); });
+        [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { outUserData.push_back(block.userData[lane]); });
     return uint32(outUserData.size());
 }
 
@@ -888,10 +967,10 @@ void SpatialIndexState::forEachInSphereImpl(const glm::dvec3& center, float radi
     if (skipStampedIn == 0)
     {
         traverse(SphereTester{ radius }, center, layerMask,
-            [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { emit(ctx, block.userData[lane]); });
+            [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { emit(ctx, block.userData[lane]); });
         return;
     }
-    traverse(SphereTester{ radius }, center, layerMask, [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32)
+    traverse(SphereTester{ radius }, center, layerMask, [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32)
     {
         if (!(passBits(currentLanes(stampLanes(block.poolIdx[lane]))) & skipStampedIn))
             emit(ctx, block.userData[lane]);
@@ -902,7 +981,7 @@ void SpatialIndexState::forEachInFrustumImpl(const Frustum& frustumRelCamera, co
                                         IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const
 {
     traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
-        [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { emit(ctx, block.userData[lane]); });
+        [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { emit(ctx, block.userData[lane]); });
 }
 
 uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const
@@ -910,7 +989,7 @@ uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMa
     outUserData.clear();
     const glm::dvec3 center = (boxMin + boxMax) * 0.5;
     traverse(AABBTester{ glm::vec3((boxMax - boxMin) * 0.5) }, center, layerMask,
-        [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { outUserData.push_back(block.userData[lane]); });
+        [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { outUserData.push_back(block.userData[lane]); });
     return uint32(outUserData.size());
 }
 
@@ -919,7 +998,7 @@ uint32 SpatialIndex::queryFrustum(const Frustum& frustumRelCamera, const glm::dv
 {
     outUserData.clear();
     traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
-        [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { outUserData.push_back(block.userData[lane]); });
+        [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { outUserData.push_back(block.userData[lane]); });
     return uint32(outUserData.size());
 }
 
@@ -929,7 +1008,7 @@ uint32 SpatialIndex::queryRay(const glm::dvec3& origin, const glm::dvec3& dir, d
     outUserData.clear();
     const glm::dvec3 normalized = glm::normalize(dir);
     traverse(RayTester{ glm::vec3(normalized), float(maxDist) }, origin, layerMask,
-        [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32) { outUserData.push_back(block.userData[lane]); });
+        [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32) { outUserData.push_back(block.userData[lane]); });
     return uint32(outUserData.size());
 }
 
@@ -938,12 +1017,12 @@ uint64 SpatialIndex::queryNearest(const glm::dvec3& pos, float maxRadius, uint32
     uint64 best = 0;
     float bestDist2 = FLT_MAX;
     bool found = false;
-    const auto collectNearest = [&](const CellBlock& block, uint32 lane, const glm::vec3& cellMin, uint32)
+    const auto collectNearest = [&](const CellBlock& block, uint32 lane, const LaneDecode& decode, uint32)
     {
         const uint64 userData = block.userData[lane];
         if (userData == excludeUserData)
             return;
-        const glm::vec3 rel = cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]);
+        const glm::vec3 rel = lanePos(decode, block, lane);
         const float dist2 = glm::dot(rel, rel);
         if (dist2 < bestDist2)
         {
@@ -990,13 +1069,13 @@ void SpatialIndexState::stampFrustum(const Tester& tester, const glm::dvec3& cam
     if (!collect)
     {
         traverseParallel(tester, cameraPos, layerMask, stats,
-            [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32 passes) { stampPasses(block.poolIdx[lane], passes); },
+            [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32 passes) { stampPasses(block.poolIdx[lane], passes); },
             [](uint32) {});
         return;
     }
     // Stamp + collect (see setVisibleCollect): the chunk-aware emit appends the Main hits to its own list of every slot whose layers
     // the hit carries.
-    const auto stampCollect = [&](const CellBlock& block, uint32 lane, const glm::vec3&, uint32 passes, uint32 chunk)
+    const auto stampCollect = [&](const CellBlock& block, uint32 lane, const LaneDecode&, uint32 passes, uint32 chunk)
     {
         const uint32 idx = block.poolIdx[lane];
         stampPasses(idx, passes);
@@ -1085,7 +1164,7 @@ void SpatialIndexState::markVisibleSphere(ESpatialPass pass, const glm::dvec3& c
     self().advanceStamp(pass);
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
     PassStamps* stamps = m_pool.stamps;
-    const auto stamp = [stamps, passIdx, stampId](const CellBlock& block, uint32 lane, const glm::vec3&, uint32)
+    const auto stamp = [stamps, passIdx, stampId](const CellBlock& block, uint32 lane, const LaneDecode&, uint32)
     {
         stamps[block.poolIdx[lane]].pass[passIdx] = stampId;
     };
@@ -1142,9 +1221,9 @@ const oc::vector<oc::vector<uint64>>& SpatialIndex::queryUpdateTiers(const glm::
     }
     // Outside the kick/join window, concurrent with spawning: safe without a lock - a registration never
     // moves the pool rows (RecordPool) and the cell maps change only at commit.
-    const auto stampCollect = [&](const CellBlock& block, uint32 lane, const glm::vec3& cellMin, uint32, uint32 chunk)
+    const auto stampCollect = [&](const CellBlock& block, uint32 lane, const LaneDecode& decode, uint32, uint32 chunk)
     {
-        const glm::vec3 pos = cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]);
+        const glm::vec3 pos = lanePos(decode, block, lane);
         const float d2 = horizontal ? pos.x * pos.x + pos.z * pos.z : glm::dot(pos, pos);
         PassStamps& stamps = m_pool.stamps[block.poolIdx[lane]];
         for (int t = 0; t < 3; ++t)
