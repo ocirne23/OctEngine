@@ -86,11 +86,11 @@ namespace
         const __m256d p = _mm256_insertf128_pd(_mm256_castpd128_pd256(_mm_loadu_pd(&pos.x)), _mm_load_sd(&pos.z), 1); // x, y, z, 0
         const __m256d lattice = _mm256_add_pd(p, _mm256_set1_pd(double(Morton::FineOffset) * Morton::FineCellSize));
         const __m256d cell = _mm256_floor_pd(_mm256_mul_pd(lattice, _mm256_set1_pd(Morton::InvFineCellSize)));
-        return { _mm256_cvttpd_epi32(cell), _mm256_cvtpd_ps(_mm256_fnmadd_pd(cell, _mm256_set1_pd(Morton::FineCellSize), lattice)), pos };
+        return { _mm256_cvttpd_epi32(cell), _mm256_cvtpd_ps(_mm256_fnmadd_pd(cell, _mm256_set1_pd(Morton::FineCellSize), lattice)) };
     }
 
-    // A fine-lattice corner relative to the reference, in metres. Two corners inside the world differ by < 2^22 fine cells, so the
-    // integer difference is exact in float and the scale is too: the FMA is the only rounding.
+    // A fine-lattice corner relative to the reference, in metres. Two corners inside the world differ by < 2^21 fine cells (exact in
+    // float below 2^24), and the scale is exact too: the FMA is the only rounding.
     glm::vec3 relMin(const TraversalRef& ref, __m128i minFine)
     {
         return toVec3(_mm_fmsub_ps(_mm_cvtepi32_ps(_mm_sub_epi32(minFine, ref.fine)), _mm_set1_ps(float(Morton::FineCellSize)), ref.frac));
@@ -631,29 +631,53 @@ bool SpatialIndexState::forEachChild(const Tester& tester, const TraversalRef& r
         // parent's float min plus the grid offset - a few float roundings off the exact ones, so
         // the batch tests a box inflated by a bound on that error: still conservative both ways
         // (outside and fully inside are only claimed when the exact box is too).
-        const auto visit = [&](uint32 bit, uint32 childActive) -> bool
+        const BlockStore& childBlocks = m_blocks[childLevel];
+        uint32 bits[8];
+        const CellRecord* found[8];
+        // A batch's probes all in flight at once: every slot first, then each found record's head block. Without it, a sibling's
+        // probe waits until the subtree of the one before it is done, far past what the out-of-order window can look ahead.
+        const auto probe = [&](uint32 lanes)
         {
-            const uint64 childKey = (key << 6) | bit;
-            const CellRecord* child = cells.find(childKey);
+            for (uint32 l = lanes; l; l &= l - 1)
+                cells.prefetch((key << 6) | bits[oc::tzcnt(l)]);
+            for (uint32 l = lanes; l; l &= l - 1)
+            {
+                const uint32 lane = uint32(oc::tzcnt(l));
+                const CellRecord* child = cells.find((key << 6) | bits[lane]);
+                found[lane] = child;
+                if (child && child->head != UINT32_MAX)
+                    childBlocks.prefetch(child->head);
+            }
+        };
+        const auto visit = [&](uint32 lane, uint32 childActive) -> bool
+        {
+            const CellRecord* child = found[lane];
             if (!child)
                 return true;
+            const uint32 bit = bits[lane];
             __m128i childMinFine;
             const glm::vec3 childMin = childCorner(bit, childMinFine);
             childActive = tester.acceptCell(childMin + glm::vec3(childHalf), glm::vec3(childSize), childActive);
-            return childActive == ClassifyOutside || goOn(onChild, childKey, *child, childMinFine, childMin, childActive);
+            return childActive == ClassifyOutside || goOn(onChild, (key << 6) | bit, *child, childMinFine, childMin, childActive);
         };
         if (active == 0)
         {
-            for (; childMask; childMask &= childMask - 1)
-                if (!visit(uint32(oc::tzcnt(childMask)), 0u))
-                    return false;
+            while (childMask)
+            {
+                uint32 n = 0;
+                for (; childMask && n < 8; childMask &= childMask - 1, ++n)
+                    bits[n] = uint32(oc::tzcnt(childMask));
+                probe((1u << n) - 1);
+                for (uint32 lane = 0; lane < n; ++lane)
+                    if (!visit(lane, 0u))
+                        return false;
+            }
             return true;
         }
         const glm::vec3 absMin = glm::abs(cellMin);
         const float eps = (glm::max(absMin.x, glm::max(absMin.y, absMin.z)) + 4.0f * childSize) * (1.0f / 1048576.0f);
         const glm::vec3 half = glm::vec3(childSize + eps);
         ChildBatch batch;
-        uint32 bits[8];
         uint32 laneActive[8];
         while (childMask)
         {
@@ -675,12 +699,13 @@ bool SpatialIndexState::forEachChild(const Tester& tester, const TraversalRef& r
             if constexpr (SpatialStatsEnabled)
                 stats.cellsTested += int(n);
             uint32 pass = tester.classify8(batch, half, active, laneActive) & ((1u << n) - 1);
+            probe(pass);
             for (; pass; pass &= pass - 1)
             {
                 const uint32 lane = uint32(oc::tzcnt(pass));
                 if constexpr (SpatialStatsEnabled)
                     stats.cellsFullyInside += laneActive[lane] == 0 ? 1 : 0;
-                if (!visit(bits[lane], laneActive[lane]))
+                if (!visit(lane, laneActive[lane]))
                     return false;
             }
         }
@@ -709,12 +734,16 @@ bool SpatialIndexState::emitCellEntries(const Tester& tester, const glm::vec3& c
                                    const CellRecord& rec, uint32 level, uint32 active,
                                    [[maybe_unused]] TraverseStats& stats, const EmitFunc& emit) const
 {
+    if (rec.head == UINT32_MAX)
+        return true; // an interior cell: children only, no lanes
     const BlockStore& store = m_blocks[level];
     const LaneDecode decode = makeLaneDecode(cellMin, level, level == m_numLevels - 1 ? m_topLevelMaxRadius.load(oc::memory_order_relaxed) : 0.0f);
     for (uint32 b = rec.head; b != UINT32_MAX;)
     {
         const CellBlock& block = store.blocks[b];
         b = block.next;
+        if (b != UINT32_MAX)
+            store.prefetch(b); // the chain's next block loads while this one is tested
         uint32 hits;
         if (active == 0)
         {
@@ -804,7 +833,7 @@ void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos,
         const float topLevelMaxRadius = m_topLevelMaxRadius.load(oc::memory_order_relaxed);
         struct LevelRange { uint64 x0, x1, y0, y1, z0, z1; };
         LevelRange ranges[Morton::MaxLevels];
-        uint32 total = 0;
+        uint64 total = 0; // 64-bit: one level's product passes 2^32 for a ball of ~6.5 km at 8 m cells
         for (uint32 level = 0; level < m_numLevels; ++level)
         {
             if (m_levelEntityCount[level] == 0)
@@ -818,7 +847,7 @@ void SpatialIndexState::traverse(const Tester& tester, const glm::dvec3& refPos,
             r.x0 = quantizeAxisClamped(lo.x) >> shift; r.x1 = quantizeAxisClamped(hi.x) >> shift;
             r.y0 = quantizeAxisClamped(lo.y) >> shift; r.y1 = quantizeAxisClamped(hi.y) >> shift;
             r.z0 = quantizeAxisClamped(lo.z) >> shift; r.z1 = quantizeAxisClamped(hi.z) >> shift;
-            total += uint32((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) * (r.z1 - r.z0 + 1));
+            total += (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) * (r.z1 - r.z0 + 1); // <= 2^63: each axis spans <= 2^21 cells
             if (total > DirectCellLimit)
                 break;
         }

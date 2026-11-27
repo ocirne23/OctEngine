@@ -98,6 +98,20 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   4×4×4 grid offset (`g_childOffsets`), tested with a box inflated by a bound on the float rounding,
   so "outside" and "fully inside" stay conservative; only survivors pay the `CellMap` probe and the
   exact double `cellMinWorld`. AABB and ray fall back to a probe + scalar classify per child.
+* **Prefetch where the addresses are known early but used late** (`CellMap::prefetch`, `BlockStore::prefetch`, `_MM_HINT_T0`).
+  The out-of-order window (a few hundred instructions) cannot overlap misses that a subtree or a cell test separates:
+  * `forEachChild`: a batch's survivors (up to 8) get every home slot prefetched, then each found record's head block (lines
+    0 and 1), before the first child's subtree runs; without it each sibling's probe waited behind the subtree before it. The
+    slot prefetches go out before any find's branch, so a find that probes a second slot (a mispredict) does not stall the rest.
+  * `emitCellEntries`: the chain's next block while the current one is tested (the hit loop's data-dependent trip count
+    mispredicts often; the prefetch is already out by then). A one-block chain pays one not-taken branch.
+
+  Not prefetched:
+  * the direct cell path's slots: tried, dropped because gameplay queries come from many units around the same places, so the
+    level maps sit in L1/L2, and the extra encode + hash per cell cost ~15-30 % of a small query with nothing to hide.
+  * the stamp stores of the hits: a store's read-for-ownership can start when its address is known, so the misses already
+    overlap; a `prefetchw` per hit would cost about 3 µops against about 5 for the whole stamp emit.
+  * the hits' userData pointees: Spatial cannot know what the caller reads.
 * **Plane masking.** A traversal carries an `active` mask down the tree: the bounds a cell still
   STRADDLES (frustum: bits 0–5 the planes, bit 6 the distance band; the others one bit), 0 = fully
   inside. A child's loose box sits inside its parent's, so it tests only the parent's active bounds,
@@ -117,7 +131,8 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   the float offset inside it. A cell carries its min corner on the fine lattice (`__m128i`); a child's is the parent's plus
   its grid offset shifted by `2 * childLevel` (one `vpaddd`), with no Morton decode below the top level. The corner
   relative to the reference is `(minFine - ref.fine) * FineCellSize - ref.frac` (`relMin`): two corners inside the world
-  differ by < 2^22 fine cells, so the integer subtract and the scale are exact and the FMA is the only rounding.
+  differ by < 2^21 fine cells (exact in float below 2^24), so the integer subtract and the scale are exact and the FMA is the
+  only rounding.
 
 ## `Globals::spatialIndex` API
 

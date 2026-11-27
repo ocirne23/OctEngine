@@ -1,3 +1,7 @@
+module;
+
+#include <immintrin.h>
+
 export module Spatial:CellMap;
 
 import Core;
@@ -48,6 +52,9 @@ public:
     }
 
     const CellRecord* find(uint64 key) const { return const_cast<CellMap*>(this)->find(key); }
+
+    // The key's home slot into L1: issued for several keys before their finds, the misses overlap.
+    void prefetch(uint64 key) const { _mm_prefetch(reinterpret_cast<const char*>(&m_slots[homeSlot(key)]), _MM_HINT_T0); }
 
     CellRecord& getOrCreate(uint64 key, bool& created) // growth invalidates previously returned pointers
     {

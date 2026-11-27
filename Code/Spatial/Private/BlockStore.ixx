@@ -1,3 +1,7 @@
+module;
+
+#include <immintrin.h>
+
 export module Spatial:BlockStore;
 
 import Core;
@@ -72,6 +76,14 @@ struct BlockStore
     static uint32 slotOf(uint32 block, uint32 lane) { return block * CellBlock::Lanes + lane; }
     static uint32 blockOf(uint32 slot) { return slot / CellBlock::Lanes; }
     static uint32 laneOf(uint32 slot) { return slot % CellBlock::Lanes; }
+
+    // A block's first two lines into L1: what a test reads (the geometry, the layer + the chain's next).
+    void prefetch(uint32 b) const
+    {
+        const char* p = reinterpret_cast<const char*>(&blocks[b]);
+        _mm_prefetch(p, _MM_HINT_T0);
+        _mm_prefetch(p + 64, _MM_HINT_T0);
+    }
 
     uint32 allocBlock(uint32 next)
     {

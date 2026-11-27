@@ -26,7 +26,6 @@ struct TraversalRef
 {
     __m128i fine; // not clamped to the world bound: a query volume may reach past it
     __m128 frac;
-    glm::dvec3 pos;
 };
 
 // Everything of SpatialIndex but its public API (SpatialIndex.ixx): the storage, the commit, the traversals, the stamps, the cull job and the hand-over
