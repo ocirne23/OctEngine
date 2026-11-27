@@ -50,7 +50,8 @@ public:
     uint64 queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData = 0) const;
 
     // emit(userData) per hit, straight out of the traversal (no result buffer): the form to use from job code. Never wait inside emit.
-    // skipStampedIn: SpatialPassBit_* - hits currently stamped in any of these passes are skipped.
+    // emit may return bool: false stops the traversal at once (the hits come in no distance order, so "any?" searches stop at the
+    // first one). skipStampedIn: SpatialPassBit_* - hits currently stamped in any of these passes are skipped.
     template<typename Func>
     void forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit, uint32 skipStampedIn = 0) const;
     template<typename Func>
@@ -102,19 +103,38 @@ export namespace Globals
 
 // ---- Inline bodies ----
 
+// The type-erased emit returns true to go on; a void callback never stops the traversal.
 template<typename Func>
 void SpatialIndex::forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit, uint32 skipStampedIn) const
 {
-    forEachInSphereImpl(center, radius, layerMask, skipStampedIn, &emit,
-        [](void* ctx, uint64 userData) { (*static_cast<std::remove_reference_t<Func>*>(ctx))(userData); });
+    forEachInSphereImpl(center, radius, layerMask, skipStampedIn, &emit, [](void* ctx, uint64 userData) -> bool
+    {
+        auto& f = *static_cast<std::remove_reference_t<Func>*>(ctx);
+        if constexpr (std::is_void_v<decltype(f(userData))>)
+        {
+            f(userData);
+            return true;
+        }
+        else
+            return bool(f(userData));
+    });
 }
 
 template<typename Func>
 void SpatialIndex::forEachInFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
                                     Func&& emit, IOcclusionTester* occlusion) const
 {
-    forEachInFrustumImpl(frustumRelCamera, cameraPos, maxDist, layerMask, occlusion, &emit,
-        [](void* ctx, uint64 userData) { (*static_cast<std::remove_reference_t<Func>*>(ctx))(userData); });
+    forEachInFrustumImpl(frustumRelCamera, cameraPos, maxDist, layerMask, occlusion, &emit, [](void* ctx, uint64 userData) -> bool
+    {
+        auto& f = *static_cast<std::remove_reference_t<Func>*>(ctx);
+        if constexpr (std::is_void_v<decltype(f(userData))>)
+        {
+            f(userData);
+            return true;
+        }
+        else
+            return bool(f(userData));
+    });
 }
 
 inline bool SpatialIndex::isVisible(SpatialHandle handle) const

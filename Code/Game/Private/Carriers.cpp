@@ -244,6 +244,28 @@ bool StructureSystem::carrierAccepts(int sourceIdx, int targetIdx, int good, boo
 
 // ---- The Armory's guards ----
 
+// Whether a living enemy unit of `team` is within `radius` of pos (flat, on the map): the first one found stops the search, since
+// any enemy raises an alarm, however near (the hits come in no distance order). outPos: that one's place.
+bool StructureSystem::anyEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3* outPos) const
+{
+    bool found = false;
+    Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), radius, SpatialLayer_Render, [&](uint64 user)
+    {
+        Entity* other = reinterpret_cast<Entity*>(user);
+        GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
+        if (!unit || unit->puppet || unit->team == team || !unit->alive())
+            return true;
+        const glm::vec2 d(other->pos.x - pos.x, other->pos.z - pos.z);
+        if (glm::dot(d, d) > radius * radius)
+            return true;
+        found = true;
+        if (outPos)
+            *outPos = other->pos;
+        return false;
+    });
+    return found;
+}
+
 // The nearest living enemy unit of `team` within `radius` of pos (flat, on the map); null = none.
 // sightFrom: the unit must also be IN SIGHT of that point - no static body (a building, a wall, a gate, the terrain, a
 // tree or a rock) on the line to it. Only the c_sightTries nearest ones are tried: one ray each, not one per unit of a horde.
@@ -720,8 +742,7 @@ void StructureSystem::carrierHousePass()
         Ref& ref = m_frame[i];
         if (isGunType(ref.type) && !ref.state->blueprint && ref.state->team < GameMaxTeams && (!ref.onShip || m_shipJoined))
         {
-            glm::vec3 threat;
-            if (nearestEnemyUnit(ref.entity->pos, m_settings.cannonCallRange, ref.state->team, threat))
+            if (anyEnemyUnit(ref.entity->pos, m_settings.cannonCallRange, ref.state->team))
                 ref.alarm = glm::max(m_settings.cannonStandDown, c_passSeconds * 1.5f);
             // CAN IT FIRE: a munition in the gun or on its way, or a source of them on its road. If not, no crew comes
             // and the crew at the gun stands down: nobody stands at an empty gun.
@@ -737,7 +758,7 @@ void StructureSystem::carrierHousePass()
         if (!armsGuards(ref.type) || ref.state->blueprint || ref.state->team >= GameMaxTeams)
             continue;
         glm::vec3 threat;
-        if (nearestEnemyUnit(ref.entity->pos, m_settings.armoryRange, ref.state->team, threat))
+        if (anyEnemyUnit(ref.entity->pos, m_settings.armoryRange, ref.state->team, &threat))
         {
             ref.alarm = glm::max(m_settings.armoryStandDown, c_passSeconds * 1.5f);
             ref.threat = threat;

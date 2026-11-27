@@ -186,17 +186,20 @@ protected:
 
     // ---- Traversal ---- `active`: the tester's still-undecided bounds; 0 = the cell is fully inside.
 
-    void forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, uint32 skipStampedIn, void* ctx, void (*emit)(void*, uint64)) const;
+    // emit returns true to go on, false to stop the traversal.
+    void forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, uint32 skipStampedIn, void* ctx, bool (*emit)(void*, uint64)) const;
     void forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
-                              IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const;
+                              IOcclusionTester* occlusion, void* ctx, bool (*emit)(void*, uint64)) const;
 
+    // EARLY STOP: an emit that returns bool stops the traversal with false; a void emit never does (its checks fold away). The
+    // traversal functions below return false once stopped. traverseParallel ignores it: its emits (the stamps) never stop.
     template <typename Tester, typename EmitFunc>
     void traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const;
 
     // A cell that passed its test: emits its entries, then recurses into the children that pass. minFine: the cell's min corner on the
     // fine lattice; cellMin: the same corner relative to the reference.
     template <typename Tester, typename EmitFunc>
-    void traverseCell(const Tester& tester, const TraversalRef& ref, uint32 layerMask,
+    bool traverseCell(const Tester& tester, const TraversalRef& ref, uint32 layerMask,
                       uint64 key, uint32 level, const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const EmitFunc& emit) const;
 
@@ -205,9 +208,9 @@ protected:
     uint32 testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
                     uint32 active, TraverseStats& stats) const;
 
-    // onChild(childKey, childRecord, childMinFine, childMin, childActive) for each child that passes.
+    // onChild(childKey, childRecord, childMinFine, childMin, childActive) for each child that passes; a bool onChild stops it with false.
     template <typename Tester, typename ChildFunc>
-    void forEachChild(const Tester& tester, const TraversalRef& ref, uint64 key, uint32 level,
+    bool forEachChild(const Tester& tester, const TraversalRef& ref, uint64 key, uint32 level,
                       const CellRecord& rec, const __m128i& minFine, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const ChildFunc& onChild) const;
 
@@ -215,7 +218,7 @@ protected:
     // poolIdx, layer; `decode` turns the lane's position and radius into metres relative to the reference, for the emits that need a
     // distance). passes: bit 0 = the tester's first pass, bit 1 = its second (a two-pass tester; a one-pass one always passes 1).
     template <typename Tester, typename EmitFunc>
-    void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
+    bool emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
                          const CellRecord& rec, uint32 level, uint32 active,
                          TraverseStats& stats, const EmitFunc& emit) const;
 

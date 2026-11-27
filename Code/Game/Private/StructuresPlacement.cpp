@@ -246,9 +246,10 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
         Entity* entity = reinterpret_cast<Entity*>(user);
         const GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
         if (!unit || !unit->alive() || (unit->puppet && playersPass)) // a puppet = a player capsule
-            return;
+            return true;
         if (glm::abs(entity->pos.x - p.x) < half && glm::abs(entity->pos.z - p.z) < half)
             blocked = true;
+        return !blocked; // one blocker is the answer: stop
     });
     return blocked;
 }

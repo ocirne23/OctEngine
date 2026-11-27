@@ -907,6 +907,8 @@ private:
     // "The Armory" in Docs/Context/Game/Economy.md.
     GameUnitComponent* nearestEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3& outPos,
         const glm::vec3* sightFrom = nullptr, Entity** outEntity = nullptr) const;
+    // THE ALARMS: whether any living enemy unit is within `radius` (flat); the first one found ends the search. outPos: its place.
+    bool anyEnemyUnit(const glm::vec3& pos, float radius, uint32 team, glm::vec3* outPos = nullptr) const;
     // THE GUARDS' ARROWS in flight (authority): the hit is a hitscan, but it LANDS when the drawn arrow arrives (the
     // flight time: the distance / "Arrow speed (m/s)"). The victim is held, so a dead or removed one is simply skipped.
     struct ArrowHit { EntityPtr victim; float damage; float timeLeft; };

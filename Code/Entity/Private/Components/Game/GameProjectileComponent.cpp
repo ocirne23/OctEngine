@@ -143,21 +143,22 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
             SpatialLayer_Render, [&](uint64 user)
         {
             if (pierced >= pierce)
-                return;
+                return false;
             Entity* other = reinterpret_cast<Entity*>(user);
             GameUnitComponent* unit = getComponent<GameUnitComponent>(other);
             if (!unit || unit->team == team || !unit->alive() || (!hitsShadows && !unit->solid))
-                return;
+                return true;
             for (int k = 0; k < pierced; ++k)
                 if (pierceHits[k] == unit)
-                    return;
+                    return true;
             const float t = lenSq > 1e-8f ? glm::clamp(glm::dot(other->pos - from, seg) / lenSq, 0.0f, 1.0f) : 0.0f;
             const glm::vec3 d = other->pos - (from + seg * t);
             const float reach = unit->bodyRadius + c_boltRadius;
             if (d.x * d.x + d.z * d.z > reach * reach || glm::abs(d.y) > unit->bodyRadius + 1.0f)
-                return;
+                return true;
             unit->damage(unitDamage, hitsShadows);
             pierceHits[pierced++] = unit;
+            return pierced < pierce; // spent: stop
         });
         lastPos = pos;
         if (pierced >= pierce)

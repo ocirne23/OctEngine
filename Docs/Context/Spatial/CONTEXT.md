@@ -140,7 +140,11 @@ cross the segment) · `queryNearest`, all filling a caller's `oc::vector<uint64>
 returns one userData); plus the CALLBACK forms `forEachInSphere` / `forEachInFrustum`, which hand each
 hit to a functor straight out of the traversal — **the form to use from job code**: no result buffer,
 so nothing `thread_local` rides a fiber that may resume on another thread (zero-allocation type
-erasure). **Do not wait inside the callback.** Every game/entity probe uses them.
+erasure). **Do not wait inside the callback.** Every game/entity probe uses them. **Early stop:** a callback that returns `bool`
+stops the traversal with `false` (every level of it returns at once: the block loop, the child loop, the direct cells, the top
+cells); a `void` callback never stops. The hits come in no distance order, so this is for "any?" searches and for a count that
+is reached (the alarms' `anyEnemyUnit`, the placement block test, a bolt's pierce count). The stamp traversals
+(`traverseParallel`) never stop: their emits are `void`, so the checks fold away.
 
 ### `spawnVisible` — the spawn guard
 
